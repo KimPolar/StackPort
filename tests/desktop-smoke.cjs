@@ -26,6 +26,10 @@ async function main() {
   await page.getByRole('button', { name: 'people' }).click();
   await page.getByText('100개 행', { exact: true }).waitFor();
   await page.getByText('사용자 1', { exact: true }).waitFor();
+  await page.locator('details.schema-card summary').click();
+  const columns = page.getByRole('table', { name: 'people 열 구조' });
+  await columns.getByRole('cell', { name: 'PK 1' }).waitFor();
+  await columns.getByRole('cell', { name: 'INTEGER' }).waitFor();
   await page.getByRole('button', { name: '다음 페이지' }).click();
   await page.getByText('사용자 101', { exact: true }).waitFor();
   await page.getByRole('button', { name: '다음 페이지' }).click();

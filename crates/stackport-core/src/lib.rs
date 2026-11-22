@@ -46,6 +46,53 @@ pub struct DatabaseObject {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ColumnInfo {
+    pub position: i64,
+    pub name: String,
+    pub declared_type: String,
+    pub not_null: bool,
+    pub default_value: Option<String>,
+    pub primary_key_position: i64,
+    pub hidden: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexColumn {
+    pub position: i64,
+    pub name: Option<String>,
+    pub descending: bool,
+    pub collation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexInfo {
+    pub name: String,
+    pub unique: bool,
+    pub origin: String,
+    pub partial: bool,
+    pub columns: Vec<IndexColumn>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForeignKeyInfo {
+    pub id: i64,
+    pub sequence: i64,
+    pub target_table: String,
+    pub from_column: String,
+    pub to_column: Option<String>,
+    pub on_update: String,
+    pub on_delete: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectDetails {
+    pub object: DatabaseObject,
+    pub columns: Vec<ColumnInfo>,
+    pub indexes: Vec<IndexInfo>,
+    pub foreign_keys: Vec<ForeignKeyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Cell {
     pub kind: &'static str,
     pub display: String,
@@ -235,7 +282,7 @@ impl Store {
 
     pub fn objects(&self, profile_id: &str) -> Result<Vec<DatabaseObject>> {
         let db = open_user_db(Path::new(&self.profile(profile_id)?.path))?;
-        let mut stmt = db.prepare("SELECT name, type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name COLLATE NOCASE").map_err(db_error)?;
+        let mut stmt = db.prepare("SELECT name, type, sql FROM sqlite_schema WHERE type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE ORDER BY type, name COLLATE NOCASE").map_err(db_error)?;
         let items = stmt
             .query_map([], |r| {
                 Ok(DatabaseObject {
@@ -248,6 +295,97 @@ impl Store {
         items
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)
+    }
+
+    /// Read schema metadata using fixed, parameterized introspection queries.
+    /// General user queries never receive these PRAGMA permissions.
+    pub fn describe_object(&self, profile_id: &str, name: &str) -> Result<ObjectDetails> {
+        let db = open_schema_db(Path::new(&self.profile(profile_id)?.path))?;
+        let object = db.query_row(
+            "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
+            [name],
+            |row| Ok(DatabaseObject { name: row.get(0)?, kind: row.get(1)?, ddl: row.get(2)? }),
+        ).optional().map_err(db_error)?.ok_or("테이블 또는 뷰를 찾을 수 없습니다.")?;
+
+        let mut statement = db.prepare(
+            "SELECT cid, name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo(?1) ORDER BY cid",
+        ).map_err(db_error)?;
+        let columns = statement
+            .query_map([name], |row| {
+                Ok(ColumnInfo {
+                    position: row.get(0)?,
+                    name: row.get(1)?,
+                    declared_type: row.get(2)?,
+                    not_null: row.get(3)?,
+                    default_value: row.get(4)?,
+                    primary_key_position: row.get(5)?,
+                    hidden: row.get(6)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+
+        let mut statement = db
+            .prepare(
+                "SELECT name, \"unique\", origin, partial FROM pragma_index_list(?1) ORDER BY name",
+            )
+            .map_err(db_error)?;
+        let mut indexes = statement
+            .query_map([name], |row| {
+                Ok(IndexInfo {
+                    name: row.get(0)?,
+                    unique: row.get(1)?,
+                    origin: row.get(2)?,
+                    partial: row.get(3)?,
+                    columns: Vec::new(),
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        for index in &mut indexes {
+            let mut fields = db.prepare(
+                "SELECT seqno, name, \"desc\", coll FROM pragma_index_xinfo(?1) WHERE \"key\" = 1 ORDER BY seqno",
+            ).map_err(db_error)?;
+            index.columns = fields
+                .query_map([&index.name], |row| {
+                    Ok(IndexColumn {
+                        position: row.get(0)?,
+                        name: row.get(1)?,
+                        descending: row.get(2)?,
+                        collation: row.get(3)?,
+                    })
+                })
+                .map_err(db_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)?;
+        }
+
+        let mut statement = db.prepare(
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+        ).map_err(db_error)?;
+        let foreign_keys = statement
+            .query_map([name], |row| {
+                Ok(ForeignKeyInfo {
+                    id: row.get(0)?,
+                    sequence: row.get(1)?,
+                    target_table: row.get(2)?,
+                    from_column: row.get(3)?,
+                    to_column: row.get(4)?,
+                    on_update: row.get(5)?,
+                    on_delete: row.get(6)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        Ok(ObjectDetails {
+            object,
+            columns,
+            indexes,
+            foreign_keys,
+        })
     }
 
     /// Create a verified SQLite snapshot without modifying or replacing either
@@ -443,6 +581,14 @@ fn db_error(error: rusqlite::Error) -> String {
 }
 
 fn open_user_db(path: &Path) -> Result<Connection> {
+    open_user_db_with_schema_access(path, false)
+}
+
+fn open_schema_db(path: &Path) -> Result<Connection> {
+    open_user_db_with_schema_access(path, true)
+}
+
+fn open_user_db_with_schema_access(path: &Path, allow_schema_pragmas: bool) -> Result<Connection> {
     // URI mode is deliberately not enabled; a filename cannot inject SQLite flags.
     let db = Connection::open_with_flags(
         path,
@@ -454,13 +600,27 @@ fn open_user_db(path: &Path) -> Result<Connection> {
         .map_err(db_error)?;
     db.pragma_update(None, "trusted_schema", false)
         .map_err(db_error)?;
+    if allow_schema_pragmas {
+        // Keep all schema queries on one read snapshot even if another process
+        // changes the database while the details are being assembled.
+        db.execute_batch("BEGIN DEFERRED").map_err(db_error)?;
+    }
     let started = Instant::now();
     db.progress_handler(
         10_000,
         Some(move || started.elapsed() > Duration::from_secs(10)),
     );
-    db.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+    db.authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
         AuthAction::Select | AuthAction::Read { .. } | AuthAction::Recursive => {
+            Authorization::Allow
+        }
+        AuthAction::Pragma { pragma_name, .. }
+            if allow_schema_pragmas
+                && matches!(
+                    pragma_name,
+                    "table_xinfo" | "index_list" | "index_xinfo" | "foreign_key_list"
+                ) =>
+        {
             Authorization::Allow
         }
         AuthAction::Function { function_name }

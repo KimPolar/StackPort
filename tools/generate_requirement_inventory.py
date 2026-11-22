@@ -18,7 +18,10 @@ PARTIAL = {
     "SP-DB-001": "SQLite 읽기 전용 어댑터",
     "SP-DB-007": "한 프로젝트에 여러 SQLite 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록",
-    "SP-DB-010": "SQLite 테이블·뷰 목록",
+    "SP-DB-010": "SQLite 테이블·뷰와 열·기본 키·외래 키·인덱스 열람",
+    "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
+    "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
+    "SP-DB-022": "SQLite 객체의 구조·데이터 조회",
     "SP-DB-028": "읽기 전용 연결과 쓰기 차단",
     "SP-DT-001": "100행 단위 결과 페이지",
     "SP-DT-006": "결과의 NULL 표시",
@@ -60,8 +63,11 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         subset = PARTIAL.get(requirement_id, "")
         evidence = ""
         if subset:
-            evidence = ("crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
-                        if requirement_id.startswith("SP-BK-") or requirement_id == "SP-AT-016"
-                        else "crates/stackport-core/tests/workspace.rs; src/; src-tauri/")
+            if requirement_id.startswith("SP-BK-") or requirement_id == "SP-AT-016":
+                evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018", "SP-DB-022"}:
+                evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            else:
+                evidence = "crates/stackport-core/tests/workspace.rs; src/; src-tauri/"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

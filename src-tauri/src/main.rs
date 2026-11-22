@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use stackport_core::{BackupReport, DatabaseObject, Profile, Project, QueryPage, Store};
+use stackport_core::{
+    BackupReport, DatabaseObject, ObjectDetails, Profile, Project, QueryPage, Store,
+};
 use tauri::{Manager, State};
 
 async fn worker<T, F>(operation: F) -> Result<T, String>
@@ -74,6 +76,16 @@ async fn list_objects(
 }
 
 #[tauri::command]
+async fn describe_object(
+    store: State<'_, Store>,
+    profile_id: String,
+    name: String,
+) -> Result<ObjectDetails, String> {
+    let store = store.inner().clone();
+    worker(move || store.describe_object(&profile_id, &name)).await
+}
+
+#[tauri::command]
 async fn run_query(
     store: State<'_, Store>,
     profile_id: String,
@@ -138,6 +150,7 @@ fn main() {
             create_sqlite_profile,
             delete_profile,
             list_objects,
+            describe_object,
             run_query,
             choose_sqlite_file,
             choose_backup_directory,

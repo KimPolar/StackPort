@@ -11,6 +11,10 @@ import "./styles.css";
 type Project = { id: string; name: string };
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
 type DatabaseObject = { name: string; kind: string; ddl: string | null };
+type ColumnInfo = { position: number; name: string; declared_type: string; not_null: boolean; default_value: string | null; primary_key_position: number; hidden: number };
+type IndexInfo = { name: string; unique: boolean; origin: string; partial: boolean; columns: { position: number; name: string | null; descending: boolean; collation: string | null }[] };
+type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from_column: string; to_column: string | null; on_update: string; on_delete: string };
+type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok" };
@@ -37,6 +41,10 @@ function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [profileId, setProfileId] = useState("");
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
+  const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
+  const [objectDetails, setObjectDetails] = useState<ObjectDetails | null>(null);
+  const [detailsError, setDetailsError] = useState("");
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
   const [executedSql, setExecutedSql] = useState("");
   const [result, setResult] = useState<QueryPage | null>(null);
@@ -53,6 +61,7 @@ function App() {
   const [saving, setSaving] = useState(false);
   const queryGeneration = useRef(0);
   const objectGeneration = useRef(0);
+  const detailsGeneration = useRef(0);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef<Record<string, string>>({});
@@ -90,6 +99,7 @@ function App() {
     let live = true;
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedSql(""); setError("");
+    detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     queryGeneration.current++;
     setQuerying(false);
@@ -122,6 +132,12 @@ function App() {
   function openObject(object: DatabaseObject) {
     const query = `SELECT *\nFROM ${quoteIdentifier(object.name)};`;
     if (sql.trim() && sql !== query && !window.confirm("현재 편집 중인 SQL을 선택한 객체의 조회문으로 바꾸시겠습니까?")) return;
+    const generation = ++detailsGeneration.current;
+    setSelectedObject(object); setObjectDetails(null); setDetailsError(""); setDetailsLoading(true);
+    call<ObjectDetails>("describe_object", { profileId, name: object.name })
+      .then(details => { if (detailsGeneration.current === generation) setObjectDetails(details); })
+      .catch(e => { if (detailsGeneration.current === generation) setDetailsError(errorText(e)); })
+      .finally(() => { if (detailsGeneration.current === generation) setDetailsLoading(false); });
     changeSql(query);
     void runQuery(query);
   }
@@ -129,6 +145,7 @@ function App() {
   async function refreshObjects() {
     if (!profileId) return;
     const generation = ++objectGeneration.current;
+    detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setLoading(true); setError("");
     try {
       const items = await call<DatabaseObject[]>("list_objects", { profileId });
@@ -237,6 +254,7 @@ function App() {
               <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
             </div>
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
+            {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
             <div className="results-card"><div className="panel-heading"><div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div><span className="subtle">페이지당 최대 100개 행</span></div>
               {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}</tr></thead><tbody>{result.rows.map((row, rowIndex) => <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}</tr>)}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
                 <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => void runQuery(executedSql, result.page - 1)} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => void runQuery(executedSql, result.page + 1)} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
@@ -257,6 +275,20 @@ function App() {
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
   </div>;
+}
+
+function SchemaDetails({ object, details, loading, error }: { object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string }) {
+  return <details className="schema-card"><summary><span><Table2 size={15} /> <strong>{object.name}</strong> 구조</span><span className="subtle">{loading ? "불러오는 중…" : details ? `열 ${details.columns.length} · 인덱스 ${details.indexes.length} · 외래 키 ${details.foreign_keys.length}` : "상세 보기"}</span></summary>
+    <div className="schema-content" aria-busy={loading}>
+      {error && <p className="form-error" role="alert">구조를 불러오지 못했습니다: {error}</p>}
+      {details && <><p className="form-note">조회 시점의 구조입니다. 데이터 수정은 아직 지원하지 않습니다.</p>
+        <h2>열</h2><div className="table-wrap"><table aria-label={`${object.name} 열 구조`}><thead><tr><th scope="col">이름</th><th scope="col">형식</th><th scope="col">NULL 허용</th><th scope="col">기본값</th><th scope="col">키 / 특성</th></tr></thead><tbody>{details.columns.map(column => <tr key={column.position}><td>{column.name}</td><td>{column.declared_type || "지정 없음"}</td><td>{column.not_null ? "아니요" : "명시 안 됨"}</td><td>{column.default_value ?? "없음"}</td><td>{column.primary_key_position ? `PK ${column.primary_key_position}` : column.hidden === 2 ? "가상 생성 열" : column.hidden === 3 ? "저장 생성 열" : column.hidden ? "숨김 열" : "—"}</td></tr>)}</tbody></table></div>
+        <h2>인덱스</h2>{details.indexes.length ? <ul className="schema-list">{details.indexes.map(index => <li key={index.name}><strong>{index.name}</strong><span>{index.unique ? "UNIQUE · " : ""}{index.partial ? "부분 인덱스 · " : ""}{index.columns.map(column => `${column.name ?? "(표현식)"}${column.descending ? " DESC" : ""}${column.collation ? ` COLLATE ${column.collation}` : ""}`).join(", ")}</span></li>)}</ul> : <p className="form-note">인덱스가 없습니다.</p>}
+        <h2>외래 키</h2>{details.foreign_keys.length ? <ul className="schema-list">{details.foreign_keys.map(key => <li key={`${key.id}-${key.sequence}`}><strong>{key.from_column} → {key.target_table}.{key.to_column ?? "(기본 키)"}</strong><span>그룹 {key.id} · 순서 {key.sequence + 1} · 삭제 {key.on_delete} · 수정 {key.on_update}</span></li>)}</ul> : <p className="form-note">외래 키가 없습니다.</p>}
+        <h2>생성 SQL</h2><pre className="schema-ddl">{details.object.ddl ?? "생성 SQL을 사용할 수 없습니다."}</pre>
+      </>}
+    </div>
+  </details>;
 }
 
 function ObjectGroup({ name, items, onSelect }: { name: string; items: DatabaseObject[]; onSelect: (object: DatabaseObject) => void }) {
