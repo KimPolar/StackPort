@@ -5,6 +5,7 @@
 //! authorizer in addition to the operating mode of the connection.
 
 use rusqlite::{
+    backup::{Backup, StepResult},
     hooks::{AuthAction, AuthContext, Authorization},
     params,
     types::ValueRef,
@@ -57,6 +58,13 @@ pub struct QueryPage {
     pub rows: Vec<Vec<Cell>>,
     pub page: u32,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupReport {
+    pub path: String,
+    pub size_bytes: u64,
+    pub integrity: &'static str,
 }
 
 #[derive(Clone)]
@@ -240,6 +248,93 @@ impl Store {
         items
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)
+    }
+
+    /// Create a verified SQLite snapshot without modifying or replacing either
+    /// the source database or an existing destination.
+    pub fn backup_sqlite(&self, profile_id: &str, destination: &str) -> Result<BackupReport> {
+        let profile = self.profile(profile_id)?;
+        let destination = Path::new(destination.trim());
+        if !destination.is_absolute() || destination.file_name().is_none() {
+            return Err("새 백업 파일의 절대 경로를 지정하세요.".into());
+        }
+        let parent = destination
+            .parent()
+            .ok_or("백업 폴더를 찾을 수 없습니다.")?;
+        if !parent.is_dir() {
+            return Err("백업 폴더가 없거나 폴더에 접근할 수 없습니다.".into());
+        }
+        if destination.exists() {
+            return Err("같은 이름의 파일이 이미 있습니다. 새 경로를 선택하세요.".into());
+        }
+
+        let source = open_user_db(Path::new(&profile.path))?;
+        let temporary = tempfile::Builder::new()
+            .prefix(".stackport-backup-")
+            .tempfile_in(parent)
+            .map_err(|e| format!("백업 임시 파일을 만들 수 없습니다: {e}"))?;
+        {
+            let mut target = Connection::open(temporary.path()).map_err(db_error)?;
+            target
+                .busy_timeout(Duration::from_secs(5))
+                .map_err(db_error)?;
+            {
+                let backup = Backup::new(&source, &mut target).map_err(db_error)?;
+                let mut last_remaining = None;
+                let mut last_progress = Instant::now();
+                loop {
+                    let state = backup.step(128).map_err(db_error)?;
+                    if state == StepResult::Done {
+                        break;
+                    }
+                    let remaining = backup.progress().remaining;
+                    if last_remaining != Some(remaining) {
+                        last_remaining = Some(remaining);
+                        last_progress = Instant::now();
+                    } else if last_progress.elapsed() > Duration::from_secs(15) {
+                        return Err(
+                            "백업 진행이 중단되었습니다. 원본의 잠금 상태를 확인하세요.".into()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            // A standalone backup must not depend on an adjacent WAL file.
+            target
+                .pragma_update(None, "journal_mode", "DELETE")
+                .map_err(db_error)?;
+            let mut check = target.prepare("PRAGMA integrity_check").map_err(db_error)?;
+            let results = check
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(db_error)?
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)?;
+            if results != ["ok"] {
+                return Err(
+                    "백업 무결성 검사에 실패했습니다. 백업 파일을 게시하지 않았습니다.".into(),
+                );
+            }
+        }
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|e| format!("백업을 디스크에 기록할 수 없습니다: {e}"))?;
+        let size_bytes = temporary
+            .as_file()
+            .metadata()
+            .map_err(|e| format!("백업 크기를 확인할 수 없습니다: {e}"))?
+            .len();
+        temporary.persist_noclobber(destination).map_err(|e| {
+            format!(
+                "백업을 저장할 수 없습니다. 기존 파일은 덮어쓰지 않습니다: {}",
+                e.error
+            )
+        })?;
+        Ok(BackupReport {
+            path: destination.to_string_lossy().into_owned(),
+            size_bytes,
+            integrity: "ok",
+        })
     }
 
     pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {

@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use stackport_core::{DatabaseObject, Profile, Project, QueryPage, Store};
+use stackport_core::{BackupReport, DatabaseObject, Profile, Project, QueryPage, Store};
 use tauri::{Manager, State};
 
 async fn worker<T, F>(operation: F) -> Result<T, String>
@@ -96,6 +96,27 @@ async fn choose_sqlite_file() -> Result<Option<String>, String> {
     .await
 }
 
+#[tauri::command]
+async fn choose_backup_directory() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("백업을 저장할 폴더 선택")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn backup_sqlite(
+    store: State<'_, Store>,
+    profile_id: String,
+    destination: String,
+) -> Result<BackupReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.backup_sqlite(&profile_id, &destination)).await
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -118,7 +139,9 @@ fn main() {
             delete_profile,
             list_objects,
             run_query,
-            choose_sqlite_file
+            choose_sqlite_file,
+            choose_backup_directory,
+            backup_sqlite
         ])
         .run(tauri::generate_context!())
         .expect("StackPort 실행 실패");

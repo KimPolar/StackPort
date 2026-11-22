@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-  ArrowLeft, ArrowRight, Boxes, ChevronDown, ChevronRight, CircleHelp,
+  ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
   Database, FileCode2, FolderOpen, HardDrive, Layers3,
   Plus, RefreshCw, Search, ShieldCheck, Table2, Trash2, X, Play,
 } from "lucide-react";
@@ -13,7 +13,8 @@ type Profile = { id: string; project_id: string; name: string; path: string; env
 type DatabaseObject = { name: string; kind: string; ddl: string | null };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean };
-type Modal = "project" | "profile" | "rename" | "deleteProject" | "deleteProfile" | null;
+type BackupReport = { path: string; size_bytes: number; integrity: "ok" };
+type Modal = "project" | "profile" | "rename" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
@@ -48,6 +49,7 @@ function App() {
   const [querying, setQuerying] = useState(false);
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
+  const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
   const [saving, setSaving] = useState(false);
   const queryGeneration = useRef(0);
   const objectGeneration = useRef(0);
@@ -88,6 +90,7 @@ function App() {
     let live = true;
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedSql(""); setError("");
+    setBackupReport(null);
     queryGeneration.current++;
     setQuerying(false);
     if (profileId) {
@@ -173,6 +176,9 @@ function App() {
         await call("delete_profile", { id: profile.id });
         delete drafts.current[profile.id];
         await reloadProfiles(project.id, "");
+      } else if (modal === "backup" && profile) {
+        const report = await call<BackupReport>("backup_sqlite", { profileId: profile.id, destination: path });
+        setBackupReport(report);
       }
       setModal(null);
     } catch (e) { setFormError(errorText(e)); }
@@ -223,8 +229,9 @@ function App() {
           !project ? <EmptyState title="작업을 시작해 보세요" text="프로젝트를 만들고 SQLite 데이터베이스를 연결하세요." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
           !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 읽기 전용으로 열어 테이블을 살펴볼 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
             <div className="content-header"><div><div className="breadcrumbs">{project.name} <ChevronRight size={14} /> 데이터베이스</div><h1><Database size={21} /> {profile.name} <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} /> {displayPath(profile.path)}</p></div>
-              <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> 읽기 전용</span><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
+              <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> 읽기 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
             </div>
+            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>격리된 환경에서의 복원 테스트는 수행하지 않았습니다.</span></div>}
             <div className="editor-card"><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div><button className="primary small" disabled={querying || !sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> {querying ? "실행 중…" : "쿼리 실행"}</button></div>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
               <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
@@ -240,13 +247,14 @@ function App() {
       </div>
       <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SQLite 읽기 전용 <span className="status-separator">|</span> SSH 및 기타 DB 준비 중</span></footer>
     </div>
-    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
+    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
       {modal === "profile" && <><label className="field">SQLite 파일 경로<span className="file-input"><input required value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" /><button type="button" className="secondary" onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label><label className="field">환경<select value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label><p className="form-note">기존 파일만 열 수 있으며, 이 연결은 읽기 전용입니다.</p></>}
+      {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
       {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 연결 정의 {profiles.length}개, 해당 연결의 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
-      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : "저장"}</button></div>
+      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
   </div>;
 }

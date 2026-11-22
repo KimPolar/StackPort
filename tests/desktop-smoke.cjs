@@ -4,6 +4,8 @@
  * See docs/IMPLEMENTATION.md for setup and security boundaries.
  */
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
+const path = require('path');
+const { randomUUID } = require('crypto');
 const database = process.env.STACKPORT_TEST_DATABASE;
 if (!database) throw new Error('Set STACKPORT_TEST_DATABASE to the isolated fixture path.');
 
@@ -35,8 +37,26 @@ async function main() {
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();
+
+  const backupPath = path.join(path.dirname(database), `backup-${randomUUID()}.sqlite`);
+  await page.getByRole('button', { name: '백업', exact: true }).click();
+  await page.getByLabel('새 백업 파일 경로').fill(database);
+  await page.getByRole('button', { name: '백업 만들기' }).click();
+  await page.getByRole('alert').getByText('같은 이름의 파일이 이미 있습니다. 새 경로를 선택하세요.').waitFor();
+  await page.getByLabel('새 백업 파일 경로').fill(backupPath);
+  await page.getByRole('button', { name: '백업 만들기' }).click();
+  await page.getByText('백업 생성 완료 · 무결성 검사 통과').waitFor();
+  await page.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).first().click();
+  await page.getByLabel('이름', { exact: true }).fill('백업 검증');
+  await page.getByLabel('SQLite 파일 경로').fill(backupPath);
+  await page.getByRole('button', { name: '저장' }).click();
+  await page.getByRole('button', { name: 'people' }).click();
+  await page.getByText('100개 행', { exact: true }).waitFor();
+  await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
+  await page.getByRole('button', { name: '쿼리 실행' }).click();
+  await page.getByRole('cell', { name: '205', exact: true }).waitFor();
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('Desktop SQLite workflow and read-only protection passed.');
+  console.log('Desktop SQLite read-only workflow and verified backup reopen passed.');
   await browser.close();
 }
 
