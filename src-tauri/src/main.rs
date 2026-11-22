@@ -2,7 +2,7 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, ObjectDetails, Profile, Project, QueryPage, Store,
+    EditSession, ObjectDetails, Profile, Project, QueryOutcome, Store,
 };
 use tauri::{Manager, State};
 
@@ -96,14 +96,26 @@ async fn describe_object(
 }
 
 #[tauri::command]
+fn prepare_query(store: State<'_, Store>) -> Result<String, String> {
+    store.prepare_query()
+}
+
+#[tauri::command]
+async fn cancel_query(store: State<'_, Store>, token: String) -> Result<bool, String> {
+    let store = store.inner().clone();
+    worker(move || store.cancel_query(&token)).await
+}
+
+#[tauri::command]
 async fn run_query(
     store: State<'_, Store>,
+    token: String,
     profile_id: String,
     sql: String,
     page: u32,
-) -> Result<QueryPage, String> {
+) -> Result<QueryOutcome, String> {
     let store = store.inner().clone();
-    worker(move || store.query(&profile_id, &sql, page)).await
+    worker(move || store.query_prepared(&token, &profile_id, &sql, page)).await
 }
 
 #[tauri::command]
@@ -200,6 +212,8 @@ fn main() {
             delete_profile,
             list_objects,
             describe_object,
+            prepare_query,
+            cancel_query,
             run_query,
             begin_cell_edit,
             preview_cell_edit,

@@ -54,6 +54,18 @@ async function main() {
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();
 
+  await page.getByLabel('SQL 쿼리').fill('WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers');
+  await page.getByRole('button', { name: '쿼리 실행' }).click();
+  await page.getByRole('button', { name: '쿼리 중단' }).waitFor();
+  await page.waitForTimeout(250);
+  await page.getByRole('button', { name: '쿼리 중단' }).click();
+  await page.getByRole('status').getByText('쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.').waitFor();
+  await page.getByRole('button', { name: '쿼리 실행' }).click();
+  await page.getByRole('status').getByText('쿼리 실행 시간 10초를 초과해 중단되었습니다. 조건을 줄여 다시 실행하세요.').waitFor({ timeout: 20000 });
+  await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
+  await page.getByRole('button', { name: '쿼리 실행' }).click();
+  await page.getByRole('cell', { name: '205', exact: true }).waitFor();
+
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'people' }).click();
   await page.getByRole('button', { name: '1행 편집', exact: true }).click();
@@ -126,7 +138,7 @@ async function main() {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('Desktop SQLite preview, PROD confirmation, verified backup, and audit history passed.');
+  console.log('Desktop query cancellation and timeout, SQLite preview, PROD confirmation, verified backup, and audit history passed.');
   await browser.close();
 }
 

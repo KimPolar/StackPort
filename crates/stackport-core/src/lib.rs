@@ -6,6 +6,8 @@
 
 mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
+mod query;
+pub use query::QueryOutcome;
 
 use rusqlite::{
     backup::{Backup, StepResult},
@@ -171,6 +173,7 @@ struct AuditRecord<'a> {
 pub struct Store {
     path: PathBuf,
     edits: Arc<edit::EditManager>,
+    queries: Arc<query::QueryManager>,
 }
 
 impl Store {
@@ -183,6 +186,7 @@ impl Store {
         let store = Self {
             path: path.to_owned(),
             edits: Arc::new(edit::EditManager::default()),
+            queries: Arc::new(query::QueryManager::default()),
         };
         let mut db = store.connect()?;
         let version: i64 = db
@@ -678,64 +682,6 @@ impl Store {
             (Err(error), Err(_)) => Err(format!("{error} 완료 감사 기록도 저장하지 못했습니다.")),
             (result, Ok(())) => result,
         }
-    }
-
-    pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {
-        let db = open_user_db(Path::new(&self.profile(profile_id)?.path))?;
-        let sql = sql.trim().trim_end_matches(';').trim_end();
-        if sql.is_empty() {
-            return Err("조회할 SQL을 입력하세요.".into());
-        }
-        // Prepare once before pagination so authorizer failures are reported
-        // as read-only restrictions rather than a subquery syntax error.
-        let original = db.prepare(sql).map_err(db_error)?;
-        if !original.readonly() || original.column_count() == 0 {
-            return Err(
-                "이 연결에서는 결과를 반환하는 읽기 전용 쿼리만 실행할 수 있습니다.".into(),
-            );
-        }
-        if original.parameter_count() != 0 {
-            return Err("쿼리 매개변수는 아직 지원하지 않습니다.".into());
-        }
-        drop(original);
-        // The subquery enforces a single result-producing statement and allows
-        // bounded page retrieval without retaining earlier pages in memory.
-        let offset = i64::from(page) * PAGE_SIZE as i64;
-        let bounded_sql = format!(
-            "SELECT * FROM (\n{sql}\n) LIMIT {} OFFSET {offset}",
-            PAGE_SIZE + 1
-        );
-        let mut stmt = db.prepare(&bounded_sql).map_err(db_error)?;
-        if !stmt.readonly() {
-            return Err("이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.".into());
-        }
-        if stmt.parameter_count() != 0 {
-            return Err("쿼리 매개변수는 아직 지원하지 않습니다.".into());
-        }
-        let columns = stmt
-            .column_names()
-            .iter()
-            .map(|s| (*s).to_owned())
-            .collect();
-        let mut cursor = stmt.query([]).map_err(db_error)?;
-        let mut rows = Vec::with_capacity(PAGE_SIZE + 1);
-        while let Some(row) = cursor.next().map_err(db_error)? {
-            let mut cells = Vec::with_capacity(row.as_ref().column_count());
-            for index in 0..row.as_ref().column_count() {
-                cells.push(display_value(row.get_ref(index).map_err(db_error)?));
-            }
-            rows.push(cells);
-        }
-        let has_more = rows.len() > PAGE_SIZE;
-        if has_more {
-            rows.pop();
-        }
-        Ok(QueryPage {
-            columns,
-            rows,
-            page,
-            has_more,
-        })
     }
 }
 

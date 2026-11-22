@@ -12,7 +12,7 @@ SP-UI-010,가상 그룹,같은 연결·DB 객체를 실제 위치를 바꾸지 �
 SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,프로젝트·연결 변경 및 SQLite 백업·셀 변경의 로컬 작업 기록,crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목록 복구, 실제 재연결은 정책에 따라 수행.",not_started,,
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
-SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·오류 표시,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-UI-015,테마·레이아웃,"라이트/다크/시스템, 크기·아이콘·글꼴·색상, 컴팩트/집중 모드 및 패널 숨김.",not_started,,
 SP-UI-016,키보드 중심,"키보드 탐색, 명령 검색, 사용자 지정 단축키, 탭 전환, 컨텍스트 메뉴 대체 동작.",not_started,,
 SP-UI-017,도움말,"문맥형 설명, 연결 진단, 프로토콜별 오류 가이드, 키보드 단축키 검색.",not_started,,
@@ -186,7 +186,7 @@ SP-SQ-005,리팩터링,식별자 이름 변경·별칭 변경·쿼리 포맷 변
 SP-SQ-006,서식 도구,"SQL 포맷/축약, 대소문자·들여쓰기·줄바꿈 규칙, 방언별 사용자 서식 저장.",not_started,,
 SP-SQ-007,실행 범위,"전체/현재 문장/선택 영역/배치 실행, 세미콜론 및 프로시저 블록의 방언별 구분.",partial,단일 읽기 전용 SQL 실행,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
 SP-SQ-008,결과 탭,"여러 결과 집합, 메시지·서버 통계·영향받은 행·실행 시간·에러 위치 분리.",not_started,,
-SP-SQ-009,실행 취소,"실행 중 쿼리의 취소·타임아웃, 서버 측 취소 성공 여부와 트랜잭션 상태 제시.",not_started,,
+SP-SQ-009,실행 취소,"실행 중 쿼리의 취소·타임아웃, 서버 측 취소 성공 여부와 트랜잭션 상태 제시.",partial,"SQLite 조회 중단과 시간 초과, 완료 여부 표시",crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-SQ-010,파라미터 쿼리,"바인딩 변수·타입·값·기본값, 시크릿 변수 처리, 저장된 파라미터 세트.",not_started,,
 SP-SQ-011,트랜잭션 관리,"자동 커밋 전환, BEGIN/COMMIT/ROLLBACK, 저장점, 열린 트랜잭션 경고.",not_started,,
 SP-SQ-012,쿼리 빌더,테이블 드래그·관계선·JOIN·WHERE·GROUP BY·HAVING·ORDER BY·LIMIT를 GUI로 구성.,not_started,,

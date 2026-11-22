@@ -17,6 +17,8 @@ type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from
 type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean };
+type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "cancelled" | "timed_out" };
+type ActiveQuery = { token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -64,6 +66,8 @@ function App() {
   const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [querying, setQuerying] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [queryNotice, setQueryNotice] = useState("");
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
@@ -72,6 +76,7 @@ function App() {
   const [editReport, setEditReport] = useState<EditResult | null>(null);
   const [saving, setSaving] = useState(false);
   const queryGeneration = useRef(0);
+  const activeQuery = useRef<ActiveQuery | null>(null);
   const objectGeneration = useRef(0);
   const detailsGeneration = useRef(0);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
@@ -98,6 +103,7 @@ function App() {
 
   useEffect(() => {
     let live = true;
+    abandonQuery();
     objectGeneration.current++;
     setProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedSql("");
     queryGeneration.current++;
@@ -109,6 +115,7 @@ function App() {
 
   useEffect(() => {
     let live = true;
+    abandonQuery();
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedSql(""); setError("");
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
@@ -116,6 +123,7 @@ function App() {
     setEditReport(null);
     queryGeneration.current++;
     setQuerying(false);
+    setCancelling(false); setQueryNotice("");
     if (profileId) {
       setLoading(true);
       call<DatabaseObject[]>("list_objects", { profileId })
@@ -167,16 +175,58 @@ function App() {
     finally { if (objectGeneration.current === generation) setLoading(false); }
   }
 
+  function requestCancellation(task: ActiveQuery): Promise<void> {
+    task.cancelRequested = true;
+    if (!task.token) return Promise.resolve();
+    if (!task.cancellation) {
+      task.cancellation = call<boolean>("cancel_query", { token: task.token }).then(() => {}).catch(e => {
+        task.cancelRequested = false;
+        task.cancellation = null;
+        if (activeQuery.current === task) { setCancelling(false); setQueryNotice(""); setError(`중단 요청에 실패했습니다: ${errorText(e)}`); }
+      });
+    }
+    return task.cancellation;
+  }
+
+  function abandonQuery() {
+    const task = activeQuery.current;
+    if (task) { activeQuery.current = null; void requestCancellation(task); }
+  }
+
+  function cancelCurrentQuery() {
+    const task = activeQuery.current;
+    if (!task || task.cancelRequested) return;
+    setCancelling(true); setQueryNotice("중단 요청 중입니다. 실행 결과를 확인하고 있습니다.");
+    void requestCancellation(task);
+  }
+
   async function runQuery(query: string, page = 0) {
     if (!profileId || !query.trim()) return;
+    abandonQuery();
     const generation = ++queryGeneration.current;
-    setQuerying(true); setError("");
+    const task: ActiveQuery = { token: null, cancelRequested: false, cancellation: null };
+    activeQuery.current = task;
+    setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
     if (query !== executedSql) setResult(null);
     try {
-      const response = await call<QueryPage>("run_query", { profileId, sql: query, page });
-      if (queryGeneration.current === generation) { setResult(response); setExecutedSql(query); }
-    } catch (e) { if (queryGeneration.current === generation) setError(errorText(e)); }
-    finally { if (queryGeneration.current === generation) setQuerying(false); }
+      task.token = await call<string>("prepare_query");
+      if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
+      const response = await call<QueryOutcome>("run_query", { token: task.token, profileId, sql: query, page });
+      if (queryGeneration.current === generation) {
+        if (response.status === "completed") {
+          setResult(response.result); setExecutedSql(query);
+          setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
+        } else if (response.status === "cancelled") {
+          setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
+        } else {
+          setQueryNotice("쿼리 실행 시간 10초를 초과해 중단되었습니다. 조건을 줄여 다시 실행하세요.");
+        }
+      }
+    } catch (e) { if (queryGeneration.current === generation) { setQueryNotice(""); setError(errorText(e)); } }
+    finally {
+      if (activeQuery.current === task) activeQuery.current = null;
+      if (queryGeneration.current === generation) { setQuerying(false); setCancelling(false); }
+    }
   }
 
   function openModal(next: Modal) {
@@ -281,10 +331,11 @@ function App() {
             </div>
             {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>격리된 환경에서의 복원 테스트는 수행하지 않았습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
             {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
-            <div className="editor-card"><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div><button className="primary small" disabled={querying || !sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> {querying ? "실행 중…" : "쿼리 실행"}</button></div>
+            <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button> : <button className="primary small" disabled={!sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>}</div>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
               <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
             </div>
+            {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
             {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
             <div className="results-card"><div className="panel-heading"><div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div><span className="subtle">페이지당 최대 100개 행</span></div>

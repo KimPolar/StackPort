@@ -12,7 +12,7 @@ PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰 탐색",
     "SP-UI-011": "프로젝트·연결 변경 및 SQLite 백업·셀 변경의 로컬 작업 기록",
-    "SP-UI-014": "읽기 전용·실행 중·오류 표시",
+    "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-CN-001": "프로젝트별 로컬 SQLite 파일 연결 정의",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제",
@@ -37,6 +37,7 @@ PARTIAL = {
     "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
     "SP-SQ-001": "단일 SQL 입력 영역과 메모리 초안",
     "SP-SQ-007": "단일 읽기 전용 SQL 실행",
+    "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
     "SP-BK-002": "SQLite 온라인 백업 API",
     "SP-BK-003": "복원 가능한 SQLite 바이너리 파일",
@@ -88,6 +89,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
                 evidence = "crates/stackport-core/tests/migration.rs"
+            elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
+                evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif (requirement_id.startswith("SP-DT-") and requirement_id != "SP-DT-001") or requirement_id in {"SP-SEC-003", "SP-SEC-015", "SP-AT-010"}:
                 evidence = "crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             else:
