@@ -11,7 +11,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰 탐색",
-    "SP-UI-011": "프로젝트·연결 변경 및 SQLite 백업의 로컬 작업 기록",
+    "SP-UI-011": "프로젝트·연결 변경 및 SQLite 백업·셀 변경의 로컬 작업 기록",
     "SP-UI-014": "읽기 전용·실행 중·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-CN-001": "프로젝트별 로컬 SQLite 파일 연결 정의",
@@ -25,7 +25,16 @@ PARTIAL = {
     "SP-DB-022": "SQLite 객체의 구조·데이터 조회",
     "SP-DB-028": "읽기 전용 연결과 쓰기 차단",
     "SP-DT-001": "100행 단위 결과 페이지",
-    "SP-DT-006": "결과의 NULL 표시",
+    "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀 수정",
+    "SP-DT-004": "단일 셀 이전·변경 값 미리보기와 취소",
+    "SP-DT-005": "SQLite 기본 키 검증과 키 없는 테이블 편집 차단",
+    "SP-DT-006": "NULL·빈 문자열·숫자 구분 및 단일 셀 입력",
+    "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집",
+    "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
+    "SP-DT-020": "단일 셀 변경의 시작·성공·실패 감사 기록",
+    "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
+    "SP-DT-022": "SQLite 단일 셀 트랜잭션·롤백과 저장 값 검증",
+    "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
     "SP-SQ-001": "단일 SQL 입력 영역과 메모리 초안",
     "SP-SQ-007": "단일 읽기 전용 SQL 실행",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
@@ -35,15 +44,18 @@ PARTIAL = {
     "SP-BK-014": "백업 무결성 검사와 복원 테스트 상태 구분",
     "SP-ST-006": "프로젝트와 연결 정의 저장",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
-    "SP-SEC-008": "메타데이터의 SQL 바인딩과 SQLite 읽기 전용 검사",
+    "SP-SEC-008": "메타데이터·셀 변경의 값 바인딩과 일반 SQL 읽기 전용 검사",
+    "SP-SEC-003": "SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업의 이벤트 ID·시간·대상·결과·정책 기록",
+    "SP-SEC-011": "로컬 변경·백업·셀 편집의 이벤트 ID·시간·대상·결과·정책 기록",
+    "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1 작업 공간을 백업한 뒤 트랜잭션으로 v2 이관",
     "SP-AT-025": "v1 백업 후 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 파일의 데이터·객체 재조회와 무결성 검사",
+    "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
 }
 
 items = {}
@@ -76,6 +88,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
                 evidence = "crates/stackport-core/tests/migration.rs"
+            elif (requirement_id.startswith("SP-DT-") and requirement_id != "SP-DT-001") or requirement_id in {"SP-SEC-003", "SP-SEC-015", "SP-AT-010"}:
+                evidence = "crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             else:
                 evidence = "crates/stackport-core/tests/workspace.rs; src/; src-tauri/"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])

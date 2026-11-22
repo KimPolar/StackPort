@@ -5,7 +5,10 @@ edition = "2021"
 
 [dependencies]
 rusqlite = { version = "0.32.1", features = ["backup", "bundled", "hooks"] }
+same-file = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 tempfile = "3.0"
 uuid = { version = "1.0", features = ["v4"] }
+zeroize = "1.9"

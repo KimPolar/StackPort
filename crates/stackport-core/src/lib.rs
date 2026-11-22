@@ -1,8 +1,11 @@
 //! Local workspace metadata and the first database adapter.
 //!
-//! The metadata database and user databases are deliberately separate. User
-//! databases are opened read-only and arbitrary SQL is subject to an SQLite
-//! authorizer in addition to the operating mode of the connection.
+//! The metadata database and user databases are deliberately separate. General
+//! queries use read-only connections and an SQLite authorizer. Controlled cell
+//! updates use a separate previewed, audited transaction.
+
+mod edit;
+pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 
 use rusqlite::{
     backup::{Backup, StepResult},
@@ -14,6 +17,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -166,6 +170,7 @@ struct AuditRecord<'a> {
 #[derive(Clone)]
 pub struct Store {
     path: PathBuf,
+    edits: Arc<edit::EditManager>,
 }
 
 impl Store {
@@ -177,6 +182,7 @@ impl Store {
         }
         let store = Self {
             path: path.to_owned(),
+            edits: Arc::new(edit::EditManager::default()),
         };
         let mut db = store.connect()?;
         let version: i64 = db
@@ -546,6 +552,10 @@ impl Store {
     /// General user queries never receive these PRAGMA permissions.
     pub fn describe_object(&self, profile_id: &str, name: &str) -> Result<ObjectDetails> {
         let db = open_schema_db(Path::new(&self.profile(profile_id)?.path))?;
+        Self::describe_object_on(&db, name)
+    }
+
+    fn describe_object_on(db: &Connection, name: &str) -> Result<ObjectDetails> {
         let object = db.query_row(
             "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
             [name],
@@ -732,6 +742,10 @@ impl Store {
 fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
     let policy = match record.operation {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        "sqlite.cell.update" if record.environment == Some("PROD") => {
+            "sqlite-cell-update-prod-confirmed"
+        }
+        "sqlite.cell.update" => "sqlite-cell-update-confirmed",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -914,7 +928,12 @@ fn open_user_db_with_schema_access(path: &Path, allow_schema_pragmas: bool) -> R
             if allow_schema_pragmas
                 && matches!(
                     pragma_name,
-                    "table_xinfo" | "index_list" | "index_xinfo" | "foreign_key_list"
+                    "table_xinfo"
+                        | "index_list"
+                        | "index_xinfo"
+                        | "foreign_key_list"
+                        | "table_list"
+                        | "schema_version"
                 ) =>
         {
             Authorization::Allow

@@ -1,7 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use stackport_core::{
-    AuditPage, BackupReport, DatabaseObject, ObjectDetails, Profile, Project, QueryPage, Store,
+    AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
+    EditSession, ObjectDetails, Profile, Project, QueryPage, Store,
 };
 use tauri::{Manager, State};
 
@@ -106,6 +107,44 @@ async fn run_query(
 }
 
 #[tauri::command]
+async fn begin_cell_edit(
+    store: State<'_, Store>,
+    profile_id: String,
+    table: String,
+    keys: Vec<EditKey>,
+) -> Result<EditSession, String> {
+    let store = store.inner().clone();
+    worker(move || store.begin_cell_edit(&profile_id, &table, keys)).await
+}
+
+#[tauri::command]
+async fn preview_cell_edit(
+    store: State<'_, Store>,
+    token: String,
+    column: String,
+    input: EditInput,
+) -> Result<EditPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_cell_edit(&token, &column, input)).await
+}
+
+#[tauri::command]
+async fn apply_cell_edit(
+    store: State<'_, Store>,
+    token: String,
+    production_confirmation: String,
+) -> Result<EditResult, String> {
+    let store = store.inner().clone();
+    worker(move || store.apply_cell_edit(&token, &production_confirmation)).await
+}
+
+#[tauri::command]
+async fn cancel_cell_edit(store: State<'_, Store>, token: String) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.cancel_cell_edit(&token)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -162,6 +201,10 @@ fn main() {
             list_objects,
             describe_object,
             run_query,
+            begin_cell_edit,
+            preview_cell_edit,
+            apply_cell_edit,
+            cancel_cell_edit,
             choose_sqlite_file,
             choose_backup_directory,
             backup_sqlite
