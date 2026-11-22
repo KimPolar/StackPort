@@ -16,6 +16,10 @@ async function main() {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
 
+  if (process.env.STACKPORT_EXPECT_PROJECT) {
+    await page.getByRole('option', { name: process.env.STACKPORT_EXPECT_PROJECT, exact: true }).waitFor({ state: 'attached' });
+  }
+
   await page.getByRole('button', { name: '새 프로젝트' }).click();
   await page.getByLabel('이름', { exact: true }).fill('E2E 테스트');
   await page.getByRole('button', { name: '저장' }).click();
@@ -59,8 +63,17 @@ async function main() {
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();
+  await page.getByRole('button', { name: '작업 기록' }).click();
+  await page.getByRole('heading', { name: '작업 기록' }).waitFor();
+  await page.getByText('SQLite 백업', { exact: true }).first().waitFor();
+  await page.getByText('실패', { exact: true }).first().waitFor();
+  await page.getByText('완료', { exact: true }).first().waitFor();
+  const history = await page.locator('.audit-panel').innerText();
+  if (history.includes(database) || history.includes('DELETE FROM people') || history.includes('사용자 1')) {
+    throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
+  }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('Desktop SQLite read-only workflow and verified backup reopen passed.');
+  console.log('Desktop SQLite workflow, verified backup, and privacy-preserving history passed.');
   await browser.close();
 }
 

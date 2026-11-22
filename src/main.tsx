@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
-  Database, FileCode2, FolderOpen, HardDrive, Layers3,
+  Database, FileCode2, FolderOpen, HardDrive, History, Layers3,
   Plus, RefreshCw, Search, ShieldCheck, Table2, Trash2, X, Play,
 } from "lucide-react";
 import "./styles.css";
@@ -17,7 +17,9 @@ type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from
 type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean };
-type BackupReport = { path: string; size_bytes: number; integrity: "ok" };
+type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
+type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
+type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 type Modal = "project" | "profile" | "rename" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
@@ -58,6 +60,7 @@ function App() {
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const queryGeneration = useRef(0);
   const objectGeneration = useRef(0);
@@ -215,7 +218,7 @@ function App() {
     <div className="workspace">
       <header className="topbar">
         <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">워크스페이스</span></div>
-        <div className="top-right"><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
+        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => setHistoryOpen(current => !current)} aria-pressed={historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
       </header>
       <div className="body-layout">
         <aside className="explorer" aria-label="작업 공간 탐색기">
@@ -242,13 +245,13 @@ function App() {
           <div className="explorer-foot"><ShieldCheck size={15} /><span>연결 정보는 이 장치에 저장됩니다.</span></div>
         </aside>
         <main className="main-content">
-          {!desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
+          {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
           !project ? <EmptyState title="작업을 시작해 보세요" text="프로젝트를 만들고 SQLite 데이터베이스를 연결하세요." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
           !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 읽기 전용으로 열어 테이블을 살펴볼 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
             <div className="content-header"><div><div className="breadcrumbs">{project.name} <ChevronRight size={14} /> 데이터베이스</div><h1><Database size={21} /> {profile.name} <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} /> {displayPath(profile.path)}</p></div>
               <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> 읽기 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
             </div>
-            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>격리된 환경에서의 복원 테스트는 수행하지 않았습니다.</span></div>}
+            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>격리된 환경에서의 복원 테스트는 수행하지 않았습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
             <div className="editor-card"><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div><button className="primary small" disabled={querying || !sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> {querying ? "실행 중…" : "쿼리 실행"}</button></div>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
               <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
@@ -275,6 +278,42 @@ function App() {
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
   </div>;
+}
+
+const auditOperationNames: Record<string, string> = {
+  "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
+  "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업",
+};
+const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패" };
+
+function AuditPanel({ onBack }: { onBack: () => void }) {
+  const [cursors, setCursors] = useState<(number | null)[]>([null]);
+  const [page, setPage] = useState<AuditPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const cursor = cursors[cursors.length - 1];
+  useEffect(() => {
+    let live = true;
+    setLoading(true); setError("");
+    call<AuditPage>("list_audit_events", { before: cursor })
+      .then(result => { if (live) setPage(result); })
+      .catch(e => { if (live) setError(errorText(e)); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [cursor, refresh]);
+
+  return <section className="audit-panel" aria-labelledby="audit-title">
+    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경과 SQLite 백업을 기록합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
+    <p className="audit-note">SQL, 행 데이터, 암호와 파일 경로는 기록하지 않습니다. 실행자는 로컬 사용자로만 표시되며 개인 계정 식별과 변조 방지는 아직 제공되지 않습니다.</p>
+    {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
+    <div className="audit-card" aria-busy={loading}>
+      {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => <li key={event.id}>
+        <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${event.outcome}`}>{auditOutcomeNames[event.outcome] ?? event.outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
+      </li>)}</ul> : <p className="audit-empty">아직 기록된 작업이 없습니다.</p>}
+      <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
+    </div>
+  </section>;
 }
 
 function SchemaDetails({ object, details, loading, error }: { object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string }) {

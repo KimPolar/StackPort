@@ -11,6 +11,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰 탐색",
+    "SP-UI-011": "프로젝트·연결 변경 및 SQLite 백업의 로컬 작업 기록",
     "SP-UI-014": "읽기 전용·실행 중·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-CN-001": "프로젝트별 로컬 SQLite 파일 연결 정의",
@@ -35,8 +36,12 @@ PARTIAL = {
     "SP-ST-006": "프로젝트와 연결 정의 저장",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
     "SP-SEC-008": "메타데이터의 SQL 바인딩과 SQLite 읽기 전용 검사",
+    "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
+    "SP-SEC-011": "로컬 변경·백업의 이벤트 ID·시간·대상·결과·정책 기록",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
+    "SP-NFR-006": "v1 작업 공간을 백업한 뒤 트랜잭션으로 v2 이관",
+    "SP-AT-025": "v1 백업 후 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 파일의 데이터·객체 재조회와 무결성 검사",
 }
@@ -67,6 +72,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018", "SP-DB-022"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-UI-011", "SP-SEC-009", "SP-SEC-011"}:
+                evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
+                evidence = "crates/stackport-core/tests/migration.rs"
             else:
                 evidence = "crates/stackport-core/tests/workspace.rs; src/; src-tauri/"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])

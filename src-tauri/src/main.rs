@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use stackport_core::{
-    BackupReport, DatabaseObject, ObjectDetails, Profile, Project, QueryPage, Store,
+    AuditPage, BackupReport, DatabaseObject, ObjectDetails, Profile, Project, QueryPage, Store,
 };
 use tauri::{Manager, State};
 
@@ -19,6 +19,15 @@ where
 async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> {
     let store = store.inner().clone();
     worker(move || store.list_projects()).await
+}
+
+#[tauri::command]
+async fn list_audit_events(
+    store: State<'_, Store>,
+    before: Option<i64>,
+) -> Result<AuditPage, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_audit_events(before)).await
 }
 
 #[tauri::command]
@@ -143,6 +152,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_projects,
+            list_audit_events,
             create_project,
             rename_project,
             delete_project,

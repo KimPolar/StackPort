@@ -9,7 +9,7 @@ use rusqlite::{
     hooks::{AuthAction, AuthContext, Authorization},
     params,
     types::ValueRef,
-    Connection, OpenFlags, OptionalExtension,
+    Connection, OpenFlags, OptionalExtension, TransactionBehavior,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,9 +19,23 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
+const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
+    id TEXT PRIMARY KEY,
+    correlation_id TEXT NOT NULL,
+    occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    actor TEXT NOT NULL DEFAULT 'local',
+    operation TEXT NOT NULL,
+    project_id TEXT,
+    profile_id TEXT,
+    environment TEXT,
+    object_name TEXT,
+    outcome TEXT NOT NULL CHECK(outcome IN ('started', 'succeeded', 'failed')),
+    policy TEXT NOT NULL DEFAULT 'local-workspace',
+    affected_count INTEGER
+);";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Project {
@@ -112,6 +126,41 @@ pub struct BackupReport {
     pub path: String,
     pub size_bytes: u64,
     pub integrity: &'static str,
+    pub audit_warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditEvent {
+    pub sequence: i64,
+    pub id: String,
+    pub correlation_id: String,
+    pub occurred_at: String,
+    pub actor: String,
+    pub operation: String,
+    pub project_id: Option<String>,
+    pub profile_id: Option<String>,
+    pub environment: Option<String>,
+    pub object_name: Option<String>,
+    pub outcome: String,
+    pub policy: String,
+    pub affected_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditPage {
+    pub events: Vec<AuditEvent>,
+    pub next_cursor: Option<i64>,
+}
+
+struct AuditRecord<'a> {
+    correlation_id: &'a str,
+    operation: &'static str,
+    project_id: Option<&'a str>,
+    profile_id: Option<&'a str>,
+    environment: Option<&'a str>,
+    object_name: Option<&'a str>,
+    outcome: &'static str,
+    affected_count: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -133,25 +182,90 @@ impl Store {
         let version: i64 = db
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > SCHEMA_VERSION {
+        if !(0..=SCHEMA_VERSION).contains(&version) {
             return Err(format!(
-                "더 최신 버전의 작업 공간 형식입니다 (버전 {version})."
+                "지원하지 않는 작업 공간 형식입니다 (버전 {version})."
             ));
         }
+        // An existing v1 workspace is copied before changing its schema. The
+        // backup has a unique name and can never overwrite an earlier copy.
+        if version == 1 {
+            let absolute = std::fs::canonicalize(&store.path)
+                .map_err(|e| format!("작업 공간 경로를 확인할 수 없습니다: {e}"))?;
+            let directory = absolute
+                .parent()
+                .ok_or("작업 공간 폴더를 찾을 수 없습니다.")?;
+            let filename = absolute
+                .file_name()
+                .ok_or("작업 공간 파일 이름이 없습니다.")?
+                .to_string_lossy();
+            let backup = directory.join(format!("{filename}.v1-{}.backup.sqlite", Uuid::new_v4()));
+            if let Err(error) = snapshot_sqlite(&db, &backup, Some(1)) {
+                // Another instance may have completed the migration while this
+                // instance was creating its snapshot. Do not publish a v2
+                // database under a misleading v1 backup name.
+                let current: i64 = db
+                    .pragma_query_value(None, "user_version", |r| r.get(0))
+                    .map_err(db_error)?;
+                if current == SCHEMA_VERSION {
+                    return Ok(store);
+                }
+                return Err(format!(
+                    "이관 전 백업에 실패하여 원본을 변경하지 않았습니다: {error}"
+                ));
+            }
+        }
         if version == 0 {
-            let tx = db.transaction().map_err(db_error)?;
-            tx.execute_batch(
-                "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            let tx = db
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            let current: i64 = tx
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .map_err(db_error)?;
+            if current == 0 {
+                let objects: i64 = tx.query_row("SELECT count(*) FROM sqlite_schema WHERE substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE", [], |r| r.get(0)).map_err(db_error)?;
+                if objects != 0 {
+                    return Err(
+                        "초기화되지 않은 비어 있지 않은 작업 공간 파일입니다. 원본을 보존했습니다."
+                            .into(),
+                    );
+                }
+                tx.execute_batch(
+                    "CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
                  CREATE TABLE profiles (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                     name TEXT NOT NULL,
                     path TEXT NOT NULL,
                     environment TEXT NOT NULL CHECK(environment IN ('DEV', 'STAGING', 'PROD'))
-                 );
-                 PRAGMA user_version = 1;",
-            )
-            .map_err(db_error)?;
+                 );",
+                )
+                .map_err(db_error)?;
+                tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+                    .map_err(db_error)?;
+            } else if current != SCHEMA_VERSION {
+                return Err(format!(
+                    "다른 프로세스가 작업 공간 형식을 변경했습니다 (버전 {current})."
+                ));
+            }
+            tx.commit().map_err(db_error)?;
+        } else if version == 1 {
+            let tx = db
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            let current: i64 = tx
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .map_err(db_error)?;
+            if current == 1 {
+                tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
+                tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+                    .map_err(db_error)?;
+            } else if current != SCHEMA_VERSION {
+                return Err(format!(
+                    "다른 프로세스가 작업 공간 형식을 변경했습니다 (버전 {current})."
+                ));
+            }
             tx.commit().map_err(db_error)?;
         }
         Ok(store)
@@ -189,32 +303,84 @@ impl Store {
             id: Uuid::new_v4().to_string(),
             name: name.into(),
         };
-        self.connect()?
-            .execute(
-                "INSERT INTO projects (id, name) VALUES (?1, ?2)",
-                params![project.id, project.name],
-            )
-            .map_err(db_error)?;
+        let mut db = self.connect()?;
+        let tx = db.transaction().map_err(db_error)?;
+        tx.execute(
+            "INSERT INTO projects (id, name) VALUES (?1, ?2)",
+            params![project.id, project.name],
+        )
+        .map_err(db_error)?;
+        insert_audit(
+            &tx,
+            AuditRecord {
+                correlation_id: &Uuid::new_v4().to_string(),
+                operation: "project.create",
+                project_id: Some(&project.id),
+                profile_id: None,
+                environment: None,
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(1),
+            },
+        )?;
+        tx.commit().map_err(db_error)?;
         Ok(project)
     }
 
     pub fn rename_project(&self, id: &str, name: &str) -> Result<()> {
-        let changed = self
-            .connect()?
+        let mut db = self.connect()?;
+        let tx = db.transaction().map_err(db_error)?;
+        let changed = tx
             .execute(
                 "UPDATE projects SET name = ?1 WHERE id = ?2",
                 params![valid_name(name)?, id],
             )
             .map_err(db_error)?;
-        require_changed(changed, "프로젝트를 찾을 수 없습니다.")
+        require_changed(changed, "프로젝트를 찾을 수 없습니다.")?;
+        insert_audit(
+            &tx,
+            AuditRecord {
+                correlation_id: &Uuid::new_v4().to_string(),
+                operation: "project.rename",
+                project_id: Some(id),
+                profile_id: None,
+                environment: None,
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(1),
+            },
+        )?;
+        tx.commit().map_err(db_error)
     }
 
     pub fn delete_project(&self, id: &str) -> Result<()> {
-        let changed = self
-            .connect()?
+        let mut db = self.connect()?;
+        let tx = db.transaction().map_err(db_error)?;
+        let profiles: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM profiles WHERE project_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;
-        require_changed(changed, "프로젝트를 찾을 수 없습니다.")
+        require_changed(changed, "프로젝트를 찾을 수 없습니다.")?;
+        insert_audit(
+            &tx,
+            AuditRecord {
+                correlation_id: &Uuid::new_v4().to_string(),
+                operation: "project.delete",
+                project_id: Some(id),
+                profile_id: None,
+                environment: None,
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(profiles + 1),
+            },
+        )?;
+        tx.commit().map_err(db_error)
     }
 
     pub fn list_profiles(&self, project_id: &str) -> Result<Vec<Profile>> {
@@ -255,17 +421,96 @@ impl Store {
             path: path.to_string_lossy().into_owned(),
             environment: environment.into(),
         };
-        self.connect()?.execute("INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
+        let mut metadata = self.connect()?;
+        let tx = metadata.transaction().map_err(db_error)?;
+        tx.execute("INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![profile.id, profile.project_id, profile.name, profile.path, profile.environment]).map_err(db_error)?;
+        insert_audit(
+            &tx,
+            AuditRecord {
+                correlation_id: &Uuid::new_v4().to_string(),
+                operation: "sqlite_profile.create",
+                project_id: Some(&profile.project_id),
+                profile_id: Some(&profile.id),
+                environment: Some(&profile.environment),
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(1),
+            },
+        )?;
+        tx.commit().map_err(db_error)?;
         Ok(profile)
     }
 
     pub fn delete_profile(&self, id: &str) -> Result<()> {
-        let changed = self
-            .connect()?
+        let mut db = self.connect()?;
+        let tx = db.transaction().map_err(db_error)?;
+        let profile = tx
+            .query_row(
+                "SELECT id, project_id, name, path, environment FROM profiles WHERE id = ?1",
+                [id],
+                profile_from_row,
+            )
+            .optional()
+            .map_err(db_error)?
+            .ok_or("연결을 찾을 수 없습니다.")?;
+        let changed = tx
             .execute("DELETE FROM profiles WHERE id = ?1", [id])
             .map_err(db_error)?;
-        require_changed(changed, "연결을 찾을 수 없습니다.")
+        require_changed(changed, "연결을 찾을 수 없습니다.")?;
+        insert_audit(
+            &tx,
+            AuditRecord {
+                correlation_id: &Uuid::new_v4().to_string(),
+                operation: "sqlite_profile.delete",
+                project_id: Some(&profile.project_id),
+                profile_id: Some(id),
+                environment: Some(&profile.environment),
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(1),
+            },
+        )?;
+        tx.commit().map_err(db_error)
+    }
+
+    pub fn list_audit_events(&self, before: Option<i64>) -> Result<AuditPage> {
+        if before.is_some_and(|cursor| cursor <= 0) {
+            return Err("유효하지 않은 기록 위치입니다.".into());
+        }
+        let db = self.connect()?;
+        let mut statement = db.prepare("SELECT rowid, id, correlation_id, occurred_at, actor, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count FROM audit_events WHERE (?1 IS NULL OR rowid < ?1) ORDER BY rowid DESC LIMIT ?2").map_err(db_error)?;
+        let mut events = statement
+            .query_map(params![before, (PAGE_SIZE + 1) as i64], |row| {
+                Ok(AuditEvent {
+                    sequence: row.get(0)?,
+                    id: row.get(1)?,
+                    correlation_id: row.get(2)?,
+                    occurred_at: row.get(3)?,
+                    actor: row.get(4)?,
+                    operation: row.get(5)?,
+                    project_id: row.get(6)?,
+                    profile_id: row.get(7)?,
+                    environment: row.get(8)?,
+                    object_name: row.get(9)?,
+                    outcome: row.get(10)?,
+                    policy: row.get(11)?,
+                    affected_count: row.get(12)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        let next_cursor = if events.len() > PAGE_SIZE {
+            events.pop();
+            events.last().map(|event| event.sequence)
+        } else {
+            None
+        };
+        Ok(AuditPage {
+            events,
+            next_cursor,
+        })
     }
 
     fn profile(&self, id: &str) -> Result<Profile> {
@@ -392,87 +637,37 @@ impl Store {
     /// the source database or an existing destination.
     pub fn backup_sqlite(&self, profile_id: &str, destination: &str) -> Result<BackupReport> {
         let profile = self.profile(profile_id)?;
-        let destination = Path::new(destination.trim());
-        if !destination.is_absolute() || destination.file_name().is_none() {
-            return Err("새 백업 파일의 절대 경로를 지정하세요.".into());
-        }
-        let parent = destination
-            .parent()
-            .ok_or("백업 폴더를 찾을 수 없습니다.")?;
-        if !parent.is_dir() {
-            return Err("백업 폴더가 없거나 폴더에 접근할 수 없습니다.".into());
-        }
-        if destination.exists() {
-            return Err("같은 이름의 파일이 이미 있습니다. 새 경로를 선택하세요.".into());
-        }
-
-        let source = open_user_db(Path::new(&profile.path))?;
-        let temporary = tempfile::Builder::new()
-            .prefix(".stackport-backup-")
-            .tempfile_in(parent)
-            .map_err(|e| format!("백업 임시 파일을 만들 수 없습니다: {e}"))?;
-        {
-            let mut target = Connection::open(temporary.path()).map_err(db_error)?;
-            target
-                .busy_timeout(Duration::from_secs(5))
-                .map_err(db_error)?;
-            {
-                let backup = Backup::new(&source, &mut target).map_err(db_error)?;
-                let mut last_remaining = None;
-                let mut last_progress = Instant::now();
-                loop {
-                    let state = backup.step(128).map_err(db_error)?;
-                    if state == StepResult::Done {
-                        break;
-                    }
-                    let remaining = backup.progress().remaining;
-                    if last_remaining != Some(remaining) {
-                        last_remaining = Some(remaining);
-                        last_progress = Instant::now();
-                    } else if last_progress.elapsed() > Duration::from_secs(15) {
-                        return Err(
-                            "백업 진행이 중단되었습니다. 원본의 잠금 상태를 확인하세요.".into()
-                        );
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
+        let correlation_id = Uuid::new_v4().to_string();
+        let audit = |outcome, affected_count| AuditRecord {
+            correlation_id: &correlation_id,
+            operation: "sqlite.backup",
+            project_id: Some(&profile.project_id),
+            profile_id: Some(&profile.id),
+            environment: Some(&profile.environment),
+            object_name: None,
+            outcome,
+            affected_count,
+        };
+        insert_audit(&self.connect()?, audit("started", None))?;
+        let result = open_user_db(Path::new(&profile.path))
+            .and_then(|source| snapshot_sqlite(&source, Path::new(destination.trim()), None));
+        let outcome = if result.is_ok() {
+            "succeeded"
+        } else {
+            "failed"
+        };
+        let audit_result = self
+            .connect()
+            .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
+        match (result, audit_result) {
+            (Ok(mut report), Err(_)) => {
+                report.audit_warning =
+                    Some("백업은 생성됐지만 완료 감사 기록을 저장하지 못했습니다.".into());
+                Ok(report)
             }
-            // A standalone backup must not depend on an adjacent WAL file.
-            target
-                .pragma_update(None, "journal_mode", "DELETE")
-                .map_err(db_error)?;
-            let mut check = target.prepare("PRAGMA integrity_check").map_err(db_error)?;
-            let results = check
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(db_error)?
-                .collect::<rusqlite::Result<Vec<_>>>()
-                .map_err(db_error)?;
-            if results != ["ok"] {
-                return Err(
-                    "백업 무결성 검사에 실패했습니다. 백업 파일을 게시하지 않았습니다.".into(),
-                );
-            }
+            (Err(error), Err(_)) => Err(format!("{error} 완료 감사 기록도 저장하지 못했습니다.")),
+            (result, Ok(())) => result,
         }
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|e| format!("백업을 디스크에 기록할 수 없습니다: {e}"))?;
-        let size_bytes = temporary
-            .as_file()
-            .metadata()
-            .map_err(|e| format!("백업 크기를 확인할 수 없습니다: {e}"))?
-            .len();
-        temporary.persist_noclobber(destination).map_err(|e| {
-            format!(
-                "백업을 저장할 수 없습니다. 기존 파일은 덮어쓰지 않습니다: {}",
-                e.error
-            )
-        })?;
-        Ok(BackupReport {
-            path: destination.to_string_lossy().into_owned(),
-            size_bytes,
-            integrity: "ok",
-        })
     }
 
     pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {
@@ -532,6 +727,107 @@ impl Store {
             has_more,
         })
     }
+}
+
+fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
+    let policy = match record.operation {
+        "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        _ => "local-workspace",
+    };
+    db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![Uuid::new_v4().to_string(), record.correlation_id, record.operation, record.project_id, record.profile_id, record.environment, record.object_name, record.outcome, policy, record.affected_count]).map_err(db_error)?;
+    Ok(())
+}
+
+fn snapshot_sqlite(
+    source: &Connection,
+    destination: &Path,
+    expected_version: Option<i64>,
+) -> Result<BackupReport> {
+    if !destination.is_absolute() || destination.file_name().is_none() {
+        return Err("새 백업 파일의 절대 경로를 지정하세요.".into());
+    }
+    let parent = destination
+        .parent()
+        .ok_or("백업 폴더를 찾을 수 없습니다.")?;
+    if !parent.is_dir() {
+        return Err("백업 폴더가 없거나 폴더에 접근할 수 없습니다.".into());
+    }
+    if destination.exists() {
+        return Err("같은 이름의 파일이 이미 있습니다. 새 경로를 선택하세요.".into());
+    }
+    let temporary = tempfile::Builder::new()
+        .prefix(".stackport-backup-")
+        .tempfile_in(parent)
+        .map_err(|e| format!("백업 임시 파일을 만들 수 없습니다: {e}"))?;
+    {
+        let mut target = Connection::open(temporary.path()).map_err(db_error)?;
+        target
+            .busy_timeout(Duration::from_secs(5))
+            .map_err(db_error)?;
+        {
+            let backup = Backup::new(source, &mut target).map_err(db_error)?;
+            let mut last_remaining = None;
+            let mut last_progress = Instant::now();
+            loop {
+                let state = backup.step(128).map_err(db_error)?;
+                if state == StepResult::Done {
+                    break;
+                }
+                let remaining = backup.progress().remaining;
+                if last_remaining != Some(remaining) {
+                    last_remaining = Some(remaining);
+                    last_progress = Instant::now();
+                } else if last_progress.elapsed() > Duration::from_secs(15) {
+                    return Err("백업 진행이 중단되었습니다. 원본의 잠금 상태를 확인하세요.".into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        target
+            .pragma_update(None, "journal_mode", "DELETE")
+            .map_err(db_error)?;
+        if let Some(expected) = expected_version {
+            let actual: i64 = target
+                .pragma_query_value(None, "user_version", |r| r.get(0))
+                .map_err(db_error)?;
+            if actual != expected {
+                return Err(format!(
+                    "백업 중 작업 공간 버전이 변경되었습니다 (버전 {actual})."
+                ));
+            }
+        }
+        let mut check = target.prepare("PRAGMA integrity_check").map_err(db_error)?;
+        let results = check
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        if results != ["ok"] {
+            return Err("백업 무결성 검사에 실패했습니다. 백업 파일을 게시하지 않았습니다.".into());
+        }
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|e| format!("백업을 디스크에 기록할 수 없습니다: {e}"))?;
+    let size_bytes = temporary
+        .as_file()
+        .metadata()
+        .map_err(|e| format!("백업 크기를 확인할 수 없습니다: {e}"))?
+        .len();
+    temporary.persist_noclobber(destination).map_err(|e| {
+        format!(
+            "백업을 저장할 수 없습니다. 기존 파일은 덮어쓰지 않습니다: {}",
+            e.error
+        )
+    })?;
+    Ok(BackupReport {
+        path: destination.to_string_lossy().into_owned(),
+        size_bytes,
+        integrity: "ok",
+        audit_warning: None,
+    })
 }
 
 fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
