@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/
+crates/stackport-core/target/
+.npm-cache/
+.npm-logs/
+.test-data/
+*.db-wal
+*.db-shm

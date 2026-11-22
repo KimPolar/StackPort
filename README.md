@@ -1,0 +1,44 @@
+# StackPort
+
+StackPort는 로컬 우선 원격 접속·데이터베이스 작업 공간을 만드는 프로젝트입니다. 전체 요구사항은 [기능 명세서](StackPort_Functional_Spec_KO.md)에 있습니다. 현재 코드는 초기 구현이며 명세 전체가 완성된 제품이 아닙니다.
+
+## 현재 사용 가능한 기능
+
+- 로컬 프로젝트 생성·이름 변경·삭제와 프로젝트별 SQLite 연결 정의 저장
+- 기존 SQLite 파일을 **읽기 전용**으로 열어 테이블과 뷰를 탐색
+- 단일 읽기 전용 SQL 실행, 결과 100행씩 조회, NULL과 BLOB 구분 표시
+- 연결별 SQL 초안을 앱 실행 중 메모리에 보관하고, 프로젝트·연결 삭제 전 영향 확인
+
+SQLite 원본은 수정하지 않습니다. 삭제 명령은 저장된 연결 정의만 삭제하며 데이터베이스 파일을 삭제하지 않습니다. 파일은 미리 존재해야 합니다. 쿼리는 하나의 결과를 반환해야 하며 바인딩 매개변수, 쓰기, DDL, PRAGMA 및 데이터베이스 첨부는 아직 지원하지 않습니다. 조회는 최대 10초 동안 실행되며 셀의 긴 텍스트는 앞 4,096자만 표시합니다. 데이터 순서가 중요하면 SQL에 `ORDER BY`를 지정하세요. 쿼리 초안은 앱 종료나 비정상 종료 후 복구되지 않습니다.
+
+SSH, 터미널, 다른 DB 엔진, 데이터 변경, 협업, AI, 브라우저 게이트웨이 및 설치·업데이트 패키지 등 나머지 기능은 아직 제공되지 않습니다. 브라우저에서는 로컬 파일 연결을 제공하지 않습니다. 요구사항별 현재 상태는 [추적표](docs/requirements.csv), 구현 경계와 검증 범위는 [구현 현황](docs/IMPLEMENTATION.md)을 참고하세요.
+
+## 개발 실행
+
+Windows에서 Node.js 20.19 이상 또는 22.12 이상, Rust, C++ 빌드 도구, WebView2가 필요합니다. macOS와 Linux는 아직 검증하지 않았습니다.
+
+```powershell
+npm ci
+npm run dev
+```
+
+다른 터미널에서 다음을 실행합니다.
+
+```powershell
+cargo run --manifest-path src-tauri/Cargo.toml
+```
+
+프런트엔드를 빌드하고 내장 리소스로 데스크톱 바이너리를 만들려면 다음을 실행합니다. 서명된 배포 패키지는 아직 구성하지 않았습니다.
+
+```powershell
+npm run build
+cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+```
+
+메타데이터는 기본적으로 OS의 앱 데이터 디렉터리에 있는 `workspace.sqlite`에 저장됩니다. 별도의 위치를 사용하려면 실행 전에 `STACKPORT_DATA_DIR` 환경 변수를 지정할 수 있습니다. 이 폴더는 연결 정의를 보관하므로 접근 권한과 백업을 사용자가 관리해야 합니다. 비밀번호나 개인키를 저장하는 기능은 없습니다.
+
+```powershell
+cargo test --manifest-path crates/stackport-core/Cargo.toml
+npm run build
+cargo check --manifest-path src-tauri/Cargo.toml
+```
