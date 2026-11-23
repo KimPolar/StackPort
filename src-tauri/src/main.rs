@@ -2,8 +2,10 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, ObjectDetails, Profile, Project, QueryOutcome, Store,
+    EditSession, ObjectDetails, Profile, Project, QueryOutcome, Store, TerminalInfo,
+    TerminalManager, TerminalRead,
 };
+use std::sync::Arc;
 use tauri::{Manager, State};
 
 async fn worker<T, F>(operation: F) -> Result<T, String>
@@ -157,6 +159,56 @@ async fn cancel_cell_edit(store: State<'_, Store>, token: String) -> Result<(), 
 }
 
 #[tauri::command]
+async fn open_terminal(
+    terminals: State<'_, Arc<TerminalManager>>,
+    shell: String,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalInfo, String> {
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || terminals.open(&shell, rows, cols)).await
+}
+
+#[tauri::command]
+async fn read_terminal(
+    terminals: State<'_, Arc<TerminalManager>>,
+    id: String,
+) -> Result<TerminalRead, String> {
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || terminals.read(&id)).await
+}
+
+#[tauri::command]
+async fn write_terminal(
+    terminals: State<'_, Arc<TerminalManager>>,
+    id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || terminals.write(&id, &data)).await
+}
+
+#[tauri::command]
+async fn resize_terminal(
+    terminals: State<'_, Arc<TerminalManager>>,
+    id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || terminals.resize(&id, rows, cols)).await
+}
+
+#[tauri::command]
+async fn close_terminal(
+    terminals: State<'_, Arc<TerminalManager>>,
+    id: String,
+) -> Result<(), String> {
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || terminals.close(&id)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -199,6 +251,7 @@ fn main() {
             let path = directory.join("workspace.sqlite");
             let store = Store::open(path).map_err(std::io::Error::other)?;
             app.manage(store);
+            app.manage(Arc::new(TerminalManager::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -219,6 +272,11 @@ fn main() {
             preview_cell_edit,
             apply_cell_edit,
             cancel_cell_edit,
+            open_terminal,
+            read_terminal,
+            write_terminal,
+            resize_terminal,
+            close_terminal,
             choose_sqlite_file,
             choose_backup_directory,
             backup_sqlite

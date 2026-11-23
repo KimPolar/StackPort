@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
   Database, FileCode2, FolderOpen, HardDrive, History, Layers3,
-  Plus, RefreshCw, Search, ShieldCheck, Table2, Trash2, X, Play,
+  Plus, RefreshCw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import "./styles.css";
 
@@ -31,6 +32,7 @@ type EditRequest = { profile: Profile; object: DatabaseObject; keys: EditKey[] }
 type Modal = "project" | "profile" | "rename" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
+const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -47,6 +49,8 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
+  const [page, setPage] = useState<"workspace" | "terminal">("workspace");
+  const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -79,6 +83,9 @@ function App() {
   const activeQuery = useRef<ActiveQuery | null>(null);
   const objectGeneration = useRef(0);
   const detailsGeneration = useRef(0);
+  const terminalCount = useRef(0);
+  const closeApproved = useRef(false);
+  const updateTerminalCount = useCallback((count: number) => { terminalCount.current = count; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef<Record<string, string>>({});
@@ -136,13 +143,27 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (Object.values(drafts.current).some(draft => draft.trim())) {
+      if (!closeApproved.current && (terminalCount.current > 0 || Object.values(drafts.current).some(draft => draft.trim()))) {
         event.preventDefault();
         event.returnValue = "";
       }
     }
     window.addEventListener("beforeunload", warnBeforeClose);
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
+  }, []);
+
+  useEffect(() => {
+    if (!desktop) return;
+    let live = true;
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested(event => {
+      const notes: string[] = [];
+      if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
+      if (Object.values(drafts.current).some(draft => draft.trim())) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
+      if (notes.length && !window.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) event.preventDefault();
+      else closeApproved.current = true;
+    }).then(remove => { if (live) unlisten = remove; else remove(); }).catch(e => { if (live) setError(`창 종료 확인을 설정할 수 없습니다: ${errorText(e)}`); });
+    return () => { live = false; unlisten?.(); };
   }, []);
 
   function changeSql(value: string) {
@@ -290,15 +311,16 @@ function App() {
   return <div className="app-shell">
     <aside className="rail" aria-label="기본 탐색">
       <div className="brand-mark" aria-label="StackPort"><Layers3 size={22} strokeWidth={2.2} /></div>
-      <div className="rail-active" title="작업 공간"><Boxes size={20} /><span>워크스페이스</span></div>
+      <button className={`rail-item ${page === "workspace" ? "rail-active" : ""}`} aria-label="워크스페이스" aria-current={page === "workspace" ? "page" : undefined} onClick={() => setPage("workspace")}><Boxes size={20} /><span>워크스페이스</span></button>
+      <button className={`rail-item ${page === "terminal" ? "rail-active" : ""}`} aria-label="터미널" aria-current={page === "terminal" ? "page" : undefined} disabled={!desktop} onClick={() => { setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={20} /><span>터미널</span></button>
       <div className="rail-bottom"><CircleHelp size={19} /><span>로컬 우선</span></div>
     </aside>
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">워크스페이스</span></div>
-        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => setHistoryOpen(current => !current)} aria-pressed={historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
+        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{page === "terminal" ? "터미널" : "워크스페이스"}</span></div>
+        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page === "terminal" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
       </header>
-      <div className="body-layout">
+      <div className="body-layout" hidden={page !== "workspace"}>
         <aside className="explorer" aria-label="작업 공간 탐색기">
           <div className="explorer-top"><span>탐색기</span><button className="icon-button" onClick={() => openModal("project")} disabled={!desktop} aria-label="새 프로젝트"><Plus size={17} /></button></div>
           <label className="select-label" htmlFor="project-select">프로젝트</label>
@@ -347,7 +369,8 @@ function App() {
           {!profile && error && <div className="error-banner" role="alert">{error}</div>}
         </main>
       </div>
-      <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SQLite 조회 · 승인 후 단일 셀 편집 <span className="status-separator">|</span> SSH 및 기타 DB 준비 중</span></footer>
+      <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} /></React.Suspense>}</div>
+      <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> SSH 및 기타 DB 준비 중</span></footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}

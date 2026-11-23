@@ -8,6 +8,8 @@ mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 mod query;
 pub use query::QueryOutcome;
+mod terminal;
+pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
 
 use rusqlite::{
     backup::{Backup, StepResult},

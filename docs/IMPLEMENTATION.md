@@ -6,6 +6,8 @@
 
 React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다. 네트워크·파일 처리와 장시간 SQL은 웹 UI에서 직접 수행하지 않고 별도 작업 스레드로 넘깁니다. 브라우저에는 네이티브 명령이나 임의 TCP 프록시를 제공하지 않습니다. 게이트웨이 인증 및 접근 제어는 아직 구현하지 않았습니다.
 
+Windows 로컬 터미널은 ConPTY와 xterm.js를 사용하며 PowerShell(`-NoProfile`) 또는 CMD(`/D`) 세션을 별도 탭으로 엽니다. 입력·출력은 StackPort가 파일이나 감사 기록에 저장하지 않지만 셸과 실행 프로그램의 자체 기록은 별도입니다. 화면을 숨겨도 세션을 유지하며 출력 대기열은 유한한 크기로 제한하고 밀리면 프로세스에 역압을 적용합니다. 창 크기는 PTY에 전달하고, 여러 줄 붙여넣기 및 탭·앱 종료 시 확인합니다. Windows 작업 개체에 연결된 프로세스는 탭이나 앱을 닫을 때 정리합니다. Windows 10 1809 이상의 ConPTY가 필요하며 WSL·사용자 지정 셸·SSH, 재연결, 터미널 기록 검색과 다른 OS 검증은 아직 없습니다.
+
 로컬 메타데이터는 SQLite 트랜잭션, 외래 키, 스키마 버전을 사용합니다. 버전 1에서 2로 이관하기 전 원본과 같은 폴더에 SQLite 스냅샷을 생성하고 무결성과 버전을 검사합니다. 이관 실패 시 원본 트랜잭션을 롤백하고 백업을 보존합니다. 지원하지 않는 버전이나 비어 있지 않은 미버전 파일은 변경하지 않고 거절합니다. 백업을 통한 자동 복구와 여러 창에서의 편집 충돌 해결은 아직 구현하지 않았습니다. 프로젝트 삭제는 연결 정의도 삭제하지만 원본 DB 파일은 건드리지 않습니다. 자격 증명 모델과 보안 저장소는 아직 없습니다.
 
 프로젝트·연결 정의 변경은 메타데이터와 감사 이벤트를 같은 트랜잭션에 저장합니다. SQLite 백업과 셀 변경은 시작과 완료·실패를 별도 이벤트로 기록합니다. 작업이 성공한 뒤 완료 기록이 실패하면 작업 성공과 기록 실패를 함께 표시합니다. 이벤트에는 ID, UTC 시각, 로컬 사용자 표시, 작업 종류, 대상 ID, 환경, 결과, 정책과 영향 개수를 저장하며 SQL, 행 값, 파일 경로와 자격 증명은 저장하지 않습니다. 개별 OS 사용자 식별, 변조 방지와 보존 기간 설정은 아직 없습니다. 앱이 작업 완료와 기록 저장 사이에 비정상 종료되면 시작 이벤트만 남을 수 있습니다.
@@ -26,8 +28,10 @@ SQLite 백업은 온라인 백업 API를 사용해 WAL을 포함한 일관된 �
 - `crates/stackport-core/tests/migration.rs`: 이전 형식 백업·이관, 이관 실패 시 원본 보존과 동시 초기화·이관을 검사합니다.
 - `crates/stackport-core/tests/audit.rs`: 감사 기록과 메타데이터 변경의 원자성, 백업 완료 기록 실패, 개인정보 제외와 안정적인 페이지 이동을 검사합니다.
 - `crates/stackport-core/tests/edit.rs`: 미리보기의 비변경, 운영 환경 확인, 동시 변경·파일 교체·구조 변경 충돌, 트랜잭션 롤백과 감사 실패를 실제 파일로 검사합니다.
-- `crates/stackport-core/tests/query_cancel.rs`와 `src/query.rs` 단위 테스트: 실행 전·실행 중 중단, 시간 초과, 요청 재사용 방지와 독립 조회를 검사합니다.
+- `crates/stackport-core/tests/query_cancel.rs`와 `crates/stackport-core/src/query.rs` 단위 테스트: 실행 전·실행 중 중단, 시간 초과, 요청 재사용 방지와 독립 조회를 검사합니다.
+- `crates/stackport-core/tests/terminal.rs`: 실제 Windows CMD 입출력·크기 변경·종료 코드, 하위 프로세스 종료와 입출력이 막힌 상태에서의 종료를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에 연결하여 조회 중단·재조회, 단일 셀 미리보기·적용·동시 수정 차단, 운영 환경 확인, 백업 생성·재조회 및 작업 기록을 검사합니다.
+- `tests/terminal-smoke.cjs`: 격리된 Windows 앱에서 PowerShell·CMD와 한글 입력·24비트 색상 출력, 탭 전환·키보드 이동, 여러 줄 붙여넣기 거부와 창 종료 확인을 검사합니다. 실제 IME 조합 입력과 스크린 리더 사용성은 별도 검증이 필요합니다.
 - `npm run build`: 프런트엔드 타입 검사와 배포용 번들 생성.
 - `cargo check --manifest-path src-tauri/Cargo.toml`: 네이티브 명령과 Tauri 호스트 컴파일 검사.
 
@@ -35,19 +39,24 @@ SQLite 백업은 온라인 백업 API를 사용해 WAL을 포함한 일관된 �
 
 ### Windows 데스크톱 E2E 실행
 
-테스트는 디버깅 포트를 열고 테스트 DB를 직접 변경하므로 테스트용 앱 데이터와 WebView 프로필만 사용해야 합니다. 기존 사용자의 앱이나 데이터를 대상으로 실행하지 마세요. Playwright Node 패키지와 Python이 별도로 필요합니다(예: `npm install --no-save playwright`). Node 모듈 경로는 `STACKPORT_PLAYWRIGHT_PATH`, Python 실행 파일은 `STACKPORT_TEST_PYTHON`으로 지정할 수 있습니다.
+테스트는 디버깅 포트를 열고 테스트 DB와 로컬 셸을 사용하므로 테스트용 앱 데이터, WebView 및 사용자 프로필만 사용해야 합니다. 기존 사용자의 앱이나 데이터를 대상으로 실행하지 마세요. 아래 환경 변수는 테스트 전용 PowerShell 창에서 설정하고, 테스트 후 그 창을 닫으세요. Playwright Node 패키지와 Python이 별도로 필요합니다(예: `npm install --no-save playwright`). Node 모듈 경로는 `STACKPORT_PLAYWRIGHT_PATH`, Python 실행 파일은 `STACKPORT_TEST_PYTHON`으로 지정할 수 있습니다.
 
 ```powershell
 $testRoot = Join-Path $env:TEMP ('stackport-e2e-' + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 $env:STACKPORT_TEST_DATABASE = Join-Path $testRoot 'fixture.sqlite'
 python tests/create_desktop_fixture.py $env:STACKPORT_TEST_DATABASE
+npm run build
+cargo build --features custom-protocol --manifest-path src-tauri/Cargo.toml
 $env:STACKPORT_DATA_DIR = Join-Path $testRoot 'workspace'
 $env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $testRoot 'webview'
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9331 --disable-background-networking'
+$env:USERPROFILE = Join-Path $testRoot 'profile'
+$env:APPDATA = Join-Path $env:USERPROFILE 'AppData\Roaming'
+$env:LOCALAPPDATA = Join-Path $env:USERPROFILE 'AppData\Local'
+New-Item -ItemType Directory -Force -Path $env:APPDATA, $env:LOCALAPPDATA | Out-Null
 Write-Output $testRoot
-npm run build
-cargo run --features custom-protocol --manifest-path src-tauri/Cargo.toml
+& '.\src-tauri\target\debug\stackport.exe'
 ```
 
 앱이 열리면 다른 터미널에서 위에 출력된 테스트 폴더를 사용해 다음을 실행합니다.
@@ -55,6 +64,16 @@ cargo run --features custom-protocol --manifest-path src-tauri/Cargo.toml
 ```powershell
 $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
+```
+
+같은 격리 앱에서 터미널 검사를 실행하려면 테스트 앱 프로세스가 하나뿐인지 확인하고 PID를 지정합니다. 이 검사는 종료 확인을 검증한 뒤 앱을 닫습니다.
+
+```powershell
+$testExe = (Resolve-Path -LiteralPath 'src-tauri\target\debug\stackport.exe').Path
+$testProcesses = @(Get-Process -Name stackport | Where-Object { $_.Path -eq $testExe })
+if ($testProcesses.Count -ne 1) { throw '격리된 테스트 앱 하나만 실행하세요.' }
+$env:STACKPORT_TEST_WINDOW_PID = [string]$testProcesses[0].Id
+node tests/terminal-smoke.cjs
 ```
 
 테스트 후 앱을 종료하고 임시 폴더를 삭제합니다. 앱 개발 시 이 디버깅 포트는 기본으로 열리지 않습니다.

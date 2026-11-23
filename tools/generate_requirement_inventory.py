@@ -11,11 +11,19 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰 탐색",
+    "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
     "SP-UI-011": "프로젝트·연결 변경 및 SQLite 백업·셀 변경의 로컬 작업 기록",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
+    "SP-UI-016": "로컬 터미널 탭의 키보드 이동",
     "SP-CN-001": "프로젝트별 로컬 SQLite 파일 연결 정의",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제",
+    "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널",
+    "SP-TM-003": "Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절",
+    "SP-TM-005": "터미널의 메모리 스크롤백",
+    "SP-TM-006": "터미널 키보드 입력과 선택·붙여넣기",
+    "SP-TM-007": "여러 줄 붙여넣기 전 확인",
+    "SP-TM-017": "로컬 터미널·앱 종료 시 실행 작업 확인",
     "SP-DB-001": "SQLite 읽기 전용 어댑터",
     "SP-DB-007": "한 프로젝트에 여러 SQLite 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록",
@@ -57,6 +65,7 @@ PARTIAL = {
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 파일의 데이터·객체 재조회와 무결성 검사",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
+    "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
 }
 
 items = {}
@@ -91,6 +100,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/migration.rs"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id.startswith("SP-TM-") or requirement_id in {"SP-UI-003", "SP-UI-016", "SP-AT-007"}:
+                evidence = "crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif (requirement_id.startswith("SP-DT-") and requirement_id != "SP-DT-001") or requirement_id in {"SP-SEC-003", "SP-SEC-015", "SP-AT-010"}:
                 evidence = "crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             else:

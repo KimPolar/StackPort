@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+portable-pty = "=0.8.1"
 rusqlite = { version = "0.32.1", features = ["backup", "bundled", "hooks"] }
 same-file = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -12,3 +13,6 @@ sha2 = "0.10"
 tempfile = "3.0"
 uuid = { version = "1.0", features = ["v4"] }
 zeroize = "1.9"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
