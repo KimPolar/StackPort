@@ -93,6 +93,24 @@ async function main() {
   if (!denied.includes('호스트 키')) throw new Error(`Untrusted SSH session was not rejected: ${denied}`);
   if (instance.stats.connections !== 0) throw new Error('Untrusted session attempted a connection.');
 
+  // The network test opens TCP only; it must not try SSH authentication.
+  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
+  await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
+  await page.getByLabel('포트', { exact: true }).fill(String(instance.port));
+  await page.getByRole('button', { name: 'DNS·TCP 진단' }).click();
+  const diagnostic = page.getByRole('status', { name: '연결 진단 결과' });
+  await diagnostic.getByText(/IP 주소 · DNS 조회 불필요/).waitFor();
+  await diagnostic.getByText(/TCP 연결 성공/).first().waitFor();
+  await diagnostic.getByText(/SSH 호스트 키, 인증 및 서버 권한은 검사하지 않았습니다/).waitFor();
+  await page.getByLabel('호스트 또는 IP').fill('localhost');
+  await diagnostic.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: 'DNS·TCP 진단' }).click();
+  await diagnostic.getByText(/이름 조회 성공/).waitFor();
+  await diagnostic.getByText(/TCP 연결 성공/).first().waitFor();
+  if (instance.stats.authentications !== 0) throw new Error('Network diagnosis attempted SSH authentication.');
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+
   await openDialog(page, instance.port);
   await page.getByText('확인이 필요한 호스트 키', { exact: false }).waitFor();
   await page.getByText(originalKey.fingerprint, { exact: true }).waitFor();
@@ -282,7 +300,7 @@ async function main() {
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   await stopServer(instance);
   await browser.close();
-  console.log('SSH fingerprint confirmation, pinned login, saved PROD profiles, stale revisions, key rotation, and changed-key rejection passed.');
+  console.log('DNS/TCP diagnosis, SSH fingerprint confirmation, pinned login, saved PROD profiles, stale revisions, key rotation, and changed-key rejection passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

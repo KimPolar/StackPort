@@ -2,9 +2,9 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, ObjectDetails, Profile, Project, QueryOutcome, SshHostInfo, SshManager,
-    SshProfile, SshProfileExportReport, SshProfileImportPreview, SshProfileInput, SshTrustPage,
-    Store, TerminalInfo, TerminalManager, TerminalRead,
+    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
+    SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
+    SshProfileInput, SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -292,6 +292,16 @@ async fn inspect_ssh_host(
 }
 
 #[tauri::command]
+async fn diagnose_ssh_network(
+    network: State<'_, Arc<NetworkManager>>,
+    host: String,
+    port: u16,
+) -> Result<NetworkDiagnostics, String> {
+    let network = Arc::clone(network.inner());
+    worker(move || network.diagnose(&host, port)).await
+}
+
+#[tauri::command]
 async fn trust_ssh_host(
     ssh: State<'_, Arc<SshManager>>,
     token: String,
@@ -444,6 +454,7 @@ fn main() {
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(directory)));
+            app.manage(Arc::new(NetworkManager::default()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -477,6 +488,7 @@ fn main() {
             resize_terminal,
             close_terminal,
             inspect_ssh_host,
+            diagnose_ssh_network,
             trust_ssh_host,
             reinspect_ssh_host,
             list_ssh_trust_events,

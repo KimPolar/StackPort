@@ -18,7 +18,7 @@ PARTIAL = {
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-UI-016": "로컬 터미널 탭의 키보드 이동",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
-    "SP-CN-002": "SSH 호스트 키 사전 조회와 실패 표시",
+    "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",
     "SP-CN-005": "선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
@@ -33,6 +33,7 @@ PARTIAL = {
     "SP-TM-006": "터미널 키보드 입력과 선택·붙여넣기",
     "SP-TM-007": "여러 줄 붙여넣기 전 확인",
     "SP-TM-017": "로컬 터미널·앱 종료 시 실행 작업 확인",
+    "SP-NW-002": "SSH 연결 화면의 DNS 조회와 TCP 포트 연결 진단",
     "SP-DB-001": "SQLite 읽기 전용 어댑터",
     "SP-DB-007": "한 프로젝트에 여러 SQLite 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록",
@@ -115,9 +116,11 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
                 evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
+            elif requirement_id in {"SP-CN-002", "SP-NW-002"}:
+                evidence = "crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
-            elif requirement_id in {"SP-UI-008", "SP-CN-002", "SP-CN-007", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:
+            elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id.startswith("SP-TM-") or requirement_id in {"SP-UI-003", "SP-UI-016", "SP-AT-007"}:
                 evidence = "crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"

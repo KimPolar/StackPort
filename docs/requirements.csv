@@ -20,7 +20,7 @@ SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자�
 SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,연결별 SQL 초안을 실행 중 메모리에 유지,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
 SP-UI-020,오류 중심 UX,기술 오류 코드와 원인·재시도 조건·안전한 복구 조치를 분리해 제시.,not_started,,
 SP-CN-001,연결 프로필,"프로토콜, 호스트, 포트, 사용자, 별칭, 설명, 색상, 폴더, 자격 증명 참조, 타임아웃을 저장.",partial,프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
-SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",partial,SSH 호스트 키 사전 조회와 실패 표시,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
+SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",partial,SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공,crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-003,수명주기,접속·중단·재접속·복제·삭제·일괄 접속·연결 수 제한·유휴 타임아웃 설정.,partial,"SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-CN-004,자동 재연결,"지수 백오프, 최대 재시도, 수동 중지, 실패 원인 기록. 비멱등 명령은 자동 재실행하지 않음.",not_started,,
 SP-CN-005,연결 프로필 가져오기/내보내기,선택한 연결만 JSON 등 문서화된 버전형 포맷으로 교환; 비밀번호 기본 제외.,partial,선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기,crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/
@@ -110,7 +110,7 @@ SP-FL-022,작업 재사용,"전송·백업·동기화 프로필 저장, 수동 �
 SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",not_started,,
 SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",not_started,,
 SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",not_started,,
-SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",not_started,,
+SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",partial,SSH 연결 화면의 DNS 조회와 TCP 포트 연결 진단,crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-NW-003,웹 상태 확인,"HTTP/HTTPS 요청 시간·상태 코드·헤더·TLS 정보, 반복 가용성 측정.",not_started,,
 SP-NW-004,대역폭 측정,사용자가 허가한 측정 대상에 대한 iperf 계열 클라이언트/서버 실행 및 결과 정리.,not_started,,
 SP-NW-005,패킷 캡처,사용자 허가 인터페이스의 캡처·필터·PCAP 저장; OS 권한 및 드라이버 요구사항 명시.,not_started,,

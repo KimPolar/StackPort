@@ -13,6 +13,8 @@ type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: 
 type Tab = TerminalInfo & { number: number; exit: TerminalExit | null };
 type SshKey = { algorithm: string; fingerprint: string };
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
+type TcpStatus = "connected" | "refused" | "unreachable" | "timed_out" | "failed" | "not_tested";
+type NetworkDiagnostics = { host: string; port: number; dns: { status: "literal" | "resolved" | "failed" | "timed_out" | "busy"; elapsed_ms: number }; tcp: { status: TcpStatus; elapsed_ms: number }; addresses: string[]; attempts: { address: string; status: Exclude<TcpStatus, "not_tested">; elapsed_ms: number }[]; connected_address: string | null };
 
 const call = <T,>(command: string, args?: Record<string, unknown>) => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
@@ -218,9 +220,18 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
   const [fingerprint, setFingerprint] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [prodConfirmation, setProdConfirmation] = useState("");
-  const [busy, setBusy] = useState<"" | "inspect" | "trust" | "open">("");
+  const [diagnostic, setDiagnostic] = useState<NetworkDiagnostics | null>(null);
+  const [busy, setBusy] = useState<"" | "diagnose" | "inspect" | "trust" | "open">("");
   const [error, setError] = useState("");
   useEffect(() => { dialog.current?.showModal(); }, []);
+
+  async function diagnose() {
+    if (busy) return;
+    setBusy("diagnose"); setDiagnostic(null); setError("");
+    try { setDiagnostic(await call<NetworkDiagnostics>("diagnose_ssh_network", { host, port: Number(port) })); }
+    catch (e) { setError(errorText(e)); }
+    finally { setBusy(""); }
+  }
 
   async function inspect(event: FormEvent) {
     event.preventDefault();
@@ -267,9 +278,11 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
     <div className="dialog-heading"><h2>SSH 연결</h2><button className="icon-button" aria-label="닫기" disabled={Boolean(busy)} onClick={onClose}><X size={18} /></button></div>
     <form onSubmit={inspect} aria-busy={Boolean(busy)}>
       {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>}
-      <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
-      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => setPort(event.target.value)} /></label>
+      <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
+      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>
       <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
+      <div className="ssh-diagnostic-actions"><button type="button" className="secondary small" disabled={Boolean(busy) || !host.trim() || !port} onClick={() => void diagnose()}>DNS·TCP 진단</button><span>네트워크 연결을 시도하며 로그인하지 않습니다.</span></div>
+      {diagnostic && <NetworkDiagnosticResult result={diagnostic} />}
       {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. 암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다.{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
       {info && <div className="ssh-verification">
         <strong>{info.host.includes(":") ? `[${info.host}]` : info.host}:{info.port} · {info.status === "trusted" ? "저장된 호스트 키" : info.status === "replacement" ? "호스트 키 재확인" : "확인이 필요한 호스트 키"}</strong>
@@ -277,8 +290,21 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       </div>}
       {info?.status === "trusted" && profile?.environment === "PROD" && <label className="field ssh-prod-confirm">운영 환경 확인: PROD 입력<input disabled={Boolean(busy)} value={prodConfirmation} onChange={event => setProdConfirmation(event.target.value)} autoComplete="off" placeholder="PROD" /></label>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      {busy && <p className="form-note" role="status">{busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
+      {busy && <p className="form-note" role="status">{busy === "diagnose" ? "DNS와 TCP 연결을 확인하는 중…" : busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setProdConfirmation(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy) || (profile?.environment === "PROD" && prodConfirmation !== "PROD")} onClick={() => void connect()}>연결</button>}</div>
     </form>
   </dialog>;
+}
+
+function NetworkDiagnosticResult({ result }: { result: NetworkDiagnostics }) {
+  const dnsLabels = { literal: "IP 주소 · DNS 조회 불필요", resolved: "이름 조회 성공", failed: "이름 조회 실패", timed_out: "이름 조회 시간 초과", busy: "이전 DNS 조회가 아직 진행 중" };
+  const tcpLabels = { connected: "TCP 연결 성공", refused: "TCP 연결 거부", unreachable: "네트워크에 도달할 수 없음", timed_out: "TCP 연결 시간 초과 또는 일부 주소 응답 없음", failed: "TCP 연결 실패", not_tested: "TCP 연결 미검사" };
+  const attemptLabels = { connected: "연결 성공", refused: "연결 거부", unreachable: "도달할 수 없음", timed_out: "연결 시간 초과", failed: "연결 실패" };
+  return <section className="ssh-diagnostic-result" aria-label="연결 진단 결과" role="status">
+    <strong>{result.host.includes(":") ? `[${result.host}]` : result.host}:{result.port} 진단</strong>
+    <dl><dt>DNS</dt><dd>{dnsLabels[result.dns.status]} · {result.dns.elapsed_ms} ms</dd><dt>TCP</dt><dd>{result.attempts.length > 1 && result.tcp.status !== "connected" ? "TCP 연결 실패 또는 응답 없음" : tcpLabels[result.tcp.status]}{result.tcp.status !== "not_tested" && ` · ${result.tcp.elapsed_ms} ms`}</dd></dl>
+    {result.addresses.length > 0 && <p>대상 주소: {result.addresses.join(", ")}{result.connected_address && ` · 연결된 주소: ${result.connected_address}`}</p>}
+    {result.attempts.length > 1 && <ul>{result.attempts.map(attempt => <li key={attempt.address}>{attempt.address} · {attemptLabels[attempt.status]} · {attempt.elapsed_ms} ms</li>)}</ul>}
+    <p>SSH 호스트 키, 인증 및 서버 권한은 검사하지 않았습니다.</p>
+  </section>;
 }

@@ -6,6 +6,8 @@
 
 mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
+mod network;
+pub use network::{NetworkDiagnostics, NetworkManager};
 mod query;
 pub use query::QueryOutcome;
 mod ssh;

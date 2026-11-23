@@ -96,6 +96,9 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .terminal-remote.prod { background: #75463e; }.terminal-remote.prod span { color: #f4ddd7; }
 .ssh-profile-context { display: flex; align-items: center; gap: 8px; color: #435e50; font-size: 13px; }
 .ssh-prod-confirm { color: #9b4036; }
+.ssh-diagnostic-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 4px 0 12px; color: #70857b; font-size: 11px; }
+.ssh-diagnostic-result { margin: 0 0 14px; padding: 12px; border: 1px solid #d9e9df; border-radius: 6px; background: #f5faf6; color: #435e50; font-size: 12px; overflow-wrap: anywhere; }
+.ssh-diagnostic-result dl { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 9px 0; }.ssh-diagnostic-result dt { font-weight: 700; }.ssh-diagnostic-result dd { margin: 0; }.ssh-diagnostic-result p { color: #617b6d; margin: 7px 0 0; }
 .ssh-exchange-dialog { width: min(580px, calc(100vw - 32px)); }
 .exchange-list { border: 1px solid #d9e9df; border-radius: 6px; margin: 12px 0; padding: 8px 12px; max-height: 240px; overflow: auto; }
 .exchange-list legend { font-size: 12px; font-weight: 700; color: #435e50; }
