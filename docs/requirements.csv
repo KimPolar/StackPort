@@ -6,10 +6,10 @@ SP-UI-004,화면 분할,"2분할 수평/수직, 4분할, 자유 분할 및 크�
 SP-UI-005,탭 분리,데스크톱에서 탭을 별도 창으로 분리·재결합하고 전체 화면을 제공.,not_started,,
 SP-UI-006,통합 검색,"연결 이름, 경로, 즐겨찾기, DB 객체, 저장 쿼리, 로그, 도구를 검색. 민감 정보는 색인 제외.",not_started,,
 SP-UI-007,명령 팔레트,단축키로 기능·명령·호스트·DB를 빠르게 열고 최근 항목을 우선 표시.,not_started,,
-SP-UI-008,빠른 연결,"호스트/IP/URL/연결 문자열 입력에서 프로토콜 추론, 유효성 검사 및 신규 프로필 저장 제안.",not_started,,
+SP-UI-008,빠른 연결,"호스트/IP/URL/연결 문자열 입력에서 프로토콜 추론, 유효성 검사 및 신규 프로필 저장 제안.",partial,Windows SSH 호스트·포트·사용자 빠른 연결,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-UI-009,즐겨찾기,연결·쿼리·테이블·스크립트·폴더·작업을 고정하고 개인 즐겨찾기 및 프로젝트 공유 구분.,not_started,,
 SP-UI-010,가상 그룹,같은 연결·DB 객체를 실제 위치를 바꾸지 않고 태그/논리 그룹으로 분류.,not_started,,
-SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,프로젝트·연결 변경 및 SQLite 백업·셀 변경의 로컬 작업 기록,crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,프로젝트·SQLite 작업과 SSH 호스트 키 신뢰·교체의 로컬 기록,crates/stackport-core/tests/audit.rs; crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목록 복구, 실제 재연결은 정책에 따라 수행.",not_started,,
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
 SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
@@ -20,15 +20,15 @@ SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자�
 SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,연결별 SQL 초안을 실행 중 메모리에 유지,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
 SP-UI-020,오류 중심 UX,기술 오류 코드와 원인·재시도 조건·안전한 복구 조치를 분리해 제시.,not_started,,
 SP-CN-001,연결 프로필,"프로토콜, 호스트, 포트, 사용자, 별칭, 설명, 색상, 폴더, 자격 증명 참조, 타임아웃을 저장.",partial,프로젝트별 로컬 SQLite 파일 연결 정의,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",not_started,,
-SP-CN-003,수명주기,접속·중단·재접속·복제·삭제·일괄 접속·연결 수 제한·유휴 타임아웃 설정.,partial,SQLite 연결 정의 생성·삭제,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",partial,SSH 호스트 키 사전 조회와 실패 표시,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
+SP-CN-003,수명주기,접속·중단·재접속·복제·삭제·일괄 접속·연결 수 제한·유휴 타임아웃 설정.,partial,SQLite 연결 정의 생성·삭제와 SSH 세션 열기·닫기,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-004,자동 재연결,"지수 백오프, 최대 재시도, 수동 중지, 실패 원인 기록. 비멱등 명령은 자동 재실행하지 않음.",not_started,,
 SP-CN-005,연결 프로필 가져오기/내보내기,선택한 연결만 JSON 등 문서화된 버전형 포맷으로 교환; 비밀번호 기본 제외.,not_started,,
 SP-CN-006,URL 핸들러,`stackport://` URI로 명시적 연결/개체 접근; 외부 입력은 확인·검증·권한 검사.,not_started,,
-SP-CN-007,암호 기반 인증,"암호 입력/저장/세션만 사용, 마스킹과 클립보드 관리.",not_started,,
+SP-CN-007,암호 기반 인증,"암호 입력/저장/세션만 사용, 마스킹과 클립보드 관리.",partial,SSH 터미널의 일회성 암호 입력,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-008,키 기반 SSH,공개키·개인키·암호화 키·여러 키·SSH 에이전트·키 암호(passphrase) 지원.,not_started,,
 SP-CN-009,SSH 대화형 인증,"keyboard-interactive, 다중 인증 프롬프트, 서버 안내 메시지.",not_started,,
-SP-CN-010,SSH 호스트 신뢰,"최초 호스트 키 확인, 핑거프린트 저장, 변경 경고 및 연결 차단 기본값.",not_started,,
+SP-CN-010,SSH 호스트 신뢰,"최초 호스트 키 확인, 핑거프린트 저장, 변경 경고 및 연결 차단 기본값.",partial,SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-011,인증서 인증,TLS 서버 인증서 체인·호스트 이름·유효기간·고정값 검증 및 필요 시 클라이언트 인증서.,not_started,,
 SP-CN-012,DB 인증,암호·OS 통합 인증·Kerberos·LDAP/PAM·AD·SSO·MFA 등 엔진에서 제공하는 모드 지원.,not_started,,
 SP-CN-013,시크릿 저장소,"운영체제 보안 저장소 또는 암호화된 독립 보관함, 마스터 암호, 잠금/해제·암호 변경·자동 잠금.",not_started,,
@@ -42,9 +42,9 @@ SP-CN-020,세션 그룹,폴더/프로젝트의 여러 세션을 한 번에 열�
 SP-CN-021,공유 연결 정의,"읽기 전용 공유/편집 가능한 공유, 프로젝트 소유, 변경 이력 및 충돌 처리.",not_started,,
 SP-CN-022,연결 정책,관리자가 허용하는 프로토콜·인증 방식·호스트 범위·TLS 검증 예외를 설정.,not_started,,
 SP-CN-023,환경 분리,"DEV/STAGING/PROD 구분, 색상·배너·파괴적 명령 승인 정책.",not_started,,
-SP-CN-024,인증 실패 처리,로그인 실패 횟수·재시도 제한·계정 잠금 메시지를 구분하고 무차별 재시도를 금지.,not_started,,
+SP-CN-024,인증 실패 처리,로그인 실패 횟수·재시도 제한·계정 잠금 메시지를 구분하고 무차별 재시도를 금지.,partial,SSH 암호 인증 프롬프트 1회로 제한,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-001,로컬 셸,"PowerShell, CMD, WSL, 설치된 Bash/Zsh 등 사용자 지정 실행 파일을 터미널 탭에서 실행.",partial,Windows PowerShell·CMD 로컬 터미널,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
-SP-TM-002,원격 셸,"SSH, Telnet, Rlogin/Rsh, Mosh 세션에서 명령 입력·표준입출력·종료 코드·에러 스트림 처리.",not_started,,
+SP-TM-002,원격 셸,"SSH, Telnet, Rlogin/Rsh, Mosh 세션에서 명령 입력·표준입출력·종료 코드·에러 스트림 처리.",partial,Windows OpenSSH의 대화형 원격 셸 입출력,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-003,터미널 호환,"PTY/ConPTY, ANSI/VT100/VT220/xterm 계열 제어, UTF-8·기타 문자집합, 24-bit 색, 줄 바꿈·커서·스크롤 영역.",partial,Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-004,인터랙티브 프로그램,"vim, less, top, tmux, screen, curses 애플리케이션의 입력/리사이즈 정상 동작.",not_started,,
 SP-TM-005,출력 기록,"스크롤백 크기, 검색, 정규식 필터, 저장/인쇄, TXT/ANSI 내보내기, 타임스탬프 로그.",partial,터미널의 메모리 스크롤백,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
@@ -376,14 +376,14 @@ SP-ST-018,국제화,"한국어/영어 UI, 다국어 문자 입력·출력, IME �
 SP-SEC-001,기본 거부,"명시적으로 허용하지 않은 호스트 접근, 로컬 서버 공개, 외부 API 송신, 확장 실행을 기본 차단.",not_started,,
 SP-SEC-002,최소 권한,읽기/쓰기/관리 권한과 자격 증명·네트워크·파일 접근을 기능별로 제한.,not_started,,
 SP-SEC-003,고위험 작업,"데이터 삭제/복원/스키마 변경, 동시 원격 명령, 원격 키 삭제 시 환경·대상·예상 영향 확인.",partial,SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-SEC-004,세션 보안,호스트 키·TLS 인증서 경고를 무음 우회하지 않으며 예외는 범위·만료·감사 기록.,not_started,,
+SP-SEC-004,세션 보안,호스트 키·TLS 인증서 경고를 무음 우회하지 않으며 예외는 범위·만료·감사 기록.,partial,"SSH 호스트 키 지문 확인·고정과 변경 차단, 신뢰·교체 이력",crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-SEC-005,전송 암호화,보안 프로토콜을 우선 제안; Telnet/Rlogin/FTP/XDMCP 등 평문 사용 시 위험 배너.,not_started,,
 SP-SEC-006,비밀값 보호,"암호·토큰·키를 OS 보안 저장소/암호화 보관함에 보관, 사용 후 가능한 범위에서 메모리 정리.",not_started,,
 SP-SEC-007,UI 보안,"WebView 콘텐츠 보안 정책(CSP), 교차 컨텍스트 브리지 권한 최소화, HTML/SQL/셸 문자열 적절한 이스케이프.",partial,Tauri 콘텐츠 보안 정책,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-SEC-008,입력 방어,"DB 파라미터 바인딩, 파일 경로 검증, 셸 실행 인자 분리, 프로토콜 URI 검증.",partial,메타데이터·셀 변경의 값 바인딩과 일반 SQL 읽기 전용 검사,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-SEC-008,입력 방어,"DB 파라미터 바인딩, 파일 경로 검증, 셸 실행 인자 분리, 프로토콜 URI 검증.",partial,"메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-SEC-009,로그 정책,"민감 자격 증명·개인키·원본 데이터·쿼리 리터럴의 마스킹/제외, 보존 기간과 삭제 정책.",partial,작업 기록에서 SQL·행 데이터·경로·자격 증명 제외,crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-SEC-010,네트워크 권한,브라우저 중계 게이트웨이의 사용자 인증·RBAC·세션 범위·허용 목적지·TLS·감사·레이트 리밋.,not_started,,
-SP-SEC-011,감사 무결성,중요 동작은 사건 ID·시간·주체·대상·결과·정책을 남기고 외부 반출을 통제.,partial,로컬 변경·백업·셀 편집의 이벤트 ID·시간·대상·결과·정책 기록,crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-SEC-011,감사 무결성,중요 동작은 사건 ID·시간·주체·대상·결과·정책을 남기고 외부 반출을 통제.,partial,로컬 변경·백업·셀 편집과 SSH 키 신뢰·교체 이력 기록,crates/stackport-core/tests/audit.rs; crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-SEC-012,데이터 유출 차단,팀 동기화·AI 호출·진단 수집에서 시크릿/원본 레코드 비포함 기본값.,not_started,,
 SP-SEC-013,백업 안전,"암호화/복구키 분리, 백업 파일 권한·보존·파기, 복원 테스트 상태 제공.",not_started,,
 SP-SEC-014,공급망,"의존성·네이티브 바이너리·드라이버·플러그인 서명 검증, SBOM 및 라이선스 고지.",not_started,,
@@ -405,7 +405,7 @@ SP-NFR-013,장애 진단,"오류 ID, 구성 요소, 실제 재시도 가능성, 
 SP-NFR-014,감시 가능성,연결 수·작업 상태·터널·전송·DB 쿼리·스케줄 상태를 운영 화면에서 확인 가능,not_started,,
 SP-NFR-015,브라우저 격리,임의 웹 페이지/링크/비신뢰 확장이 네이티브 API 또는 게이트웨이 토큰에 접근할 수 없어야 함,not_started,,
 SP-NFR-016,호환성,DB 엔진/버전 및 OS/프로토콜별 자동·수동 회귀 테스트 결과를 매트릭스 형태로 유지,not_started,,
-SP-AT-001,SSH 호스트 키 변경,기존 지문과 다른 서버에 재접속할 때 무음 접속하지 않고 차단/재검증 제공,not_started,,
+SP-AT-001,SSH 호스트 키 변경,기존 지문과 다른 서버에 재접속할 때 무음 접속하지 않고 차단/재검증 제공,partial,SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-AT-002,SSH + SFTP 연동,SSH 접속→파일 탐색→원격 파일 편집·저장→재조회 결과 일치,not_started,,
 SP-AT-003,파일 저장 충돌,원격 파일이 타 사용자에 의해 변경된 경우 덮어쓰기 전에 충돌 감지 및 선택 제공,not_started,,
 SP-AT-004,다중 터미널,"2/4분할, 탭 분리·복귀·그룹 실행, 종료·재접속 후 상태 일관성",not_started,,

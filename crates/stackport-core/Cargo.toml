@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+base64 = "0.22"
 portable-pty = "=0.8.1"
 rusqlite = { version = "0.32.1", features = ["backup", "bundled", "hooks"] }
 same-file = "1.0"

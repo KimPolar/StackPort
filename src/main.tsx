@@ -23,6 +23,8 @@ type ActiveQuery = { token: string | null; cancelRequested: boolean; cancellatio
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
+type SshTrustEvent = { sequence: number; id: string; host: string; port: number; action: "accepted" | "replaced"; previous_fingerprint: string | null; fingerprint: string; occurred_at: string };
+type SshTrustPage = { events: SshTrustEvent[]; next_cursor: number | null };
 type EditKey = { name: string; kind: string; value: string };
 type EditField = { name: string; declared_type: string; current: Cell; editable: boolean; reason: string | null };
 type EditSession = { token: string; table: string; environment: string; keys: EditKey[]; fields: EditField[]; expires_seconds: number };
@@ -370,7 +372,7 @@ function App() {
         </main>
       </div>
       <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} /></React.Suspense>}</div>
-      <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> SSH 및 기타 DB 준비 중</span></footer>
+      <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
@@ -467,6 +469,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  const [sshOpen, setSshOpen] = useState(false);
   const cursor = cursors[cursors.length - 1];
   useEffect(() => {
     let live = true;
@@ -479,7 +482,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
   }, [cursor, refresh]);
 
   return <section className="audit-panel" aria-labelledby="audit-title">
-    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경과 SQLite 백업·셀 변경을 기록합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
+    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite 작업과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
     <p className="audit-note">SQL, 행 데이터, 암호와 파일 경로는 기록하지 않습니다. 실행자는 로컬 사용자로만 표시되며 개인 계정 식별과 변조 방지는 아직 제공되지 않습니다.</p>
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
@@ -488,7 +491,32 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
       </li>)}</ul> : <p className="audit-empty">아직 기록된 작업이 없습니다.</p>}
       <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
     </div>
+    <details className="ssh-history" onToggle={event => setSshOpen(event.currentTarget.open)}><summary>SSH 호스트 키 신뢰 기록</summary>{sshOpen && <SshTrustHistory />}</details>
   </section>;
+}
+
+function SshTrustHistory() {
+  const [cursors, setCursors] = useState<(number | null)[]>([null]);
+  const [page, setPage] = useState<SshTrustPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const cursor = cursors[cursors.length - 1];
+  useEffect(() => {
+    let live = true;
+    setLoading(true); setError("");
+    call<SshTrustPage>("list_ssh_trust_events", { before: cursor }).then(result => { if (live) setPage(result); })
+      .catch(e => { if (live) setError(errorText(e)); }).finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [cursor, refresh]);
+  return <div className="ssh-history-content" aria-busy={loading}>
+    <div className="ssh-history-heading"><p>호스트 이름·포트와 확인한 공개 키 지문을 이 장치에 기록합니다.</p><button className="secondary small" disabled={loading} onClick={() => setRefresh(value => value + 1)}>새로고침</button></div>
+    {error && <p className="form-error" role="alert">신뢰 기록을 불러오지 못했습니다: {error}</p>}
+    {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => <li key={event.id}>
+      <div className="audit-row"><div><strong>{event.action === "replaced" ? "호스트 키 교체" : "호스트 키 신뢰"}</strong><p>{event.host.includes(":") ? `[${event.host}]` : event.host}:{event.port} · {new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자</p></div><details><summary>지문과 이벤트 ID</summary><dl>{event.previous_fingerprint && <><dt>이전 지문</dt><dd>{event.previous_fingerprint}</dd></>}<dt>확인한 지문</dt><dd>{event.fingerprint}</dd><dt>이벤트 ID</dt><dd>{event.id}</dd></dl></details></div>
+    </li>)}</ul> : <p className="audit-empty">아직 신뢰한 호스트 키가 없습니다.</p>}
+    <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
+  </div>;
 }
 
 function SchemaDetails({ object, details, loading, error }: { object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string }) {

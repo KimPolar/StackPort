@@ -15,7 +15,7 @@ async function main() {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.getByRole('button', { name: '터미널', exact: true }).click();
-  await page.getByRole('heading', { name: '로컬 터미널' }).waitFor();
+  await page.getByRole('heading', { name: '터미널', exact: true }).waitFor();
   await page.getByLabel('셸', { exact: true }).selectOption('cmd');
   await page.getByRole('button', { name: '새 터미널' }).click();
   await page.getByRole('tab', { name: 'CMD 1' }).waitFor();

@@ -2,8 +2,8 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, ObjectDetails, Profile, Project, QueryOutcome, Store, TerminalInfo,
-    TerminalManager, TerminalRead,
+    EditSession, ObjectDetails, Profile, Project, QueryOutcome, SshHostInfo, SshManager,
+    SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -209,6 +209,61 @@ async fn close_terminal(
 }
 
 #[tauri::command]
+async fn inspect_ssh_host(
+    ssh: State<'_, Arc<SshManager>>,
+    host: String,
+    port: u16,
+) -> Result<SshHostInfo, String> {
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || ssh.inspect(&host, port)).await
+}
+
+#[tauri::command]
+async fn trust_ssh_host(
+    ssh: State<'_, Arc<SshManager>>,
+    token: String,
+    fingerprint: String,
+    confirmation: String,
+) -> Result<SshHostInfo, String> {
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || ssh.trust(&token, &fingerprint, &confirmation)).await
+}
+
+#[tauri::command]
+async fn reinspect_ssh_host(
+    ssh: State<'_, Arc<SshManager>>,
+    host: String,
+    port: u16,
+) -> Result<SshHostInfo, String> {
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || ssh.reinspect(&host, port)).await
+}
+
+#[tauri::command]
+async fn list_ssh_trust_events(
+    ssh: State<'_, Arc<SshManager>>,
+    before: Option<i64>,
+) -> Result<SshTrustPage, String> {
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || ssh.history(before)).await
+}
+
+#[tauri::command]
+async fn open_ssh_terminal(
+    ssh: State<'_, Arc<SshManager>>,
+    terminals: State<'_, Arc<TerminalManager>>,
+    host: String,
+    port: u16,
+    username: String,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalInfo, String> {
+    let ssh = Arc::clone(ssh.inner());
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || ssh.open(&terminals, &host, port, &username, rows, cols)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -248,10 +303,16 @@ fn main() {
                 Some(path) => std::path::PathBuf::from(path),
                 None => app.path().app_data_dir()?,
             };
+            let directory = if directory.is_absolute() {
+                directory
+            } else {
+                std::env::current_dir()?.join(directory)
+            };
             let path = directory.join("workspace.sqlite");
             let store = Store::open(path).map_err(std::io::Error::other)?;
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
+            app.manage(Arc::new(SshManager::new(directory)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -277,6 +338,11 @@ fn main() {
             write_terminal,
             resize_terminal,
             close_terminal,
+            inspect_ssh_host,
+            trust_ssh_host,
+            reinspect_ssh_host,
+            list_ssh_trust_events,
+            open_ssh_terminal,
             choose_sqlite_file,
             choose_backup_directory,
             backup_sqlite

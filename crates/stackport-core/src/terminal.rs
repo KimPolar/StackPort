@@ -1,4 +1,4 @@
-//! Local terminal sessions. Input and output are never written to workspace storage.
+//! Terminal sessions. Input and output are never written to workspace storage.
 
 use crate::Result;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -28,6 +28,7 @@ pub struct TerminalInfo {
     pub id: String,
     pub shell: String,
     pub process_id: Option<u32>,
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,6 +58,7 @@ struct Session {
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     job: Mutex<Option<ProcessJob>>,
+    known_hosts: Mutex<Option<tempfile::TempPath>>,
 }
 
 impl Session {
@@ -80,6 +82,9 @@ impl Session {
         if let Ok(mut master) = self.master.lock() {
             master.take();
         }
+        if let Ok(mut known_hosts) = self.known_hosts.lock() {
+            known_hosts.take();
+        }
     }
 }
 
@@ -98,8 +103,20 @@ pub struct TerminalManager {
 
 impl TerminalManager {
     pub fn open(&self, shell: &str, rows: u16, cols: u16) -> Result<TerminalInfo> {
-        let size = terminal_size(rows, cols)?;
         let command = shell_command(shell)?;
+        self.open_command(shell, None, command, rows, cols, None)
+    }
+
+    pub(crate) fn open_command(
+        &self,
+        shell: &str,
+        target: Option<String>,
+        command: CommandBuilder,
+        rows: u16,
+        cols: u16,
+        known_hosts: Option<tempfile::TempPath>,
+    ) -> Result<TerminalInfo> {
+        let size = terminal_size(rows, cols)?;
         let job = ProcessJob::new()?;
         let pair = native_pty_system()
             .openpty(size)
@@ -122,6 +139,7 @@ impl TerminalManager {
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pair.master)),
             job: Mutex::new(Some(job)),
+            known_hosts: Mutex::new(known_hosts),
         });
         let reader_closing = Arc::clone(&closing);
         let reader_state = Arc::clone(&state);
@@ -218,6 +236,7 @@ impl TerminalManager {
             id,
             shell: shell.into(),
             process_id,
+            target,
         })
     }
 
