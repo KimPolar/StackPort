@@ -4,10 +4,11 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
-  Database, FileCode2, FolderOpen, HardDrive, History, Layers3,
+  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3,
   Pencil, Plus, RefreshCw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
+import { SshProfileExchange } from "./SshProfileExchange";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -59,6 +60,7 @@ function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile } | null>(null);
+  const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [profileId, setProfileId] = useState("");
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
@@ -358,12 +360,12 @@ function App() {
               <ObjectGroup name="뷰" items={views} onSelect={openObject} />
             </>}
           </div>}
-          <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
+          <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => setSshExchange("import")} disabled={!project} aria-label="SSH 연결 가져오기" title="SSH 연결 가져오기"><FileUp size={14} /></button><button className="icon-button" onClick={() => setSshExchange("export")} disabled={!project || !sshProfiles.length} aria-label="SSH 연결 내보내기" title="SSH 연결 내보내기"><FileDown size={14} /></button><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
           {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
           <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
-            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={15} /><span>{item.name}</span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
-            <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
-            <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
+            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
+            <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
+            <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
           </div>)}</div>
           <div className="explorer-foot"><ShieldCheck size={15} /><span>연결 정보는 이 장치에 저장됩니다.</span></div>
         </aside>
@@ -406,6 +408,7 @@ function App() {
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result) void runQuery(executedSql, result.page); }} />}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
+    {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
 
@@ -439,7 +442,7 @@ function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mo
       <label className="field">연결 이름<input autoFocus required disabled={busy} value={name} onChange={event => setName(event.target.value)} placeholder="예: 운영 서버" /></label>
       <label className="field">호스트 또는 IP<input required disabled={busy} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
       <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={busy} value={port} onChange={event => setPort(event.target.value)} /></label>
-      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_][A-Za-z0-9._-]*" disabled={busy} value={username} onChange={event => setUsername(event.target.value)} /></label>
+      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={busy} value={username} onChange={event => setUsername(event.target.value)} /></label>
       <label className="field">환경<select disabled={busy} value={environment} onChange={event => setEnvironment(event.target.value as SshProfile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label>
       <p className="form-note">연결 정보만 저장합니다. 암호나 개인 키는 입력하지 않습니다. 운영 환경 연결은 열기 전 추가 확인합니다.</p>
     </>}
@@ -452,6 +455,7 @@ const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
+  "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패" };
 

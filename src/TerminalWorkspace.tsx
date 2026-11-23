@@ -269,7 +269,7 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>}
       <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
       <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => setPort(event.target.value)} /></label>
-      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
+      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
       {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. 암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다.{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
       {info && <div className="ssh-verification">
         <strong>{info.host.includes(":") ? `[${info.host}]` : info.host}:{info.port} · {info.status === "trusted" ? "저장된 호스트 키" : info.status === "replacement" ? "호스트 키 재확인" : "확인이 필요한 호스트 키"}</strong>

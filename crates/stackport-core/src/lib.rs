@@ -12,6 +12,8 @@ mod ssh;
 pub use ssh::{SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
 pub use ssh_profiles::{SshProfile, SshProfileInput};
+mod ssh_exchange;
+pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
 

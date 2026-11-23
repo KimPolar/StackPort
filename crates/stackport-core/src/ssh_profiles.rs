@@ -17,7 +17,8 @@ pub struct SshProfile {
     pub revision: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SshProfileInput {
     pub name: String,
     pub host: String,
@@ -26,7 +27,7 @@ pub struct SshProfileInput {
     pub environment: String,
 }
 
-fn validate(input: SshProfileInput) -> Result<SshProfileInput> {
+pub(crate) fn validate(input: SshProfileInput) -> Result<SshProfileInput> {
     let name = valid_name(&input.name)?.to_owned();
     let host = ssh::normalize_host(&input.host)?;
     ssh::validate_port(input.port)?;
@@ -43,7 +44,7 @@ fn validate(input: SshProfileInput) -> Result<SshProfileInput> {
     })
 }
 
-fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SshProfile> {
+pub(crate) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SshProfile> {
     Ok(SshProfile {
         id: row.get(0)?,
         project_id: row.get(1)?,
@@ -56,7 +57,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SshProfile> {
     })
 }
 
-fn validate_stored(profile: SshProfile) -> Result<SshProfile> {
+pub(crate) fn validate_stored(profile: SshProfile) -> Result<SshProfile> {
     let input = validate(SshProfileInput {
         name: profile.name.clone(),
         host: profile.host.clone(),
@@ -76,7 +77,7 @@ fn validate_stored(profile: SshProfile) -> Result<SshProfile> {
     Ok(profile)
 }
 
-fn verify_saved(db: &rusqlite::Connection, profile: &SshProfile) -> Result<()> {
+pub(crate) fn verify_saved(db: &rusqlite::Connection, profile: &SshProfile) -> Result<()> {
     let saved = db.query_row("SELECT id, project_id, name, host, port, username, environment, revision FROM ssh_profiles WHERE id=?1", [&profile.id], from_row)
         .optional().map_err(db_error)?;
     if saved.as_ref() != Some(profile) {
@@ -215,7 +216,7 @@ impl Store {
     }
 }
 
-fn profile_audit(
+pub(crate) fn profile_audit(
     db: &rusqlite::Connection,
     operation: &'static str,
     profile: &SshProfile,

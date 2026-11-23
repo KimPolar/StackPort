@@ -3,7 +3,8 @@
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, ObjectDetails, Profile, Project, QueryOutcome, SshHostInfo, SshManager,
-    SshProfile, SshProfileInput, SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
+    SshProfile, SshProfileExportReport, SshProfileImportPreview, SshProfileInput, SshTrustPage,
+    Store, TerminalInfo, TerminalManager, TerminalRead,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -98,6 +99,38 @@ async fn delete_ssh_profile(
 ) -> Result<(), String> {
     let store = store.inner().clone();
     worker(move || store.delete_ssh_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn preview_ssh_profile_import(
+    store: State<'_, Store>,
+    path: String,
+) -> Result<SshProfileImportPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_ssh_profile_import(&path)).await
+}
+
+#[tauri::command]
+async fn import_ssh_profiles(
+    store: State<'_, Store>,
+    project_id: String,
+    path: String,
+    digest: String,
+    selected: Vec<usize>,
+) -> Result<Vec<SshProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.import_ssh_profiles(&project_id, &path, &digest, selected)).await
+}
+
+#[tauri::command]
+async fn export_ssh_profiles(
+    store: State<'_, Store>,
+    project_id: String,
+    expected: Vec<SshProfile>,
+    destination: String,
+) -> Result<SshProfileExportReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.export_ssh_profiles(&project_id, expected, &destination)).await
 }
 
 #[tauri::command]
@@ -351,6 +384,29 @@ async fn choose_sqlite_file() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_ssh_profile_import_file() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("SSH 연결 파일 선택")
+            .add_filter("JSON", &["json"])
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn choose_ssh_profile_export_directory() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("SSH 연결 파일을 저장할 폴더 선택")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn choose_backup_directory() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -401,6 +457,9 @@ fn main() {
             create_ssh_profile,
             update_ssh_profile,
             delete_ssh_profile,
+            preview_ssh_profile_import,
+            import_ssh_profiles,
+            export_ssh_profiles,
             create_sqlite_profile,
             delete_profile,
             list_objects,
@@ -424,6 +483,8 @@ fn main() {
             open_ssh_terminal,
             open_saved_ssh_terminal,
             choose_sqlite_file,
+            choose_ssh_profile_import_file,
+            choose_ssh_profile_export_directory,
             choose_backup_directory,
             backup_sqlite
         ])

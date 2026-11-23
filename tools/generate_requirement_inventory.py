@@ -20,8 +20,10 @@ PARTIAL = {
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 호스트 키 사전 조회와 실패 표시",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",
+    "SP-CN-005": "선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
+    "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
     "SP-CN-023": "저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호 인증 프롬프트 1회로 제한",
     "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널",
@@ -111,6 +113,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/migration.rs"
             elif requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
+                evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-008", "SP-CN-002", "SP-CN-007", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:
