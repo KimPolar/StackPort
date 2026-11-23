@@ -46,12 +46,52 @@ async function main() {
   const colored = rows.locator(':scope > div').filter({ hasText: /^STACKPORT_COLOR\s*$/ }).getByText('STACKPORT_COLOR', { exact: true });
   await colored.waitFor();
   if (await colored.evaluate(element => getComputedStyle(element).color) !== 'rgb(123, 45, 67)') throw new Error('24-bit terminal color was not rendered.');
+  await page.keyboard.type("[Console]::WriteLine('STACKPORT_SCROLLBACK_MARKER'); 1..150 | ForEach-Object { [Console]::WriteLine('STACKPORT_LINE_' + $_) }");
+  await page.keyboard.press('Enter');
+  await rows.getByText('STACKPORT_LINE_150', { exact: false }).waitFor();
+  if ((await rows.innerText()).includes('STACKPORT_SCROLLBACK_MARKER')) throw new Error('Scrollback marker did not move off screen.');
+  await page.getByRole('button', { name: /출력 찾기/ }).click();
+  const search = page.getByLabel('터미널 출력 검색어');
+  await search.fill('STACKPORT_SCROLLBACK_MARKER');
+  await search.press('Enter');
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
+  await rows.getByText('STACKPORT_SCROLLBACK_MARKER', { exact: false }).first().waitFor();
+  await search.fill('한글출력');
+  await search.press('Enter');
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
+  await page.getByRole('button', { name: '이전 결과' }).click();
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
+  await search.fill('stackport_color');
+  await page.getByLabel('대소문자 구분').check();
+  await search.press('Enter');
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용이 없습니다.').waitFor();
+  await page.getByLabel('대소문자 구분').uncheck();
+  await search.press('Enter');
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
+  await search.fill('[');
+  await search.press('Enter');
+  await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
   if (process.env.STACKPORT_TEST_SCREENSHOT) await page.screenshot({ path: process.env.STACKPORT_TEST_SCREENSHOT });
 
   await page.getByRole('tab', { name: 'PowerShell 2' }).focus();
   await page.keyboard.press('ArrowLeft');
   if (await page.getByRole('tab', { name: 'CMD 1' }).getAttribute('aria-selected') !== 'true') throw new Error('Keyboard tab navigation failed.');
+  if (await page.locator('[role=tabpanel]:visible').getByLabel('터미널 출력 검색어').count()) throw new Error('Search state leaked into another terminal tab.');
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
+  await page.getByRole('tab', { name: 'PowerShell 2' }).click();
+  if (await page.getByLabel('터미널 출력 검색어').inputValue() !== '[') throw new Error('Search state did not follow its terminal tab.');
+  await page.getByLabel('터미널 출력 검색어').press('Escape');
+  if (await page.getByLabel('터미널 출력 검색어').count()) throw new Error('Escape did not close terminal search.');
+  await page.keyboard.press('Control+Shift+F');
+  await page.getByLabel('터미널 출력 검색어').waitFor();
+  if (await page.getByLabel('터미널 출력 검색어').inputValue() !== '') throw new Error('Closed search retained its previous term.');
+  await page.getByRole('button', { name: '검색 닫기' }).click();
+  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
+  await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  await page.keyboard.press('Control+Shift+F');
+  if (await page.getByLabel('터미널 출력 검색어').count()) throw new Error('Search shortcut opened behind an SSH dialog.');
+  await page.getByRole('dialog').getByRole('button', { name: '닫기' }).click();
+  await page.getByRole('tab', { name: 'CMD 1' }).click();
   let pasteMessage = '';
   page.once('dialog', async dialog => { pasteMessage = dialog.message(); await dialog.dismiss(); });
   await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').evaluate(input => {
@@ -99,7 +139,7 @@ async function main() {
     await page.getByRole('button', { name: 'PowerShell 2 터미널 닫기' }).click();
     await browser.close();
   }
-  console.log('Desktop local terminals, input, tabs, process cleanup, and close protection passed.');
+  console.log('Desktop terminals, scrollback search, tabs, process cleanup, and close protection passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

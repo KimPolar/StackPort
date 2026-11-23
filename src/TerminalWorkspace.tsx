@@ -2,7 +2,8 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { Plus, TerminalSquare, X } from "lucide-react";
+import { SearchAddon } from "@xterm/addon-search";
+import { ChevronDown, ChevronUp, Plus, Search, TerminalSquare, X } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import "@xterm/xterm/css/xterm.css";
 
@@ -114,10 +115,16 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; onExit: (id: string, exit: TerminalExit) => void }) {
   const container = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
+  const searchAddon = useRef<SearchAddon | null>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
   const fit = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   const exitCallback = useRef(onExit);
   const [error, setError] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [searchStatus, setSearchStatus] = useState("");
   visibleRef.current = visible;
   exitCallback.current = onExit;
 
@@ -125,6 +132,20 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
     if (!visible) return;
     const frame = requestAnimationFrame(() => { fit.current?.(); });
     return () => cancelAnimationFrame(frame);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    function handleShortcut(event: globalThis.KeyboardEvent) {
+      if (!document.querySelector("dialog[open]") && event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSearchOpen(true);
+        requestAnimationFrame(() => searchInput.current?.focus());
+      }
+    }
+    window.addEventListener("keydown", handleShortcut, true);
+    return () => window.removeEventListener("keydown", handleShortcut, true);
   }, [visible]);
 
   useEffect(() => {
@@ -141,10 +162,13 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
         theme: { background: "#172523", foreground: "#e4f1e9", cursor: "#a4e5c7", selectionBackground: "#477763" },
       });
       const addon = new FitAddon();
+      const search = new SearchAddon();
       emulator.loadAddon(addon);
+      emulator.loadAddon(search);
       emulator.open(host);
       host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.setAttribute("aria-label", "터미널 입력");
       terminal.current = emulator;
+      searchAddon.current = search;
       let inputQueue = Promise.resolve();
       let resizeQueue = Promise.resolve();
       let reportedExit = false;
@@ -197,14 +221,40 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
       dispose = () => {
         host.removeEventListener("paste", onPaste, true);
         observer.disconnect(); input.dispose(); resized.dispose(); emulator.dispose();
-        fit.current = null; terminal.current = null;
+        fit.current = null; terminal.current = null; searchAddon.current = null;
       };
     });
     return () => { stopped = true; dispose(); };
   }, [tab.id]);
 
+  function clearSearch() {
+    searchAddon.current?.clearDecorations();
+    terminal.current?.clearSelection();
+    setSearchStatus("");
+  }
+
+  function closeSearch() {
+    clearSearch(); setSearchText(""); setCaseSensitive(false); setSearchOpen(false);
+    terminal.current?.focus();
+  }
+
+  function find(direction: "next" | "previous") {
+    const search = searchAddon.current;
+    if (!search || !searchText) return;
+    const options = { caseSensitive };
+    const found = direction === "next" ? search.findNext(searchText, options) : search.findPrevious(searchText, options);
+    setSearchStatus(found ? "일치하는 내용을 선택했습니다." : "일치하는 내용이 없습니다.");
+  }
+
   return <div role="tabpanel" id={`terminal-panel-${tab.id}`} aria-labelledby={`terminal-tab-${tab.id}`} className="terminal-panel" hidden={!visible}>
     {tab.target && <div className={`terminal-remote ${tab.environment === "PROD" ? "prod" : ""}`}><strong>SSH · {tab.target} · {tab.environment ?? "환경 미지정"}</strong><span>이 터미널의 명령은 원격 서버에서 실행됩니다.</span></div>}
+    <div className="terminal-tools"><button className="terminal-search-toggle" aria-expanded={searchOpen} onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); requestAnimationFrame(() => searchInput.current?.focus()); } }}><Search size={14} /> 출력 찾기 <span>Ctrl+Shift+F</span></button></div>
+    {searchOpen && <form className="terminal-search" role="search" aria-label={`${tabName(tab)} 출력 검색`} onSubmit={event => { event.preventDefault(); find("next"); }}>
+      <label className="sr-only" htmlFor={`terminal-search-${tab.id}`}>터미널 출력 검색어</label><input id={`terminal-search-${tab.id}`} ref={searchInput} type="search" maxLength={512} autoComplete="off" spellCheck={false} value={searchText} onChange={event => { setSearchText(event.target.value); clearSearch(); }} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closeSearch(); } else if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); find("previous"); } }} placeholder="스크롤백에서 찾기" />
+      <label className="terminal-search-case"><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); clearSearch(); }} /> 대소문자 구분</label>
+      <button type="button" aria-label="이전 결과" disabled={!searchText} onClick={() => find("previous")}><ChevronUp size={16} /></button><button type="submit" aria-label="다음 결과" disabled={!searchText}><ChevronDown size={16} /></button><button type="button" aria-label="검색 닫기" onClick={closeSearch}><X size={16} /></button>
+      <span className="terminal-search-status" role="status">{searchStatus}</span>
+    </form>}
     {tab.exit && <div className="terminal-exit" role="status">{tab.exit.error ?? `셸이 종료되었습니다. 종료 코드: ${tab.exit.code ?? "확인 불가"}`}</div>}
     {error && <div className="terminal-error" role="alert">{error}</div>}
     <div className="terminal-screen" ref={container} aria-label={`${tabName(tab)} 터미널 화면`} />
