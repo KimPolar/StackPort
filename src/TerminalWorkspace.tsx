@@ -3,10 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Plus, TerminalSquare, X } from "lucide-react";
+import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import "@xterm/xterm/css/xterm.css";
 
 type Shell = "powershell" | "cmd" | "ssh";
-type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null };
+type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
 type Tab = TerminalInfo & { number: number; exit: TerminalExit | null };
@@ -18,12 +19,13 @@ const errorText = (error: unknown) => typeof error === "string" ? error : String
 const shellName = (shell: Shell) => shell === "powershell" ? "PowerShell" : shell === "cmd" ? "CMD" : "SSH";
 const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target ? ` · ${tab.target}` : ""}`;
 
-export function TerminalWorkspace({ visible, onCountChange }: { visible: boolean; onCountChange: (count: number) => void }) {
+export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled }: { visible: boolean; onCountChange: (count: number) => void; request: SshOpenRequest | null; onRequestHandled: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState("");
   const [shell, setShell] = useState<Shell>("powershell");
   const [opening, setOpening] = useState(false);
   const [sshDialog, setSshDialog] = useState(false);
+  const [dialogProfile, setDialogProfile] = useState<SshProfile | null>(null);
   const [sshOpening, setSshOpening] = useState(false);
   const [closing, setClosing] = useState<string[]>([]);
   const [error, setError] = useState("");
@@ -34,6 +36,12 @@ export function TerminalWorkspace({ visible, onCountChange }: { visible: boolean
   tabsRef.current = tabs;
 
   useEffect(() => { onCountChange(tabs.length + (opening ? 1 : 0) + (sshOpening ? 1 : 0)); }, [tabs.length, opening, sshOpening, onCountChange]);
+  useEffect(() => {
+    if (!request) return;
+    setDialogProfile(request.profile);
+    setSshDialog(true);
+    onRequestHandled();
+  }, [request, onRequestHandled]);
 
   function addTerminal(terminal: TerminalInfo) {
     const number = nextNumber.current++;
@@ -42,7 +50,7 @@ export function TerminalWorkspace({ visible, onCountChange }: { visible: boolean
   }
 
   async function openTerminal() {
-    if (shell === "ssh") { setSshDialog(true); return; }
+    if (shell === "ssh") { setDialogProfile(null); setSshDialog(true); return; }
     if (openingRef.current) return;
     openingRef.current = true; setOpening(true); setError("");
     try {
@@ -97,7 +105,7 @@ export function TerminalWorkspace({ visible, onCountChange }: { visible: boolean
       </div>)}</div>
       {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} />)}
     </div>}
-    {sshDialog && <SshDialog onClose={() => setSshDialog(false)} onOpeningChange={setSshOpening} onOpened={terminal => { addTerminal(terminal); setSshDialog(false); }} />}
+    {sshDialog && <SshDialog profile={dialogProfile} onClose={() => setSshDialog(false)} onOpeningChange={setSshOpening} onOpened={terminal => { addTerminal(terminal); setSshDialog(false); }} />}
   </section>;
 }
 
@@ -194,21 +202,22 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
   }, [tab.id]);
 
   return <div role="tabpanel" id={`terminal-panel-${tab.id}`} aria-labelledby={`terminal-tab-${tab.id}`} className="terminal-panel" hidden={!visible}>
-    {tab.target && <div className="terminal-remote"><strong>SSH · {tab.target}</strong><span>이 터미널의 명령은 원격 서버에서 실행됩니다.</span></div>}
+    {tab.target && <div className={`terminal-remote ${tab.environment === "PROD" ? "prod" : ""}`}><strong>SSH · {tab.target} · {tab.environment ?? "환경 미지정"}</strong><span>이 터미널의 명령은 원격 서버에서 실행됩니다.</span></div>}
     {tab.exit && <div className="terminal-exit" role="status">{tab.exit.error ?? `셸이 종료되었습니다. 종료 코드: ${tab.exit.code ?? "확인 불가"}`}</div>}
     {error && <div className="terminal-error" role="alert">{error}</div>}
     <div className="terminal-screen" ref={container} aria-label={`${tabName(tab)} 터미널 화면`} />
   </div>;
 }
 
-function SshDialog({ onClose, onOpened, onOpeningChange }: { onClose: () => void; onOpened: (terminal: TerminalInfo) => void; onOpeningChange: (opening: boolean) => void }) {
+function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: SshProfile | null; onClose: () => void; onOpened: (terminal: TerminalInfo) => void; onOpeningChange: (opening: boolean) => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [host, setHost] = useState("");
-  const [port, setPort] = useState("22");
-  const [username, setUsername] = useState("");
+  const [host, setHost] = useState(profile?.host ?? "");
+  const [port, setPort] = useState(String(profile?.port ?? 22));
+  const [username, setUsername] = useState(profile?.username ?? "");
   const [info, setInfo] = useState<SshHost | null>(null);
   const [fingerprint, setFingerprint] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [prodConfirmation, setProdConfirmation] = useState("");
   const [busy, setBusy] = useState<"" | "inspect" | "trust" | "open">("");
   const [error, setError] = useState("");
   useEffect(() => { dialog.current?.showModal(); }, []);
@@ -246,7 +255,9 @@ function SshDialog({ onClose, onOpened, onOpeningChange }: { onClose: () => void
     if (!info || info.status !== "trusted" || busy) return;
     setBusy("open"); onOpeningChange(true); setError("");
     try {
-      const terminal = await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, rows: 24, cols: 80 });
+      const terminal = profile
+        ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, rows: 24, cols: 80 })
+        : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, rows: 24, cols: 80 });
       onOpened(terminal);
     } catch (e) { setError(errorText(e)); }
     finally { onOpeningChange(false); setBusy(""); }
@@ -255,17 +266,19 @@ function SshDialog({ onClose, onOpened, onOpeningChange }: { onClose: () => void
   return <dialog ref={dialog} className="dialog ssh-dialog" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
     <div className="dialog-heading"><h2>SSH 연결</h2><button className="icon-button" aria-label="닫기" disabled={Boolean(busy)} onClick={onClose}><X size={18} /></button></div>
     <form onSubmit={inspect} aria-busy={Boolean(busy)}>
-      <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(info) || Boolean(busy)} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
-      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(info) || Boolean(busy)} value={port} onChange={event => setPort(event.target.value)} /></label>
-      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_][A-Za-z0-9._-]*" disabled={Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
-      {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. 암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다.</p>}
+      {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>}
+      <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
+      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => setPort(event.target.value)} /></label>
+      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
+      {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. 암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다.{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
       {info && <div className="ssh-verification">
         <strong>{info.host.includes(":") ? `[${info.host}]` : info.host}:{info.port} · {info.status === "trusted" ? "저장된 호스트 키" : info.status === "replacement" ? "호스트 키 재확인" : "확인이 필요한 호스트 키"}</strong>
         {info.status !== "trusted" ? <>{info.previous && <div className="ssh-previous"><span>기존에 신뢰한 지문</span><code>{info.previous.fingerprint}</code></div>}<p>이 지문은 서버가 제공한 값입니다. 서버 관리자에게 받은 지문과 별도의 경로로 비교한 후 신뢰할 키를 선택하세요.{info.previous && " 교체 후 새 연결에서는 기존 키가 차단되며, 이미 열린 세션은 유지됩니다."}</p><fieldset><legend>서버 지문 선택</legend>{info.keys.map(key => <label className="ssh-key" key={key.fingerprint}><input type="radio" name="ssh-key" value={key.fingerprint} disabled={Boolean(busy) || key.fingerprint === info.previous?.fingerprint} checked={fingerprint === key.fingerprint} onChange={() => setFingerprint(key.fingerprint)} /><span><strong>{key.algorithm}{key.fingerprint === info.previous?.fingerprint ? " · 현재 신뢰 키" : ""}</strong><code>{key.fingerprint}</code></span></label>)}</fieldset>{info.status === "replacement" && <label className="field ssh-confirm">키를 바꾸려면 교체 입력<input disabled={Boolean(busy)} value={confirmation} onChange={event => setConfirmation(event.target.value)} placeholder="교체" /></label>}</> : <><p>실제 접속에서는 저장된 키만 허용합니다. 서버 키가 달라지면 연결이 차단됩니다.</p>{info.keys.map(key => <div className="ssh-key-value" key={key.fingerprint}><strong>{key.algorithm}</strong><code>{key.fingerprint}</code></div>)}<button type="button" className="secondary small ssh-reinspect" disabled={Boolean(busy)} onClick={() => void reinspect()}>다른 호스트 키 확인</button></>}
       </div>}
+      {info?.status === "trusted" && profile?.environment === "PROD" && <label className="field ssh-prod-confirm">운영 환경 확인: PROD 입력<input disabled={Boolean(busy)} value={prodConfirmation} onChange={event => setProdConfirmation(event.target.value)} autoComplete="off" placeholder="PROD" /></label>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {busy && <p className="form-note" role="status">{busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
-      <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void connect()}>연결</button>}</div>
+      <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setProdConfirmation(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy) || (profile?.environment === "PROD" && prodConfirmation !== "PROD")} onClick={() => void connect()}>연결</button>}</div>
     </form>
   </dialog>;
 }

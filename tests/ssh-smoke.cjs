@@ -192,6 +192,70 @@ async function main() {
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: /SSH 5 .*터미널 닫기/ }).click();
   await page.getByRole('tab', { name: /SSH 5/ }).waitFor({ state: 'detached' });
+
+  // Saved connections retain their environment and cannot be opened with a
+  // stale snapshot or without the server-side PROD confirmation.
+  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '새 프로젝트' }).click();
+  await page.getByLabel('이름', { exact: true }).fill('SSH 프로필 검증');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await page.getByRole('button', { name: 'SSH 연결 추가' }).click();
+  await page.getByLabel('연결 이름').fill('운영 서버');
+  await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
+  await page.getByLabel('포트', { exact: true }).fill(String(instance.port));
+  await page.getByLabel('사용자 이름').fill('stackport');
+  await page.getByRole('dialog').locator('select').selectOption('PROD');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await page.getByRole('button', { name: 'SSH 운영 서버 연결' }).waitFor();
+  const project = await page.evaluate(async () => (await window.__TAURI_INTERNALS__.invoke('list_projects')).find(item => item.name === 'SSH 프로필 검증'));
+  const originalProfile = await page.evaluate(async projectId => (await window.__TAURI_INTERNALS__.invoke('list_ssh_profiles', { projectId }))[0], project.id);
+  const beforeBlocked = instance.stats.connections;
+  const deniedProd = await page.evaluate(async profile => {
+    try { await window.__TAURI_INTERNALS__.invoke('open_saved_ssh_terminal', { profile, confirmation: '', rows: 24, cols: 80 }); return ''; }
+    catch (error) { return String(error); }
+  }, originalProfile);
+  if (!deniedProd.includes('PROD') || instance.stats.connections !== beforeBlocked) throw new Error(`PROD confirmation was bypassed: ${deniedProd}`);
+
+  await page.getByRole('button', { name: '운영 서버 SSH 연결 수정' }).click();
+  await page.getByLabel('연결 이름').fill('운영 SSH');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await page.getByRole('button', { name: 'SSH 운영 SSH 연결' }).waitFor();
+  const staleResult = await page.evaluate(async profile => {
+    try { await window.__TAURI_INTERNALS__.invoke('open_saved_ssh_terminal', { profile, confirmation: 'PROD', rows: 24, cols: 80 }); return ''; }
+    catch (error) { return String(error); }
+  }, originalProfile);
+  if (!staleResult.includes('변경') || instance.stats.connections !== beforeBlocked) throw new Error(`Stale connection snapshot was accepted: ${staleResult}`);
+
+  await page.getByRole('button', { name: 'SSH 운영 SSH 연결' }).click();
+  await page.getByRole('heading', { name: 'SSH 연결', exact: true }).waitFor();
+  if (!await page.getByLabel('호스트 또는 IP').isDisabled() || !await page.getByLabel('사용자 이름').isDisabled()) throw new Error('Saved connection target was editable in the confirmation dialog.');
+  await page.getByRole('button', { name: '지문 확인' }).click();
+  await page.getByText(changedKey.fingerprint, { exact: true }).waitFor();
+  if (!await page.getByRole('button', { name: '연결', exact: true }).isDisabled()) throw new Error('PROD confirmation was not required in the UI.');
+  await page.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+  await page.getByRole('button', { name: '연결', exact: true }).click();
+  await page.getByRole('tab', { name: /SSH 6/ }).waitFor();
+  await page.locator('.terminal-remote').getByText(/PROD/).waitFor();
+  await waitForRows(page, 'password:');
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.type(password);
+  await page.keyboard.press('Enter');
+  await waitForRows(page, 'STACKPORT_REMOTE_READY');
+  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '운영 SSH SSH 연결 삭제' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '삭제', exact: true }).click();
+  await page.getByRole('button', { name: 'SSH 운영 SSH 연결' }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '터미널', exact: true }).click();
+  await page.getByRole('tab', { name: /SSH 6/ }).waitFor();
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.type('hello');
+  await page.keyboard.press('Enter');
+  await waitForRows(page, 'STACKPORT_REMOTE_ECHO');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: /SSH 6 .*터미널 닫기/ }).click();
+  await page.getByRole('tab', { name: /SSH 6/ }).waitFor({ state: 'detached' });
+  if (fs.readFileSync(path.join(root, 'workspace', 'workspace.sqlite')).includes(Buffer.from(password))) throw new Error('Password was saved in the workspace database.');
+
   const trustDb = new DatabaseSync(trustFile, { readOnly: true });
   const events = trustDb.prepare('SELECT action, previous_fingerprint, fingerprint FROM trust_events ORDER BY rowid').all();
   trustDb.close();
@@ -201,13 +265,13 @@ async function main() {
   await openDialog(page, instance.port);
   await page.getByText(changedKey.fingerprint, { exact: true }).waitFor();
   await page.getByRole('button', { name: '연결', exact: true }).click();
-  await page.getByRole('tab', { name: /SSH 6/ }).waitFor();
+  await page.getByRole('tab', { name: /SSH 7/ }).waitFor();
   await waitForRows(page, 'REMOTE HOST IDENTIFICATION HAS CHANGED', 20000);
   if (instance.stats.authentications !== 0) throw new Error('Old key remained trusted after replacement.');
   await page.getByRole('status').getByText(/종료 코드: 255/).waitFor();
   page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: /SSH 6 .*터미널 닫기/ }).click();
-  await page.getByRole('tab', { name: /SSH 6/ }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: /SSH 7 .*터미널 닫기/ }).click();
+  await page.getByRole('tab', { name: /SSH 7/ }).waitFor({ state: 'detached' });
   if (fs.readdirSync(path.join(root, 'workspace')).some(name => name.startsWith('.stackport-known-hosts-'))) throw new Error('Temporary host-key pin file was not removed.');
   await page.getByRole('button', { name: '작업 기록' }).click();
   await page.locator('.ssh-history > summary').click();
@@ -218,7 +282,7 @@ async function main() {
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   await stopServer(instance);
   await browser.close();
-  console.log('SSH fingerprint confirmation, pinned login, authentication limit, key rotation, and changed-key rejection passed.');
+  console.log('SSH fingerprint confirmation, pinned login, saved PROD profiles, stale revisions, key rotation, and changed-key rejection passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

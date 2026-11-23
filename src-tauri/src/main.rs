@@ -3,7 +3,7 @@
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, ObjectDetails, Profile, Project, QueryOutcome, SshHostInfo, SshManager,
-    SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
+    SshProfile, SshProfileInput, SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -58,6 +58,46 @@ async fn list_profiles(
 ) -> Result<Vec<Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn list_ssh_profiles(
+    store: State<'_, Store>,
+    project_id: String,
+) -> Result<Vec<SshProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_ssh_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_ssh_profile(
+    store: State<'_, Store>,
+    project_id: String,
+    input: SshProfileInput,
+) -> Result<SshProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_ssh_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_ssh_profile(
+    store: State<'_, Store>,
+    id: String,
+    revision: i64,
+    input: SshProfileInput,
+) -> Result<SshProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_ssh_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_ssh_profile(
+    store: State<'_, Store>,
+    id: String,
+    revision: i64,
+) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_ssh_profile(&id, revision)).await
 }
 
 #[tauri::command]
@@ -264,6 +304,41 @@ async fn open_ssh_terminal(
 }
 
 #[tauri::command]
+async fn open_saved_ssh_terminal(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    terminals: State<'_, Arc<TerminalManager>>,
+    profile: SshProfile,
+    confirmation: String,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalInfo, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    let terminals = Arc::clone(terminals.inner());
+    worker(move || {
+        let current = store.ssh_profile(&profile.id)?;
+        if current != profile {
+            return Err("SSH 연결이 변경되었습니다. 새로고침하고 대상을 다시 확인하세요.".into());
+        }
+        if current.environment == "PROD" && confirmation != "PROD" {
+            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+        }
+        let mut terminal = ssh.open(
+            &terminals,
+            &current.host,
+            current.port,
+            &current.username,
+            rows,
+            cols,
+        )?;
+        terminal.environment = Some(current.environment);
+        Ok(terminal)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -322,6 +397,10 @@ fn main() {
             rename_project,
             delete_project,
             list_profiles,
+            list_ssh_profiles,
+            create_ssh_profile,
+            update_ssh_profile,
+            delete_ssh_profile,
             create_sqlite_profile,
             delete_profile,
             list_objects,
@@ -343,6 +422,7 @@ fn main() {
             reinspect_ssh_host,
             list_ssh_trust_events,
             open_ssh_terminal,
+            open_saved_ssh_terminal,
             choose_sqlite_file,
             choose_backup_directory,
             backup_sqlite

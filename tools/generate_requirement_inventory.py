@@ -10,18 +10,19 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
-    "SP-UI-002": "프로젝트별 SQLite 테이블·뷰 탐색",
+    "SP-UI-002": "프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색",
     "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
-    "SP-UI-011": "프로젝트·SQLite 작업과 SSH 호스트 키 신뢰·교체의 로컬 기록",
+    "SP-UI-011": "프로젝트·SQLite 작업, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-UI-016": "로컬 터미널 탭의 키보드 이동",
-    "SP-CN-001": "프로젝트별 로컬 SQLite 파일 연결 정의",
+    "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 호스트 키 사전 조회와 실패 표시",
-    "SP-CN-003": "SQLite 연결 정의 생성·삭제와 SSH 세션 열기·닫기",
+    "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
+    "SP-CN-023": "저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호 인증 프롬프트 1회로 제한",
     "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널",
     "SP-TM-002": "Windows OpenSSH의 대화형 원격 셸 입출력",
@@ -63,12 +64,12 @@ PARTIAL = {
     "SP-SEC-003": "SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·고정과 변경 차단, 신뢰·교체 이력",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·셀 편집과 SSH 키 신뢰·교체 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
     "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
-    "SP-NFR-006": "v1 작업 공간을 백업한 뒤 트랜잭션으로 v2 이관",
-    "SP-AT-025": "v1 백업 후 이관·이관 실패 시 원본 보존",
+    "SP-NFR-006": "v1·v2 작업 공간을 백업한 뒤 트랜잭션으로 v3 이관",
+    "SP-AT-025": "v1·v2 백업 후 v3 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 파일의 데이터·객체 재조회와 무결성 검사",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
@@ -108,9 +109,11 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
                 evidence = "crates/stackport-core/tests/migration.rs"
+            elif requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
+                evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
-            elif requirement_id in {"SP-UI-008", "SP-CN-002", "SP-CN-003", "SP-CN-007", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:
+            elif requirement_id in {"SP-UI-008", "SP-CN-002", "SP-CN-007", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id.startswith("SP-TM-") or requirement_id in {"SP-UI-003", "SP-UI-016", "SP-AT-007"}:
                 evidence = "crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"

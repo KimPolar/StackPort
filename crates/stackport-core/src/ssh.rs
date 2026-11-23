@@ -414,7 +414,7 @@ impl SshManager {
     }
 }
 
-fn normalize_host(value: &str) -> Result<String> {
+pub(crate) fn normalize_host(value: &str) -> Result<String> {
     let host = value.trim();
     if let Ok(ip) = host.parse::<IpAddr>() {
         return Ok(ip.to_string());
@@ -437,7 +437,7 @@ fn normalize_host(value: &str) -> Result<String> {
     Ok(host.to_ascii_lowercase())
 }
 
-fn normalize_username(value: &str) -> Result<String> {
+pub(crate) fn normalize_username(value: &str) -> Result<String> {
     let username = value.trim();
     if username.is_empty()
         || username.len() > 128
@@ -454,7 +454,7 @@ fn normalize_username(value: &str) -> Result<String> {
     Ok(username.into())
 }
 
-fn validate_port(port: u16) -> Result<()> {
+pub(crate) fn validate_port(port: u16) -> Result<()> {
     if port == 0 {
         Err("SSH 포트는 1부터 65535까지 지정하세요.".into())
     } else {

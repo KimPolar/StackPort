@@ -24,6 +24,24 @@ fn backups(directory: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn create_v2(path: &Path, conflict: bool) {
+    create_v1(path, false);
+    let db = Connection::open(path).unwrap();
+    db.execute_batch("CREATE TABLE audit_events (id TEXT PRIMARY KEY, correlation_id TEXT NOT NULL, occurred_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), actor TEXT NOT NULL DEFAULT 'local', operation TEXT NOT NULL, project_id TEXT, profile_id TEXT, environment TEXT, object_name TEXT, outcome TEXT NOT NULL, policy TEXT NOT NULL DEFAULT 'local-workspace', affected_count INTEGER); INSERT INTO audit_events(id, correlation_id, operation, outcome) VALUES ('old-event', 'old-operation', 'project.create', 'succeeded'); PRAGMA user_version=2;").unwrap();
+    if conflict {
+        db.execute_batch("CREATE VIEW ssh_profiles AS SELECT 1 AS value;")
+            .unwrap();
+    }
+}
+
+fn v2_backups(directory: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().unwrap().to_string_lossy().contains(".v2-"))
+        .collect()
+}
+
 #[test]
 fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     let dir = tempfile::tempdir().unwrap();
@@ -36,7 +54,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -70,7 +88,97 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         backups(dir.path()).len(),
         1,
-        "v2 must not make another migration backup"
+        "v3 must not make another migration backup"
+    );
+}
+
+#[test]
+fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    create_v2(&path, false);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.list_profiles("project-1").unwrap()[0].id, "profile-1");
+    assert_eq!(
+        store.list_audit_events(None).unwrap().events[0].id,
+        "old-event"
+    );
+    assert!(store.list_ssh_profiles("project-1").unwrap().is_empty());
+    let db = Connection::open(&path).unwrap();
+    assert_eq!(
+        db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    let saved = v2_backups(dir.path());
+    assert_eq!(saved.len(), 1);
+    let backup = Connection::open(&saved[0]).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        backup
+            .query_row("SELECT id FROM audit_events", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "old-event"
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='ssh_profiles'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn failed_version_two_migration_leaves_original_and_backup_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    create_v2(&path, true);
+    assert!(Store::open(&path).is_err());
+    let db = Connection::open(&path).unwrap();
+    assert_eq!(
+        db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT type FROM sqlite_schema WHERE name='ssh_profiles'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "view"
+    );
+    assert_eq!(
+        db.query_row("SELECT id FROM audit_events", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "old-event"
+    );
+    let saved = v2_backups(dir.path());
+    assert_eq!(saved.len(), 1);
+    let backup = Connection::open(&saved[0]).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+            .unwrap(),
+        2
     );
 }
 
@@ -193,5 +301,46 @@ fn concurrent_migrations_only_publish_version_one_backups() {
     assert_eq!(
         Store::open(path).unwrap().list_projects().unwrap()[0].id,
         "project-1"
+    );
+}
+
+#[test]
+fn concurrent_version_two_migrations_keep_only_version_two_backups() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    create_v2(&path, false);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let workers: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                Store::open(path).map(|_| ())
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap().unwrap();
+    }
+    let saved = v2_backups(dir.path());
+    assert!(!saved.is_empty());
+    for path in saved {
+        let backup = Connection::open(path).unwrap();
+        assert_eq!(
+            backup
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+    assert_eq!(
+        Store::open(path)
+            .unwrap()
+            .list_audit_events(None)
+            .unwrap()
+            .events[0]
+            .id,
+        "old-event"
     );
 }

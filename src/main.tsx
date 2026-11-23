@@ -5,8 +5,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
   Database, FileCode2, FolderOpen, HardDrive, History, Layers3,
-  Plus, RefreshCw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
+  Pencil, Plus, RefreshCw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
+import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -56,6 +57,9 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
+  const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile } | null>(null);
+  const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [profileId, setProfileId] = useState("");
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
@@ -86,8 +90,12 @@ function App() {
   const objectGeneration = useRef(0);
   const detailsGeneration = useRef(0);
   const terminalCount = useRef(0);
+  const sshRequestSequence = useRef(0);
+  const selectedProject = useRef(projectId);
+  selectedProject.current = projectId;
   const closeApproved = useRef(false);
   const updateTerminalCount = useCallback((count: number) => { terminalCount.current = count; }, []);
+  const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef<Record<string, string>>({});
@@ -106,6 +114,11 @@ function App() {
     setProfileId(current => select ?? (next.some(item => item.id === current) ? current : ""));
   }, []);
 
+  const reloadSshProfiles = useCallback(async (id: string) => {
+    const next = await call<SshProfile[]>("list_ssh_profiles", { projectId: id });
+    if (selectedProject.current === id) setSshProfiles(next);
+  }, []);
+
   useEffect(() => {
     if (desktop) reloadProjects().catch(e => setError(errorText(e)));
   }, [reloadProjects]);
@@ -114,10 +127,11 @@ function App() {
     let live = true;
     abandonQuery();
     objectGeneration.current++;
-    setProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedSql("");
+    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedSql("");
     queryGeneration.current++;
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => { if (live) setProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      call<SshProfile[]>("list_ssh_profiles", { projectId }).then(items => { if (live) setSshProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
   }, [projectId]);
@@ -344,6 +358,13 @@ function App() {
               <ObjectGroup name="뷰" items={views} onSelect={openObject} />
             </>}
           </div>}
+          <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
+          {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
+          <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
+            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={15} /><span>{item.name}</span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
+            <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
+            <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
+          </div>)}</div>
           <div className="explorer-foot"><ShieldCheck size={15} /><span>연결 정보는 이 장치에 저장됩니다.</span></div>
         </aside>
         <main className="main-content">
@@ -371,25 +392,66 @@ function App() {
           {!profile && error && <div className="error-banner" role="alert">{error}</div>}
         </main>
       </div>
-      <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} /></React.Suspense>}</div>
+      <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense>}</div>
       <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
       {modal === "profile" && <><label className="field">SQLite 파일 경로<span className="file-input"><input required value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" /><button type="button" className="secondary" onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label><label className="field">환경<select value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label><p className="form-note">기존 파일만 열 수 있습니다. SQL은 읽기 전용이며 지원되는 셀은 별도 미리보기와 승인 후 수정할 수 있습니다.</p></>}
       {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
-      {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 연결 정의 {profiles.length}개, 해당 연결의 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
+      {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개 및 해당 SQL 초안을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result) void runQuery(executedSql, result.page); }} />}
+    {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
+}
+
+function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mode: "create" | "edit" | "delete"; profile?: SshProfile; projectId: string; onClose: () => void; onChanged: () => void }) {
+  const [name, setName] = useState(profile?.name ?? "");
+  const [host, setHost] = useState(profile?.host ?? "");
+  const [port, setPort] = useState(String(profile?.port ?? 22));
+  const [username, setUsername] = useState(profile?.username ?? "");
+  const [environment, setEnvironment] = useState<SshProfile["environment"]>(profile?.environment ?? "DEV");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true); setError("");
+    try {
+      const input = { name, host, port: Number(port), username, environment };
+      if (mode === "create") await call("create_ssh_profile", { projectId, input });
+      else if (mode === "edit" && profile) await call("update_ssh_profile", { id: profile.id, revision: profile.revision, input });
+      else if (mode === "delete" && profile) await call("delete_ssh_profile", { id: profile.id, revision: profile.revision });
+      else throw new Error("변경할 SSH 연결을 찾을 수 없습니다.");
+      onChanged();
+    } catch (e) { setError(errorText(e)); }
+    finally { setBusy(false); }
+  }
+
+  const title = mode === "create" ? "SSH 연결 추가" : mode === "edit" ? "SSH 연결 수정" : "SSH 연결 삭제";
+  return <Dialog title={title} onClose={onClose} busy={busy}><form onSubmit={submit} aria-busy={busy}>
+    {mode === "delete" ? <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의를 삭제합니다. 열린 SSH 세션과 저장된 호스트 키 신뢰 기록은 유지됩니다.</p> : <>
+      <label className="field">연결 이름<input autoFocus required disabled={busy} value={name} onChange={event => setName(event.target.value)} placeholder="예: 운영 서버" /></label>
+      <label className="field">호스트 또는 IP<input required disabled={busy} value={host} onChange={event => setHost(event.target.value)} placeholder="예: server.example.com" /></label>
+      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={busy} value={port} onChange={event => setPort(event.target.value)} /></label>
+      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_][A-Za-z0-9._-]*" disabled={busy} value={username} onChange={event => setUsername(event.target.value)} /></label>
+      <label className="field">환경<select disabled={busy} value={environment} onChange={event => setEnvironment(event.target.value as SshProfile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label>
+      <p className="form-note">연결 정보만 저장합니다. 암호나 개인 키는 입력하지 않습니다. 운영 환경 연결은 열기 전 추가 확인합니다.</p>
+    </>}
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button><button type="submit" className={mode === "delete" ? "danger" : "primary"} disabled={busy}>{busy ? "처리 중…" : mode === "delete" ? "삭제" : "저장"}</button></div>
+  </form></Dialog>;
 }
 
 const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
+  "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패" };
 

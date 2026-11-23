@@ -29,6 +29,7 @@ pub struct TerminalInfo {
     pub shell: String,
     pub process_id: Option<u32>,
     pub target: Option<String>,
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,6 +238,7 @@ impl TerminalManager {
             shell: shell.into(),
             process_id,
             target,
+            environment: None,
         })
     }
 

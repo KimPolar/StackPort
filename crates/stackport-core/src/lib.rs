@@ -10,6 +10,8 @@ mod query;
 pub use query::QueryOutcome;
 mod ssh;
 pub use ssh::{SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
+mod ssh_profiles;
+pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
 
@@ -29,7 +31,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -45,6 +47,16 @@ const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
     outcome TEXT NOT NULL CHECK(outcome IN ('started', 'succeeded', 'failed')),
     policy TEXT NOT NULL DEFAULT 'local-workspace',
     affected_count INTEGER
+);";
+const SSH_PROFILE_SCHEMA: &str = "CREATE TABLE ssh_profiles (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL CHECK(port BETWEEN 1 AND 65535),
+    username TEXT NOT NULL,
+    environment TEXT NOT NULL CHECK(environment IN ('DEV', 'STAGING', 'PROD')),
+    revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0)
 );";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,9 +213,9 @@ impl Store {
                 "지원하지 않는 작업 공간 형식입니다 (버전 {version})."
             ));
         }
-        // An existing v1 workspace is copied before changing its schema. The
+        // An older workspace is copied before changing its schema. The
         // backup has a unique name and can never overwrite an earlier copy.
-        if version == 1 {
+        if (1..SCHEMA_VERSION).contains(&version) {
             let absolute = std::fs::canonicalize(&store.path)
                 .map_err(|e| format!("작업 공간 경로를 확인할 수 없습니다: {e}"))?;
             let directory = absolute
@@ -213,11 +225,14 @@ impl Store {
                 .file_name()
                 .ok_or("작업 공간 파일 이름이 없습니다.")?
                 .to_string_lossy();
-            let backup = directory.join(format!("{filename}.v1-{}.backup.sqlite", Uuid::new_v4()));
-            if let Err(error) = snapshot_sqlite(&db, &backup, Some(1)) {
+            let backup = directory.join(format!(
+                "{filename}.v{version}-{}.backup.sqlite",
+                Uuid::new_v4()
+            ));
+            if let Err(error) = snapshot_sqlite(&db, &backup, Some(version)) {
                 // Another instance may have completed the migration while this
-                // instance was creating its snapshot. Do not publish a v2
-                // database under a misleading v1 backup name.
+                // instance was creating its snapshot. Do not publish a newer
+                // database under a misleading older backup name.
                 let current: i64 = db
                     .pragma_query_value(None, "user_version", |r| r.get(0))
                     .map_err(db_error)?;
@@ -256,6 +271,7 @@ impl Store {
                 )
                 .map_err(db_error)?;
                 tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -264,15 +280,18 @@ impl Store {
                 ));
             }
             tx.commit().map_err(db_error)?;
-        } else if version == 1 {
+        } else if (1..SCHEMA_VERSION).contains(&version) {
             let tx = db
                 .transaction_with_behavior(TransactionBehavior::Immediate)
                 .map_err(db_error)?;
             let current: i64 = tx
                 .pragma_query_value(None, "user_version", |r| r.get(0))
                 .map_err(db_error)?;
-            if current == 1 {
-                tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
+            if current == version {
+                if current == 1 {
+                    tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -377,6 +396,13 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(db_error)?;
+        let ssh_profiles: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM ssh_profiles WHERE project_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;
@@ -391,7 +417,7 @@ impl Store {
                 environment: None,
                 object_name: None,
                 outcome: "succeeded",
-                affected_count: Some(profiles + 1),
+                affected_count: Some(profiles + ssh_profiles + 1),
             },
         )?;
         tx.commit().map_err(db_error)
