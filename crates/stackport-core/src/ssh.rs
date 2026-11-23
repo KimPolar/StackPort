@@ -208,6 +208,34 @@ impl SshManager {
         rows: u16,
         cols: u16,
     ) -> Result<TerminalInfo> {
+        self.open_internal(terminals, host, port, username, rows, cols, None)
+    }
+
+    /// Select one identity for this session without storing its path or passphrase.
+    pub fn open_with_identity(
+        &self,
+        terminals: &TerminalManager,
+        host: &str,
+        port: u16,
+        username: &str,
+        rows: u16,
+        cols: u16,
+        identity_path: &str,
+    ) -> Result<TerminalInfo> {
+        let identity = identity_file(identity_path)?;
+        self.open_internal(terminals, host, port, username, rows, cols, Some(&identity))
+    }
+
+    fn open_internal(
+        &self,
+        terminals: &TerminalManager,
+        host: &str,
+        port: u16,
+        username: &str,
+        rows: u16,
+        cols: u16,
+        identity: Option<&str>,
+    ) -> Result<TerminalInfo> {
         let host = normalize_host(host)?;
         validate_port(port)?;
         let username = normalize_username(username)?;
@@ -215,7 +243,14 @@ impl SshManager {
             .lookup(&host, port)?
             .ok_or("먼저 서버의 호스트 키 지문을 확인하고 신뢰해야 합니다.")?;
         let known_hosts = self.pin_file(&host, port, &key)?;
-        let command = ssh_command(&host, port, &username, &key.algorithm, known_hosts.as_ref())?;
+        let command = ssh_command(
+            &host,
+            port,
+            &username,
+            &key.algorithm,
+            known_hosts.as_ref(),
+            identity,
+        )?;
         let address = if host.contains(':') {
             format!("[{host}]")
         } else {
@@ -613,6 +648,7 @@ fn ssh_command(
     username: &str,
     algorithm: &str,
     known_hosts: &Path,
+    identity: Option<&str>,
 ) -> Result<CommandBuilder> {
     let program = system_ssh_program("ssh.exe")?;
     let path = known_hosts
@@ -650,11 +686,28 @@ fn ssh_command(
         "BatchMode=no".into(),
         "NumberOfPasswordPrompts=1".into(),
         "ConnectTimeout=10".into(),
-        "PreferredAuthentications=publickey,keyboard-interactive,password".into(),
+        if identity.is_some() {
+            "PreferredAuthentications=publickey"
+        } else {
+            "PreferredAuthentications=publickey,keyboard-interactive,password"
+        }
+        .into(),
         format!("HostKeyAlgorithms={algorithms}"),
     ] {
         command.arg("-o");
         command.arg(option);
+    }
+    if let Some(identity) = identity {
+        // `none` prevents OpenSSH from falling back to default identity files if
+        // the selected file disappears before the child process starts.
+        command.args([
+            "-o",
+            "IdentityFile=none",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-i",
+            identity,
+        ]);
     }
     command.arg("-p");
     command.arg(port.to_string());
@@ -665,6 +718,35 @@ fn ssh_command(
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     Ok(command)
+}
+
+fn identity_file(value: &str) -> Result<String> {
+    let path = Path::new(value.trim());
+    if !path.is_absolute() {
+        return Err("SSH 키 파일의 절대 경로를 지정하세요.".into());
+    }
+    let resolved =
+        std::fs::canonicalize(path).map_err(|_| "SSH 키 파일을 찾거나 접근할 수 없습니다.")?;
+    if !resolved.is_file() {
+        return Err("SSH 키는 일반 파일이어야 합니다.".into());
+    }
+    let text = resolved
+        .to_str()
+        .ok_or("SSH 키 파일 경로를 읽을 수 없습니다.")?;
+    #[cfg(windows)]
+    let text = if let Some(path) = text.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{path}")
+    } else {
+        text.strip_prefix("\\\\?\\").unwrap_or(text).to_owned()
+    };
+    #[cfg(not(windows))]
+    let text = text.to_owned();
+    // IdentityFile expands OpenSSH %-tokens and, on supported versions,
+    // environment references. Reject them instead of changing the target.
+    if text.contains('%') || text.contains("${") || text.contains(['\r', '\n']) {
+        return Err("SSH 키 파일 경로에 지원하지 않는 문자가 있습니다 (% 또는 환경 변수).".into());
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -900,7 +982,7 @@ mod tests {
     #[test]
     fn ssh_uses_only_the_verified_key_and_disables_user_configuration() {
         let path = Path::new("C:\\temporary folder\\known_hosts");
-        let command = ssh_command("example.com", 2222, "alice", "ssh-ed25519", path).unwrap();
+        let command = ssh_command("example.com", 2222, "alice", "ssh-ed25519", path, None).unwrap();
         let args: Vec<_> = command
             .get_argv()
             .iter()
@@ -915,5 +997,58 @@ mod tests {
             .iter()
             .any(|arg| arg == "HostKeyAlgorithms=ssh-ed25519"));
         assert!(args.windows(2).any(|pair| pair == ["--", "example.com"]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn explicit_identity_disables_default_keys_and_other_authentication() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("identity with spaces");
+        std::fs::write(&key, b"test fixture").unwrap();
+        let selected = identity_file(key.to_str().unwrap()).unwrap();
+        let command = ssh_command(
+            "example.com",
+            22,
+            "alice",
+            "ssh-ed25519",
+            Path::new("C:\\known_hosts"),
+            Some(&selected),
+        )
+        .unwrap();
+        let args: Vec<_> = command
+            .get_argv()
+            .iter()
+            .map(|item| item.to_string_lossy().into_owned())
+            .collect();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-i", selected.as_str()]));
+        assert!(args.iter().any(|arg| arg == "IdentityFile=none"));
+        assert!(args.iter().any(|arg| arg == "IdentitiesOnly=yes"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "PreferredAuthentications=publickey"));
+        assert!(!args.iter().any(|arg| arg.contains("keyboard-interactive")));
+        std::fs::remove_file(&key).unwrap();
+        let output = std::process::Command::new(&args[0])
+            .arg("-G")
+            .args(&args[1..])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let configuration = String::from_utf8(output.stdout).unwrap();
+        let identity_lines: Vec<_> = configuration
+            .lines()
+            .filter(|line| line.starts_with("identityfile "))
+            .collect();
+        assert_eq!(identity_lines, ["identityfile none"]);
+        assert!(identity_file("relative-key").is_err());
+        assert!(identity_file(dir.path().to_str().unwrap()).is_err());
+        let percent = dir.path().join("key%h");
+        std::fs::write(&percent, b"fixture").unwrap();
+        assert!(identity_file(percent.to_str().unwrap()).is_err());
+        let variable = dir.path().join("key${USER}");
+        std::fs::write(&variable, b"fixture").unwrap();
+        assert!(identity_file(variable.to_str().unwrap()).is_err());
     }
 }

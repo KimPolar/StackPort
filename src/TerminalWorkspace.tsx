@@ -266,14 +266,26 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
   const [host, setHost] = useState(profile?.host ?? "");
   const [port, setPort] = useState(String(profile?.port ?? 22));
   const [username, setUsername] = useState(profile?.username ?? "");
+  const [authentication, setAuthentication] = useState<"auto" | "key">("auto");
+  const [identityPath, setIdentityPath] = useState("");
   const [info, setInfo] = useState<SshHost | null>(null);
   const [fingerprint, setFingerprint] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [prodConfirmation, setProdConfirmation] = useState("");
   const [diagnostic, setDiagnostic] = useState<NetworkDiagnostics | null>(null);
-  const [busy, setBusy] = useState<"" | "diagnose" | "inspect" | "trust" | "open">("");
+  const [busy, setBusy] = useState<"" | "file" | "diagnose" | "inspect" | "trust" | "open">("");
   const [error, setError] = useState("");
   useEffect(() => { dialog.current?.showModal(); }, []);
+
+  async function chooseIdentity() {
+    if (busy) return;
+    setBusy("file"); setError("");
+    try {
+      const chosen = await call<string | null>("choose_ssh_identity_file");
+      if (chosen) setIdentityPath(chosen);
+    } catch (e) { setError(errorText(e)); }
+    finally { setBusy(""); }
+  }
 
   async function diagnose() {
     if (busy) return;
@@ -314,11 +326,13 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
 
   async function connect() {
     if (!info || info.status !== "trusted" || busy) return;
+    if (authentication === "key" && !identityPath.trim()) { setError("SSH 키 파일을 선택하세요."); return; }
     setBusy("open"); onOpeningChange(true); setError("");
     try {
+      const selectedIdentity = authentication === "key" ? identityPath : null;
       const terminal = profile
-        ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, rows: 24, cols: 80 })
-        : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, rows: 24, cols: 80 });
+        ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, identityPath: selectedIdentity, rows: 24, cols: 80 })
+        : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, identityPath: selectedIdentity, rows: 24, cols: 80 });
       onOpened(terminal);
     } catch (e) { setError(errorText(e)); }
     finally { onOpeningChange(false); setBusy(""); }
@@ -331,6 +345,8 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
       <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>
       <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
+      <label className="field">SSH 인증 방식<select disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as "auto" | "key"); setError(""); }}><option value="auto">자동 · 기본 키, 에이전트 또는 암호</option><option value="key">지정한 키 파일</option></select></label>
+      {authentication === "key" && <><label className="field">SSH 키 파일 경로<span className="file-input"><input required disabled={Boolean(busy)} value={identityPath} onChange={event => setIdentityPath(event.target.value)} placeholder="개인 키 또는 에이전트에 등록된 공개 키의 절대 경로" autoComplete="off" /><button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void chooseIdentity()}>찾아보기</button></span></label><p className="form-note">선택한 키만 사용합니다. 키 경로와 암호는 저장하지 않으며, 키 암호가 필요하면 연결 후 터미널에 입력합니다.</p></>}
       <div className="ssh-diagnostic-actions"><button type="button" className="secondary small" disabled={Boolean(busy) || !host.trim() || !port} onClick={() => void diagnose()}>DNS·TCP 진단</button><span>네트워크 연결을 시도하며 로그인하지 않습니다.</span></div>
       {diagnostic && <NetworkDiagnosticResult result={diagnostic} />}
       {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. 암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다.{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
@@ -340,7 +356,7 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       </div>}
       {info?.status === "trusted" && profile?.environment === "PROD" && <label className="field ssh-prod-confirm">운영 환경 확인: PROD 입력<input disabled={Boolean(busy)} value={prodConfirmation} onChange={event => setProdConfirmation(event.target.value)} autoComplete="off" placeholder="PROD" /></label>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      {busy && <p className="form-note" role="status">{busy === "diagnose" ? "DNS와 TCP 연결을 확인하는 중…" : busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
+      {busy && <p className="form-note" role="status">{busy === "file" ? "키 파일을 선택하는 중…" : busy === "diagnose" ? "DNS와 TCP 연결을 확인하는 중…" : busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setProdConfirmation(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy) || (profile?.environment === "PROD" && prodConfirmation !== "PROD")} onClick={() => void connect()}>연결</button>}</div>
     </form>
   </dialog>;

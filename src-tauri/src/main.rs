@@ -340,10 +340,17 @@ async fn open_ssh_terminal(
     username: String,
     rows: u16,
     cols: u16,
+    identity_path: Option<String>,
 ) -> Result<TerminalInfo, String> {
     let ssh = Arc::clone(ssh.inner());
     let terminals = Arc::clone(terminals.inner());
-    worker(move || ssh.open(&terminals, &host, port, &username, rows, cols)).await
+    worker(move || match identity_path {
+        Some(identity) => {
+            ssh.open_with_identity(&terminals, &host, port, &username, rows, cols, &identity)
+        }
+        None => ssh.open(&terminals, &host, port, &username, rows, cols),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -355,6 +362,7 @@ async fn open_saved_ssh_terminal(
     confirmation: String,
     rows: u16,
     cols: u16,
+    identity_path: Option<String>,
 ) -> Result<TerminalInfo, String> {
     let store = store.inner().clone();
     let ssh = Arc::clone(ssh.inner());
@@ -367,14 +375,25 @@ async fn open_saved_ssh_terminal(
         if current.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
-        let mut terminal = ssh.open(
-            &terminals,
-            &current.host,
-            current.port,
-            &current.username,
-            rows,
-            cols,
-        )?;
+        let mut terminal = match identity_path {
+            Some(identity) => ssh.open_with_identity(
+                &terminals,
+                &current.host,
+                current.port,
+                &current.username,
+                rows,
+                cols,
+                &identity,
+            ),
+            None => ssh.open(
+                &terminals,
+                &current.host,
+                current.port,
+                &current.username,
+                rows,
+                cols,
+            ),
+        }?;
         terminal.environment = Some(current.environment);
         Ok(terminal)
     })
@@ -399,6 +418,17 @@ async fn choose_ssh_profile_import_file() -> Result<Option<String>, String> {
         Ok(rfd::FileDialog::new()
             .set_title("SSH 연결 파일 선택")
             .add_filter("JSON", &["json"])
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn choose_ssh_identity_file() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("SSH 키 파일 선택")
             .pick_file()
             .map(|path| path.to_string_lossy().into_owned()))
     })
@@ -496,6 +526,7 @@ fn main() {
             open_saved_ssh_terminal,
             choose_sqlite_file,
             choose_ssh_profile_import_file,
+            choose_ssh_identity_file,
             choose_ssh_profile_export_directory,
             choose_backup_directory,
             backup_sqlite
