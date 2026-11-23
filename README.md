@@ -65,3 +65,11 @@ cargo test --manifest-path crates/stackport-core/Cargo.toml
 npm run build
 cargo check --manifest-path src-tauri/Cargo.toml
 ```
+
+## Windows 자동 릴리즈
+
+`main`에 커밋을 푸시하거나 GitHub의 **Actions → Windows build and release → Run workflow**를 실행하면 Windows x64 EXE를 빌드하고 GitHub Release를 하나 만듭니다. 빌드와 테스트가 성공해야 릴리즈가 게시됩니다. 실행 결과의 Actions 산출물과 릴리즈에는 `StackPort-Windows-x64.exe` 및 `SHA256SUMS.txt`가 포함됩니다. EXE에는 WebView2 Runtime이 필요하며 현재 코드 서명은 제공하지 않습니다.
+
+버전은 `vMAJOR.MINOR.PATCH` 형식입니다. 첫 릴리즈는 소스의 기준 버전으로 시작합니다. 이후 `feat:` 또는 `feat(범위):` 커밋은 MINOR, `BREAKING CHANGE:` 또는 `!`가 붙은 Conventional Commit은 MAJOR를 올립니다. 그 밖의 변경이나 새 커밋이 없는 수동 실행은 PATCH를 올립니다. 수동 실행 시 `bump`를 `patch`, `minor`, `major`로 직접 선택할 수도 있습니다. 동시에 요청된 실행은 차례로 처리하며, 같은 실행을 재시도하면 기존 버전과 릴리즈를 사용합니다.
+
+릴리즈 버전은 빌드 중 EXE와 패키지 메타데이터에 적용하고 해당 소스 커밋에 태그를 생성합니다. `main`의 기준 버전 파일은 자동 커밋으로 변경하지 않습니다. 테스트가 실패한 실행은 릴리즈를 만들지 않으며, 게시 직전 오류가 발생하면 같은 실행을 다시 시도해 이어갈 수 있습니다.

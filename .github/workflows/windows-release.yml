@@ -1,0 +1,133 @@
+name: Windows build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version increase (auto reads commit messages)
+        required: true
+        default: auto
+        type: choice
+        options: [auto, patch, minor, major]
+
+# Serialize version allocation and preserve queued runs instead of replacing them.
+concurrency:
+  group: stackport-windows-release
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Build Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      artifact: ${{ steps.version.outputs.artifact }}
+    steps:
+      - name: Check out source and release tags
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Select Rust MSVC toolchain
+        shell: pwsh
+        run: rustup default stable-x86_64-pc-windows-msvc
+
+      - name: Test release version rules
+        run: node --test tests/release-version.test.mjs
+
+      - name: Calculate and apply release version
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_BUMP: ${{ inputs.bump || 'auto' }}
+          RELEASE_METADATA: ${{ runner.temp }}\stackport-release.json
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Run this release workflow on main.' }
+          node tools/release-version.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Release version preparation failed.' }
+          $release = Get-Content -Raw -Encoding UTF8 $env:RELEASE_METADATA | ConvertFrom-Json
+          "version=$($release.version)" >> $env:GITHUB_OUTPUT
+          "tag=$($release.tag)" >> $env:GITHUB_OUTPUT
+          "artifact=StackPort-Windows-x64-$($release.version)-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_OUTPUT
+
+      - name: Install JavaScript dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test Rust core
+        run: cargo test --locked --manifest-path crates/stackport-core/Cargo.toml
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Build release executable
+        run: cargo build --locked --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+
+      - name: Prepare executable and checksum
+        shell: pwsh
+        run: |
+          $source = 'src-tauri/target/release/stackport.exe'
+          if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw 'Release executable not found.' }
+          $output = 'release-assets'
+          New-Item -ItemType Directory -Path $output | Out-Null
+          $executable = Join-Path $output 'StackPort-Windows-x64.exe'
+          Copy-Item -LiteralPath $source -Destination $executable
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $executable).Hash.ToLowerInvariant()
+          $checksum = Join-Path $output 'SHA256SUMS.txt'
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) $checksum), "$hash  StackPort-Windows-x64.exe`n", [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ${{ steps.version.outputs.artifact }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the built commit
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Test release retry handling
+        run: node --test tests/publish-release.test.mjs
+
+      - name: Download build artifact
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ needs.windows.outputs.artifact }}
+          path: release-assets
+
+      - name: Verify, tag and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.windows.outputs.tag }}
+        run: bash tools/publish-release.sh
