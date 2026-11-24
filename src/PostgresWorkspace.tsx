@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
-import { PostgresEditDialog, type PostgresRowStamp } from "./PostgresEditDialog";
+import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
@@ -39,7 +39,9 @@ type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: s
   has_next: boolean; has_next_columns: boolean; primary_key_order: boolean;
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null;
   value_rows: PostgresValueRow[] | null; edit_reason: string | null;
-  row_insert: boolean; row_paste: boolean; row_delete: boolean; row_delete_reason: string | null };
+  row_update: boolean; row_insert: boolean; row_paste: boolean; row_delete: boolean; row_delete_reason: string | null };
+type GridEditTarget = { object: number; trigger: HTMLButtonElement } &
+  ({ stamp: PostgresRowStamp; column: string; rows?: never } | { rows: PostgresGridEditRow[] });
 type PostgresRowChangeRequest = Extract<RowChangeRequest, { engine: "postgres" }>;
 const rowActionWidth = 56;
 type Route = { id: string; name: string; port: number };
@@ -269,7 +271,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
   const [layoutOpen, setLayoutOpen] = useState(false);
-  const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
+  const [edit, setEdit] = useState<GridEditTarget | null>(null);
   const [rowChange, setRowChange] = useState<{ request: PostgresRowChangeRequest; trigger: HTMLButtonElement } | null>(null);
   const [rowReport, setRowReport] = useState<RowChangeResult | null>(null);
   const [paste, setPaste] = useState<{ request: GridPasteRequest; trigger: HTMLButtonElement } | null>(null);
@@ -291,6 +293,13 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
   const result = page.data;
   const rowSelection = useGridRowSelection(result, result?.rows.length ?? 0);
+  const selectedRowsForEdit = result?.row_update && rowSelection.active
+    ? [...rowSelection.rows].sort((first, second) => first - second).flatMap(index => {
+      const stamp = result.row_stamps?.[index];
+      return stamp ? [{ stamp, number: rowPage * 100 + index + 1 }] : [];
+    })
+    : [];
+  const canEditSelection = selectedRowsForEdit.length >= 2 && selectedRowsForEdit.length === rowSelection.rows.size;
   const selectedWidth = rowSelection.active ? selectionColumnWidth : 0;
   const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns,
     (result.row_delete ? rowActionWidth : 0) + selectedWidth);
@@ -352,6 +361,21 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       else if (!refreshGrid && trigger?.isConnected) trigger.focus();
       else dataPanel.current?.focus();
     });
+  }
+
+  function openGridEdit(trigger: HTMLButtonElement) {
+    if (!object || unavailable || page.loading || !canEditSelection) return;
+    setEditNotice("");
+    setRowReport(null);
+    setPasteReport(null);
+    setEdit({ object: object.id, trigger, rows: selectedRowsForEdit });
+  }
+
+  function editApplied(cells: number, warning: boolean, rows?: number) {
+    const changes = cells === 1 ? "셀 변경 완료" : `${cells}개 셀 변경 완료`;
+    const report = rows === undefined ? changes : `행 ${rows}개 · ${changes}`;
+    setEditNotice(warning ? report + " · 작업 기록을 저장할 수 없습니다." : report);
+    closeEdit(true);
   }
 
   function openRowChange(change: PostgresRowChangeRequest["change"], trigger: HTMLButtonElement) {
@@ -434,6 +458,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
           {!structureOpen && Boolean(result?.rows.length) && <GridSelectionButton selection={rowSelection} disabled={page.loading} />}
+          {!structureOpen && result?.row_update && rowSelection.active && <button type="button" className="secondary small"
+            disabled={page.loading || Boolean(unavailable) || !canEditSelection} onClick={event => openGridEdit(event.currentTarget)}>선택한 행 편집</button>}
           {result?.row_insert && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {result?.row_paste && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
@@ -495,6 +521,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           {rowSelection.active && Boolean(result.rows.length) && <GridCopyControls selection={rowSelection}
             columns={result.columns.map(column => column.name)} startRow={rowPage * 100 + 1} disabled={page.loading}
             readCell={(row, column) => postgresCopyCell(result.rows[row][column], result.columns[column].data_type)} />}
+          {rowSelection.active && result.row_update && rowSelection.rows.size > selectedRowsForEdit.length &&
+            <p className="form-note">편집할 행마다 전체 기본 키 값이 필요합니다.</p>}
           {result.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
             <table aria-label="PostgreSQL 데이터" style={geometry ? { tableLayout: "fixed", width: geometry.total } : undefined}>
               {geometry && <colgroup>{rowSelection.active && <col style={{ width: selectionColumnWidth }} />}
@@ -567,12 +595,12 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           else dataPanel.current?.focus();
         });
       }} />}
-      {edit && <PostgresEditDialog id={id} object={edit.object} stamp={edit.stamp} column={edit.column} profile={profile.settings}
-        unavailable={unavailable} onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onExitGuard={onEditExitGuard} onApplied={(cells, warning) => {
-          const result = cells === 1 ? "셀 변경 완료" : `${cells}개 셀 변경 완료`;
-          setEditNotice(warning ? result + " · 작업 기록을 저장할 수 없습니다." : result);
-          closeEdit(true);
-        }} />}
+      {edit && (edit.rows
+        ? <PostgresGridEditDialog id={id} object={edit.object} selected={edit.rows} profile={profile.settings}
+          unavailable={unavailable} onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown}
+          onExitGuard={onEditExitGuard} onApplied={(rows, cells, warning) => editApplied(cells, warning, rows)} />
+        : <PostgresEditDialog id={id} object={edit.object} stamp={edit.stamp} column={edit.column} profile={profile.settings}
+          unavailable={unavailable} onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onExitGuard={onEditExitGuard} onApplied={editApplied} />)}
       {rowChange && <RowChangeDialog request={rowChange.request} unavailable={unavailable} onClose={() => closeRowChange()}
         onApplied={closeRowChange} onUnknown={onEditUnknown} onBusy={onFileBusy} onExitGuard={onEditExitGuard} />}
       {paste && <GridPasteDialog request={paste.request} unavailable={unavailable} onClose={() => closeRowPaste()}

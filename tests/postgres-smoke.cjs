@@ -122,6 +122,11 @@ async function startPostgres(preloadStats = true) {
     'GRANT SELECT, INSERT, DELETE ON report."row actions" TO fixture_reader;',
     "CREATE TABLE report.row_guard (id integer PRIMARY KEY, label text); INSERT INTO report.row_guard VALUES (1, 'before');",
     'GRANT SELECT, UPDATE, DELETE ON report.row_guard TO fixture_reader;',
+    "CREATE TABLE report.grid_updates (id int PRIMARY KEY, note text DEFAULT '서버 기본값', " +
+      'amount numeric(30,3) NOT NULL CHECK (amount >= 0), large_note text, ' +
+      'parent_id int REFERENCES report.row_guard(id) DEFERRABLE INITIALLY DEFERRED, observed timestamptz);',
+    "INSERT INTO report.grid_updates (id, note, amount, large_note) VALUES (1, '첫 값', 3, repeat('가', 4097)), (2, '둘째 값', 4, '짧은 값');",
+    'GRANT SELECT, UPDATE ON report.grid_updates TO fixture_reader;',
     'CREATE TABLE report.paste_refs (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer NOT NULL REFERENCES report.row_guard(id) DEFERRABLE INITIALLY DEFERRED);',
     'GRANT SELECT, INSERT ON report.paste_refs TO fixture_reader;',
     'CREATE TABLE report.row_cascade (id integer PRIMARY KEY); INSERT INTO report.row_cascade VALUES (1);',
@@ -1347,6 +1352,44 @@ async function verify(browser, fixture, gateway, jump) {
   await cellEditor.getByRole('button', { name: '변경 버리기', exact: true }).click();
   await cellEditor.waitFor({ state: 'detached' });
   await data.getByText('화면 다중 수정', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'grid_updates 테이블', exact: true }).click();
+  await data.getByText('짧은 값', { exact: true }).waitFor();
+  const editSelected = page.getByRole('button', { name: '선택한 행 편집', exact: true });
+  await selectGridRows.click();
+  assert.equal(await editSelected.isDisabled(), true);
+  await data.getByLabel('이 페이지의 행 모두 선택', { exact: true }).check();
+  await editSelected.click();
+  const gridEditor = page.getByRole('dialog', { name: 'PostgreSQL 여러 행 편집', exact: true });
+  const gridColumn = gridEditor.getByLabel('변경할 열');
+  const gridRow = gridEditor.getByLabel('편집할 행');
+  const gridInput = gridEditor.getByLabel('변경할 값');
+  await gridColumn.selectOption('large_note');
+  await gridEditor.getByText(/4,096자를 초과합니다/).waitFor();
+  await gridRow.selectOption('1');
+  assert.equal(await gridInput.inputValue(), '짧은 값');
+  await gridRow.selectOption('0');
+  await gridColumn.selectOption('note');
+  await gridInput.fill('화면 일괄 저장');
+  await gridEditor.getByRole('button', { name: '선택한 모든 행의 이 열에 입력', exact: true }).click();
+  await gridRow.selectOption('1');
+  assert.equal(await gridInput.inputValue(), '화면 일괄 저장');
+  await gridColumn.selectOption('amount');
+  await gridInput.fill('9007199254740993.1237');
+  await page.keyboard.press('Escape');
+  await gridEditor.getByText('적용하지 않은 변경이 있습니다.', { exact: true }).waitFor();
+  await gridEditor.getByRole('button', { name: '계속 편집', exact: true }).click();
+  await gridEditor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await gridEditor.getByText('변경 미리보기 · 2행 / 3셀', { exact: true }).waitFor();
+  await gridEditor.getByRole('region', { name: '1행 note 변경 비교', exact: true }).getByText('화면 일괄 저장').waitFor();
+  await gridEditor.getByRole('region', { name: '2행 amount 변경 비교', exact: true }).getByText('9007199254740993.124').waitFor();
+  await gridEditor.getByLabel('운영 환경 확인').fill('PROD');
+  await gridEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
+  await gridEditor.waitFor({ state: 'detached' });
+  await page.getByText('행 2개 · 3개 셀 변경 완료', { exact: true }).waitFor();
+  await data.getByText('9007199254740993.124', { exact: true }).waitFor();
+  assert.equal(await data.getByText('화면 일괄 저장', { exact: true }).count(), 2);
+  assert.equal(await editSelected.isDisabled(), true);
+  await selectGridRows.click();
   await disconnect();
 
   const ssh = await command('create_ssh_profile', { projectId: project.id, input: {
@@ -1820,12 +1863,95 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     const rows = history.events.filter(event => event.operation === 'postgres.edit.row');
     assert.deepEqual(rows.map(event => event.outcome).sort(), ['failed', 'started', 'started', 'succeeded']);
     assert.equal(rows.find(event => event.outcome === 'succeeded').affected_count, 1);
+    await verifyGridUpdates({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
     await verifyRowActions({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
     await verifyRowPastes({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
   } finally {
     await close(writer.id);
     await close(peer.id);
   }
+}
+
+async function verifyGridUpdates({ command, page, id, peer, findObject, readOnly }) {
+  const target = findObject('grid_updates');
+  const roleLimited = findObject('edit demo');
+  const begin = (stamps, connection = id, object = target) => command('begin_postgres_grid_edit', { id: connection, object, stamps });
+  const openColumn = (session, column) => command('open_postgres_grid_edit_column', { id, token: session.token, column });
+  const preview = (session, changes) => command('preview_postgres_grid_edit', { id, token: session.token, changes });
+  const apply = (session, proposal, confirmation = 'PROD') =>
+    command('apply_postgres_grid_edit', { id, token: session.token, approval: proposal.approval, confirmation });
+  const text = (column, value) => ({ column, input: { kind: 'text', value } });
+  const changeBoth = (first, second) => [{ row: 0, cells: [first] }, { row: 1, cells: [second] }];
+  const values = async () => (await page(peer, target)).rows.map(row => [row[1].value, row[2].value, row[4].value]);
+  const current = await page(id, target);
+  assert.equal(current.row_update, true);
+  assert.equal((await page(readOnly, target)).row_update, false);
+  await assert.rejects(begin(current.row_stamps, readOnly), /편집을 허용/);
+  await assert.rejects(begin([current.row_stamps[0], current.row_stamps[0]]), /같은 행/);
+  const columns = await begin(current.row_stamps);
+  assert.deepEqual(columns.keys, [[['id', '1']], [['id', '2']]]);
+  assert.deepEqual((await openColumn(columns, 'large_note')).map(field => field?.current.value ?? null), [null, '짧은 값']);
+  await openColumn(columns, 'note');
+  const previous = await preview(columns, changeBoth(text('note', '임시 A'), text('note', '임시 B')));
+  await assert.rejects(preview(columns, [{ row: 0, cells: [text('large_note', '미허용')] }]), /열을 열어/);
+  await assert.rejects(apply(columns, previous), /다시 미리/);
+  await command('cancel_postgres_grid_edit', { id, token: columns.token });
+  await assert.rejects(apply(columns, previous), /만료/);
+
+  const blocked = await begin(current.row_stamps);
+  await openColumn(blocked, 'note');
+  await openColumn(blocked, 'amount');
+  const check = await preview(blocked, changeBoth(text('note', '전부 롤백'), text('amount', '-1')));
+  await assert.rejects(apply(blocked, check, ''), /PROD/);
+  await assert.rejects(apply(blocked, check), /2번째 행.*23514.*전체 변경을 롤백/);
+  await assert.rejects(apply(blocked, check), /만료/);
+  assert.deepEqual(await values(), [['첫 값', '3.000', null], ['둘째 값', '4.000', null]]);
+
+  const deferred = await begin((await page(id, target)).row_stamps);
+  await openColumn(deferred, 'parent_id');
+  const invalidReference = await preview(deferred, changeBoth(text('parent_id', '1'), text('parent_id', '999')));
+  await assert.rejects(apply(deferred, invalidReference), /23503.*전체 변경을 롤백/);
+  assert.deepEqual(await values(), [['첫 값', '3.000', null], ['둘째 값', '4.000', null]]);
+
+  const limited = await begin((await page(id, roleLimited)).row_stamps, id, roleLimited);
+  await openColumn(limited, 'public note');
+  const denied = await preview(limited, changeBoth(text('public note', '권한 밖으로 롤백'), text('public note', '미허용')));
+  await assert.rejects(apply(limited, denied), /2번째 행.*편집 권한.*전체 변경을 롤백/);
+  assert.deepEqual((await page(peer, roleLimited)).rows.map(row => row[2].value), ['조합', '다른 행']);
+
+  const fresh = (await page(id, target)).row_stamps;
+  const stale = await begin(fresh);
+  await openColumn(stale, 'note');
+  const outdated = await preview(stale, changeBoth(text('note', '충돌로 롤백'), text('note', '동시 변경과 경쟁')));
+  const other = await command('begin_postgres_edit', { id: peer, object: target, stamp: fresh[1], column: 'note' });
+  const external = await command('preview_postgres_edit', { id: peer, token: other.token, input: { kind: 'text', value: '다른 연결에서 갱신' } });
+  await command('apply_postgres_edit', { id: peer, token: other.token, approval: external.approval, confirmation: 'PROD' });
+  await assert.rejects(apply(stale, outdated), /2번째 행.*행이 변경.*전체 변경을 롤백/);
+  assert.deepEqual(await values(), [['첫 값', '3.000', null], ['다른 연결에서 갱신', '4.000', null]]);
+
+  const ready = await begin((await page(id, target)).row_stamps);
+  await openColumn(ready, 'note');
+  await openColumn(ready, 'amount');
+  await openColumn(ready, 'observed');
+  const approved = await preview(ready, [
+    { row: 0, cells: [{ column: 'note', input: { kind: 'default' } }] },
+    { row: 1, cells: [text('amount', '5.1237'), text('observed', 'now')] },
+  ]);
+  assert.equal(approved.rows[0].changes[0].before.value, '첫 값');
+  assert.match(approved.rows[0].changes[0].default_sql, /서버 기본값/);
+  assert.equal(approved.rows[1].changes[0].after.value, '5.124');
+  const previewTime = approved.rows[1].changes[1].after.value;
+  assert.match(previewTime, /^\d{4}-\d{2}-\d{2} /);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.deepEqual(await apply(ready, approved), { status: 'applied', affected_rows: 2, affected_cells: 3, audit_warning: false });
+  assert.deepEqual(await values(), [['서버 기본값', '3.000', null], ['다른 연결에서 갱신', '5.124', null]]);
+  assert.equal((await page(peer, target)).rows[1][5].value, previewTime);
+  const history = await command('list_audit_events', { before: null });
+  const reports = history.events.filter(event => event.operation === 'postgres.edit.grid');
+  assert.ok(reports.some(event => event.outcome === 'succeeded' && event.affected_count === 2 &&
+    event.policy === 'postgres-grid-update-prod-confirmed'));
+  assert.equal(reports.filter(event => event.outcome === 'failed').length, 4);
+  assert.doesNotMatch(JSON.stringify(reports), /권한 밖으로|다른 연결에서|5\.124/);
 }
 
 async function verifyRowActions({ command, page, id, peer, findObject, readOnly }) {

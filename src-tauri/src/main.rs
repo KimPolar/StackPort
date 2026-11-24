@@ -19,6 +19,7 @@ use stackport_core::{
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
+    PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession,
     PostgresRowChange, PostgresRowChangeOutcome,
     PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
     PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget,
@@ -1002,6 +1003,56 @@ async fn cancel_postgres_edit(postgres: State<'_, PostgresManager>, id: String, 
 }
 
 #[tauri::command]
+async fn begin_postgres_grid_edit(
+    postgres: State<'_, PostgresManager>,
+    id: String,
+    object: i64,
+    stamps: Vec<PostgresRowStamp>,
+) -> Result<PostgresGridEditSession, String> {
+    postgres.begin_grid_edit(&id, object, stamps).await
+}
+
+#[tauri::command]
+async fn open_postgres_grid_edit_column(
+    postgres: State<'_, PostgresManager>,
+    id: String,
+    token: String,
+    column: String,
+) -> Result<Vec<Option<PostgresEditField>>, String> {
+    postgres.open_grid_edit_column(&id, &token, &column).await
+}
+
+#[tauri::command]
+async fn preview_postgres_grid_edit(
+    postgres: State<'_, PostgresManager>,
+    id: String,
+    token: String,
+    changes: Vec<PostgresGridEditChange>,
+) -> Result<PostgresGridEditPreview, String> {
+    postgres.preview_grid_edit(&id, &token, changes).await
+}
+
+#[tauri::command]
+async fn apply_postgres_grid_edit(
+    postgres: State<'_, PostgresManager>,
+    id: String,
+    token: String,
+    approval: String,
+    confirmation: String,
+) -> Result<PostgresGridEditOutcome, String> {
+    postgres.apply_grid_edit(&id, &token, &approval, &confirmation).await
+}
+
+#[tauri::command]
+async fn cancel_postgres_grid_edit(
+    postgres: State<'_, PostgresManager>,
+    id: String,
+    token: String,
+) -> Result<(), String> {
+    postgres.cancel_grid_edit(&id, &token).await
+}
+
+#[tauri::command]
 async fn begin_postgres_row_change(postgres: State<'_, PostgresManager>, id: String, object: i64, change: PostgresRowChange) -> Result<RowChangeSession, String> {
     postgres.begin_row_change(&id, object, change).await
 }
@@ -1737,6 +1788,11 @@ fn main() {
             preview_postgres_row_edit,
             apply_postgres_edit,
             cancel_postgres_edit,
+            begin_postgres_grid_edit,
+            open_postgres_grid_edit_column,
+            preview_postgres_grid_edit,
+            apply_postgres_grid_edit,
+            cancel_postgres_grid_edit,
             begin_postgres_row_change,
             preview_postgres_row_insert,
             apply_postgres_row_change,

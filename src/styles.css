@@ -765,8 +765,8 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .row-change-values dt { overflow-wrap: anywhere; font-weight: 600; }
 .row-change-values dd { margin: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
 .sqlite-row-report, .row-change-report { margin-block: 8px; }
-.sqlite-edit-drafts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 14px; }
-.sqlite-edit-drafts button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-accent); }
+.grid-edit-drafts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 14px; }
+.grid-edit-drafts button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-accent); }
 .sqlite-edit-fields { min-width: 0; margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
 .sqlite-edit-fields legend { padding-inline: 4px; font-weight: 600; overflow-wrap: anywhere; }
 .sqlite-edit-comparison { margin-top: 10px; }

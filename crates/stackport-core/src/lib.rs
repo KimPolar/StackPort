@@ -23,6 +23,7 @@ pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 pub use postgres::{PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
+pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};
 pub use postgres::PostgresDisconnect;
 pub use postgres::PostgresGridLayout;
 pub use postgres::{PostgresActivityInput, PostgresActivitySnapshot};
@@ -945,6 +946,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "postgres-row-change-prod-confirmed"
         }
         "postgres.row.insert" | "postgres.row.delete" | "postgres.row.paste" => "postgres-row-change-confirmed",
+        "postgres.edit.grid" if record.environment == Some("PROD") => "postgres-grid-update-prod-confirmed",
+        "postgres.edit.grid" => "postgres-grid-update-confirmed",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

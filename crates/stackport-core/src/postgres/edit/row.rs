@@ -505,7 +505,7 @@ fn check_delete(table: &EditTable) -> Result<()> {
     Ok(())
 }
 
-fn validate_stamp(stamp: &PostgresRowStamp, keys: usize) -> Result<()> {
+pub(super) fn validate_stamp(stamp: &PostgresRowStamp, keys: usize) -> Result<()> {
     if stamp.tuple.len() > 32
         || stamp.version.parse::<u32>().is_err()
         || stamp.keys.len() != keys

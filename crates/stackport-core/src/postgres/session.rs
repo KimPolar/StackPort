@@ -2,7 +2,7 @@ use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
     edit::{
-        self, row as row_edit, PostgresCellChange, PostgresEditField, PostgresEditInput,
+        self, grid as grid_update, row as row_edit, PostgresCellChange, PostgresEditField, PostgresEditInput,
         PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview,
         PostgresRowStamp,
     },
@@ -160,6 +160,7 @@ pub struct PostgresPage {
     row_stamps: Option<Vec<Option<PostgresRowStamp>>>,
     value_rows: Option<Vec<PostgresValueRow>>,
     edit_reason: Option<&'static str>,
+    row_update: bool,
     row_insert: bool,
     row_paste: bool,
     row_delete: bool,
@@ -183,6 +184,7 @@ struct Session {
     running_sql: Mutex<Option<sql::RunningSql>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
+    grid_update: AsyncMutex<Option<grid_update::Plan>>,
     row_edit: AsyncMutex<Option<row_edit::Plan>>,
     _permit: OwnedSemaphorePermit,
 }
@@ -370,6 +372,7 @@ impl PostgresManager {
             running_sql: Mutex::default(),
             grid_edit,
             edit: AsyncMutex::default(),
+            grid_update: AsyncMutex::default(),
             row_edit: AsyncMutex::default(),
             _permit: permit,
         });
@@ -891,6 +894,110 @@ impl PostgresManager {
         Ok(())
     }
 
+    pub async fn begin_grid_edit(
+        &self,
+        id: &str,
+        object: i64,
+        stamps: Vec<PostgresRowStamp>,
+    ) -> Result<grid_update::PostgresGridEditSession> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.grid_update.lock().await;
+        let (plan, response) = timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            grid_update::begin(&mut client, object, stamps).await
+        })
+        .await
+        .map_err(|_| "편집할 행을 읽는 시간이 초과되었습니다.")??;
+        let token = plan.token;
+        *pending = Some(plan);
+        let session = Arc::downgrade(&session);
+        tokio::spawn(async move {
+            tokio::time::sleep(edit::LIFETIME).await;
+            if let Some(session) = session.upgrade() {
+                let mut pending = session.grid_update.lock().await;
+                if pending.as_ref().is_some_and(|plan| plan.token == token) {
+                    pending.take();
+                }
+            }
+        });
+        Ok(response)
+    }
+
+    pub async fn open_grid_edit_column(
+        &self,
+        id: &str,
+        token: &str,
+        column: &str,
+    ) -> Result<Vec<Option<PostgresEditField>>> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.grid_update.lock().await;
+        let token = edit_token(token)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let plan = checked_grid_edit(&mut pending, token)?;
+            grid_update::open_column(&mut client, plan, column).await
+        })
+        .await
+        .map_err(|_| "편집할 열을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn preview_grid_edit(
+        &self,
+        id: &str,
+        token: &str,
+        changes: Vec<grid_update::PostgresGridEditChange>,
+    ) -> Result<grid_update::PostgresGridEditPreview> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.grid_update.lock().await;
+        let token = edit_token(token)?;
+        checked_grid_edit(&mut pending, token)?.clear_preview();
+        timeout(grid_update::TIME_LIMIT, async {
+            let mut client = session.client.lock().await;
+            let plan = checked_grid_edit(&mut pending, token)?;
+            grid_update::preview(&mut client, plan, changes).await
+        })
+        .await
+        .map_err(|_| "변경 미리보기 시간이 초과되었습니다.")?
+    }
+
+    pub async fn apply_grid_edit(
+        &self,
+        id: &str,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+    ) -> Result<grid_update::PostgresGridEditOutcome> {
+        let session = self.edit_session(id)?;
+        let token = edit_token(token)?;
+        if session.profile.settings.environment == "PROD" && confirmation != "PROD" {
+            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+        }
+        let mut pending = session.grid_update.lock().await;
+        if !checked_grid_edit(&mut pending, token)?.approved(edit_token(approval)?) {
+            return Err("현재 변경 내용을 다시 미리 보세요.".into());
+        }
+        let mut client = timeout(QUERY_TIMEOUT, session.client.lock())
+            .await
+            .map_err(|_| "연결에서 실행 중인 작업이 끝난 뒤 다시 시도하세요.")?;
+        checked_grid_edit(&mut pending, token)?;
+        let plan = pending.take().ok_or(edit::EXPIRED)?;
+        let outcome = grid_update::apply(&mut client, &self.store, &session.profile, plan).await?;
+        if matches!(outcome, grid_update::PostgresGridEditOutcome::Unknown) {
+            session.connection.abort();
+        }
+        Ok(outcome)
+    }
+
+    pub async fn cancel_grid_edit(&self, id: &str, token: &str) -> Result<()> {
+        let session = self.edit_session(id)?;
+        let token = edit_token(token)?;
+        let mut pending = session.grid_update.lock().await;
+        if pending.as_ref().is_some_and(|plan| plan.token == token) {
+            pending.take();
+        }
+        Ok(())
+    }
+
     pub async fn begin_row_change(
         &self,
         id: &str,
@@ -1051,6 +1158,15 @@ fn checked_edit(pending: &mut Option<edit::Plan>, token: Uuid) -> Result<&mut ed
         .ok_or_else(|| edit::EXPIRED.into())
 }
 
+fn checked_grid_edit(
+    pending: &mut Option<grid_update::Plan>,
+    token: Uuid,
+) -> Result<&mut grid_update::Plan> {
+    pending.as_mut()
+        .filter(|plan| plan.token == token && plan.created.elapsed() < edit::LIFETIME)
+        .ok_or_else(|| edit::EXPIRED.into())
+}
+
 fn checked_row_change(
     pending: &mut Option<row_edit::Plan>,
     token: Uuid,
@@ -1119,6 +1235,7 @@ async fn browse(
     } else {
         (None, None)
     };
+    let row_update = edit_table.is_some() && edit_reason.is_none();
     let row_insert = edit_table
         .as_ref()
         .is_some_and(edit::EditTable::allow_insert);
@@ -1285,6 +1402,7 @@ async fn browse(
         row_stamps,
         value_rows,
         edit_reason,
+        row_update,
         row_insert,
         row_paste,
         row_delete,

@@ -5,17 +5,20 @@ use super::{
     PostgresProfile,
 };
 use crate::{insert_audit, quote_identifier as quote, AuditRecord, Result, Store};
+use bytes::BytesMut;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
+    fmt,
     time::{Duration, Instant},
 };
 use tokio::time::timeout;
-use tokio_postgres::types::ToSql;
+use tokio_postgres::types::{to_sql_checked, BorrowToSql, FromSql, IsNull, ToSql, Type};
 use tokio_postgres::{Client, Error, IsolationLevel, Row, Transaction};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+pub(super) mod grid;
 pub(super) mod row;
 
 pub(super) const LIFETIME: Duration = Duration::from_secs(300);
@@ -380,12 +383,16 @@ pub(super) async fn access(tx: &Transaction<'_>, object: i64, kind: &str) -> Res
 pub(super) struct Plan {
     pub token: Uuid,
     pub created: Instant,
-    object: i64,
-    table: String,
+    target: EditTarget,
     fields: Vec<Attribute>,
-    key: Vec<Attribute>,
     stamp: PostgresRowStamp,
     change: Option<Approved>,
+}
+
+struct EditTarget {
+    object: i64,
+    table: String,
+    key: Vec<Attribute>,
 }
 
 struct Approved {
@@ -395,8 +402,64 @@ struct Approved {
 
 struct Change {
     column: String,
-    input: PostgresEditInput,
+    input: ApprovedValue,
     normalized: Option<Zeroizing<String>>,
+}
+
+enum ApprovedValue {
+    Default,
+    Null,
+    Value(ServerValue),
+}
+
+type SqlError = Box<dyn std::error::Error + Sync + Send>;
+
+struct ServerValue {
+    oid: u32,
+    bytes: Zeroizing<Vec<u8>>,
+}
+
+impl fmt::Debug for ServerValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ServerValue(<redacted>)")
+    }
+}
+
+impl<'a> FromSql<'a> for ServerValue {
+    fn from_sql(ty: &Type, raw: &'a [u8]) -> std::result::Result<Self, SqlError> {
+        Ok(Self {
+            oid: ty.oid(),
+            bytes: Zeroizing::new(raw.to_vec()),
+        })
+    }
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+}
+
+impl ToSql for ServerValue {
+    fn to_sql(&self, ty: &Type, output: &mut BytesMut) -> std::result::Result<IsNull, SqlError> {
+        if self.oid != ty.oid() {
+            return Err("미리보기 이후 입력 타입이 변경되었습니다.".into());
+        }
+        output.extend_from_slice(&self.bytes);
+        Ok(IsNull::No)
+    }
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+
+    to_sql_checked!();
+}
+
+fn preview_value_projection(expression: &str) -> [String; 2] {
+    let text = format!("({expression})::pg_catalog.text");
+    [
+        format!("pg_catalog.left({text}, {})", VALUE_LIMIT + 1),
+        format!("CASE WHEN pg_catalog.char_length({text}) <= {VALUE_LIMIT} AND pg_catalog.pg_column_size({expression}) <= {} THEN {expression} END", VALUE_LIMIT * 4 + 64),
+    ]
 }
 
 impl Plan {
@@ -413,18 +476,54 @@ impl Plan {
     pub(super) fn first_column(&self) -> String {
         self.fields[0].name.clone()
     }
+}
 
-    fn checked_field(&self, table: &EditTable, column: &str) -> Result<&Attribute> {
-        let old = self
-            .fields
-            .iter()
-            .find(|field| field.name == column)
-            .ok_or("선택한 열을 다시 열어 현재 값을 확인하세요.")?;
-        if !table.columns.contains(old) {
-            return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
-        }
-        Ok(old)
+fn checked_field<'a>(
+    fields: &'a [Attribute],
+    table: &EditTable,
+    column: &str,
+) -> Result<&'a Attribute> {
+    let old = fields
+        .iter()
+        .find(|field| field.name == column)
+        .ok_or("선택한 열을 다시 열어 현재 값을 확인하세요.")?;
+    if !table.columns.contains(old) {
+        return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
     }
+    Ok(old)
+}
+
+async fn read_transaction(client: &mut Client) -> Result<Transaction<'_>> {
+    client
+        .build_transaction()
+        .read_only(true)
+        .isolation_level(IsolationLevel::RepeatableRead)
+        .start()
+        .await
+        .map_err(pg_error)
+}
+
+async fn read_target(tx: &Transaction<'_>, object: i64) -> Result<(EditTarget, EditTable)> {
+    let relation = catalog::relation(tx, object).await?;
+    let edit = access(tx, object, relation.kind).await?.allowed()?;
+    if let Some(reason) = edit.update_reason() {
+        return Err(reason.into());
+    }
+    let target = EditTarget {
+        object,
+        table: format!("{}.{}", quote(&relation.schema), quote(&relation.name)),
+        key: edit.key.clone(),
+    };
+    Ok((target, edit))
+}
+
+fn stamp_keys(target: &EditTarget, stamp: &PostgresRowStamp) -> Vec<(String, String)> {
+    target
+        .key
+        .iter()
+        .zip(&stamp.keys)
+        .map(|(key, value)| (key.name.clone(), value.clone()))
+        .collect()
 }
 
 pub(super) async fn begin(
@@ -436,18 +535,8 @@ pub(super) async fn begin(
     if stamp.tuple.len() > 32 || stamp.version.parse::<u32>().is_err() {
         return Err(STALE.into());
     }
-    let tx = client
-        .build_transaction()
-        .read_only(true)
-        .isolation_level(IsolationLevel::RepeatableRead)
-        .start()
-        .await
-        .map_err(pg_error)?;
-    let relation = catalog::relation(&tx, object).await?;
-    let edit = access(&tx, object, relation.kind).await?.allowed()?;
-    if let Some(reason) = edit.update_reason() {
-        return Err(reason.into());
-    }
+    let tx = read_transaction(client).await?;
+    let (target, edit) = read_target(&tx, object).await?;
     let columns = edit
         .columns
         .iter()
@@ -458,9 +547,7 @@ pub(super) async fn begin(
         .into_iter()
         .find(|field| field.name == column)
         .ok_or("선택한 열은 편집할 수 없습니다.")?;
-    let table = format!("{}.{}", quote(&relation.schema), quote(&relation.name));
-    let keys = edit.key;
-    if stamp.keys.len() != keys.len()
+    if stamp.keys.len() != target.key.len()
         || stamp.keys.iter().any(|value| {
             value.chars().take(KEY_LIMIT + 1).count() > KEY_LIMIT || value.contains('\0')
         })
@@ -469,25 +556,18 @@ pub(super) async fn begin(
     }
     let plan = Plan {
         token: Uuid::new_v4(),
-        object,
-        table,
+        target,
         fields: vec![column],
-        key: keys,
         stamp,
         created: Instant::now(),
         change: None,
     };
-    let first = read_field(&tx, &plan, &plan.fields[0]).await?;
+    let first = read_field(&tx, &plan.target, &plan.stamp, &plan.fields[0]).await?;
     tx.commit().await.map_err(pg_error)?;
     let ui = PostgresEditSession {
         token: plan.token.to_string(),
-        table: plan.table.clone(),
-        keys: plan
-            .key
-            .iter()
-            .zip(plan.stamp.keys.iter())
-            .map(|(key, value)| (key.name.clone(), value.clone()))
-            .collect(),
+        table: plan.target.table.clone(),
+        keys: stamp_keys(&plan.target, &plan.stamp),
         columns,
         first,
     };
@@ -499,14 +579,8 @@ pub(super) async fn open_field(
     plan: &mut Plan,
     column: &str,
 ) -> Result<PostgresEditField> {
-    let tx = client
-        .build_transaction()
-        .read_only(true)
-        .isolation_level(IsolationLevel::RepeatableRead)
-        .start()
-        .await
-        .map_err(pg_error)?;
-    let table = recheck(&tx, plan).await?;
+    let tx = read_transaction(client).await?;
+    let table = recheck(&tx, &plan.target).await?;
     let field = table
         .columns
         .into_iter()
@@ -516,7 +590,7 @@ pub(super) async fn open_field(
     if stored.is_some_and(|old| old != &field) {
         return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
     }
-    let response = read_field(&tx, plan, &field).await?;
+    let response = read_field(&tx, &plan.target, &plan.stamp, &field).await?;
     tx.commit().await.map_err(pg_error)?;
     if stored.is_none() {
         plan.fields.push(field);
@@ -529,58 +603,10 @@ pub(super) async fn preview(
     plan: &mut Plan,
     inputs: Vec<PostgresCellChange>,
 ) -> Result<PostgresRowEditPreview> {
-    if inputs.is_empty() || inputs.len() > CELL_LIMIT {
-        return Err("한 행에서 1~16개 셀의 변경을 선택하세요.".into());
-    }
-    let tx = client
-        .build_transaction()
-        .read_only(true)
-        .isolation_level(IsolationLevel::RepeatableRead)
-        .start()
-        .await
-        .map_err(pg_error)?;
-    let table = recheck(&tx, plan).await?;
-    let mut seen = HashSet::new();
-    let mut projection = Vec::with_capacity(inputs.len() * 2);
-    let mut values = plan.stamp.values();
-    for change in &inputs {
-        if !seen.insert(change.column.as_str()) {
-            return Err("같은 열을 두 번 변경할 수 없습니다.".into());
-        }
-        let column = plan.checked_field(&table, &change.column)?;
-        projection.push(bounded(&column.name, VALUE_LIMIT));
-        projection.push(preview_expression(column, &change.input, &mut values)?);
-    }
-    let row = read_row(&tx, plan, &projection.join(", "), &values).await?;
-    plan.stamp.check(&row, projection.len())?;
-    let mut changes = Vec::new();
-    let mut staged = Vec::new();
-    for (index, change) in inputs.into_iter().enumerate() {
-        let before = cell(field(&row, index * 2)?)?;
-        let after = cell(field(&row, index * 2 + 1)?)?;
-        let default_sql = if matches!(change.input, PostgresEditInput::Default) {
-            visible_default(plan.checked_field(&table, &change.column)?).map(str::to_owned)
-        } else {
-            None
-        };
-        if default_sql.is_none() && before.value == after.value {
-            continue;
-        }
-        staged.push(Change {
-            column: change.column.clone(),
-            input: change.input,
-            normalized: after
-                .value
-                .as_ref()
-                .map(|value| Zeroizing::new(value.clone())),
-        });
-        changes.push(CellPreview {
-            column: change.column,
-            before,
-            after,
-            default_sql,
-        });
-    }
+    let tx = read_transaction(client).await?;
+    let table = recheck(&tx, &plan.target).await?;
+    let (changes, staged) =
+        preview_cells(&tx, &plan.target, &plan.stamp, &plan.fields, &table, inputs).await?;
     if changes.is_empty() {
         return Err("변경할 값이 기존 값과 같습니다.".into());
     }
@@ -594,6 +620,71 @@ pub(super) async fn preview(
         approval: approval.to_string(),
         changes,
     })
+}
+
+async fn preview_cells(
+    tx: &Transaction<'_>,
+    target: &EditTarget,
+    stamp: &PostgresRowStamp,
+    fields: &[Attribute],
+    table: &EditTable,
+    inputs: Vec<PostgresCellChange>,
+) -> Result<(Vec<CellPreview>, Vec<Change>)> {
+    if inputs.is_empty() || inputs.len() > CELL_LIMIT {
+        return Err("한 행에서 1~16개 셀의 변경을 선택하세요.".into());
+    }
+    let mut seen = HashSet::new();
+    let mut projection = Vec::with_capacity(inputs.len() * 3);
+    let mut values = stamp.values();
+    for change in &inputs {
+        if !seen.insert(change.column.as_str()) {
+            return Err("같은 열을 두 번 변경할 수 없습니다.".into());
+        }
+        let column = checked_field(fields, table, &change.column)?;
+        projection.push(bounded(&column.name, VALUE_LIMIT));
+        let expression = cast_input(column, &change.input, &mut values)?
+            .unwrap_or_else(|| "NULL::pg_catalog.text".into());
+        projection.extend(preview_value_projection(&expression));
+    }
+    let row = read_row(tx, target, &projection.join(", "), &values).await?;
+    stamp.check(&row, projection.len())?;
+    let mut changes = Vec::new();
+    let mut staged = Vec::new();
+    for (index, change) in inputs.into_iter().enumerate() {
+        let before = cell(field(&row, index * 3)?)?;
+        let after = cell(field(&row, index * 3 + 1)?)?;
+        let default_sql = if matches!(change.input, PostgresEditInput::Default) {
+            visible_default(checked_field(fields, table, &change.column)?).map(str::to_owned)
+        } else {
+            None
+        };
+        if default_sql.is_none() && before.value == after.value {
+            continue;
+        }
+        let binary: Option<ServerValue> = field(&row, index * 3 + 2)?;
+        if after.value.is_some() != binary.is_some() {
+            return Err("서버에서 표시한 값을 저장용 형식으로 확인하지 못했습니다.".into());
+        }
+        let input = match change.input {
+            PostgresEditInput::Default => ApprovedValue::Default,
+            _ => binary.map_or(ApprovedValue::Null, ApprovedValue::Value),
+        };
+        staged.push(Change {
+            column: change.column.clone(),
+            input,
+            normalized: after
+                .value
+                .as_ref()
+                .map(|value| Zeroizing::new(value.clone())),
+        });
+        changes.push(CellPreview {
+            column: change.column,
+            before,
+            after,
+            default_sql,
+        });
+    }
+    Ok((changes, staged))
 }
 
 fn preview_expression(
@@ -701,6 +792,23 @@ async fn commit(tx: Transaction<'_>) -> Result<bool> {
 }
 
 async fn update<'a>(client: &'a mut Client, plan: &Plan) -> Result<(Transaction<'a>, Cell)> {
+    let tx = write_transaction(client, &plan.target).await?;
+    let table = recheck(&tx, &plan.target).await?;
+    let change = plan
+        .change
+        .as_ref()
+        .ok_or("변경 내용을 먼저 미리 보세요.")?;
+    for cell in &change.cells {
+        checked_field(&plan.fields, &table, &cell.column)?;
+    }
+    let actual = update_cells(&tx, &plan.target, &plan.stamp, &change.cells).await?;
+    Ok((tx, actual))
+}
+
+async fn write_transaction<'a>(
+    client: &'a mut Client,
+    target: &EditTarget,
+) -> Result<Transaction<'a>> {
     let tx = client
         .build_transaction()
         .read_only(false)
@@ -710,52 +818,53 @@ async fn update<'a>(client: &'a mut Client, plan: &Plan) -> Result<(Transaction<
         .map_err(write_error)?;
     tx.batch_execute(&format!(
         "LOCK TABLE ONLY {} IN SHARE UPDATE EXCLUSIVE MODE",
-        plan.table
+        target.table
     ))
     .await
     .map_err(write_error)?;
-    let table = recheck(&tx, plan).await?;
-    let change = plan
-        .change
-        .as_ref()
-        .ok_or("변경 내용을 먼저 미리 보세요.")?;
-    for cell in &change.cells {
-        plan.checked_field(&table, &cell.column)?;
-    }
-    let mut values = plan.stamp.values();
-    let predicate = predicate(plan);
-    let lock = format!(
-        "SELECT {} FROM ONLY {} WHERE {predicate} FOR UPDATE",
-        PostgresRowStamp::PROJECTION,
-        plan.table
-    );
-    let row = exactly_one(&mut query(&tx, &lock, &values).await?)?;
-    plan.stamp.check(&row, 0)?;
-    let mut assignments = Vec::with_capacity(change.cells.len());
-    let mut returned = Vec::with_capacity(change.cells.len());
-    for cell in &change.cells {
+    Ok(tx)
+}
+
+async fn update_cells(
+    tx: &Transaction<'_>,
+    target: &EditTarget,
+    stamp: &PostgresRowStamp,
+    changes: &[Change],
+) -> Result<Cell> {
+    let mut values = stamp.values();
+    let predicate = key_predicate(target.object, &target.key);
+    let tuple = values.len() + 1;
+    let version = tuple + 1;
+    values.push(bind(stamp.tuple.clone()));
+    values.push(bind(stamp.version.clone()));
+    let mut bindings: Vec<&(dyn ToSql + Sync)> = values.iter().map(|value| value as _).collect();
+    let mut assignments = Vec::with_capacity(changes.len());
+    let mut returned = Vec::with_capacity(changes.len());
+    for cell in changes {
         let expression = match &cell.input {
-            PostgresEditInput::Default => "DEFAULT".into(),
-            PostgresEditInput::Null => "NULL".into(),
-            PostgresEditInput::Text { value } => {
-                values.push(bind(value.to_string()));
-                format!("${}", values.len())
+            ApprovedValue::Default => "DEFAULT".into(),
+            ApprovedValue::Null => "NULL".into(),
+            ApprovedValue::Value(value) => {
+                bindings.push(value);
+                format!("${}", bindings.len())
             }
         };
         assignments.push(format!("{} = {expression}", quote(&cell.column)));
         returned.push(bounded(&cell.column, VALUE_LIMIT));
     }
     let sql = format!(
-        "UPDATE ONLY {} SET {} WHERE {predicate} RETURNING {}",
-        plan.table,
+        "UPDATE ONLY {} SET {} WHERE {predicate}
+         AND ctid = ${tuple}::pg_catalog.tid AND xmin::pg_catalog.text = ${version}
+         RETURNING {}",
+        target.table,
         assignments.join(", "),
         returned.join(", "),
     );
-    let row = exactly_one(&mut query(&tx, &sql, &values).await?)?;
+    let row = exactly_one(&mut query_params(tx, &sql, bindings).await?)?;
     let mut first = None;
-    for (index, change) in change.cells.iter().enumerate() {
+    for (index, change) in changes.iter().enumerate() {
         let actual = cell(field(&row, index)?)?;
-        if !matches!(change.input, PostgresEditInput::Default)
+        if !matches!(change.input, ApprovedValue::Default)
             && actual.value.as_deref() != change.normalized.as_ref().map(|value| value.as_str())
         {
             return Err(format!(
@@ -767,69 +876,74 @@ async fn update<'a>(client: &'a mut Client, plan: &Plan) -> Result<(Transaction<
             first = Some(actual);
         }
     }
-    Ok((tx, first.ok_or("서버에서 확인할 변경이 없습니다.")?))
+    first.ok_or("서버에서 확인할 변경이 없습니다.".into())
 }
 
-async fn recheck(tx: &Transaction<'_>, plan: &Plan) -> Result<EditTable> {
-    let relation = catalog::relation(tx, plan.object).await?;
-    if format!("{}.{}", quote(&relation.schema), quote(&relation.name)) != plan.table {
+async fn recheck(tx: &Transaction<'_>, target: &EditTarget) -> Result<EditTable> {
+    let (current, edit) = read_target(tx, target.object).await?;
+    if current.table != target.table {
         return Err(STALE.into());
     }
-    let edit = access(tx, plan.object, relation.kind).await?.allowed()?;
-    if let Some(reason) = edit.update_reason() {
-        return Err(reason.into());
-    }
-    if plan.key != edit.key {
+    if target.key != current.key {
         return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
     }
     Ok(edit)
 }
 
-fn predicate(plan: &Plan) -> String {
-    key_predicate(plan.object, &plan.key)
+fn key_predicate(object: i64, keys: &[Attribute]) -> String {
+    key_predicate_at(object, keys, 0)
 }
 
-fn key_predicate(object: i64, keys: &[Attribute]) -> String {
+fn key_predicate_at(object: i64, keys: &[Attribute], offset: usize) -> String {
     let mut where_sql = format!("tableoid::bigint = {object}");
     for (index, key) in keys.iter().enumerate() {
-        where_sql.push_str(&format!(" AND {} = ${}", quote(&key.name), index + 1));
+        where_sql.push_str(&format!(
+            " AND {} = ${}",
+            quote(&key.name),
+            offset + index + 1
+        ));
     }
     where_sql
 }
 
 async fn read_field(
     tx: &Transaction<'_>,
-    plan: &Plan,
+    target: &EditTarget,
+    stamp: &PostgresRowStamp,
     column: &Attribute,
 ) -> Result<PostgresEditField> {
     let row = read_row(
         tx,
-        plan,
+        target,
         &bounded(&column.name, VALUE_LIMIT),
-        &plan.stamp.values(),
+        &stamp.values(),
     )
     .await?;
-    plan.stamp.check(&row, 1)?;
-    Ok(PostgresEditField {
+    stamp.check(&row, 1)?;
+    Ok(edit_field(column, cell(field(&row, 0)?)?))
+}
+
+fn edit_field(column: &Attribute, current: Cell) -> PostgresEditField {
+    PostgresEditField {
         column: column.name.clone(),
         data_type: column.data_type.clone(),
         nullable: column.nullable,
-        current: cell(field(&row, 0)?)?,
+        current,
         default_sql: visible_default(column).map(str::to_owned),
-    })
+    }
 }
 
 async fn read_row(
     tx: &Transaction<'_>,
-    plan: &Plan,
+    target: &EditTarget,
     projection: &str,
     values: &[Value],
 ) -> Result<Row> {
     let sql = format!(
         "SELECT {projection}, {} FROM ONLY {} WHERE {}",
         PostgresRowStamp::PROJECTION,
-        plan.table,
-        predicate(plan)
+        target.table,
+        key_predicate(target.object, &target.key)
     );
     exactly_one(&mut query(tx, &sql, values).await?)
 }
@@ -876,11 +990,17 @@ fn exactly_one(rows: &mut Vec<Row>) -> Result<Row> {
 }
 
 async fn query(tx: &Transaction<'_>, sql: &str, values: &[impl ToSql + Sync]) -> Result<Vec<Row>> {
+    query_params(tx, sql, values.iter()).await
+}
+
+async fn query_params<P, I>(tx: &Transaction<'_>, sql: &str, values: I) -> Result<Vec<Row>>
+where
+    P: BorrowToSql,
+    I: IntoIterator<Item = P>,
+    I::IntoIter: ExactSizeIterator,
+{
     let stmt = tx.prepare(sql).await.map_err(write_error)?;
-    let portal = tx
-        .bind_raw(&stmt, values.iter())
-        .await
-        .map_err(write_error)?;
+    let portal = tx.bind_raw(&stmt, values).await.map_err(write_error)?;
     tx.query_portal(&portal, 0).await.map_err(write_error)
 }
 

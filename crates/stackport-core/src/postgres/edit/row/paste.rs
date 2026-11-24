@@ -1,74 +1,19 @@
 use super::{display_cell, read_transaction, Action, Plan};
 use crate::postgres::edit::{
-    cast_input, cell, field, pg_error, query, PostgresCellChange, PostgresEditInput, VALUE_LIMIT,
+    cast_input, cell, field, pg_error, preview_value_projection, query, ApprovedValue,
+    PostgresCellChange, PostgresEditInput, ServerValue,
 };
 use crate::{
     edit::{RowPastePreview, PASTE_BYTES, PASTE_COLUMNS, PASTE_ROWS},
     quote_identifier as quote, Result,
 };
-use bytes::BytesMut;
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
-use tokio_postgres::{
-    types::{to_sql_checked, FromSql, IsNull, ToSql, Type},
-    Client, Transaction,
-};
+use std::collections::{HashMap, HashSet};
+use tokio_postgres::{Client, Transaction};
 use uuid::Uuid;
-use zeroize::Zeroizing;
-
-type SqlError = Box<dyn std::error::Error + Sync + Send>;
-
-struct ServerValue {
-    oid: u32,
-    bytes: Zeroizing<Vec<u8>>,
-}
-
-impl fmt::Debug for ServerValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ServerValue(<redacted>)")
-    }
-}
-
-impl<'a> FromSql<'a> for ServerValue {
-    fn from_sql(ty: &Type, raw: &'a [u8]) -> std::result::Result<Self, SqlError> {
-        Ok(Self {
-            oid: ty.oid(),
-            bytes: Zeroizing::new(raw.to_vec()),
-        })
-    }
-
-    fn accepts(_: &Type) -> bool {
-        true
-    }
-}
-
-impl ToSql for ServerValue {
-    fn to_sql(&self, ty: &Type, output: &mut BytesMut) -> std::result::Result<IsNull, SqlError> {
-        if self.oid != ty.oid() {
-            return Err("미리보기 이후 입력 타입이 변경되었습니다.".into());
-        }
-        output.extend_from_slice(&self.bytes);
-        Ok(IsNull::No)
-    }
-
-    fn accepts(_: &Type) -> bool {
-        true
-    }
-
-    to_sql_checked!();
-}
-
-enum PasteCell {
-    Default,
-    Null,
-    Value(ServerValue),
-}
 
 pub(super) struct PasteRows {
     columns: Vec<String>,
-    rows: Vec<Vec<PasteCell>>,
+    rows: Vec<Vec<ApprovedValue>>,
 }
 
 impl PasteRows {
@@ -162,10 +107,11 @@ pub(in crate::postgres) async fn preview(
         .map(|index| format!("f{index}"))
         .collect::<Vec<_>>();
     // Keep the exact binary values behind the displayed text. Reinterpreting a literal such as now during INSERT would change the approved value.
-    let projected = aliases.iter().flat_map(|name| [
-        format!("pg_catalog.left({name}::pg_catalog.text, {})", VALUE_LIMIT + 1),
-        format!("CASE WHEN pg_catalog.char_length({name}::pg_catalog.text) <= {VALUE_LIMIT} AND pg_catalog.pg_column_size({name}) <= {} THEN {name} END", VALUE_LIMIT * 4 + 64),
-    ]).collect::<Vec<_>>().join(", ");
+    let projected = aliases
+        .iter()
+        .flat_map(|name| preview_value_projection(name))
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!(
         "SELECT {projected} FROM (VALUES {}) AS entries(ordinal, {}) ORDER BY ordinal",
         tuples.join(", "),
@@ -183,7 +129,7 @@ pub(in crate::postgres) async fn preview(
         let mut preview = Vec::with_capacity(columns.len());
         for (position, default) in omitted.into_iter().enumerate() {
             if default {
-                values.push(PasteCell::Default);
+                values.push(ApprovedValue::Default);
                 preview.push(None);
                 continue;
             }
@@ -200,7 +146,7 @@ pub(in crate::postgres) async fn preview(
             if shown.is_some() != binary.is_some() {
                 return Err("서버에서 표시한 값을 저장용 형식으로 확인하지 못했습니다.".into());
             }
-            values.push(binary.map_or(PasteCell::Null, PasteCell::Value));
+            values.push(binary.map_or(ApprovedValue::Null, ApprovedValue::Value));
             preview.push(Some(display_cell(shown, false)));
         }
         approved.push(values);
@@ -229,9 +175,9 @@ pub(super) async fn apply(tx: &Transaction<'_>, table: &str, batch: &PasteRows) 
             let expressions = row
                 .iter()
                 .map(|cell| match cell {
-                    PasteCell::Default => "DEFAULT".into(),
-                    PasteCell::Null => "NULL".into(),
-                    PasteCell::Value(value) => {
+                    ApprovedValue::Default => "DEFAULT".into(),
+                    ApprovedValue::Null => "NULL".into(),
+                    ApprovedValue::Value(value) => {
                         bindings.push(value);
                         format!("${}", bindings.len())
                     }

@@ -196,7 +196,7 @@ export function SqliteEditDialog({ request, onClose, onApplied, onBusy, onExitGu
             </select></label>}
             <p className="form-note">기본 키 · {selected.keys.map(key => `${key.name} = ${key.value}`).join(", ")}</p>
             {multiple && dirty && <p className="form-note">{drafts.size}행 · {totalChanges}개 셀 변경됨</p>}
-            {rowDrafts && <div className="sqlite-edit-drafts" role="group" aria-label={`변경된 열 ${rowDrafts.size}개`}>
+            {rowDrafts && <div className="grid-edit-drafts" role="group" aria-label={`변경된 열 ${rowDrafts.size}개`}>
               {[...rowDrafts.keys()].map(name => <button key={name} type="button" className="secondary small"
                 aria-pressed={name === column} disabled={busy} onClick={() => { setColumn(name); setError(""); }}>{name}</button>)}
             </div>}
@@ -213,7 +213,7 @@ export function SqliteEditDialog({ request, onClose, onApplied, onBusy, onExitGu
               </select></label>
               {input.kind !== "null" && <label className="field">변경할 값<textarea className="edit-value" value={input.value}
                 onChange={event => update({ ...input, value: event.target.value })} /></label>}
-              {(canFillColumn || currentDraft) && <div className="sqlite-edit-drafts">
+              {(canFillColumn || currentDraft) && <div className="grid-edit-drafts">
                 {canFillColumn && <button type="button" className="secondary small"
                   onClick={() => update(input, true)}>선택한 모든 행의 이 열에 입력</button>}
                 {currentDraft && defaultInput && <button type="button" className="secondary small" onClick={() => update(defaultInput)}>이 열의 변경 취소</button>}
