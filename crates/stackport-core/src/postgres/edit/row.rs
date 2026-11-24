@@ -26,7 +26,8 @@ pub(in crate::postgres) mod paste;
 pub enum PostgresRowChange {
     Insert,
     Paste,
-    ImportDelimited,
+    #[serde(alias = "import_delimited")]
+    ImportFile,
     Delete { stamp: PostgresRowStamp },
 }
 
@@ -83,7 +84,7 @@ impl Plan {
 
     pub(in crate::postgres) fn batch_preview_timeout(&self, normal: Duration) -> Duration {
         match self.batch_source() {
-            Some(RowBatchSource::DelimitedFile) => Duration::from_secs(30),
+            Some(RowBatchSource::File) => Duration::from_secs(30),
             _ => normal,
         }
     }
@@ -134,7 +135,7 @@ pub(in crate::postgres) async fn begin(
     let (action, columns, preview) = match change {
         PostgresRowChange::Insert
         | PostgresRowChange::Paste
-        | PostgresRowChange::ImportDelimited => {
+        | PostgresRowChange::ImportFile => {
             check_insert(&edit)?;
             if !matches!(change, PostgresRowChange::Insert) && !edit.allow_paste() {
                 return Err("이 테이블에는 여러 행을 추가할 수 있는 대상 열이 없습니다.".into());
@@ -154,8 +155,8 @@ pub(in crate::postgres) async fn begin(
                 .collect();
             let action = match change {
                 PostgresRowChange::Paste => Action::Paste(RowBatchSource::Clipboard, None),
-                PostgresRowChange::ImportDelimited => {
-                    Action::Paste(RowBatchSource::DelimitedFile, None)
+                PostgresRowChange::ImportFile => {
+                    Action::Paste(RowBatchSource::File, None)
                 }
                 _ => Action::Insert(Vec::new()),
             };
@@ -304,7 +305,7 @@ pub(in crate::postgres) async fn apply(
         Action::Paste(RowBatchSource::Clipboard, Some(batch)) => {
             ("postgres.row.paste", batch.count())
         }
-        Action::Paste(RowBatchSource::DelimitedFile, Some(batch)) => {
+        Action::Paste(RowBatchSource::File, Some(batch)) => {
             ("postgres.row.import", batch.count())
         }
         Action::Paste(_, None) => return Err("추가할 행을 먼저 미리 보세요.".into()),

@@ -14,7 +14,7 @@ pub use row::{
 #[derive(Clone, Copy)]
 pub(crate) enum RowBatchSource {
     Clipboard,
-    DelimitedFile,
+    File,
 }
 
 pub(crate) struct RowBatchLimits {
@@ -27,7 +27,7 @@ impl RowBatchSource {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Clipboard => "붙여넣기",
-            Self::DelimitedFile => "가져오기",
+            Self::File => "가져오기",
         }
     }
 
@@ -38,7 +38,7 @@ impl RowBatchSource {
                 bytes: 256 * 1024,
                 preview_rows: 100,
             },
-            Self::DelimitedFile => RowBatchLimits {
+            Self::File => RowBatchLimits {
                 rows: 1000,
                 bytes: 4 * 1024 * 1024,
                 preview_rows: 25,

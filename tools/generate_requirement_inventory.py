@@ -139,12 +139,12 @@ PARTIAL = {
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
-    "SP-MG-001": "SQLite·PostgreSQL의 지원 테이블에 CSV·TSV·TXT 구분 텍스트 가져오기와 구분자 인식",
+    "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON 가져오기",
     "SP-MG-002": "SQLite·PostgreSQL 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
-    "SP-MG-004": "두 엔진에서 파일·인코딩·구분자·헤더 선택, 원본 형식 추정, 대상 열 매핑과 검증 미리보기",
-    "SP-MG-005": "SQLite 정수·실수·문자열과 PostgreSQL 서버 타입으로 가져오기, CSV에서 NULL·빈 문자열과 명시적 생략 구분, 내보내기 값 보존",
+    "SP-MG-004": "두 엔진에서 파일·형식·인코딩·구분자·헤더 선택, JSON 속성·타입과 대상 열 매핑, 검증 미리보기",
+    "SP-MG-005": "JSON 숫자 토큰과 중첩 값, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환",
     "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
-    "SP-MG-007": "파일 인코딩 오류, 따옴표·열 수 오류 레코드와 DB의 타입·제약 위반 메시지 표시",
+    "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, DB 타입·제약 위반 메시지 표시",
     "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
@@ -417,5 +417,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/desktop-smoke.cjs"
                 if requirement_id != "SP-MG-005":
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-MG-001", "SP-MG-004", "SP-MG-005", "SP-MG-007"}:
+                evidence += "; crates/stackport-core/src/json_import.rs; crates/stackport-core/tests/json_import.rs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

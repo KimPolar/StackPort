@@ -5,7 +5,7 @@ use super::{
     ObjectDetails, Path, Profile, Result, RowBatchSource, Store, TransactionBehavior, Uuid, Value,
     ValueRef, SESSION_LIFETIME,
 };
-use crate::db_error;
+use crate::{db_error, json_import, CELL_MAX_CHARS};
 use rusqlite::{params_from_iter, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -21,8 +21,11 @@ const EXPIRED: &str = "행 작업이 만료되었습니다. 테이블을 다시 
 pub enum RowChange {
     Insert,
     Paste,
-    ImportDelimited,
-    Delete { keys: Vec<EditKey> },
+    #[serde(alias = "import_delimited")]
+    ImportFile,
+    Delete {
+        keys: Vec<EditKey>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -103,7 +106,13 @@ impl Values {
         self.0
             .iter()
             .find(|(column, _)| column == name)
-            .map(|(_, value)| display_value(ValueRef::from(value)))
+            .map(|(_, value)| {
+                let mut cell = display_value(ValueRef::from(value));
+                if let Value::Blob(bytes) = value {
+                    cell.display = json_import::hex_text(bytes);
+                }
+                cell
+            })
     }
 }
 
@@ -117,8 +126,15 @@ impl Drop for Values {
 
 enum Action {
     Insert(Values),
-    Paste(RowBatchSource, Vec<Values>),
-    Delete { keys: Values, fingerprint: [u8; 32] },
+    Paste {
+        source: RowBatchSource,
+        rows: Vec<Values>,
+        exact_types: bool,
+    },
+    Delete {
+        keys: Values,
+        fingerprint: [u8; 32],
+    },
 }
 
 impl Drop for Action {
@@ -175,13 +191,17 @@ impl Store {
                 insert_columns(&details),
                 None,
             ),
-            RowChange::Paste | RowChange::ImportDelimited => {
+            RowChange::Paste | RowChange::ImportFile => {
                 let source = match change {
-                    RowChange::ImportDelimited => RowBatchSource::DelimitedFile,
+                    RowChange::ImportFile => RowBatchSource::File,
                     _ => RowBatchSource::Clipboard,
                 };
                 (
-                    Action::Paste(source, Vec::new()),
+                    Action::Paste {
+                        source,
+                        rows: Vec::new(),
+                        exact_types: false,
+                    },
                     insert_columns(&details),
                     None,
                 )
@@ -244,7 +264,7 @@ impl Store {
         let db = open_schema_db(Path::new(&plan.profile.path))?;
         plan.check_target(self, &db)?;
         let columns = insert_columns(&editable_table(&db, &plan.table)?);
-        let values = prepare_insert(&columns, fields)?;
+        let values = prepare_insert(&columns, fields, false)?;
         let preview = columns
             .into_iter()
             .map(|column| {
@@ -276,12 +296,39 @@ impl Store {
         columns: Vec<String>,
         rows: Vec<Vec<RowInsertField>>,
     ) -> Result<RowPastePreview> {
+        self.preview_rows(token, columns, rows, false)
+    }
+
+    pub fn preview_json_import(
+        &self,
+        token: &str,
+        columns: Vec<String>,
+        rows: Vec<Vec<RowInsertField>>,
+    ) -> Result<RowPastePreview> {
+        self.preview_rows(token, columns, rows, true)
+    }
+
+    fn preview_rows(
+        &self,
+        token: &str,
+        columns: Vec<String>,
+        rows: Vec<Vec<RowInsertField>>,
+        exact_types: bool,
+    ) -> Result<RowPastePreview> {
         let mut state = self.edits.lock()?;
         let plan = active_plan(&mut state.rows, token)?;
-        let Action::Paste(source, existing) = &mut plan.action else {
+        let Action::Paste {
+            source,
+            rows: existing,
+            ..
+        } = &mut plan.action
+        else {
             return Err("여러 행 추가 작업을 다시 여세요.".into());
         };
         let source = *source;
+        if exact_types && !matches!(source, RowBatchSource::File) {
+            return Err("JSON 파일 가져오기를 다시 여세요.".into());
+        }
         plan.approval = None;
         existing.clear();
         source.validate(
@@ -320,7 +367,7 @@ impl Store {
                     index + 1
                 ));
             }
-            let values = prepare_insert(&table_columns, fields)
+            let values = prepare_insert(&table_columns, fields, exact_types)
                 .map_err(|error| format!("{operation} {}행 · {error}", index + 1))?;
             if index < preview_rows {
                 previews.push(columns.iter().map(|name| values.cell(name)).collect());
@@ -329,7 +376,11 @@ impl Store {
         }
         let approval = Uuid::new_v4().to_string();
         plan.approval = Some(approval.clone());
-        plan.action = Action::Paste(source, prepared);
+        plan.action = Action::Paste {
+            source,
+            rows: prepared,
+            exact_types,
+        };
         Ok(RowPastePreview {
             approval,
             columns,
@@ -375,7 +426,7 @@ impl Store {
             let mut state = self.edits.lock()?;
             let plan = active_plan(&mut state.rows, token)?;
             if plan.approval.as_deref() != Some(approval)
-                || matches!(plan.action, Action::Paste(..)) != paste
+                || matches!(plan.action, Action::Paste { .. }) != paste
             {
                 return Err("현재 행 작업을 다시 미리보세요.".into());
             }
@@ -387,8 +438,14 @@ impl Store {
         verify_profile(self, &plan.profile)?;
         let operation = match plan.action {
             Action::Insert(_) => "sqlite.row.insert",
-            Action::Paste(RowBatchSource::Clipboard, _) => "sqlite.row.paste",
-            Action::Paste(RowBatchSource::DelimitedFile, _) => "sqlite.row.import",
+            Action::Paste {
+                source: RowBatchSource::Clipboard,
+                ..
+            } => "sqlite.row.paste",
+            Action::Paste {
+                source: RowBatchSource::File,
+                ..
+            } => "sqlite.row.import",
             Action::Delete { .. } => "sqlite.row.delete",
         };
         let correlation_id = Uuid::new_v4().to_string();
@@ -446,7 +503,11 @@ fn active_plan<'a>(plans: &'a mut HashMap<String, Plan>, token: &str) -> Result<
     Ok(plans.get_mut(token).ok_or(EXPIRED)?)
 }
 
-fn prepare_insert(columns: &[InsertColumn], fields: Vec<RowInsertField>) -> Result<Values> {
+fn prepare_insert(
+    columns: &[InsertColumn],
+    fields: Vec<RowInsertField>,
+    exact_types: bool,
+) -> Result<Values> {
     let mut inputs = HashMap::with_capacity(fields.len());
     for field in fields {
         if inputs.insert(field.column, field.input).is_some() {
@@ -456,8 +517,12 @@ fn prepare_insert(columns: &[InsertColumn], fields: Vec<RowInsertField>) -> Resu
     let mut values = Values::default();
     for column in columns {
         if let Some(input) = inputs.remove(&column.name) {
-            let value =
-                parse_input(input).map_err(|error| format!("{} 열 · {error}", column.name))?;
+            let value = if exact_types {
+                parse_json_input(input)
+            } else {
+                parse_input(input)
+            }
+            .map_err(|error| format!("{} 열 · {error}", column.name))?;
             if !column.nullable && matches!(value, Value::Null) {
                 return Err(format!("{} 열에 NULL을 입력할 수 없습니다.", column.name));
             }
@@ -476,6 +541,18 @@ fn prepare_insert(columns: &[InsertColumn], fields: Vec<RowInsertField>) -> Resu
         return Err("테이블에 없는 열이 포함되었습니다. 다시 조회하세요.".into());
     }
     Ok(values)
+}
+
+fn parse_json_input(input: EditInput) -> Result<Value> {
+    match (input.kind.as_str(), input.value.as_str()) {
+        ("blob_hex", source) if source.len() > CELL_MAX_CHARS => {
+            Err("BLOB을 2,048바이트 이하로 줄이세요.".into())
+        }
+        ("blob_hex", source) => json_import::decode_hex(source).map(Value::Blob),
+        ("real", "inf") => Ok(Value::Real(f64::INFINITY)),
+        ("real", "-inf") => Ok(Value::Real(f64::NEG_INFINITY)),
+        _ => parse_input(input),
+    }
 }
 
 fn insert_columns(details: &ObjectDetails) -> Vec<InsertColumn> {
@@ -535,12 +612,21 @@ fn apply(store: &Store, plan: &Plan) -> Result<Applied> {
     let result = match &plan.action {
         Action::Insert(values) => Applied {
             count: 1,
-            fields: execute_insert(&tx, &details, &values.0, true)?,
+            fields: execute_insert(&tx, &details, &values.0, InsertCheck::FullRow)?,
         },
-        Action::Paste(source, rows) => {
+        Action::Paste {
+            source,
+            rows,
+            exact_types,
+        } => {
             let operation = source.name();
+            let check = if *exact_types {
+                InsertCheck::TypedValues
+            } else {
+                InsertCheck::Keys
+            };
             for (index, values) in rows.iter().enumerate() {
-                execute_insert(&tx, &details, &values.0, false).map_err(|error| {
+                execute_insert(&tx, &details, &values.0, check).map_err(|error| {
                     format!(
                         "{operation} {}행 저장에 실패해 전체를 롤백했습니다. {error}",
                         index + 1
@@ -594,17 +680,38 @@ fn apply(store: &Store, plan: &Plan) -> Result<Applied> {
     Ok(result)
 }
 
+#[derive(Clone, Copy)]
+enum InsertCheck {
+    FullRow,
+    Keys,
+    TypedValues,
+}
+
 fn execute_insert(
     tx: &Transaction<'_>,
     details: &ObjectDetails,
     values: &[(String, Value)],
-    capture_row: bool,
+    check: InsertCheck,
 ) -> Result<Vec<RowChangeField>> {
+    let capture_row = matches!(check, InsertCheck::FullRow);
+    let typed = matches!(check, InsertCheck::TypedValues);
+    let submitted: HashMap<_, _> = if typed {
+        values
+            .iter()
+            .map(|(column, value)| (column.as_str(), value))
+            .collect()
+    } else {
+        HashMap::new()
+    };
     let table = quote(&details.object.name);
     let returned: Vec<_> = details
         .columns
         .iter()
-        .filter(|column| capture_row || column.primary_key_position > 0)
+        .filter(|column| {
+            capture_row
+                || column.primary_key_position > 0
+                || submitted.contains_key(column.name.as_str())
+        })
         .collect();
     let projection = if capture_row {
         "*".into()
@@ -647,6 +754,20 @@ fn execute_insert(
                 || matches!(value, ValueRef::Text(text) if std::str::from_utf8(text).is_err()))
         {
             return Err("추가한 행의 기본 키를 확인할 수 없어 롤백했습니다.".into());
+        }
+        if let Some(expected) = submitted.get(column.name.as_str()) {
+            let matches = match (value, *expected) {
+                (ValueRef::Real(actual), Value::Real(expected)) => {
+                    actual.to_bits() == expected.to_bits()
+                }
+                (actual, expected) => actual == ValueRef::from(expected),
+            };
+            if !matches {
+                return Err(format!(
+                    "SQLite에서 {} 열의 값 또는 저장 타입이 달라졌습니다. 열 매핑을 확인하세요.",
+                    column.name
+                ));
+            }
         }
         if capture_row {
             result.push(explicit(column.name.clone(), rendered));

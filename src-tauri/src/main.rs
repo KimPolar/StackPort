@@ -7,6 +7,7 @@ use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
     EditGridChange, EditGridPreview, EditGridResult, EditGridSession,
+    parse_json_import, JsonImportTable,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport, SchemaSyncPreview, SchemaSyncReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
@@ -569,6 +570,22 @@ async fn apply_sqlite_grid_edit(
 async fn begin_row_change(store: State<'_, Store>, profile_id: String, table: String, change: RowChange) -> Result<RowChangeSession, String> {
     let store = store.inner().clone();
     worker(move || store.begin_row_change(&profile_id, &table, change)).await
+}
+
+#[tauri::command]
+async fn inspect_json_import(source: String) -> Result<JsonImportTable, String> {
+    worker(move || parse_json_import(&source)).await
+}
+
+#[tauri::command]
+async fn preview_sqlite_json_import(
+    store: State<'_, Store>,
+    token: String,
+    columns: Vec<String>,
+    rows: Vec<Vec<RowInsertField>>,
+) -> Result<RowPastePreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_json_import(&token, columns, rows)).await
 }
 
 #[tauri::command]
@@ -1744,6 +1761,8 @@ fn main() {
             preview_sqlite_grid_edit,
             apply_sqlite_grid_edit,
             begin_row_change,
+            inspect_json_import,
+            preview_sqlite_json_import,
             preview_row_insert,
             apply_row_change,
             preview_row_paste,

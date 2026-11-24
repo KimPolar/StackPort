@@ -13,7 +13,7 @@ russh-sftp = { version = "4.0.0", features = ["raw-string"] }
 rusqlite = { version = "0.32.1", features = ["backup", "bundled", "hooks"] }
 same-file = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 sha2 = "0.10"
 tempfile = "3.0"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }

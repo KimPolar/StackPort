@@ -37,6 +37,109 @@ fn input(kind: &str, value: &str) -> EditInput {
 }
 
 #[test]
+fn json_import_rolls_back_affinity_changes_and_keeps_selected_storage_types() {
+    let (dir, store, profile) = setup("DEV");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute(
+        "CREATE TABLE exact_rows (id INTEGER PRIMARY KEY, count INTEGER,
+        label TEXT DEFAULT 'fallback', amount TEXT, payload BLOB, ratio REAL)",
+        [],
+    )
+    .unwrap();
+    let begin = || {
+        store
+            .begin_row_change(&profile, "exact_rows", RowChange::ImportFile)
+            .unwrap()
+    };
+    let columns = || {
+        ["count", "label", "amount", "payload", "ratio"]
+            .map(str::to_owned)
+            .to_vec()
+    };
+    let field = |column: &str, kind, value| RowInsertField {
+        column: column.into(),
+        input: input(kind, value),
+    };
+    let rows = |preserve| {
+        vec![
+            vec![
+                field("count", "integer", "9007199254740993"),
+                field("label", "text", ""),
+                field("amount", "text", "9223372036854775808.123456789"),
+                field("payload", "blob_hex", "0041FF"),
+                field("ratio", "real", "inf"),
+            ],
+            vec![if preserve {
+                field("count", "integer", "0")
+            } else {
+                field("count", "text", "9223372036854775808")
+            }],
+        ]
+    };
+    let invalid = begin();
+    let preview = store
+        .preview_json_import(&invalid.token, columns(), rows(false))
+        .unwrap();
+    assert_eq!(preview.rows[0][3].as_ref().unwrap().display, "\\x0041ff");
+    let error = store
+        .apply_row_paste(&invalid.token, &preview.approval, "")
+        .err()
+        .expect("SQLite affinity must be checked");
+    assert!(
+        error.contains("2행") && error.contains("저장 타입") && error.contains("롤백"),
+        "{error}"
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM exact_rows", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+
+    let import = begin();
+    let preview = store
+        .preview_json_import(&import.token, columns(), rows(true))
+        .unwrap();
+    assert_eq!(preview.row_count, 2);
+    store
+        .apply_row_paste(&import.token, &preview.approval, "")
+        .unwrap();
+    let actual = db
+        .query_row(
+            "SELECT count, label, amount, hex(payload), ratio FROM exact_rows WHERE id=1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, f64>(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        actual,
+        (
+            9007199254740993,
+            String::new(),
+            "9223372036854775808.123456789".into(),
+            "0041FF".into(),
+            f64::INFINITY
+        )
+    );
+    assert_eq!(
+        db.query_row("SELECT label FROM exact_rows WHERE id=2", [], |row| row
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        "fallback"
+    );
+}
+
+#[test]
 fn delimited_import_validates_all_rows_beyond_the_sample_and_commits_once() {
     let (dir, store, profile) = setup("PROD");
     let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
@@ -76,7 +179,7 @@ fn delimited_import_validates_all_rows_beyond_the_sample_and_commits_once() {
         .is_err());
     let import = || {
         store
-            .begin_row_change(&profile, "intake", RowChange::ImportDelimited)
+            .begin_row_change(&profile, "intake", RowChange::ImportFile)
             .unwrap()
     };
     let invalid = import();

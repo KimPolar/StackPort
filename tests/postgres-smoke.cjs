@@ -120,6 +120,12 @@ async function startPostgres(preloadStats = true) {
     'CREATE POLICY row_action_insert ON report."row actions" FOR INSERT TO fixture_reader WITH CHECK ("row label" <> \'deny\');',
     'CREATE POLICY row_action_delete ON report."row actions" FOR DELETE TO fixture_reader USING (true);',
     'GRANT SELECT, INSERT, DELETE ON report."row actions" TO fixture_reader;',
+    "CREATE TABLE report.json_source (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, amount numeric(38,9), " +
+      "payload json, flag boolean, note text DEFAULT 'DB 기본값', binary_data bytea);",
+    'CREATE TABLE report.json_replay (LIKE report.json_source INCLUDING ALL);',
+    'INSERT INTO report.json_source (amount, payload, flag, note, binary_data) ' +
+      "VALUES (0.5, '{\"seed\":true}', false, NULL, decode('00ff5c','hex'));",
+    'GRANT SELECT, INSERT ON report.json_source, report.json_replay TO fixture_reader;',
     "CREATE TABLE report.row_guard (id integer PRIMARY KEY, label text); INSERT INTO report.row_guard VALUES (1, 'before');",
     'GRANT SELECT, UPDATE, DELETE ON report.row_guard TO fixture_reader;',
     "CREATE TABLE report.grid_updates (id int PRIMARY KEY, note text DEFAULT '서버 기본값', " +
@@ -1361,6 +1367,76 @@ async function verify(browser, fixture, gateway, jump) {
   assert.ok(importHistory.some(event => event.outcome === 'succeeded' && event.affected_count === 105));
   assert.ok(importHistory.some(event => event.outcome === 'failed'));
   assert.doesNotMatch(JSON.stringify(importHistory), /postgres-import-949|file-entry|reject-entry/);
+
+  await page.getByRole('button', { name: 'json_source 테이블', exact: true }).click();
+  await data.getByText('0.500000000', { exact: true }).waitFor();
+  const objectJson = path.join(root, 'postgres-object-array.json');
+  fs.writeFileSync(objectJson, [
+    '[{"amount":9007199254740993.123456789,"payload":{"n":9223372036854775808},"flag":true,"note":""},',
+    '{"amount":2.250000001,"payload":[1e77,"text"],"flag":false},',
+    '{"amount":3,"note":null,"flag":true}]',
+  ].join('\n'), 'utf8');
+  await fileImport.click();
+  await importPicker.setInputFiles(objectJson);
+  await mapFile.click();
+  await importDialog.getByText('postgres-object-array.json · UTF-8 · JSON 객체 배열', { exact: true }).waitFor();
+  await previewFile.click();
+  await importPreview.getByText('9007199254740993.123456789', { exact: true }).waitFor();
+  await importPreview.getByText('{"n":9223372036854775808}', { exact: true }).waitFor();
+  await importPreview.getByText('(빈 문자열)', { exact: true }).waitFor();
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.waitFor({ state: 'detached' });
+  await data.getByText('9007199254740993.123456789', { exact: true }).waitFor();
+  const postgresRoundTrip = path.join(root, 'postgres-roundtrip.json');
+  await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(postgresRoundTrip);
+  await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await page.getByText('JSON 저장 완료 · 4행', { exact: true }).waitFor();
+  assert.equal(JSON.parse(fs.readFileSync(postgresRoundTrip, 'utf8')).format, 'stackport.postgres-results');
+  await page.getByRole('button', { name: 'json_replay 테이블', exact: true }).click();
+  await fileImport.click();
+  await importPicker.setInputFiles(postgresRoundTrip);
+  await mapFile.click();
+  await importDialog.getByText('postgres-roundtrip.json · UTF-8 · StackPort PostgreSQL JSON', { exact: true }).waitFor();
+  await previewFile.click();
+  await importPreview.getByText('\\x00ff5c', { exact: true }).waitFor();
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 4개 가져오기 완료', { exact: true }).waitFor();
+  await fileImport.click();
+  await importPicker.setInputFiles({
+    name: 'from-sqlite.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({
+      format: 'stackport.sqlite-results', version: 1, columns: ['amount', 'payload', 'binary_data', 'note'],
+      rows: [[{ integer: '9223372036854775807' }, '{"engine":"sqlite"}', { blob_hex: 'AABB' }, '']],
+    })),
+  });
+  await mapFile.click();
+  await importDialog.getByText('from-sqlite.json · UTF-8 · StackPort SQLite JSON', { exact: true }).waitFor();
+  await previewFile.click();
+  await importPreview.getByText('9223372036854775807.000000000', { exact: true }).waitFor();
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 1개 가져오기 완료', { exact: true }).waitFor();
+  const jsonReader = await open();
+  try {
+    const replay = await command('execute_postgres_sql', {
+      id: jsonReader.id, request: randomUUID(), scope: { kind: 'document' },
+      source: "SELECT amount::text, payload::text, flag::text, note, pg_catalog.encode(binary_data, 'hex') FROM report.json_replay ORDER BY id",
+    });
+    assert.deepEqual(replay.rows.map(row => row.map(cell => cell.value)), [
+      ['0.500000000', '{"seed":true}', 'false', null, '00ff5c'],
+      ['9007199254740993.123456789', '{"n":9223372036854775808}', 'true', '', null],
+      ['2.250000001', '[1e77,"text"]', 'false', 'DB 기본값', null],
+      ['3.000000000', null, 'true', null, null],
+      ['9223372036854775807.000000000', '{"engine":"sqlite"}', null, '', 'aabb'],
+    ]);
+  } finally {
+    await close(jsonReader.id);
+  }
 
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
   const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });

@@ -114,7 +114,7 @@ function parseCsv(source: string): StructuredPreview {
 }
 
 export const clipboardPasteLimits = { rows: 100, columns: 64, bytes: 256 * 1024 };
-export const delimitedImportLimits = { rows: 1000, columns: 64, bytes: 4 * 1024 * 1024 };
+export const fileImportLimits = { rows: 1000, columns: 64, bytes: 4 * 1024 * 1024 };
 export const clipboardNull = "\\N";
 
 export type ClipboardCell = { value: string | null; textual: boolean };
@@ -168,18 +168,16 @@ export function parseClipboardRows(source: string, header: boolean, preserveBlan
   return inputTable(parsed, header, columnCount, preserveBlanks);
 }
 
-export function parseDelimitedImport(bytes: ArrayBuffer, filename: string, options: {
-  encoding: FileEncoding | "auto"; delimiter: Delimiter | "auto"; header: boolean; preserveBlanks: boolean;
-}): { source: InputTable; encoding: FileEncoding; delimiter: Delimiter } | { error: string } {
-  const limits = delimitedImportLimits;
-  if (bytes.byteLength > limits.bytes) return { error: "4 MiB 이하의 파일을 선택하세요." };
+export function decodeImportFile(bytes: ArrayBuffer, choice: FileEncoding | "auto"):
+  { text: string; encoding: FileEncoding } | { error: string } {
+  if (bytes.byteLength > fileImportLimits.bytes) return { error: "4 MiB 이하의 파일을 선택하세요." };
   const [a, b, c, d] = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 4));
   if ((a === 0xff && b === 0xfe && c === 0 && d === 0) || (a === 0 && b === 0 && c === 0xfe && d === 0xff)) {
     return { error: "UTF-32 파일은 UTF-8 또는 UTF-16으로 변환한 뒤 가져오세요." };
   }
   const bom = a === 0xef && b === 0xbb && c === 0xbf ? "utf-8"
     : a === 0xff && b === 0xfe ? "utf-16le" : a === 0xfe && b === 0xff ? "utf-16be" : null;
-  const encoding = options.encoding === "auto" ? bom ?? "utf-8" : options.encoding;
+  const encoding = choice === "auto" ? bom ?? "utf-8" : choice;
   if (bom && bom !== encoding) return { error: `파일의 BOM은 ${fileEncodings[bom]}입니다. 인코딩을 확인하세요.` };
   let text: string;
   try {
@@ -188,7 +186,17 @@ export function parseDelimitedImport(bytes: ArrayBuffer, filename: string, optio
     return { error: `${fileEncodings[encoding]}로 읽을 수 없습니다. 파일의 인코딩을 선택하세요.` };
   }
   if (text.includes("\0")) return { error: "NUL 문자가 발견됐습니다. 파일 인코딩과 내용을 확인하세요." };
-  if (new TextEncoder().encode(text).byteLength > limits.bytes) return { error: "UTF-8로 변환한 텍스트를 4 MiB 이하로 줄이세요." };
+  if (new TextEncoder().encode(text).byteLength > fileImportLimits.bytes) return { error: "UTF-8로 변환한 텍스트를 4 MiB 이하로 줄이세요." };
+  return { text, encoding };
+}
+
+export function parseDelimitedImport(bytes: ArrayBuffer, filename: string, options: {
+  encoding: FileEncoding | "auto"; delimiter: Delimiter | "auto"; header: boolean; preserveBlanks: boolean;
+}): { source: InputTable; encoding: FileEncoding; delimiter: Delimiter } | { error: string } {
+  const decoded = decodeImportFile(bytes, options.encoding);
+  if ("error" in decoded) return decoded;
+  const { text, encoding } = decoded;
+  const limits = fileImportLimits;
   const headerSize = Number(options.header);
   const parse = (delimiter: Delimiter) => {
     const parsed = parseDelimitedText(text, delimiter, limits.rows + headerSize, limits.columns, options.preserveBlanks);

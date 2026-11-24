@@ -338,7 +338,7 @@ async function main() {
   await importDialog.getByLabel('StackPort의 NULL과 빈 문자열 복원').check();
   const importMapping = importDialog.getByRole('button', { name: '열 매핑', exact: true });
   await importMapping.click();
-  await importDialog.getByText(/UTF-16 LE.*세미콜론/).waitFor();
+  await importDialog.getByText('sqlite-import-utf16.csv · UTF-16 LE · 세미콜론', { exact: true }).waitFor();
   await importDialog.getByText('원본 형식 · 정수', { exact: true }).waitFor();
   await importDialog.getByRole('button', { name: '파일 설정 수정', exact: true }).click();
   assert.equal(await importPicker.evaluate(input => input.files[0].name), 'sqlite-import-utf16.csv');
@@ -358,6 +358,33 @@ async function main() {
   assert.equal(scalar("SELECT length(note) FROM imported_records WHERE code='파일 2'"), '0');
   assert.equal(scalar("SELECT note FROM imported_records WHERE code='파일 3'"), '\\N');
   assert.equal(scalar("SELECT replace(note, char(13) || char(10), '|') FROM imported_records WHERE code='파일 4'"), '한 줄;포함|다음 "줄"');
+
+  mutateFixture('CREATE TABLE json_destination (id INTEGER PRIMARY KEY, exact_integer INTEGER, amount REAL, observed DATETIME, flag BOOLEAN, payload BLOB, document JSON)');
+  await refreshObjects.click();
+  await displayObject.click();
+  await gridTable.getByText('9,007,199,254,740,993', { exact: true }).waitFor();
+  const jsonRoundTrip = path.join(path.dirname(database), 'sqlite-roundtrip.json');
+  await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  const sqliteJsonExport = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  await sqliteJsonExport.getByLabel('파일 형식').selectOption('JSON');
+  await sqliteJsonExport.getByLabel('새 JSON 파일 경로').fill(jsonRoundTrip);
+  await sqliteJsonExport.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await sqliteJsonExport.waitFor({ state: 'detached' });
+  assert.equal(JSON.parse(fs.readFileSync(jsonRoundTrip, 'utf8')).format, 'stackport.sqlite-results');
+  await explorer.getByRole('button', { name: 'json_destination', exact: true }).click();
+  await fileImport.click();
+  await importPicker.setInputFiles(jsonRoundTrip);
+  await importMapping.click();
+  await importDialog.getByText('sqlite-roundtrip.json · UTF-8 · StackPort SQLite JSON', { exact: true }).waitFor();
+  assert.equal(await importDialog.getByLabel('원본 열 2 입력 형식', { exact: true }).inputValue(), 'source');
+  await importDialog.getByRole('button', { name: '가져오기 미리보기', exact: true }).click();
+  await importedPreview.getByText('\\x00ff', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM json_destination'), '0');
+  await importDialog.getByRole('button', { name: '가져오기 적용', exact: true }).click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 1개 가져오기 완료', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT exact_integer || \'|\' || typeof(amount) || \'|\' || hex(payload) FROM json_destination'), '9007199254740993|real|00FF');
+  assert.equal(scalar('SELECT document FROM json_destination'), '{"ready":true}');
 
   mutateFixture(`CREATE TABLE multi_edit (id INTEGER PRIMARY KEY, label TEXT NOT NULL, amount INTEGER NOT NULL,
     CHECK ((label='원래' AND amount=3) OR (label='함께' AND amount=8)))`);
@@ -488,6 +515,7 @@ async function main() {
   mutateFixture('DROP TABLE bulk_edit');
   mutateFixture('DROP TABLE multi_edit');
   mutateFixture('DROP TABLE imported_records');
+  mutateFixture('DROP TABLE json_destination');
   mutateFixture('DROP TABLE row_actions');
   mutateFixture('DROP TABLE display_examples');
   await refreshObjects.click();

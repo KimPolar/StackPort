@@ -186,7 +186,7 @@ impl Attribute {
     }
 
     fn insertable(&self) -> bool {
-        self.supported() && self.identity != "a"
+        (self.supported() || self.type_oid == 17) && self.identity != "a"
     }
 
     fn required_for_insert(&self) -> bool {

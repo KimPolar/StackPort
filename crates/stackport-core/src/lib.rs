@@ -8,6 +8,8 @@ mod result_export;
 pub use result_export::{CsvOptions, ExportQuery, ExportReport};
 pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
+mod json_import;
+pub use json_import::{parse_json_import, JsonImportTable};
 pub use edit::{EditCellChange, EditField, EditInput, EditKey, EditPreview, EditResult, EditRowPreview, EditRowResult, EditSession, SavedEditCell};
 pub use edit::{EditGridChange, EditGridPreview, EditGridResult, EditGridSession};
 pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult};
