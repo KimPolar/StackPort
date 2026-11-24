@@ -9,6 +9,7 @@ pub use result_export::{CsvOptions, ExportQuery, ExportReport};
 pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
 pub use edit::{EditCellChange, EditField, EditInput, EditKey, EditPreview, EditResult, EditRowPreview, EditRowResult, EditSession, SavedEditCell};
+pub use edit::{EditGridChange, EditGridPreview, EditGridResult, EditGridSession};
 pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult};
 pub use postgres::{PostgresRowChange, PostgresRowChangeOutcome};
 mod network;
@@ -934,6 +935,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
+        "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",
+        "sqlite.grid.update" => "sqlite-grid-update-confirmed",
         "sqlite.row.insert" | "sqlite.row.delete" | "sqlite.row.paste" if record.environment == Some("PROD") => {
             "sqlite-row-change-prod-confirmed"
         }

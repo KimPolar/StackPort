@@ -1,4 +1,4 @@
-//! A short-lived, preview-before-apply SQLite row edit session.
+//! Short-lived, preview-before-apply SQLite grid edit sessions.
 //!
 //! Only ordinary tables with stable non-NULL primary keys and without triggers
 //! or generated columns are editable. Key/unique columns and large/BLOB values
@@ -39,6 +39,8 @@ use zeroize::Zeroize;
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(300);
 const MAX_CHANGES: usize = 16;
+const MAX_GRID_CHANGES: usize = 256;
+const MAX_GRID_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditKey {
@@ -111,6 +113,53 @@ pub struct EditRowResult {
     pub audit_warning: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EditGridRow {
+    pub keys: Vec<EditKey>,
+    pub fields: Vec<EditField>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditGridSession {
+    pub token: String,
+    pub environment: String,
+    pub rows: Vec<EditGridRow>,
+    pub expires_seconds: u64,
+    pub max_changes: usize,
+    pub max_total_changes: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditGridChange {
+    pub row: usize,
+    pub cells: Vec<EditCellChange>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditGridPreviewRow {
+    pub row: usize,
+    pub changes: Vec<EditPreview>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditGridPreview {
+    pub approval: String,
+    pub rows: Vec<EditGridPreviewRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SavedEditRow {
+    pub row: usize,
+    pub cells: Vec<SavedEditCell>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditGridResult {
+    pub rows: Vec<SavedEditRow>,
+    pub audit_warning: Option<String>,
+}
+
 struct FieldValue {
     name: String,
     value: Option<Value>,
@@ -130,6 +179,11 @@ impl Drop for Change {
 
 struct ApprovedChanges {
     approval: Option<String>,
+    rows: Vec<StagedRow>,
+}
+
+struct StagedRow {
+    index: usize,
     cells: Vec<Change>,
 }
 
@@ -138,14 +192,24 @@ struct PendingEdit {
     table: String,
     identity: Handle,
     schema_version: i64,
-    keys: Vec<(String, Value)>,
-    fingerprint: [u8; 32],
-    fields: Vec<FieldValue>,
+    rows: Vec<PendingRow>,
     changes: Option<ApprovedChanges>,
     created: Instant,
 }
 
-impl Drop for PendingEdit {
+struct PendingRow {
+    keys: Vec<(String, Value)>,
+    fingerprint: [u8; 32],
+    fields: Vec<FieldValue>,
+}
+
+impl PendingEdit {
+    fn multiple_rows(&self) -> bool {
+        self.rows.len() > 1
+    }
+}
+
+impl Drop for PendingRow {
     fn drop(&mut self) {
         for (_, value) in &mut self.keys {
             wipe_value(value);
@@ -219,6 +283,37 @@ impl Store {
         table: &str,
         keys: Vec<EditKey>,
     ) -> Result<EditSession> {
+        let mut session = self.start_edit(profile_id, table, vec![keys])?;
+        let row = session.rows.pop().expect("one row requested");
+        Ok(EditSession {
+            token: session.token,
+            table: table.into(),
+            environment: session.environment,
+            keys: row.keys,
+            fields: row.fields,
+            expires_seconds: session.expires_seconds,
+            max_changes: session.max_changes,
+        })
+    }
+
+    pub fn begin_grid_edit(
+        &self,
+        profile_id: &str,
+        table: &str,
+        rows: Vec<Vec<EditKey>>,
+    ) -> Result<EditGridSession> {
+        if !(2..=super::PAGE_SIZE).contains(&rows.len()) {
+            return Err(format!("편집할 행을 2~{}개 선택하세요.", super::PAGE_SIZE));
+        }
+        self.start_edit(profile_id, table, rows)
+    }
+
+    fn start_edit(
+        &self,
+        profile_id: &str,
+        table: &str,
+        rows: Vec<Vec<EditKey>>,
+    ) -> Result<EditGridSession> {
         let profile = self.profile(profile_id)?;
         if !matches!(profile.environment.as_str(), "DEV" | "STAGING" | "PROD") {
             return Err("유효하지 않은 연결 환경입니다. 수정 전에 연결 설정을 확인하세요.".into());
@@ -232,8 +327,6 @@ impl Store {
         ensure_identity(&identity, &profile.path)?;
         let schema_version = schema_version(&db)?;
         let details = editable_table(&db, table)?;
-        let parsed_keys = validate_keys(&details, &keys)?;
-        let snapshot = read_row(&db, table, &parsed_keys, &[])?;
         let unique_columns: HashSet<&str> = details
             .indexes
             .iter()
@@ -245,49 +338,50 @@ impl Store {
                     .filter_map(|column| column.name.as_deref())
             })
             .collect();
-        let mut fields = Vec::with_capacity(snapshot.fields.len());
-        let mut plan_fields = Vec::with_capacity(snapshot.fields.len());
-        for field in snapshot.fields {
-            let column = details
-                .columns
-                .iter()
-                .find(|column| column.name == field.name)
-                .ok_or("조회된 열과 테이블 구조가 일치하지 않습니다.")?;
-            let reason = if column.primary_key_position > 0 {
-                Some("기본 키는 편집할 수 없습니다.")
-            } else if unique_columns.contains(column.name.as_str()) {
-                Some("고유 키에 속한 열은 편집할 수 없습니다.")
-            } else if field.value.is_none() {
-                Some("BLOB, 유효하지 않은 문자 또는 긴 값은 아직 편집할 수 없습니다.")
-            } else {
-                None
-            };
-            let editable = reason.is_none();
-            fields.push(EditField {
-                name: field.name.clone(),
-                declared_type: column.declared_type.clone(),
-                current: field.display,
-                editable,
-                reason: reason.map(str::to_owned),
-            });
-            plan_fields.push(FieldValue {
-                name: field.name,
-                value: field.value,
-                editable,
-            });
+        let multiple = rows.len() > 1;
+        let mut snapshots = Vec::with_capacity(rows.len());
+        let mut pending = Vec::with_capacity(rows.len());
+        let mut seen = HashSet::with_capacity(rows.len());
+        let mut snapshot_bytes = 0;
+        for (index, keys) in rows.into_iter().enumerate() {
+            let (row, plan) = prepare_edit_row(&db, table, &details, &unique_columns, keys)
+                .map_err(|error| edit_row_error(multiple, index, error))?;
+            if !seen.insert(plan.fingerprint) {
+                return Err("같은 행을 한 번만 선택하세요.".into());
+            }
+            if multiple {
+                snapshot_bytes += row
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        field.name.len()
+                            + field.declared_type.len()
+                            + field.current.display.len()
+                            + 128
+                    })
+                    .sum::<usize>();
+                if snapshot_bytes > MAX_GRID_SNAPSHOT_BYTES {
+                    return Err("선택한 행의 값이 너무 많습니다. 편집할 행 수를 줄이세요.".into());
+                }
+            }
+            snapshots.push(row);
+            pending.push(plan);
         }
-        if !fields.iter().any(|field| field.editable) {
+        if !snapshots
+            .iter()
+            .flat_map(|row| &row.fields)
+            .any(|field| field.editable)
+        {
             return Err("이 행에는 현재 편집할 수 있는 열이 없습니다.".into());
         }
         let token = Uuid::new_v4().to_string();
-        let session = EditSession {
+        let session = EditGridSession {
             token: token.clone(),
-            table: table.into(),
             environment: profile.environment.clone(),
-            keys,
-            fields,
+            rows: snapshots,
             expires_seconds: SESSION_LIFETIME.as_secs(),
             max_changes: MAX_CHANGES,
+            max_total_changes: MAX_GRID_CHANGES,
         };
         self.edits.active_state()?.pending.insert(
             token,
@@ -296,9 +390,7 @@ impl Store {
                 table: table.into(),
                 identity,
                 schema_version,
-                keys: parsed_keys,
-                fingerprint: snapshot.fingerprint,
-                fields: plan_fields,
+                rows: pending,
                 changes: None,
                 created: Instant::now(),
             },
@@ -335,12 +427,40 @@ impl Store {
         Ok(EditRowPreview { approval, changes })
     }
 
+    pub fn preview_grid_edit(
+        &self,
+        token: &str,
+        changes: Vec<EditGridChange>,
+    ) -> Result<EditGridPreview> {
+        let approval = Uuid::new_v4().to_string();
+        let rows = self.stage_grid_changes(token, changes, Some(approval.clone()), true)?;
+        Ok(EditGridPreview { approval, rows })
+    }
+
     fn stage_cell_changes(
         &self,
         token: &str,
         cells: Vec<EditCellChange>,
         approval: Option<String>,
     ) -> Result<Vec<EditPreview>> {
+        self.stage_grid_changes(
+            token,
+            vec![EditGridChange { row: 0, cells }],
+            approval,
+            false,
+        )?
+        .pop()
+        .map(|row| row.changes)
+        .ok_or("미리 볼 변경이 없습니다.".into())
+    }
+
+    fn stage_grid_changes(
+        &self,
+        token: &str,
+        changes: Vec<EditGridChange>,
+        approval: Option<String>,
+        multiple: bool,
+    ) -> Result<Vec<EditGridPreviewRow>> {
         let mut state = self.edits.lock()?;
         let plan = state
             .pending
@@ -350,12 +470,23 @@ impl Store {
             state.pending.remove(token);
             return Err("편집 세션이 만료되었습니다. 행을 다시 선택하세요.".into());
         }
+        if plan.multiple_rows() != multiple {
+            return Err("선택한 편집 세션과 요청 범위가 일치하지 않습니다.".into());
+        }
         // A failed or superseded preview must never leave an older approved
         // change available for application.
         plan.changes = None;
-        if cells.is_empty() || cells.len() > MAX_CHANGES {
+        if changes.is_empty() || changes.len() > plan.rows.len() {
+            return Err("변경할 행을 확인하세요.".into());
+        }
+        if changes
+            .iter()
+            .map(|change| change.cells.len())
+            .sum::<usize>()
+            > MAX_GRID_CHANGES
+        {
             return Err(format!(
-                "한 행에서 변경할 열을 1~{MAX_CHANGES}개 선택하세요."
+                "한 번에 최대 {MAX_GRID_CHANGES}개 셀을 변경할 수 있습니다."
             ));
         }
         verify_profile(self, &plan.profile)?;
@@ -366,49 +497,33 @@ impl Store {
             return Err("테이블 구조가 변경되었습니다. 행을 다시 선택하세요.".into());
         }
         let details = editable_table(&db, &plan.table)?;
-        let snapshot = read_row(&db, &plan.table, &plan.keys, &[])?;
-        if snapshot.fingerprint != plan.fingerprint {
-            return Err(
-                "편집을 시작한 뒤 행이 변경되었습니다. 새로고침 후 다시 선택하세요.".into(),
-            );
+        let mut seen = HashSet::with_capacity(changes.len());
+        let mut previews = Vec::with_capacity(changes.len());
+        let mut staged = Vec::with_capacity(changes.len());
+        for EditGridChange { row, cells } in changes {
+            let target = plan.rows.get(row).ok_or("선택한 범위에 없는 행입니다.")?;
+            if !seen.insert(row) {
+                return Err("같은 행을 한 번만 지정하세요.".into());
+            }
+            let (preview, changes) = preview_row_changes(&db, &plan.table, &details, target, cells)
+                .map_err(|error| edit_row_error(multiple, row, error))?;
+            if !changes.is_empty() {
+                previews.push(EditGridPreviewRow {
+                    row,
+                    changes: preview,
+                });
+                staged.push(StagedRow {
+                    index: row,
+                    cells: changes,
+                });
+            }
         }
-        let mut seen = HashSet::with_capacity(cells.len());
-        let mut previews = Vec::with_capacity(cells.len());
-        let mut changes = Vec::with_capacity(cells.len());
-        for EditCellChange { column, input } in cells {
-            if !seen.insert(column.clone()) {
-                return Err(format!("{column} 열이 중복되었습니다."));
-            }
-            let field = plan
-                .fields
-                .iter()
-                .find(|field| field.name == column && field.editable)
-                .ok_or("선택한 열은 편집할 수 없습니다.")?;
-            ensure_column_allowed(&details, &column)?;
-            let before = field.value.as_ref().ok_or("이 값은 편집할 수 없습니다.")?;
-            let after = parse_input(input).map_err(|error| format!("{column} · {error}"))?;
-            if values_equal(before, &after) {
-                continue;
-            }
-            let rendered = display_value(ValueRef::from(&after));
-            if rendered.truncated {
-                return Err(format!(
-                    "{column} 열의 전체 값을 미리 볼 수 있도록 길이를 줄이세요."
-                ));
-            }
-            previews.push(EditPreview {
-                column: column.clone(),
-                before: display_value(ValueRef::from(before)),
-                after: rendered,
-            });
-            changes.push(Change { column, after });
-        }
-        if changes.is_empty() {
+        if staged.is_empty() {
             return Err("변경할 값이 기존 값과 같습니다.".into());
         }
         plan.changes = Some(ApprovedChanges {
             approval,
-            cells: changes,
+            rows: staged,
         });
         Ok(previews)
     }
@@ -447,6 +562,34 @@ impl Store {
         approval: Option<&str>,
         production_confirmation: &str,
     ) -> Result<EditRowResult> {
+        let mut result = self.apply_staged_grid(token, approval, production_confirmation, false)?;
+        let cells = result
+            .rows
+            .pop()
+            .ok_or("변경 결과를 확인할 수 없습니다.")?
+            .cells;
+        Ok(EditRowResult {
+            cells,
+            audit_warning: result.audit_warning,
+        })
+    }
+
+    pub fn apply_grid_edit(
+        &self,
+        token: &str,
+        approval: &str,
+        production_confirmation: &str,
+    ) -> Result<EditGridResult> {
+        self.apply_staged_grid(token, Some(approval), production_confirmation, true)
+    }
+
+    fn apply_staged_grid(
+        &self,
+        token: &str,
+        approval: Option<&str>,
+        production_confirmation: &str,
+        multiple: bool,
+    ) -> Result<EditGridResult> {
         let plan = {
             let mut state = self.edits.lock()?;
             let item = state
@@ -456,6 +599,9 @@ impl Store {
             if item.created.elapsed() >= SESSION_LIFETIME {
                 state.pending.remove(token);
                 return Err("편집 세션이 만료되었습니다. 행을 다시 선택하세요.".into());
+            }
+            if item.multiple_rows() != multiple {
+                return Err("선택한 편집 세션과 요청 범위가 일치하지 않습니다.".into());
             }
             if item.profile.environment == "PROD" && production_confirmation != "PROD" {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
@@ -471,8 +617,10 @@ impl Store {
         };
         verify_profile(self, &plan.profile)?;
         let correlation_id = Uuid::new_v4().to_string();
-        let changes = &plan.changes.as_ref().expect("preview checked").cells;
-        let (operation, target) = if let [change] = changes.as_slice() {
+        let changes = &plan.changes.as_ref().expect("preview checked").rows;
+        let (operation, target) = if multiple {
+            ("sqlite.grid.update", plan.table.clone())
+        } else if let [change] = changes[0].cells.as_slice() {
             (
                 "sqlite.cell.update",
                 format!("{} · {}", plan.table, change.column),
@@ -497,16 +645,19 @@ impl Store {
         } else {
             "failed"
         };
-        let audit_result = self
-            .connect()
-            .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
+        let audit_result = self.connect().and_then(|db| {
+            insert_audit(
+                &db,
+                audit(outcome, result.as_ref().ok().map(|rows| rows.len() as i64)),
+            )
+        });
         match (result, audit_result) {
-            (Ok(cells), Ok(())) => Ok(EditRowResult {
-                cells,
+            (Ok(rows), Ok(())) => Ok(EditGridResult {
+                rows,
                 audit_warning: None,
             }),
-            (Ok(cells), Err(_)) => Ok(EditRowResult {
-                cells,
+            (Ok(rows), Err(_)) => Ok(EditGridResult {
+                rows,
                 audit_warning: Some(
                     "변경은 저장됐지만 완료 감사 기록을 저장하지 못했습니다.".into(),
                 ),
@@ -522,11 +673,117 @@ impl Store {
     }
 }
 
+fn edit_row_error(multiple: bool, row: usize, error: String) -> String {
+    if multiple {
+        format!("선택 목록의 {}번째 행 · {error}", row + 1)
+    } else {
+        error
+    }
+}
+
+fn prepare_edit_row(
+    db: &Connection,
+    table: &str,
+    details: &ObjectDetails,
+    unique_columns: &HashSet<&str>,
+    keys: Vec<EditKey>,
+) -> Result<(EditGridRow, PendingRow)> {
+    let parsed = validate_keys(details, &keys)?;
+    let snapshot = read_row(db, table, &parsed, &[])?;
+    let mut fields = Vec::with_capacity(snapshot.fields.len());
+    let mut plan_fields = Vec::with_capacity(snapshot.fields.len());
+    for field in snapshot.fields {
+        let column = details
+            .columns
+            .iter()
+            .find(|column| column.name == field.name)
+            .ok_or("조회된 열과 테이블 구조가 일치하지 않습니다.")?;
+        let reason = if column.primary_key_position > 0 {
+            Some("기본 키는 편집할 수 없습니다.")
+        } else if unique_columns.contains(column.name.as_str()) {
+            Some("고유 키에 속한 열은 편집할 수 없습니다.")
+        } else if field.value.is_none() {
+            Some("BLOB, 유효하지 않은 문자 또는 긴 값은 아직 편집할 수 없습니다.")
+        } else {
+            None
+        };
+        let editable = reason.is_none();
+        fields.push(EditField {
+            name: field.name.clone(),
+            declared_type: column.declared_type.clone(),
+            current: field.display,
+            editable,
+            reason: reason.map(str::to_owned),
+        });
+        plan_fields.push(FieldValue {
+            name: field.name,
+            value: field.value,
+            editable,
+        });
+    }
+    let plan = PendingRow {
+        keys: parsed,
+        fingerprint: snapshot.fingerprint,
+        fields: plan_fields,
+    };
+    Ok((EditGridRow { keys, fields }, plan))
+}
+
+fn preview_row_changes(
+    db: &Connection,
+    table: &str,
+    details: &ObjectDetails,
+    row: &PendingRow,
+    cells: Vec<EditCellChange>,
+) -> Result<(Vec<EditPreview>, Vec<Change>)> {
+    if cells.is_empty() || cells.len() > MAX_CHANGES {
+        return Err(format!(
+            "한 행에서 변경할 열을 1~{MAX_CHANGES}개 선택하세요."
+        ));
+    }
+    let snapshot = read_row(db, table, &row.keys, &[])?;
+    if snapshot.fingerprint != row.fingerprint {
+        return Err("편집을 시작한 뒤 행이 변경되었습니다. 새로고침 후 다시 선택하세요.".into());
+    }
+    let mut seen = HashSet::with_capacity(cells.len());
+    let mut previews = Vec::with_capacity(cells.len());
+    let mut changes = Vec::with_capacity(cells.len());
+    for EditCellChange { column, input } in cells {
+        if !seen.insert(column.clone()) {
+            return Err(format!("{column} 열이 중복되었습니다."));
+        }
+        let field = row
+            .fields
+            .iter()
+            .find(|field| field.name == column && field.editable)
+            .ok_or("선택한 열은 편집할 수 없습니다.")?;
+        ensure_column_allowed(details, &column)?;
+        let before = field.value.as_ref().ok_or("이 값은 편집할 수 없습니다.")?;
+        let after = parse_input(input).map_err(|error| format!("{column} · {error}"))?;
+        if values_equal(before, &after) {
+            continue;
+        }
+        let rendered = display_value(ValueRef::from(&after));
+        if rendered.truncated {
+            return Err(format!(
+                "{column} 열의 전체 값을 미리 볼 수 있도록 길이를 줄이세요."
+            ));
+        }
+        previews.push(EditPreview {
+            column: column.clone(),
+            before: display_value(ValueRef::from(before)),
+            after: rendered,
+        });
+        changes.push(Change { column, after });
+    }
+    Ok((previews, changes))
+}
+
 fn apply_changes(
     store: &Store,
     plan: &PendingEdit,
-    changes: &[Change],
-) -> Result<Vec<SavedEditCell>> {
+    changes: &[StagedRow],
+) -> Result<Vec<SavedEditRow>> {
     ensure_identity(&plan.identity, &plan.profile.path)?;
     let mut db = open_edit_db(&plan.profile.path)?;
     let tx = db
@@ -537,18 +794,62 @@ fn apply_changes(
         return Err("테이블 구조가 변경되었습니다. 행을 다시 선택하세요.".into());
     }
     let details = editable_table(&tx, &plan.table)?;
+    let mut saved = Vec::with_capacity(changes.len());
     for change in changes {
-        ensure_column_allowed(&details, &change.column)?;
+        let row = &plan.rows[change.index];
+        let cells =
+            apply_row_changes(&tx, &plan.table, &details, row, &change.cells).map_err(|error| {
+                if plan.multiple_rows() {
+                    edit_row_error(
+                        true,
+                        change.index,
+                        format!("{error} 전체 변경을 롤백했습니다."),
+                    )
+                } else {
+                    error
+                }
+            })?;
+        saved.push(SavedEditRow {
+            row: change.index,
+            cells,
+        });
+    }
+    ensure_identity(&plan.identity, &plan.profile.path)?;
+    verify_profile(store, &plan.profile)?;
+    tx.commit().map_err(|error| {
+        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+            return format!(
+                "제약조건 위반으로 변경을 롤백했습니다. {}",
+                super::db_error(error)
+            );
+        }
+        format!(
+            "커밋 결과를 확정하지 못했습니다. 재시도 전에 원본을 다시 조회하세요: {}",
+            super::db_error(error)
+        )
+    })?;
+    Ok(saved)
+}
+
+fn apply_row_changes(
+    db: &Connection,
+    table: &str,
+    details: &ObjectDetails,
+    row: &PendingRow,
+    changes: &[Change],
+) -> Result<Vec<SavedEditCell>> {
+    for change in changes {
+        ensure_column_allowed(details, &change.column)?;
     }
     let columns: Vec<_> = changes
         .iter()
         .map(|change| change.column.as_str())
         .collect();
-    let before = read_row(&tx, &plan.table, &plan.keys, &columns)?;
-    if before.fingerprint != plan.fingerprint {
+    let before = read_row(db, table, &row.keys, &columns)?;
+    if before.fingerprint != row.fingerprint {
         return Err("편집을 시작한 뒤 행이 변경되어 적용하지 않았습니다.".into());
     }
-    let (predicate, keys) = key_predicate(&plan.keys);
+    let (predicate, keys) = key_predicate(&row.keys);
     let assignments = columns
         .iter()
         .map(|name| format!("{} = ?", quote(name)))
@@ -560,16 +861,16 @@ fn apply_changes(
         .chain(keys.iter());
     let sql = format!(
         "UPDATE OR ABORT main.{} SET {assignments} WHERE {predicate}",
-        quote(&plan.table)
+        quote(table)
     );
-    let total_before = tx.total_changes();
-    let changed = tx
+    let total_before = db.total_changes();
+    let changed = db
         .execute(&sql, params_from_iter(values))
         .map_err(super::db_error)?;
-    if changed != 1 || tx.total_changes() != total_before + 1 {
+    if changed != 1 || db.total_changes() != total_before + 1 {
         return Err("변경 대상이 한 행이 아니어서 적용하지 않았습니다.".into());
     }
-    let after = read_row(&tx, &plan.table, &plan.keys, &columns)?;
+    let after = read_row(db, table, &row.keys, &columns)?;
     if before.other_fingerprint != after.other_fingerprint {
         return Err("선택한 열 외의 값이 변경되어 롤백했습니다.".into());
     }
@@ -592,20 +893,6 @@ fn apply_changes(
             actual: display_value(ValueRef::from(actual)),
         });
     }
-    ensure_identity(&plan.identity, &plan.profile.path)?;
-    verify_profile(store, &plan.profile)?;
-    tx.commit().map_err(|error| {
-        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
-            return format!(
-                "제약조건 위반으로 변경을 롤백했습니다. {}",
-                super::db_error(error)
-            );
-        }
-        format!(
-            "커밋 결과를 확정하지 못했습니다. 재시도 전에 원본을 다시 조회하세요: {}",
-            super::db_error(error)
-        )
-    })?;
     Ok(saved)
 }
 

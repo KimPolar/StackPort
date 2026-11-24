@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use stackport_core::{EditCellChange, EditInput, EditKey, RowChange, RowInsertField, Store};
+use stackport_core::{EditCellChange, EditGridChange, EditInput, EditKey, RowChange, RowInsertField, Store};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -335,6 +335,125 @@ fn several_cells_share_one_approved_update_and_rollback_together() {
     assert!(!serde_json::to_string(&history)
         .unwrap()
         .contains("should roll back"));
+}
+
+#[test]
+fn selected_grid_rows_commit_once_and_roll_back_earlier_rows_on_late_failure() {
+    let (dir, store, profile) = setup("PROD");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute(
+        "INSERT INTO records VALUES (2, 'second', 'before-2', 4, 'other-2', NULL)",
+        [],
+    )
+    .unwrap();
+    let keys = |id: &str| {
+        let mut keys = key();
+        keys[0].value = id.into();
+        keys
+    };
+    let start = || {
+        store
+            .begin_grid_edit(&profile, "records", vec![keys("1"), keys("2")])
+            .unwrap()
+    };
+    let preview = |token: &str, second: EditInput| {
+        store
+            .preview_grid_edit(
+                token,
+                vec![
+                    EditGridChange {
+                        row: 0,
+                        cells: vec![EditCellChange {
+                            column: "note".into(),
+                            input: input("text", "new-first"),
+                        }],
+                    },
+                    EditGridChange {
+                        row: 1,
+                        cells: vec![EditCellChange {
+                            column: "note".into(),
+                            input: second,
+                        }],
+                    },
+                ],
+            )
+            .unwrap()
+    };
+    let stored =
+        || {
+            db.query_row(
+            "SELECT (SELECT note FROM records WHERE id=1), (SELECT note FROM records WHERE id=2)",
+            [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).unwrap()
+        };
+    assert!(store
+        .begin_grid_edit(&profile, "records", vec![keys("1"), keys("01")])
+        .is_err());
+
+    let session = start();
+    let invalid = preview(&session.token, input("null", ""));
+    assert_eq!(invalid.rows[1].changes[0].after.kind, "null");
+    assert!(store
+        .apply_row_edit(&session.token, &invalid.approval, "PROD")
+        .is_err());
+    assert!(store
+        .apply_grid_edit(&session.token, &invalid.approval, "prod")
+        .is_err());
+    let error = store
+        .apply_grid_edit(&session.token, &invalid.approval, "PROD")
+        .unwrap_err();
+    assert!(error.contains("2번째") && error.contains("롤백"), "{error}");
+    assert_eq!(stored(), ("before".into(), "before-2".into()));
+    assert!(store
+        .apply_grid_edit(&session.token, &invalid.approval, "PROD")
+        .is_err());
+
+    let session = start();
+    let stale = preview(&session.token, input("text", "new-second"));
+    db.execute("UPDATE records SET note='changed elsewhere' WHERE id=2", [])
+        .unwrap();
+    let error = store
+        .apply_grid_edit(&session.token, &stale.approval, "PROD")
+        .unwrap_err();
+    assert!(
+        error.contains("2번째") && error.contains("행이 변경"),
+        "{error}"
+    );
+    assert_eq!(stored(), ("before".into(), "changed elsewhere".into()));
+
+    let session = start();
+    let old = preview(&session.token, input("text", "superseded"));
+    let ready = preview(&session.token, input("text", "new-second"));
+    assert!(store
+        .apply_grid_edit(&session.token, &old.approval, "PROD")
+        .is_err());
+    assert_eq!(ready.rows[1].changes[0].before.display, "changed elsewhere");
+    let saved = store
+        .apply_grid_edit(&session.token, &ready.approval, "PROD")
+        .unwrap();
+    assert!(saved.audit_warning.is_none());
+    assert_eq!(
+        saved
+            .rows
+            .iter()
+            .map(|row| (row.row, row.cells[0].actual.display.as_str()))
+            .collect::<Vec<_>>(),
+        [(0, "new-first"), (1, "new-second")]
+    );
+    assert_eq!(stored(), ("new-first".into(), "new-second".into()));
+    let history = store.list_audit_events(None).unwrap().events;
+    assert!(history
+        .iter()
+        .any(|event| event.operation == "sqlite.grid.update"
+            && event.outcome == "succeeded"
+            && event.policy == "sqlite-grid-update-prod-confirmed"
+            && event.affected_count == Some(2)));
+    assert!(history
+        .iter()
+        .any(|event| event.operation == "sqlite.grid.update" && event.outcome == "failed"));
+    assert!(!serde_json::to_string(&history)
+        .unwrap()
+        .contains("new-first"));
 }
 
 #[test]

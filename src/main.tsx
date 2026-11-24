@@ -1247,6 +1247,14 @@ function App() {
     }
     return keys;
   }
+  const selectedRowsForEdit = result && rowSelection.active && rowChangeTable
+    ? [...rowSelection.rows].sort((first, second) => first - second).flatMap(index => {
+      const keys = keysForRow(result.rows[index]);
+      return keys ? [{ keys, number: result.page * 100 + index + 1 }] : [];
+    })
+    : [];
+  const canEditSelection = selectedRowsForEdit.length >= 2 && selectedRowsForEdit.length === rowSelection.rows.size;
+  const editedCellCount = editReport?.rows.reduce((count, row) => count + row.cells.length, 0) ?? 0;
 
   if (!startupLoaded) return <main className="empty-state" role="status">작업 공간을 불러오는 중…</main>;
 
@@ -1311,12 +1319,18 @@ function App() {
       </div>}
       {editReport && <div className="sqlite-edit-report">
         <div className="success-banner" role="status">
-          <strong>{editReport.cells.length === 1 ? "셀 변경 완료" : `${editReport.cells.length}개 셀 변경 완료`} · 저장 값 검증됨</strong>
+          <strong>{editReport.rows[0]?.number !== undefined && `행 ${editReport.rows.length}개 · `}
+            {editedCellCount === 1 ? "셀 변경 완료" : `${editedCellCount}개 셀 변경 완료`} · 저장 값 검증됨</strong>
           {editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}
         </div>
-        <details><summary>저장된 값 보기</summary><dl className="row-change-values">
-          {editReport.cells.map(({ column, actual }) => <div key={column}><dt>{column}</dt><dd>{sqliteEditValue(actual)}</dd></div>)}
-        </dl></details>
+        <details><summary>저장된 값 보기</summary>
+          {editReport.rows.map(row => <div key={row.number ?? 0}>
+            {row.number !== undefined && <p className="form-note">편집 당시 {row.number}행</p>}
+            <dl className="row-change-values">
+              {row.cells.map(({ column, actual }) => <div key={column}><dt>{column}</dt><dd>{sqliteEditValue(actual)}</dd></div>)}
+            </dl>
+          </div>)}
+        </details>
       </div>}
       <div className="editor-card">
         <div className="panel-heading">
@@ -1410,6 +1424,12 @@ function App() {
         </div>
         <div className="results-actions">
           {Boolean(result?.rows.length) && <GridSelectionButton selection={rowSelection} disabled={querying} />}
+          {rowSelection.active && rowChangeTable && profile && <button type="button" className="secondary small"
+            disabled={querying || !canEditSelection} onClick={() => {
+              setEditReport(null);
+              setEditRequest({ profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
+                environment: profile.environment, table: rowChangeTable, rows: selectedRowsForEdit });
+            }}>선택한 행 편집</button>}
           {rowChangeTable && <button type="button" ref={rowAddButton} className="secondary small" disabled={querying}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {rowChangeTable && <button type="button" className="secondary small" disabled={querying}
@@ -1498,6 +1518,8 @@ function App() {
           {!!currentRowReport.fields.length && <details><summary>저장된 행 보기</summary><RowChangeFields fields={currentRowReport.fields} /></details>}
         </div>}
         {sqliteGrid.error && <p className="form-note" role="status">{sqliteGrid.error}</p>}
+        {rowSelection.active && rowChangeTable && rowSelection.rows.size > selectedRowsForEdit.length &&
+          <p className="form-note">편집할 행마다 전체 기본 키 값이 필요합니다.</p>}
         {result && rowSelection.active && Boolean(result.rows.length) && <GridCopyControls selection={rowSelection} disabled={querying}
           columns={displayColumns.map(column => column.name)} startRow={result.page * 100 + 1}
           readCell={(row, column) => sqliteCopyCell(result.rows[row][displayColumns[column].index])} />}
@@ -1849,6 +1871,7 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
   "sqlite.row.paste": "SQLite 행 붙여넣기",
   "sqlite.row.update": "SQLite 행 변경",
+  "sqlite.grid.update": "SQLite 여러 행 변경",
   "postgres.row.insert": "PostgreSQL 행 추가", "postgres.row.delete": "PostgreSQL 행 삭제",
   "postgres.row.paste": "PostgreSQL 행 붙여넣기",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",

@@ -6,6 +6,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
+    EditGridChange, EditGridPreview, EditGridResult, EditGridSession,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport, SchemaSyncPreview, SchemaSyncReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
@@ -529,6 +530,38 @@ async fn preview_sqlite_row_edit(store: State<'_, Store>, token: String, changes
 async fn apply_sqlite_row_edit(store: State<'_, Store>, token: String, approval: String, production_confirmation: String) -> Result<EditRowResult, String> {
     let store = store.inner().clone();
     worker(move || store.apply_row_edit(&token, &approval, &production_confirmation)).await
+}
+
+#[tauri::command]
+async fn begin_sqlite_grid_edit(
+    store: State<'_, Store>,
+    profile_id: String,
+    table: String,
+    rows: Vec<Vec<EditKey>>,
+) -> Result<EditGridSession, String> {
+    let store = store.inner().clone();
+    worker(move || store.begin_grid_edit(&profile_id, &table, rows)).await
+}
+
+#[tauri::command]
+async fn preview_sqlite_grid_edit(
+    store: State<'_, Store>,
+    token: String,
+    changes: Vec<EditGridChange>,
+) -> Result<EditGridPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_grid_edit(&token, changes)).await
+}
+
+#[tauri::command]
+async fn apply_sqlite_grid_edit(
+    store: State<'_, Store>,
+    token: String,
+    approval: String,
+    production_confirmation: String,
+) -> Result<EditGridResult, String> {
+    let store = store.inner().clone();
+    worker(move || store.apply_grid_edit(&token, &approval, &production_confirmation)).await
 }
 
 #[tauri::command]
@@ -1656,6 +1689,9 @@ fn main() {
             cancel_cell_edit,
             preview_sqlite_row_edit,
             apply_sqlite_row_edit,
+            begin_sqlite_grid_edit,
+            preview_sqlite_grid_edit,
+            apply_sqlite_grid_edit,
             begin_row_change,
             preview_row_insert,
             apply_row_change,
