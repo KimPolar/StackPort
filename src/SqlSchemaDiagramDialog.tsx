@@ -1,28 +1,31 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeftRight, FileDown, RefreshCw, Search, Table2, X } from "lucide-react";
 import { sqliteNameKey } from "./sqlCompletion";
 import { diagramCard, indexSchemaDiagram, layoutSchemaDiagram, type DiagramRelationship, type DiagramTable } from "./sqlSchemaDiagram";
 import "./schemaDiagram.css";
 
-type DiagramState = { status: "loading" } | { status: "ready"; tables: DiagramTable[] } | { status: "failed"; message: string };
+type DiagramState<T> = { status: "loading" } | { status: "ready"; tables: T[] } | { status: "failed"; message: string };
 type DiagramFilter = "all" | "related" | "isolated" | "issue";
+type IdentifierKey = (name: string) => string;
 const displayName = (name: string) => name || "(빈 이름)";
 const issueLabel = { missing_table: "참조 테이블 없음", missing_columns: "참조 열 확인 필요" };
 const relationsPerPage = 16;
 
-function TableCard({ name, table, selected, x, y, onSelect }: {
+function TableCard({ name, table, selected, x, y, onSelect, identifierKey }: {
   name: string;
   table: DiagramTable | undefined;
   selected?: boolean;
   x: number;
   y: number;
   onSelect: (name: string) => void;
+  identifierKey: IdentifierKey;
 }) {
-  const sourceKeys = new Set(table?.foreign_keys.map(key => sqliteNameKey(key.from_column)));
-  const columns = table?.columns.map(column => ({ ...column, foreign: sourceKeys.has(sqliteNameKey(column.name)) }))
+  const sourceKeys = new Set(table?.foreign_keys.map(key => identifierKey(key.from_column)));
+  const columns = table?.columns.map(column => ({ ...column, foreign: sourceKeys.has(identifierKey(column.name)) }))
     .sort((a, b) => Number(!!b.primary_key_position || b.foreign) - Number(!!a.primary_key_position || a.foreign)) ?? [];
-  const title = <><Table2 size={14} aria-hidden /><strong title={name}>{displayName(name)}</strong></>;
+  const label = displayName(table?.label ?? name);
+  const title = <><Table2 size={14} aria-hidden /><strong title={label}>{label}</strong></>;
   return <article className="erd-table" data-selected={selected || undefined} data-missing={!table || undefined}
     style={{ left: x, top: y, width: diagramCard.width, height: diagramCard.height }}>
     {table ? <button type="button" className="erd-table-name" aria-pressed={Boolean(selected)} onClick={() => onSelect(name)}>
@@ -39,18 +42,21 @@ function TableCard({ name, table, selected, x, y, onSelect }: {
   </article>;
 }
 
-function DiagramCanvas({ selected, relationships, tables, zoom, onSelect }: {
+function DiagramCanvas({ selected, relationships, tables, zoom, onSelect, identifierKey, labelFor }: {
   selected: string;
   relationships: DiagramRelationship[];
   tables: Map<string, DiagramTable>;
   zoom: number;
   onSelect: (name: string) => void;
+  identifierKey: IdentifierKey;
+  labelFor: (name: string) => string;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const centerCard = useRef<HTMLDivElement>(null);
   const moveFocus = useRef(false);
   const arrow = useId();
-  const layout = useMemo(() => layoutSchemaDiagram(selected, relationships), [selected, relationships]);
+  const layout = useMemo(() => layoutSchemaDiagram(selected, relationships, identifierKey, labelFor),
+    [selected, relationships, identifierKey, labelFor]);
   useLayoutEffect(() => {
     const container = viewport.current;
     if (!container) return;
@@ -74,10 +80,11 @@ function DiagramCanvas({ selected, relationships, tables, zoom, onSelect }: {
             data-missing={node.missing || undefined} markerEnd={`url(#${arrow})`} markerStart={node.reverse ? `url(#${arrow})` : undefined} />)}
           {layout.loop && <path className="erd-link" d={layout.loop} markerEnd={`url(#${arrow})`} />}
         </svg>
-        <div ref={centerCard}><TableCard name={selected} table={tables.get(sqliteNameKey(selected))}
-          selected {...layout.center} onSelect={onSelect} /></div>
+        <div ref={centerCard}><TableCard name={selected} table={tables.get(identifierKey(selected))}
+          selected {...layout.center} onSelect={onSelect} identifierKey={identifierKey} /></div>
         {layout.neighbors.map(node => <TableCard key={node.name} {...node}
-          table={tables.get(sqliteNameKey(node.name))} onSelect={name => { moveFocus.current = true; onSelect(name); }} />)}
+          table={tables.get(identifierKey(node.name))} identifierKey={identifierKey}
+          onSelect={name => { moveFocus.current = true; onSelect(name); }} />)}
       </div>
     </div>
   </div>;
@@ -92,36 +99,56 @@ export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, on
   onCompare: () => void;
   onClose: () => void;
 }) {
+  const load = useCallback(() => invoke<DiagramTable[]>("sqlite_schema_diagram", { profileId }), [profileId]);
+  return <SchemaDiagramDialog title="SQLite 관계도" connection={connection} initialTable={initialTable}
+    load={load} onOpen={table => onOpen(table.name)} onExport={onExport} onCompare={onCompare} onClose={onClose} />;
+}
+
+export function SchemaDiagramDialog<T extends DiagramTable>({ title, connection, initialTable, load, onOpen, onExport, onCompare, onClose,
+  identifierKey = sqliteNameKey, scopeNote }: {
+  title: string;
+  connection: string;
+  initialTable: string | null;
+  load: () => Promise<T[]>;
+  onOpen: (table: T) => void;
+  onExport?: (name: string) => void;
+  onCompare?: () => void;
+  onClose: () => void;
+  identifierKey?: IdentifierKey;
+  scopeNote?: string;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   const selectedTableButton = useRef<HTMLButtonElement>(null);
-  const [state, setState] = useState<DiagramState>({ status: "loading" });
+  const [state, setState] = useState<DiagramState<T>>({ status: "loading" });
   const [refresh, setRefresh] = useState(0);
   const [selected, setSelected] = useState(initialTable);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<DiagramFilter>("all");
   const [zoom, setZoom] = useState(1);
   const [relationshipPage, setRelationshipPage] = useState(0);
-  const index = useMemo(() => state.status === "ready" ? indexSchemaDiagram(state.tables) : null, [state]);
+  const index = useMemo(() => state.status === "ready" ? indexSchemaDiagram(state.tables, identifierKey) : null, [state, identifierKey]);
+  const labelFor = useCallback((name: string) => displayName(index?.byName.get(identifierKey(name))?.label ?? name), [index, identifierKey]);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
     let live = true;
-    void invoke<DiagramTable[]>("sqlite_schema_diagram", { profileId }).then(tables => {
+    void load().then(tables => {
       if (live) setState({ status: "ready", tables });
     }).catch(error => {
       if (live) setState({ status: "failed", message: String(error) });
     });
     return () => { live = false; };
-  }, [profileId, refresh]);
+  }, [load, refresh]);
 
   const current = state.status === "ready"
-    ? (selected !== null ? index?.byName.get(sqliteNameKey(selected)) : undefined) ?? state.tables[0]
+    ? (selected !== null ? index?.byName.get(identifierKey(selected)) : undefined) ?? state.tables[0]
     : undefined;
   const relations = current && index ? index.relationships.get(current.name)! : [];
   const pageRelations = useMemo(() => relations.slice(relationshipPage * relationsPerPage,
     (relationshipPage + 1) * relationsPerPage), [relations, relationshipPage]);
   const needle = sqliteNameKey(search.trim());
   const shown = state.status === "ready" ? state.tables.filter(table => {
-    if (!sqliteNameKey(table.name).includes(needle)) return false;
+    if (!sqliteNameKey(table.label ?? table.name).includes(needle)) return false;
     const links = index?.relationships.get(table.name) ?? [];
     if (filter === "related") return links.length > 0;
     if (filter === "isolated") return links.length === 0;
@@ -138,8 +165,8 @@ export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, on
     setRelationshipPage(0);
   }
 
-  return <dialog ref={dialog} className="dialog erd-dialog" aria-labelledby="erd-title" onClose={onClose}>
-    <div className="dialog-heading"><h2 id="erd-title">SQLite 관계도</h2>
+  return <dialog ref={dialog} className="dialog erd-dialog" aria-labelledby={titleId} onClose={onClose}>
+    <div className="dialog-heading"><h2 id={titleId}>{title}</h2>
       <button type="button" className="icon-button" aria-label="관계도 닫기" onClick={() => dialog.current?.close()}><X size={17} aria-hidden /></button>
     </div>
     <div className="erd-context"><span>{connection}</span>
@@ -163,26 +190,27 @@ export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, on
         <p className="form-note" role="status">{shown.length}개 테이블</p>
         <ul>{shown.map(table => <li key={table.name}><button type="button" aria-pressed={table.name === current?.name}
           ref={table.name === current?.name ? selectedTableButton : undefined}
-          title={table.name} onClick={() => selectTable(table.name)}>{displayName(table.name)}</button></li>)}</ul>
+          title={labelFor(table.name)} onClick={() => selectTable(table.name)}>{labelFor(table.name)}</button></li>)}</ul>
       </aside>
       {current && index && <div className="erd-main">
-        <div className="erd-toolbar"><strong title={current.name}>{displayName(current.name)}</strong>
+        <div className="erd-toolbar"><strong title={labelFor(current.name)}>{labelFor(current.name)}</strong>
           <label>확대 <select aria-label="관계도 확대" value={zoom} onChange={event => setZoom(Number(event.target.value))}>
             {[.6, .8, 1, 1.25, 1.5].map(value => <option key={value} value={value}>{value * 100}%</option>)}
           </select></label>
-          <button type="button" className="secondary small" aria-haspopup="dialog" onClick={() => onExport(current.name)}>
+          {onExport && <button type="button" className="secondary small" aria-haspopup="dialog" onClick={() => onExport(current.name)}>
             <FileDown size={14} aria-hidden /> 데이터 사전
-          </button>
-          <button type="button" className="secondary small" aria-haspopup="dialog" onClick={onCompare}>
+          </button>}
+          {onCompare && <button type="button" className="secondary small" aria-haspopup="dialog" onClick={onCompare}>
             <ArrowLeftRight size={14} aria-hidden /> 스키마 비교
-          </button>
+          </button>}
           <button type="button" className="secondary small" onClick={() => {
             dialog.current?.close();
-            onOpen(current.name);
+            onOpen(current);
           }}>테이블 열기</button>
         </div>
-        <DiagramCanvas selected={current.name} relationships={pageRelations} tables={index.byName} zoom={zoom} onSelect={selectTable} />
-        <p className="form-note erd-legend">화살표는 외래 키를 선언한 테이블에서 참조 대상 테이블로 향합니다.</p>
+        <DiagramCanvas selected={current.name} relationships={pageRelations} tables={index.byName} zoom={zoom} onSelect={selectTable}
+          identifierKey={identifierKey} labelFor={labelFor} />
+        <p className="form-note erd-legend">화살표는 외래 키를 선언한 테이블에서 참조 대상 테이블로 향합니다.{scopeNote && ` ${scopeNote}`}</p>
         <section className="erd-relations" aria-label="선택한 테이블의 외래 키">
           <div className="erd-relations-heading">
             <h3>외래 키 {relations.length}개</h3>
@@ -196,7 +224,7 @@ export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, on
           </div>
           {!relations.length && <p className="form-note">선택한 테이블에 연결된 외래 키가 없습니다.</p>}
           {pageRelations.map(link => <details key={JSON.stringify([link.source, link.id])}>
-            <summary><strong>{displayName(link.source)} → {displayName(link.target)}</strong>
+            <summary><strong>{labelFor(link.source)} → {labelFor(link.target)}</strong>
               {link.issue && <span className="erd-issue">{issueLabel[link.issue]}</span>}
             </summary>
             <ul>{link.fields.map((field, index) => <li key={index}>{displayName(field.source)} → {field.target === null ? "기본 키 확인 필요" : displayName(field.target)}</li>)}</ul>

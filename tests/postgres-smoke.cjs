@@ -142,6 +142,11 @@ async function startPostgres(preloadStats = true) {
     'CREATE TABLE report.row_cascade_child (parent integer REFERENCES report.row_cascade(id) ON DELETE CASCADE);',
     'GRANT SELECT, DELETE ON report.row_cascade TO fixture_reader;',
     'CREATE TABLE report.meta_parent (parent_id integer, tenant integer, CONSTRAINT meta_parent_pk PRIMARY KEY (parent_id, tenant));',
+    'ALTER TABLE archive.meta_child ADD COLUMN tenant integer, ADD CONSTRAINT diagram_cross_schema ' +
+      'FOREIGN KEY (archive_only, tenant) REFERENCES report.meta_parent (parent_id, tenant) ON UPDATE CASCADE;',
+    'ALTER TABLE restricted.hidden_object ADD COLUMN hidden_fk integer REFERENCES report.row_guard(id);',
+    'CREATE TABLE report."diagram.Case" ("Key" integer PRIMARY KEY, "key" integer REFERENCES report."diagram.Case" ("Key"));',
+    'GRANT SELECT ON report."diagram.Case" TO fixture_reader;',
     'CREATE TABLE report.meta_child (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer, tenant integer, ' +
       "status text COLLATE \"C\" DEFAULT '대기', normalized text GENERATED ALWAYS AS (lower(status)) STORED, " +
       'CONSTRAINT meta_fk FOREIGN KEY (parent_id, tenant) REFERENCES report.meta_parent (parent_id, tenant) DEFERRABLE INITIALLY DEFERRED);',
@@ -337,6 +342,20 @@ async function verify(browser, fixture, gateway, jump) {
   assert.ok(!schemas.schemas.some(schema => schema.name === 'pg_catalog'));
   const report = schemas.schemas.find(schema => schema.name === 'report');
   const archive = schemas.schemas.find(schema => schema.name === 'archive');
+  const diagramFor = schema => command('postgres_schema_diagram', { id: session.id, schema });
+  await assert.rejects(diagramFor(schemas.schemas.find(schema => schema.name === 'restricted').id), /스키마를 찾을 수/);
+  const diagram = await diagramFor(report.id);
+  const diagramTable = label => diagram.tables.find(table => table.label === label);
+  const keyFields = (source, target) => diagram.foreign_keys
+    .filter(key => key.source === diagramTable(source).id && key.target === diagramTable(target).id)
+    .map(key => [key.sequence, key.from_column, key.to_column, key.on_update]);
+  assert.deepEqual(keyFields('report.meta_child', 'report.meta_parent'), [[0, 'parent_id', 'parent_id', 'NO ACTION'], [1, 'tenant', 'tenant', 'NO ACTION']]);
+  assert.deepEqual(keyFields('archive.meta_child', 'report.meta_parent'), [[0, 'archive_only', 'parent_id', 'CASCADE'], [1, 'tenant', 'tenant', 'CASCADE']]);
+  assert.deepEqual(keyFields('report."diagram.Case"', 'report."diagram.Case"'), [[0, 'key', 'Key', 'NO ACTION']]);
+  assert.deepEqual(diagramTable('report.meta_parent').columns.map(column => [column.name, column.primary_key_position]), [['parent_id', 1], ['tenant', 2]]);
+  assert.equal(diagramTable('restricted.hidden_object'), undefined);
+  assert.equal(diagramTable('report.row_cascade_child'), undefined);
+  assert.equal(diagramTable('report.meta_view'), undefined);
   const searchObjects = (term, options = {}) => command('search_postgres_objects', { id: session.id,
     input: { term, field: 'name', schema: null, kind: null, page: 0, ...options } });
   const hits = async (term, options) => (await searchObjects(term, options)).hits;
@@ -892,6 +911,22 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(await page.getByRole('region', { name: 'PostgreSQL 조회 결과' }).evaluate(element => element === document.activeElement), true);
   await page.getByRole('button', { name: '데이터', exact: true }).click();
   await page.getByText('조회된 행이 없습니다.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '관계도', exact: true }).click();
+  const erd = page.getByRole('dialog', { name: 'PostgreSQL 관계도', exact: true });
+  const canvas = erd.getByRole('region', { name: '관계도 캔버스' });
+  await canvas.getByRole('button', { name: 'report.meta_child', exact: true, pressed: true }).waitFor();
+  await canvas.getByRole('button', { name: 'report.meta_parent', exact: true }).click();
+  await canvas.getByRole('button', { name: 'archive.meta_child', exact: true }).waitFor();
+  const crossSchema = erd.getByText('archive.meta_child → report.meta_parent', { exact: true });
+  await crossSchema.click();
+  await erd.getByText('archive_only → parent_id', { exact: true }).waitFor();
+  await erd.getByLabel('관계도 테이블 검색').fill('archive.meta_child');
+  await erd.getByRole('complementary', { name: '관계도 테이블 목록' })
+    .getByRole('button', { name: 'archive.meta_child', exact: true }).click();
+  await erd.getByRole('button', { name: '테이블 열기', exact: true }).click();
+  await erd.waitFor({ state: 'detached' });
+  await data.getByRole('columnheader', { name: /archive_only/ }).waitFor();
+  await page.getByRole('button', { name: 'report', exact: true }).click();
   await page.getByRole('button', { name: /denied SELECT 권한 없음/ }).waitFor();
   await page.getByRole('button', { name: /quoted table/ }).click();
   await data.getByRole('columnheader', { name: /id.*PK 1/ }).waitFor();

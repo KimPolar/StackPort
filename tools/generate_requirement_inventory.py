@@ -132,11 +132,11 @@ PARTIAL = {
     "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
     "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
-    "SP-MD-002": "SQLite 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
-    "SP-MD-006": "SQLite 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
-    "SP-MD-015": "선택한 SQLite 테이블과 인접 관계 자동 배치, 60~150% 확대·축소",
+    "SP-MD-002": "SQLite·PostgreSQL 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
+    "SP-MD-006": "SQLite·PostgreSQL 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
+    "SP-MD-015": "선택한 SQLite·PostgreSQL 테이블과 인접 관계 자동 배치, 60~150% 확대·축소",
     "SP-MD-016": "SQLite 테이블·뷰 열, 기본값·키·인덱스·트리거·외래 키와 제약을 담은 구조 문서 자동 생성",
-    "SP-MD-019": "SQLite 외래 키를 따라 탐색하고 관계 없는 테이블, 찾을 수 없는 참조 테이블·열과 암시 참조 키 불일치 표시",
+    "SP-MD-019": "SQLite·PostgreSQL 외래 키를 따라 탐색하고 관계 없는 테이블 표시, SQLite의 미확인 참조 표시, PostgreSQL의 다른 스키마 직접 참조와 데이터 그리드 이동",
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
@@ -339,7 +339,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-SQ-023":
                 evidence = "src/main.tsx; src/sqlHistory.ts; src/SqlHistoryDialog.tsx; tests/sql-history.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MD-002", "SP-MD-006", "SP-MD-015", "SP-MD-019"}:
-                evidence = "crates/stackport-core/src/schema_diagram.rs; crates/stackport-core/tests/schema.rs; src/sqlSchemaDiagram.ts; src/SqlSchemaDiagramDialog.tsx; tests/sql-schema-diagram.test.mjs; tests/sql-file-smoke.cjs"
+                evidence = "crates/stackport-core/src/schema_diagram.rs; crates/stackport-core/src/postgres/diagram.rs; crates/stackport-core/tests/schema.rs; src/sqlSchemaDiagram.ts; src/SqlSchemaDiagramDialog.tsx; src/PostgresSchemaDiagramDialog.tsx; tests/sql-schema-diagram.test.mjs; tests/sql-file-smoke.cjs; tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
                 evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/"
             elif requirement_id == "SP-CN-008":

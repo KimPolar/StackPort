@@ -1,4 +1,5 @@
 mod catalog;
+mod diagram;
 mod edit;
 mod export;
 mod grid_layout;
@@ -14,6 +15,7 @@ mod statement_stats;
 mod value;
 
 pub use catalog::{PostgresStructure, PostgresStructureSection};
+pub use diagram::PostgresSchemaDiagram;
 pub use edit::{
     PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
     PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,

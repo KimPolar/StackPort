@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
@@ -6,6 +6,7 @@ import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
+import type { PostgresDiagramTable } from "./PostgresSchemaDiagramDialog";
 import { PostgresServerMonitor } from "./PostgresServerMonitor";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
@@ -52,6 +53,7 @@ type RouteChoice = Pick<Route, "id" | "name">;
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const number = new Intl.NumberFormat("ko-KR");
+const PostgresSchemaDiagramDialog = lazy(async () => ({ default: (await import("./PostgresSchemaDiagramDialog")).PostgresSchemaDiagramDialog }));
 
 function filterBindings(query: TableQueryClauses, types: number[]): PostgresBindings | undefined {
   if (!types.length) return undefined;
@@ -296,6 +298,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [structureOpen, setStructureOpen] = useState(false);
   const [structureStart, setStructureStart] = useState<{ section: PostgresStructureSection; version: number }>({ section: "overview", version: 0 });
   const [structureRevision, setStructureRevision] = useState(0);
+  const [diagram, setDiagram] = useState<{ schema: Schema; initialObject: number | null } | null>(null);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
   const [layoutOpen, setLayoutOpen] = useState(false);
@@ -358,11 +361,13 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     setSchema(next); setSearch(""); setQuery(""); setObjectPage(0); selectObject(null);
   }
 
-  const openResolvedObject = useEffectEvent((hit: Pick<PostgresSearchHit, "id" | "schema_id" | "schema" | "name" | "kind">) => {
+  function openObjectData(hit: PostgresDiagramTable) {
     chooseSchema({ id: hit.schema_id, name: hit.schema, accessible: true });
     selectObject({ id: hit.id, name: hit.name, kind: hit.kind, readable: true });
     requestAnimationFrame(() => dataPanel.current?.focus());
-  });
+  }
+
+  const openResolvedObject = useEffectEvent(openObjectData);
 
   useEffect(() => {
     if (!objectRequest || unavailable) return;
@@ -490,7 +495,10 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <Pager label="스키마" page={schemaPage} next={schemas.data.has_next} change={value => { setSchemaPage(value); chooseSchema(null); }} />
       </>}
       {schema && <>
-        <div className="panel-heading"><strong>{schema.name}의 객체</strong></div>
+        <div className="panel-heading"><strong>{schema.name}의 객체</strong>
+          <button className="secondary small" type="button" aria-haspopup="dialog"
+            onClick={() => setDiagram({ schema, initialObject: object?.id ?? null })}>관계도</button>
+        </div>
         <form className="postgres-search" onSubmit={searchObjects}><input type="search" aria-label="PostgreSQL 객체 검색" value={search} maxLength={256} onChange={event => setSearch(event.target.value)} />
           <button type="submit" className="secondary small">검색</button></form>
         {objects.error && <p className="error-banner" role="alert">{objects.error}</p>}
@@ -549,6 +557,9 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           relation={schema.name + "." + object.name} kind={object.kind} initialSection={structureStart.section}
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />}
       </>}
+      {diagram && !unavailable && <Suspense fallback={null}><PostgresSchemaDiagramDialog id={id} schema={diagram.schema}
+        initialObject={diagram.initialObject} connection={profile.settings.name}
+        onOpen={table => { setDiagram(null); openObjectData(table); }} onClose={() => setDiagram(null)} /></Suspense>}
       <div hidden={structureOpen}>
         {grid.error && <p className="form-note" role="status">{grid.error}</p>}
         {editNotice && <p className="success-banner" role="status">{editNotice}</p>}

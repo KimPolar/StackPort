@@ -3,6 +3,7 @@ import type { ForeignKeyInfo } from "./SqlSchemaDetails";
 
 export type DiagramTable = {
   name: string;
+  label?: string;
   columns: { name: string; declared_type: string; primary_key_position: number }[];
   foreign_keys: ForeignKeyInfo[];
 };
@@ -17,9 +18,9 @@ export type DiagramRelationship = {
   onUpdate: string;
 };
 
-export function indexSchemaDiagram(tables: DiagramTable[]) {
-  const byName = new Map(tables.map(table => [sqliteNameKey(table.name), table]));
-  const columns = new Map(tables.map(table => [table.name, new Map(table.columns.map(column => [sqliteNameKey(column.name), column.name]))]));
+export function indexSchemaDiagram<T extends DiagramTable>(tables: T[], identifierKey = sqliteNameKey) {
+  const byName = new Map(tables.map(table => [identifierKey(table.name), table]));
+  const columns = new Map(tables.map(table => [table.name, new Map(table.columns.map(column => [identifierKey(column.name), column.name]))]));
   const primaryKeys = new Map(tables.map(table => [table.name,
     new Map(table.columns.filter(column => column.primary_key_position > 0)
       .map(column => [column.primary_key_position, column.name]))]));
@@ -33,16 +34,16 @@ export function indexSchemaDiagram(tables: DiagramTable[]) {
     }
     for (const [id, group] of groups) {
       const first = group[0];
-      const target = byName.get(sqliteNameKey(first.target_table));
+      const target = byName.get(identifierKey(first.target_table));
       const targetColumns = target && columns.get(target.name);
       const targetKey = target && primaryKeys.get(target.name);
       let unresolved = false;
       const fields = group.sort((a, b) => a.sequence - b.sequence).map(key => {
         const resolved = key.to_column === null
           ? targetKey?.size === group.length ? targetKey.get(key.sequence + 1) : undefined
-          : targetColumns?.get(sqliteNameKey(key.to_column));
+          : targetColumns?.get(identifierKey(key.to_column));
         unresolved ||= resolved === undefined;
-        return { source: columns.get(table.name)?.get(sqliteNameKey(key.from_column)) ?? key.from_column,
+        return { source: columns.get(table.name)?.get(identifierKey(key.from_column)) ?? key.from_column,
           target: resolved ?? key.to_column };
       });
       const relationship: DiagramRelationship = {
@@ -59,7 +60,8 @@ export function indexSchemaDiagram(tables: DiagramTable[]) {
 
 export const diagramCard = { width: 220, height: 150 };
 
-export function layoutSchemaDiagram(selected: string, relationships: readonly DiagramRelationship[]) {
+export function layoutSchemaDiagram(selected: string, relationships: readonly DiagramRelationship[], identifiers = sqliteNameKey,
+  labelFor = (name: string) => name) {
   const neighbors = new Map<string, { name: string; missing: boolean; incoming: boolean; outgoing: boolean }>();
   let self = false;
   for (const relationship of relationships) {
@@ -69,14 +71,14 @@ export function layoutSchemaDiagram(selected: string, relationships: readonly Di
     }
     const outgoing = relationship.source === selected;
     const name = outgoing ? relationship.target : relationship.source;
-    const key = sqliteNameKey(name);
+    const key = identifiers(name);
     const neighbor = neighbors.get(key) ?? { name, missing: false, incoming: false, outgoing: false };
     neighbor.missing ||= relationship.issue === "missing_table" && outgoing;
     if (outgoing) neighbor.outgoing = true;
     else neighbor.incoming = true;
     neighbors.set(key, neighbor);
   }
-  const sorted = [...neighbors.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = [...neighbors.values()].sort((a, b) => labelFor(a.name).localeCompare(labelFor(b.name)));
   const left = sorted.filter(neighbor => !neighbor.outgoing);
   const right = sorted.filter(neighbor => neighbor.outgoing);
   const margin = 18;

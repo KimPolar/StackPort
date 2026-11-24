@@ -1,6 +1,7 @@
 use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
+    diagram::{self, PostgresSchemaDiagram},
     edit::{
         self, grid as grid_update, row as row_edit, PostgresCellChange, PostgresEditField, PostgresEditInput,
         PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview,
@@ -797,6 +798,25 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "PostgreSQL 객체 구조를 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn schema_diagram(&self, id: &str, schema: i64) -> Result<PostgresSchemaDiagram> {
+        let session = self.session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .start()
+                .await
+                .map_err(pg_error)?;
+            let result = diagram::load(&tx, schema).await?;
+            tx.commit().await.map_err(pg_error)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| "PostgreSQL 관계도를 읽는 시간이 초과되었습니다.")?
     }
 
     pub async fn begin_edit(

@@ -1009,6 +1009,13 @@ async fn postgres_structure(
 }
 
 #[tauri::command]
+async fn postgres_schema_diagram(
+    postgres: State<'_, PostgresManager>, id: String, schema: i64,
+) -> Result<stackport_core::PostgresSchemaDiagram, String> {
+    postgres.schema_diagram(&id, schema).await
+}
+
+#[tauri::command]
 async fn begin_postgres_edit(
     postgres: State<'_, PostgresManager>, id: String, object: i64, stamp: PostgresRowStamp, column: String,
 ) -> Result<PostgresEditSession, String> {
@@ -1833,6 +1840,7 @@ fn main() {
             postgres_value_representation,
             save_postgres_value,
             postgres_structure,
+            postgres_schema_diagram,
             begin_postgres_edit,
             preview_postgres_edit,
             open_postgres_edit_field,
