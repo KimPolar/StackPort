@@ -2,10 +2,16 @@
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { execFileSync } = require('node:child_process');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const projectName = 'Z 재시작 복원 검증';
+const secondProjectName = 'A 재시작 기본 프로젝트';
 const profileName = '복구 SQLite';
+const secondProfileName = '다른 프로젝트 SQLite';
 const draft = "SELECT 'SYNTHETIC_RESUME_PRIVATE_DRAFT'";
+const discardedDraft = "SELECT 'SYNTHETIC_DISCARDED_DRAFT'";
+const savedFile = () => path.join(path.dirname(process.env.STACKPORT_TEST_DATABASE), '복원할 SQL.sql');
 
 function requestClose(pid) {
   if (!/^\d+$/.test(pid)) throw new Error('Set STACKPORT_TEST_WINDOW_PID to the isolated app PID.');
@@ -24,7 +30,7 @@ async function waitForSavedLayout(invoke, verify) {
 }
 
 async function writeLayout(page, invoke) {
-  await invoke('create_project', { name: 'A 재시작 기본 프로젝트' });
+  const secondProject = await invoke('create_project', { name: secondProjectName });
   const project = await invoke('create_project', { name: projectName });
   await invoke('create_sqlite_profile', {
     projectId: project.id, name: profileName, path: process.env.STACKPORT_TEST_DATABASE, environment: 'DEV',
@@ -33,8 +39,15 @@ async function writeLayout(page, invoke) {
     projectId: project.id,
     input: { name: '복구 SSH 정의', host: 'example.test', port: 22, username: 'stackport', environment: 'PROD' },
   });
+  await invoke('create_sqlite_profile', {
+    projectId: secondProject.id, name: secondProfileName, path: process.env.STACKPORT_TEST_DATABASE, environment: 'DEV',
+  });
   await page.reload();
-  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  const projectSelect = page.getByLabel('프로젝트', { exact: true });
+  await projectSelect.selectOption(secondProject.id);
+  await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
+  await page.getByLabel('SQL 쿼리').fill(discardedDraft);
+  await projectSelect.selectOption(project.id);
   await page.getByRole('button', { name: new RegExp(profileName) }).click();
   await page.getByLabel('SQL 쿼리').fill(draft);
   await page.getByRole('button', { name: '화면 분할', exact: true }).click();
@@ -57,13 +70,36 @@ async function writeLayout(page, invoke) {
 
   await rootSeparator.press('ArrowDown');
   await page.getByRole('button', { name: '탐색기 접기', exact: true }).click();
-  const prompt = page.waitForEvent('dialog');
+  const exit = page.getByRole('dialog', { name: '앱 종료', exact: true });
+  const fileDialog = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
+  const toClose = () => requestClose(process.env.STACKPORT_TEST_WINDOW_PID);
+  const pending = exit.getByRole('list', { name: '미저장 SQL 초안' });
+  toClose();
+  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 2개', { exact: true }).waitFor();
+  await exit.getByText(/열린 터미널 1개/).waitFor();
+  await pending.getByText(secondProfileName, { exact: true }).waitFor();
+  await exit.getByRole('button', { name: '계속 작업', exact: true }).click();
+  await exit.waitFor({ state: 'detached' });
+  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
+
+  toClose();
+  await pending.getByRole('button', { name: `${projectName} · ${profileName} SQL 파일로 저장`, exact: true }).click();
+  const occupied = path.join(path.dirname(savedFile()), '기존 파일.sql');
+  fs.writeFileSync(occupied, 'SELECT 1;');
+  const filePath = fileDialog.getByLabel('새 SQL 파일 경로', { exact: true });
+  await filePath.fill(occupied);
+  const save = fileDialog.getByRole('button', { name: '새 파일에 저장', exact: true });
+  await save.click();
+  await fileDialog.getByRole('alert').getByText(/같은 이름의 파일/).waitFor();
+  assert.equal(fs.readFileSync(occupied, 'utf8'), 'SELECT 1;');
+  await filePath.fill(savedFile());
+  await save.click();
+  await fileDialog.waitFor({ state: 'detached' });
+  assert.equal(fs.readFileSync(savedFile(), 'utf8'), draft);
+  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 1개', { exact: true }).waitFor();
+  await pending.getByText(secondProfileName, { exact: true }).waitFor();
   const closed = page.waitForEvent('close');
-  requestClose(process.env.STACKPORT_TEST_WINDOW_PID);
-  const confirmation = await prompt;
-  assert.match(confirmation.message(), /열린 터미널 1개/);
-  assert.match(confirmation.message(), /SQL 초안/);
-  await confirmation.accept();
+  await exit.getByRole('button', { name: '남은 초안 버리고 종료', exact: true }).click();
   await closed;
 }
 
@@ -75,6 +111,7 @@ async function readLayout(page, invoke) {
   assert.equal(record.state.layout.size, 60);
   assert.equal(record.state.explorer_open, false);
   assert.equal(JSON.stringify(record).includes(draft), false);
+  assert.equal(JSON.stringify(record).includes(discardedDraft), false);
   const rootSeparator = page.getByRole('separator', { name: '데이터베이스 · 터미널 창 크기', exact: true });
   assert.equal(await rootSeparator.getAttribute('aria-valuenow'), '60');
   assert.equal(await page.locator('#workspace-panes > .workspace-pane-slot:visible').count(), 4);
@@ -85,6 +122,15 @@ async function readLayout(page, invoke) {
   const project = page.getByLabel('프로젝트', { exact: true });
   assert.equal(await project.evaluate(select => select.selectedOptions[0].textContent), projectName);
   await page.getByRole('button', { name: 'SSH 복구 SSH 정의 연결', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'SQL 파일 열기', exact: true }).click();
+  const fileDialog = page.getByRole('dialog', { name: 'SQL 파일 열기', exact: true });
+  await fileDialog.getByLabel('SQL 파일 경로', { exact: true }).fill(savedFile());
+  await fileDialog.getByRole('button', { name: '편집기에서 열기', exact: true }).click();
+  await fileDialog.waitFor({ state: 'detached' });
+  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
+  await project.selectOption({ label: secondProjectName });
+  await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
+  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), '');
 }
 
 async function main() {

@@ -21,6 +21,7 @@ import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
+import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
 import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
 import {
@@ -106,6 +107,9 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sqlDrafts, setSqlDrafts] = useState<Record<string, SqlDraft>>({});
   const [sqlFileAction, setSqlFileAction] = useState<{ mode: "open" | "save"; draft: SqlDraft } | null>(null);
+  const [exitPrompt, setExitPrompt] = useState(false);
+  const [exitClosing, setExitClosing] = useState(false);
+  const [exitError, setExitError] = useState("");
   const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
@@ -142,6 +146,8 @@ function App() {
   selectedProject.current = projectId;
   const closeApproved = useRef(false);
   const closePending = useRef(false);
+  const exitPromptOpen = useRef(exitPrompt);
+  exitPromptOpen.current = exitPrompt;
   const sftpExitGuard = useRef<(() => void) | null>(null);
   const sqlFileBusy = useRef(false);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
@@ -304,26 +310,43 @@ function App() {
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
   }, []);
 
-  const requestAppClose = useCallback(() => {
+  const finishAppClose = useCallback(() => {
     if (closeApproved.current || closePending.current || sqlFileBusy.current) return;
-    if (sftpExitGuard.current) {
-      sftpExitGuard.current();
-      return;
-    }
-    const notes: string[] = [];
-    if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
-    if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
-    if (Object.values(drafts.current).some(isSqlDraftDirty)) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
-    if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
     closePending.current = true;
+    setExitClosing(true);
+    setExitError("");
     void flushResume().then(() => {
       closeApproved.current = true;
       return getCurrentWindow().destroy();
     }).catch(e => {
       closeApproved.current = false;
-      setError(`창을 닫을 수 없습니다: ${errorText(e)}`);
-    }).finally(() => { closePending.current = false; });
+      const message = `창을 닫을 수 없습니다. ${errorText(e)}`;
+      if (exitPromptOpen.current) setExitError(message);
+      else setError(message);
+    }).finally(() => {
+      closePending.current = false;
+      setExitClosing(false);
+    });
   }, [flushResume]);
+
+  const requestAppClose = useCallback(() => {
+    if (closeApproved.current || closePending.current || sqlFileBusy.current || exitPromptOpen.current) return;
+    if (sftpExitGuard.current) {
+      sftpExitGuard.current();
+      return;
+    }
+    if (Object.values(drafts.current).some(isSqlDraftDirty)) {
+      setSqlFileAction(null);
+      setExitError("");
+      setExitPrompt(true);
+      return;
+    }
+    const notes: string[] = [];
+    if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
+    if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
+    if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
+    finishAppClose();
+  }, [finishAppClose]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -351,7 +374,7 @@ function App() {
       profileId: profile.id, projectId: project.id,
       document: emptySqlDocument, savedText: "", savedPath: "",
     };
-    return { ...draft, targetName: `${project.name} · ${profile.name}` };
+    return { ...draft, projectName: project.name, profileName: profile.name };
   }
 
   function openSqlFileDialog(mode: "open" | "save") {
@@ -850,7 +873,13 @@ function App() {
       void reloadProjects(id).catch(error => setError(errorText(error)));
     }} />}
     {workspaceCopyOpen && <WorkspaceCopyDialog displayPath={displayPath} onClose={() => setWorkspaceCopyOpen(false)} />}
-    {sqlFileAction && <SqlFileDialog mode={sqlFileAction.mode} target={sqlFileAction.draft.targetName} document={sqlFileAction.draft.document}
+    {exitPrompt && <WorkspaceExitDialog drafts={Object.values(sqlDrafts).filter(isSqlDraftDirty).map(draft => ({
+      ...draft, projectName: projects.find(item => item.id === draft.projectId)?.name ?? draft.projectName,
+    }))} terminals={terminalTabCount} rdpClients={rdpClientCount}
+      busy={exitClosing} error={exitError} onClose={() => setExitPrompt(false)}
+      onSave={draft => setSqlFileAction({ mode: "save", draft })} onExit={finishAppClose} />}
+    {sqlFileAction && <SqlFileDialog mode={sqlFileAction.mode} target={`${sqlFileAction.draft.projectName} · ${sqlFileAction.draft.profileName}`}
+      document={sqlFileAction.draft.document}
       replacesDraft={isSqlDraftDirty(sqlFileAction.draft)} onClose={() => setSqlFileAction(null)}
       onBusy={busy => { sqlFileBusy.current = busy; }}
       onDone={(document, path) => finishSqlFile(sqlFileAction.draft, document, path)} />}

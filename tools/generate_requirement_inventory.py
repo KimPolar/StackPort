@@ -19,7 +19,7 @@ PARTIAL = {
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
-    "SP-UI-019": "연결별 SQL 초안을 메모리에 유지하고, 미저장 원격 편집의 닫기 시 확인과 새 로컬 파일 보관 및 저장 중 종료 보호",
+    "SP-UI-019": "앱 닫기 시 프로젝트·연결별 SQL 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
@@ -176,7 +176,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-UI-004":
                 evidence = "src/WorkspaceLayout.ts; src/WorkspaceSplit.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-019":
-                evidence = "src/main.tsx; src/SftpWorkspace.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs"
+                evidence = "src/WorkspaceExitDialog.tsx; src/main.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id == "SP-UI-003":
                 evidence = "src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:

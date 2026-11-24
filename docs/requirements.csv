@@ -17,7 +17,7 @@ SP-UI-015,테마·레이아웃,"라이트/다크/시스템, 크기·아이콘·�
 SP-UI-016,키보드 중심,"키보드 탐색, 명령 검색, 사용자 지정 단축키, 탭 전환, 컨텍스트 메뉴 대체 동작.",partial,"작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-017,도움말,"문맥형 설명, 연결 진단, 프로토콜별 오류 가이드, 키보드 단축키 검색.",not_started,,
 SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자로 특정 프로젝트/세션/쿼리/작업 열기.,not_started,,
-SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,"연결별 SQL 초안을 메모리에 유지하고, 미저장 원격 편집의 닫기 시 확인과 새 로컬 파일 보관 및 저장 중 종료 보호",src/main.tsx; src/SftpWorkspace.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs
+SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,"앱 닫기 시 프로젝트·연결별 SQL 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",src/WorkspaceExitDialog.tsx; src/main.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs
 SP-UI-020,오류 중심 UX,기술 오류 코드와 원인·재시도 조건·안전한 복구 조치를 분리해 제시.,not_started,,
 SP-CN-001,연결 프로필,"프로토콜, 호스트, 포트, 사용자, 별칭, 설명, 색상, 폴더, 자격 증명 참조, 타임아웃을 저장.",partial,프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",partial,SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공,crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/

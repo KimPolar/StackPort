@@ -8,7 +8,8 @@ export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom:
 export type SqlDraft = {
   profileId: string;
   projectId: string;
-  targetName: string;
+  projectName: string;
+  profileName: string;
   document: SqlDocument;
   savedText: string;
   savedPath: string;
