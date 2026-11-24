@@ -87,7 +87,7 @@ PARTIAL = {
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
     "SP-DB-021": "PostgreSQL 스키마 내 테이블·뷰 이름 검색",
-    "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 객체의 열·데이터 미리보기와 조회 SQL 열기",
+    "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite 읽기 전용 연결과 쓰기 차단, PostgreSQL 읽기 전용 연결 및 스키마·SELECT 권한 확인",
@@ -132,9 +132,9 @@ PARTIAL = {
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
-    "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
-    "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
-    "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
+    "SP-MG-002": "SQLite·PostgreSQL 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
+    "SP-MG-005": "SQLite 저장 타입과 PostgreSQL 열 타입·정확한 텍스트·NULL 보존, CSV의 NULL·빈 문자열 구분",
+    "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
     "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
@@ -156,7 +156,7 @@ PARTIAL = {
     "SP-SEC-003": "SFTP 원격 삭제 시 연결·경로·영향과 PROD 확인, SQLite 운영 환경 셀 변경의 미리보기와 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 키 신뢰·교체 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·복원·SQLite 및 PostgreSQL 내보내기·셀 편집, SFTP 파일 작업, SSH 연결 정의와 키 신뢰·교체 이력 기록",
     "SP-SEC-015": "SQLite PROD 단일 셀 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
@@ -353,6 +353,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-SQ-014", "SP-SQ-015", "SP-SQ-016", "SP-AT-011"}:
                 evidence += "; crates/stackport-core/src/postgres/plan.rs; src/PostgresQueryPlan.tsx"
                 if requirement_id != "SP-AT-011":
+                    evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-DB-022", "SP-MG-002", "SP-MG-005", "SP-MG-008", "SP-SEC-011"}:
+                evidence += "; crates/stackport-core/src/postgres/export.rs; src/PostgresResultExport.tsx"
+                if requirement_id != "SP-DB-022":
                     evidence += "; tests/postgres-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

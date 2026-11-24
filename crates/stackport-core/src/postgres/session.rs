@@ -1,6 +1,6 @@
 use super::{
-    sql, sql_range, PostgresProfile, PostgresSqlBindings, PostgresSqlMode, PostgresSqlOutcome,
-    PostgresSqlScope,
+    export::EXPORT_TIMEOUT, sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode,
+    PostgresSqlOutcome,
 };
 use crate::{quote_identifier, Result, SshTunnelManager, Store};
 use native_tls::{Certificate, Protocol, TlsConnector};
@@ -11,7 +11,7 @@ use std::{
     fs::File,
     io::Read,
     net::Ipv4Addr,
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
     time::Duration,
 };
 use tokio::{
@@ -104,6 +104,7 @@ pub struct PostgresPage {
     total_columns: usize,
     has_next: bool,
     primary_key_order: bool,
+    primary_key_columns: Vec<String>,
 }
 
 pub struct PostgresManager {
@@ -113,6 +114,7 @@ pub struct PostgresManager {
 }
 
 struct Session {
+    profile: PostgresProfile,
     client: AsyncMutex<Client>,
     connection: JoinHandle<()>,
     tls: TlsConnector,
@@ -197,6 +199,7 @@ impl PostgresManager {
         drop(config);
         drop(password);
         let session = Arc::new(Session {
+            profile,
             client: AsyncMutex::new(client),
             connection: tokio::spawn(async move {
                 let _ = connection.await;
@@ -223,6 +226,7 @@ impl PostgresManager {
             .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?
             .remove(id)
         {
+            sql::RunningSql::stop_session(&session.running_sql);
             session.connection.abort();
         }
         Ok(())
@@ -302,26 +306,44 @@ impl PostgresManager {
         &self,
         id: &str,
         request: &str,
-        source: &str,
-        scope: PostgresSqlScope,
-        bindings: Option<PostgresSqlBindings>,
-        mode: PostgresSqlMode,
+        input: PostgresSqlInput,
     ) -> Result<PostgresSqlOutcome> {
         let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
-        let span = sql_range::statement(source, scope)?;
+        let PostgresSqlInput {
+            source,
+            scope,
+            mode,
+            bindings,
+            export,
+        } = input;
+        let span = sql_range::statement(&source, scope)?;
         if let Some(values) = &bindings {
             values.validate()?;
         }
+        if export.is_some() && mode != PostgresSqlMode::Query {
+            return Err("PostgreSQL 조회 결과를 내보낼 SQL을 선택하세요.".into());
+        }
         let session = self.session(id)?;
         let (cancel, signal) = watch::channel(false);
-        let _running = sql::RunningSql::register(&session.running_sql, request, cancel)?;
+        let progress = export.as_ref().map(|_| Arc::new(AtomicU64::new(0)));
+        let running =
+            sql::RunningSql::register(&session.running_sql, request, cancel, progress.clone())?;
+        let deadline = if export.is_some() {
+            EXPORT_TIMEOUT
+        } else {
+            QUERY_TIMEOUT
+        };
         let operation = async {
             let mut client = session.client.lock().await;
             let query = sql::Request {
-                source,
+                source: &source,
                 span,
                 bindings: bindings.as_ref(),
                 mode,
+                export: export
+                    .as_ref()
+                    .zip(progress)
+                    .map(|(options, progress)| sql::ExportRequest { options, progress }),
             };
             let (outcome, reusable) =
                 sql::query(&mut client, query, signal, session.tls.clone()).await;
@@ -330,12 +352,22 @@ impl PostgresManager {
             }
             outcome
         };
-        match timeout(QUERY_TIMEOUT, operation).await {
-            Ok(outcome) => Ok(outcome),
+        match timeout(deadline, operation).await {
+            Ok(outcome) => Ok(outcome
+                .publish(&running, &self.store, &session.profile, request)
+                .await),
             Err(_) => {
                 session.connection.abort();
                 Ok(PostgresSqlOutcome::interrupted(true, false, true))
             }
+        }
+    }
+
+    pub fn export_progress(&self, id: &str, request: &str) -> Result<Option<u64>> {
+        let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
+        match self.session(id) {
+            Ok(session) => sql::RunningSql::export_progress(&session.running_sql, request),
+            Err(_) => Ok(None),
         }
     }
 
@@ -418,8 +450,20 @@ async fn browse(
         })
         .collect::<Result<_>>()?;
     let total_columns = all_columns.len();
-    let order = primary_key_order(&all_columns);
-    let primary_key_order = !order.is_empty();
+    let primary_key_columns = primary_key_columns(&all_columns);
+    let primary_key_order = !primary_key_columns.is_empty();
+    let order = if primary_key_order {
+        format!(
+            " ORDER BY {}",
+            primary_key_columns
+                .iter()
+                .map(|name| quote_identifier(name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    } else {
+        String::new()
+    };
     let start = usize::try_from(offset(column_page, COLUMN_SIZE)).unwrap_or(usize::MAX);
     if start >= total_columns && column_page != 0 {
         return Err("열 페이지를 다시 선택하세요.".into());
@@ -465,6 +509,7 @@ async fn browse(
         total_columns,
         has_next,
         primary_key_order,
+        primary_key_columns,
     })
 }
 
@@ -490,25 +535,16 @@ pub(super) fn preview_rows(result: &[Row], columns: usize) -> Result<Vec<Vec<Cel
         .collect()
 }
 
-fn primary_key_order(columns: &[Column]) -> String {
+fn primary_key_columns(columns: &[Column]) -> Vec<String> {
     let mut keys: Vec<_> = columns
         .iter()
         .filter_map(|c| {
             c.primary_key_position
-                .map(|position| (position, quote_identifier(&c.name)))
+                .map(|position| (position, c.name.clone()))
         })
         .collect();
     keys.sort_unstable_by_key(|(position, _)| *position);
-    if keys.is_empty() {
-        return String::new();
-    }
-    format!(
-        " ORDER BY {}",
-        keys.into_iter()
-            .map(|(_, name)| name)
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
+    keys.into_iter().map(|(_, name)| name).collect()
 }
 
 fn kind(code: &str) -> Result<&'static str> {

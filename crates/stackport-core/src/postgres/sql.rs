@@ -1,13 +1,23 @@
+use super::export::{self, PostgresExportOptions, StreamError};
 use super::parameters::{metadata, Parameter, PostgresSqlBindings, Value, MAX_PARAMETERS};
 use super::plan::{self, Plan};
 use super::session::{preview_rows, Cell, COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH};
-use crate::Result;
+use super::{PostgresProfile, PostgresSqlScope};
+use crate::{
+    insert_audit,
+    result_export::{ExportReport, ReadyExport},
+    AuditRecord, Result, Store,
+};
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use std::{
+    future::Future,
     ops::Range,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tokio::{sync::watch, time::timeout};
@@ -25,6 +35,14 @@ pub enum PostgresSqlMode {
     Query,
     Estimate,
     Analyze,
+}
+
+pub struct PostgresSqlInput {
+    pub source: String,
+    pub scope: PostgresSqlScope,
+    pub mode: PostgresSqlMode,
+    pub bindings: Option<PostgresSqlBindings>,
+    pub export: Option<PostgresExportOptions>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +64,14 @@ enum Outcome {
     },
     Plan {
         plan: Plan,
+    },
+    Exported {
+        report: ExportReport,
+    },
+    #[serde(skip)]
+    ReadyToExport {
+        file: ReadyExport,
+        rows: u64,
     },
     Failed {
         error: String,
@@ -81,14 +107,81 @@ impl PostgresSqlOutcome {
             connection_closed,
         }
     }
+
+    pub(super) async fn publish(
+        mut self,
+        guard: &RunningSqlGuard<'_>,
+        store: &Store,
+        profile: &PostgresProfile,
+        request: Uuid,
+    ) -> Self {
+        if let Outcome::ReadyToExport { file, rows } = self.state {
+            self.state = if self.connection_closed {
+                message("PostgreSQL 세션을 정리하지 못해 파일 저장을 완료할 수 없습니다.")
+            } else if !guard.begin_publication() {
+                cancelled(false)
+            } else {
+                let store = store.clone();
+                let profile = profile.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut report = file.publish(rows)?;
+                    let request = request.to_string();
+                    let audit = AuditRecord {
+                        correlation_id: &request,
+                        operation: if report.format == "CSV" {
+                            "postgres.export.csv"
+                        } else {
+                            "postgres.export.json"
+                        },
+                        project_id: Some(&profile.project_id),
+                        profile_id: Some(&profile.id),
+                        environment: Some(&profile.settings.environment),
+                        object_name: None,
+                        outcome: "succeeded",
+                        affected_count: i64::try_from(rows).ok(),
+                    };
+                    if store
+                        .connect()
+                        .and_then(|db| insert_audit(&db, audit))
+                        .is_err()
+                    {
+                        report.audit_warning =
+                            Some("파일은 저장됐지만 작업 기록을 저장할 수 없습니다.".into());
+                    }
+                    Ok::<_, String>(report)
+                })
+                .await;
+                match result {
+                    Ok(Ok(report)) => Outcome::Exported { report },
+                    Ok(Err(error)) => message(&error),
+                    Err(_) => message("PostgreSQL 내보내기 파일을 저장할 수 없습니다."),
+                }
+            };
+        }
+        self
+    }
 }
 
 pub(super) struct RunningSql {
     request: Uuid,
     cancel: watch::Sender<bool>,
+    progress: Option<Arc<AtomicU64>>,
+    publishing: bool,
 }
 
 pub(super) struct RunningSqlGuard<'a>(&'a Mutex<Option<RunningSql>>);
+
+impl RunningSqlGuard<'_> {
+    fn begin_publication(&self) -> bool {
+        if let Ok(mut running) = self.0.lock() {
+            if let Some(run) = running.as_mut().filter(|run| !*run.cancel.borrow()) {
+                run.publishing = true;
+                return true;
+            }
+        }
+        false
+    }
+}
 
 impl Drop for RunningSqlGuard<'_> {
     fn drop(&mut self) {
@@ -103,6 +196,7 @@ impl RunningSql {
         slot: &Mutex<Option<Self>>,
         request: Uuid,
         cancel: watch::Sender<bool>,
+        progress: Option<Arc<AtomicU64>>,
     ) -> Result<RunningSqlGuard<'_>> {
         let mut running = slot
             .lock()
@@ -110,7 +204,12 @@ impl RunningSql {
         if running.is_some() {
             return Err("이 연결에서 PostgreSQL 쿼리가 실행 중입니다.".into());
         }
-        *running = Some(Self { request, cancel });
+        *running = Some(Self {
+            request,
+            cancel,
+            progress,
+            publishing: false,
+        });
         Ok(RunningSqlGuard(slot))
     }
 
@@ -120,8 +219,30 @@ impl RunningSql {
             .map_err(|_| "SQL 실행 상태를 읽을 수 없습니다.")?;
         Ok(running
             .as_ref()
+            .filter(|run| run.request == request && !run.publishing)
+            .is_some_and(|run| !run.cancel.send_replace(true)))
+    }
+
+    pub(super) fn export_progress(
+        slot: &Mutex<Option<Self>>,
+        request: Uuid,
+    ) -> Result<Option<u64>> {
+        let running = slot
+            .lock()
+            .map_err(|_| "내보내기 진행률을 읽을 수 없습니다.")?;
+        Ok(running
+            .as_ref()
             .filter(|run| run.request == request)
-            .is_some_and(|run| run.cancel.send(true).is_ok()))
+            .and_then(|run| run.progress.as_ref())
+            .map(|progress| progress.load(Ordering::Relaxed)))
+    }
+
+    pub(super) fn stop_session(slot: &Mutex<Option<Self>>) {
+        if let Ok(running) = slot.lock() {
+            if let Some(run) = running.as_ref().filter(|run| !run.publishing) {
+                run.cancel.send_replace(true);
+            }
+        }
     }
 }
 
@@ -143,6 +264,21 @@ pub(super) async fn query(
             return (outcome, true);
         }
     };
+    if request.export.is_some() {
+        if let Err(error) = tx
+            .batch_execute("SET LOCAL statement_timeout = '300s'")
+            .await
+        {
+            let reusable = tx.rollback().await.is_ok();
+            return (
+                PostgresSqlOutcome {
+                    state: failed(error, None),
+                    connection_closed: !reusable,
+                },
+                reusable,
+            );
+        }
+    }
     let (state, sent_cancel, executed) =
         preview(&tx, request, &mut signal, cancel, tls, started).await;
     // Roll back even after a successful SELECT. Session-level effects such as
@@ -172,6 +308,12 @@ pub(super) struct Request<'a> {
     pub span: Range<usize>,
     pub bindings: Option<&'a PostgresSqlBindings>,
     pub mode: PostgresSqlMode,
+    pub export: Option<ExportRequest<'a>>,
+}
+
+pub(super) struct ExportRequest<'a> {
+    pub options: &'a PostgresExportOptions,
+    pub progress: Arc<AtomicU64>,
 }
 
 async fn preview(
@@ -190,6 +332,7 @@ async fn preview(
         span,
         bindings,
         mode,
+        export,
     } = request;
     let sql = &source[span.clone()];
     // The server parses the original single statement before it can be embedded
@@ -204,7 +347,7 @@ async fn preview(
             )
         }
     };
-    if mode == PostgresSqlMode::Query && described.columns().is_empty() {
+    if mode == PostgresSqlMode::Query && export.is_none() && described.columns().is_empty() {
         return (
             message("PostgreSQL 읽기 전용 조회 문장을 입력하세요."),
             false,
@@ -231,8 +374,10 @@ async fn preview(
         .collect();
     // Parse as a subquery before allowing EXPLAIN of the original statement.
     // This rejects utility statements and data-modifying CTEs for either mode.
-    let read_sql = if mode == PostgresSqlMode::Query {
-        bounded_preview(sql, columns.len())
+    let read_sql = if export.is_some() {
+        text_projection(sql, total_columns, false)
+    } else if mode == PostgresSqlMode::Query {
+        text_projection(sql, columns.len(), true)
     } else {
         format!("SELECT 1 FROM (\n{sql}\n) AS stackport_source LIMIT 0")
     };
@@ -283,8 +428,55 @@ async fn preview(
             false,
         );
     }
+    if let Some(export) = export {
+        let writer = match export::Writer::open(
+            export.options,
+            export::columns(&described),
+            export.progress,
+        )
+        .await
+        {
+            Ok(writer) => writer,
+            Err(error) => return (message(&error), false, false),
+        };
+        if *signal.borrow() {
+            let _ = writer.finish(false).await;
+            return (cancelled(false), false, false);
+        }
+        let (result, sent_cancel) = await_query(
+            writer.stream(tx, &statement, values, signal.clone()),
+            signal,
+            cancel,
+            tls,
+        )
+        .await;
+        let ready = writer
+            .finish(matches!(result, Ok(true)) && !*signal.borrow())
+            .await;
+        let state = match result {
+            Ok(_) => match ready {
+                Ok(Some((file, rows))) => Outcome::ReadyToExport { file, rows },
+                Ok(None) => cancelled(false),
+                Err(error) => message(&error),
+            },
+            Err(StreamError::WriterClosed) => {
+                let error = ready
+                    .err()
+                    .unwrap_or_else(|| "PostgreSQL 내보내기 파일을 기록할 수 없습니다.".into());
+                return (message(&error), true, true);
+            }
+            Err(StreamError::Query(error) | StreamError::Bind(error))
+                if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") =>
+            {
+                cancelled(true)
+            }
+            Err(StreamError::Bind(error)) => binding_failed(error, types),
+            Err(StreamError::Query(error)) => failed(error, None),
+        };
+        return (state, sent_cancel, true);
+    }
     let cancellation = signal.clone();
-    let mut running = std::pin::pin!(async {
+    let running = async {
         if values.is_empty() {
             return tx
                 .query(&statement, &[])
@@ -303,51 +495,87 @@ async fn preview(
             .await
             .map(Some)
             .map_err(|error| (error, false))
-    });
-    let (result, sent_cancel) = tokio::select! {
+    };
+    let (result, sent_cancel) = await_query(running, signal, cancel, tls).await;
+    let state = match result {
+        Ok(Some(rows)) if mode == PostgresSqlMode::Query => {
+            completed(rows, columns, total_columns, started)
+        }
+        Ok(Some(rows)) => match plan::read(&rows, mode == PostgresSqlMode::Analyze) {
+            Ok(plan) => Outcome::Plan { plan },
+            Err(error) => Outcome::Failed {
+                error,
+                position: None,
+            },
+        },
+        Ok(None) => cancelled(false),
+        Err((error, _))
+            if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") =>
+        {
+            cancelled(true)
+        }
+        Err((error, true)) => binding_failed(error, types),
+        Err((error, _)) => failed(error, None),
+    };
+    (state, sent_cancel, true)
+}
+
+async fn await_query<F: Future>(
+    running: F,
+    signal: &mut watch::Receiver<bool>,
+    cancel: CancelToken,
+    tls: TlsConnector,
+) -> (F::Output, bool) {
+    let mut running = std::pin::pin!(running);
+    tokio::select! {
         biased;
         result = &mut running => (result, false),
         _ = signal.changed() => {
             let _ = timeout(CANCEL_TIMEOUT, cancel.cancel_query(MakeTlsConnector::new(tls))).await;
             (running.await, true)
         }
-    };
-    let state = match result {
-        Ok(Some(rows)) if mode == PostgresSqlMode::Query => completed(rows, columns, total_columns, started),
-        Ok(Some(rows)) => match plan::read(&rows, mode == PostgresSqlMode::Analyze) {
-            Ok(plan) => Outcome::Plan { plan },
-            Err(error) => Outcome::Failed { error, position: None },
-        },
-        Ok(None) => cancelled(false),
-        Err((error, _)) if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") => {
-            cancelled(true)
-        }
-        Err((error, true)) if error.code().is_some_and(|code| code.code().starts_with("22") || code.code().starts_with("23")) => {
-            parameters_required(types, error.code().map(|code| format!(
-                "PostgreSQL이 매개변수 값을 받는 단계에서 오류를 반환했습니다. 표시된 타입과 값을 확인하세요. (SQLSTATE {})", code.code()
-            )))
-        }
-        Err((error, _)) => failed(error, None),
-    };
-    (state, sent_cancel, true)
+    }
 }
 
-fn bounded_preview(sql: &str, columns: usize) -> String {
+fn binding_failed(error: Error, types: &[Type]) -> Outcome {
+    if let Some(code) = error
+        .code()
+        .map(|code| code.code())
+        .filter(|code| code.starts_with("22") || code.starts_with("23"))
+    {
+        parameters_required(types, Some(format!(
+            "PostgreSQL이 매개변수 값을 받는 단계에서 오류를 반환했습니다. 표시된 타입과 값을 확인하세요. (SQLSTATE {code})"
+        )))
+    } else {
+        failed(error, None)
+    }
+}
+
+fn text_projection(sql: &str, columns: usize, preview: bool) -> String {
+    if columns == 0 {
+        return format!("SELECT NULL::pg_catalog.text FROM (\n{sql}\n) AS stackport_result");
+    }
     let aliases: Vec<_> = (0..columns).map(|column| format!("c{column}")).collect();
     let projection = aliases
         .iter()
         .map(|alias| {
-            format!(
-                "pg_catalog.left(stackport_result.{alias}::pg_catalog.text, {})",
-                VALUE_LENGTH + 1
-            )
+            let field = format!("stackport_result.{alias}::pg_catalog.text");
+            if preview {
+                format!("pg_catalog.left({field}, {})", VALUE_LENGTH + 1)
+            } else {
+                field
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
+    let limit = if preview {
+        format!(" LIMIT {}", ROW_SIZE + 1)
+    } else {
+        String::new()
+    };
     format!(
-        "SELECT {projection} FROM (\n{sql}\n) AS stackport_result({}) LIMIT {}",
-        aliases.join(", "),
-        ROW_SIZE + 1
+        "SELECT {projection} FROM (\n{sql}\n) AS stackport_result({}){limit}",
+        aliases.join(", ")
     )
 }
 
@@ -445,4 +673,28 @@ fn failed(error: Error, submitted: Option<(&str, &str)>) -> Outcome {
         |code| format!("{description} (SQLSTATE {code})"),
     );
     Outcome::Failed { error, position }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_publication_and_cancellation_have_a_single_winner() {
+        let slot = Mutex::default();
+        let request = Uuid::new_v4();
+        let (cancel, signal) = watch::channel(false);
+        let guard = RunningSql::register(&slot, request, cancel, None).unwrap();
+        drop(signal);
+        assert!(RunningSql::cancel(&slot, request).unwrap());
+        assert!(!guard.begin_publication());
+        drop(guard);
+
+        let (cancel, signal) = watch::channel(false);
+        let guard = RunningSql::register(&slot, request, cancel, None).unwrap();
+        assert!(guard.begin_publication());
+        assert!(!RunningSql::cancel(&slot, request).unwrap());
+        RunningSql::stop_session(&slot);
+        assert!(!*signal.borrow());
+    }
 }

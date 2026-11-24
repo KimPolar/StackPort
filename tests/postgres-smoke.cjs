@@ -174,8 +174,8 @@ async function verify(browser, fixture, gateway) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
-  const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null, mode = undefined) =>
-    command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings, mode });
+  const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null, mode = undefined, file = undefined) =>
+    command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings, mode, export: file });
   const explain = (sql, mode, bindings = null) => query(sql, undefined, undefined, bindings, mode);
   const textValue = value => ({ kind: 'text', value });
   const content = await query("/* outer /* nested ; */ end */ SELECT $tag$한;글$tag$ AS duplicate, 9007199254740993.123::numeric AS duplicate, NULL::text; -- tail");
@@ -284,6 +284,93 @@ async function verify(browser, fixture, gateway) {
   const withLimits = await query('SELECT ' + Array.from({ length: 33 }, (_, index) => '$' + (index + 1) + '::int').join(', '));
   assert.match(withLimits.error, /32개/);
 
+  const outputDirectory = fs.mkdtempSync(path.join(root, 'export-fixtures-'));
+  const options = (name, format) => ({ destination: path.join(outputDirectory, name + '.' + format),
+    format, include_header: true, spreadsheet_safe: true });
+  const save = (sql, file, token, values = null) => query(sql, undefined, token, values, undefined, file);
+  const wide = options('wide', 'json');
+  const wideReport = await save('SELECT * FROM report."quoted table" ORDER BY id', wide);
+  assert.equal(wideReport.status, 'exported', JSON.stringify(wideReport));
+  assert.equal(wideReport.report.rows, 105);
+  const wideData = JSON.parse(fs.readFileSync(wide.destination, 'utf8'));
+  assert.equal(wideData.format, 'stackport.postgres-results');
+  assert.equal(wideData.version, 1);
+  assert.equal(wideData.rows.length, 105);
+  assert.equal(wideData.columns.length, 26);
+  assert.deepEqual(wideData.columns[2], { name: 'precise', data_type: 'numeric' });
+  assert.deepEqual(wideData.rows[0].slice(0, 3), ['1', null, '9007199254740993.123']);
+  assert.equal(wideData.rows[1][1], '한'.repeat(513));
+  assert.equal(wideData.rows[2][1], '');
+  assert.equal(wideData.rows[104][25], '마지막 열');
+  const exists = await save('SELECT 1', wide);
+  assert.equal(exists.status, 'failed');
+  assert.match(exists.error, /이미 있습니다/);
+  assert.equal(JSON.parse(fs.readFileSync(wide.destination, 'utf8')).rows.length, 105);
+
+  const csv = options('spreadsheet', 'csv');
+  const csvReport = await save("SELECT -123::numeric AS number, '=1+1'::text AS text, ''::text AS empty, NULL::text AS missing, '\\N'::text AS token", csv);
+  assert.equal(csvReport.status, 'exported', JSON.stringify(csvReport));
+  assert.equal(csvReport.report.protected_fields, 1);
+  assert.equal(fs.readFileSync(csv.destination, 'utf8'),
+    "\"number\",\"text\",\"empty\",\"missing\",\"token\"\r\n-123,\"'=1+1\",\"\",\\N,\"\\N\"\r\n");
+  const boundFile = options('bindings', 'json');
+  const duplicateSql = 'SELECT $1::numeric AS val, $2::text AS val';
+  const needs = await save(duplicateSql, boundFile);
+  assert.equal(needs.status, 'parameters_required');
+  assert.equal(fs.existsSync(boundFile.destination), false);
+  const boundExport = await save(duplicateSql, boundFile, undefined, {
+    types: needs.parameters.map(parameter => parameter.oid), values: [textValue('9007199254740993.123000'), textValue(literal)],
+  });
+  assert.equal(boundExport.status, 'exported', JSON.stringify(boundExport));
+  const duplicateData = JSON.parse(fs.readFileSync(boundFile.destination, 'utf8'));
+  assert.deepEqual(duplicateData.columns.map(column => column.name), ['val', 'val']);
+  assert.deepEqual(duplicateData.rows, [['9007199254740993.123000', literal]]);
+  const empty = options('empty', 'json');
+  const emptyReport = await save('SELECT 1 AS id WHERE false', empty);
+  assert.equal(emptyReport.status, 'exported');
+  assert.deepEqual(JSON.parse(fs.readFileSync(empty.destination, 'utf8')).rows, []);
+  const writeFile = options('write-blocked', 'csv');
+  const refusedExport = await save('INSERT INTO report.write_probe VALUES (10) RETURNING id', writeFile);
+  assert.equal(refusedExport.status, 'failed');
+  assert.match(refusedExport.error, /읽기 전용/);
+  assert.equal(fs.existsSync(writeFile.destination), false);
+  const faultFile = options('runtime-error', 'csv');
+  const fault = await save("SELECT i, repeat('a', 2048), CASE WHEN i < 100 THEN i ELSE 1/(i-i) END FROM generate_series(1,200) AS g(i)", faultFile);
+  assert.equal(fault.status, 'failed');
+  assert.match(fault.error, /22012/);
+  assert.equal(fs.existsSync(faultFile.destination), false);
+  async function waitForWritten(token) {
+    const limit = Date.now() + 7_000;
+    while (Date.now() < limit) {
+      const rows = await command('postgres_export_progress', { id: session.id, request: token });
+      if (rows > 0) return;
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+    throw new Error('The PostgreSQL export did not report written rows.');
+  }
+  const slowFile = options('cancelled', 'csv');
+  const exportRequest = randomUUID();
+  const exporting = save("SELECT i, repeat('a', 2048), pg_sleep(0.01) FROM generate_series(1,1000) AS g(i)", slowFile, exportRequest);
+  await waitForWritten(exportRequest);
+  assert.equal(await command('cancel_postgres_sql', { id: session.id, request: exportRequest }), true);
+  const cancelledExport = await exporting;
+  assert.equal(cancelledExport.status, 'interrupted', JSON.stringify(cancelledExport));
+  assert.equal(cancelledExport.timed_out, false);
+  assert.equal(fs.existsSync(slowFile.destination), false);
+  const rival = options('race', 'csv');
+  const rivalRequest = randomUUID();
+  const publishing = save("SELECT i, repeat('a', 2048), pg_sleep(0.01) FROM generate_series(1,100) AS g(i)", rival, rivalRequest);
+  await waitForWritten(rivalRequest);
+  fs.writeFileSync(rival.destination, 'another application', { flag: 'wx' });
+  const collision = await publishing;
+  assert.equal(collision.status, 'failed', JSON.stringify(collision));
+  assert.equal(fs.readFileSync(rival.destination, 'utf8'), 'another application');
+  assert.ok(!fs.readdirSync(outputDirectory).some(name => name.startsWith('.stackport-')));
+  const audit = await command('list_audit_events', { before: null });
+  assert.ok(audit.events.some(event => event.operation === 'postgres.export.json' && event.profile_id === profile.id &&
+    event.outcome === 'succeeded' && event.affected_count === 105));
+  assert.ok(!JSON.stringify(audit).includes(boundFile.destination) && !JSON.stringify(audit).includes('9007199254740993'));
+
   const latinProfile = await alternate('Latin-1 database', { database: 'fixture_latin' });
   const latin = await open(latinProfile);
   try {
@@ -339,6 +426,16 @@ async function verify(browser, fixture, gateway) {
   assert.equal(await data.getByRole('row').count(), 6);
   await page.getByRole('button', { name: '다음 열 페이지' }).click();
   await data.getByText('마지막 열', { exact: true }).first().waitFor();
+  const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  const tableExport = path.join(root, 'postgres-table.csv');
+  await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await exportDialog.getByLabel('새 CSV 파일 경로', { exact: true }).fill(tableExport);
+  await exportDialog.getByRole('button', { name: 'CSV 저장', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+  await page.getByText('CSV 저장 완료 · 105행', { exact: true }).waitFor();
+  const exportedTable = fs.readFileSync(tableExport, 'utf8');
+  assert.match(exportedTable, /"extra_23"\r\n1,\\N,9007199254740993\.123,/);
+  assert.match(exportedTable, /\r\n105,"행 105",/);
   await page.getByLabel('PostgreSQL 객체 검색').fill('visible');
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await page.getByRole('button', { name: /visible 뷰/ }).click();
@@ -406,6 +503,17 @@ async function verify(browser, fixture, gateway) {
   await parameters.waitFor();
   assert.equal(await parameters.getByLabel('$1 값', { exact: true }).inputValue(), '');
   await parameters.getByRole('button', { name: '취소', exact: true }).click();
+  await sql.fill("SELECT 'draft replacement'");
+  const editorExport = path.join(root, 'postgres-editor.json');
+  await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(editorExport);
+  await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await parameters.getByLabel('$1 값', { exact: true }).fill('42.0');
+  await parameters.getByLabel('$2 형식', { exact: true }).selectOption('null');
+  await submitValues();
+  await exportDialog.waitFor({ state: 'detached' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(editorExport, 'utf8')).rows, [['42.0', '기본값']]);
   const plan = page.getByRole('region', { name: 'PostgreSQL 실행 계획', exact: true });
   const analyze = page.getByRole('button', { name: '실행 분석', exact: true });
   const analyzeDialog = page.getByRole('dialog', { name: 'PostgreSQL 실행 분석', exact: true });
@@ -473,6 +581,14 @@ async function verify(browser, fixture, gateway) {
     await sql.fill('SELECT 123');
     await sql.press('Control+Enter');
     await results.getByText('123', { exact: true }).waitFor();
+    const tunnelExport = path.join(root, 'postgres-tunnel.json');
+    await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+    await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+    await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(tunnelExport);
+    await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+    await exportDialog.waitFor({ state: 'detached' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(tunnelExport, 'utf8')).rows, [['123']]);
+    assert.equal(gateway.forwarded(), 2);
     await disconnect();
   } finally { await command('stop_ssh_tunnel', { id: tunnel.id }); }
   await assert.rejects(open(profile, password, 'PROD', tunnel.id), /실행 중인 로컬 SSH 터널/);
@@ -487,7 +603,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (TLS, SSH forwarding, read-only SQL, typed bindings, execution plans, cancellation and file tabs).');
+    console.log('Windows PostgreSQL E2E passed (TLS, full CSV/JSON exports, typed bindings, cancellation, file collisions and SSH forwarding).');
   } finally {
     await browser?.close();
     gateway?.close();

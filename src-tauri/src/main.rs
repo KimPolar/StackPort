@@ -14,7 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
-    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope,
+    LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -827,8 +827,14 @@ async fn execute_postgres_sql(
     postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
     bindings: Option<PostgresSqlBindings>,
     mode: Option<PostgresSqlMode>,
+    export: Option<PostgresExportOptions>,
 ) -> Result<PostgresSqlOutcome, String> {
-    postgres.execute_sql(&id, &request, &source, scope, bindings, mode.unwrap_or_default()).await
+    postgres.execute_sql(&id, &request, PostgresSqlInput { source, scope, bindings, mode: mode.unwrap_or_default(), export }).await
+}
+
+#[tauri::command]
+fn postgres_export_progress(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<Option<u64>, String> {
+    postgres.export_progress(&id, &request)
 }
 
 #[tauri::command]
@@ -1479,6 +1485,7 @@ fn main() {
             postgres_objects,
             postgres_page,
             execute_postgres_sql,
+            postgres_export_progress,
             cancel_postgres_sql,
             create_ssh_tunnel,
             update_ssh_tunnel,

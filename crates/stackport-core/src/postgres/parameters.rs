@@ -45,7 +45,7 @@ pub(super) fn metadata(types: &[Type]) -> Vec<Parameter> {
         .collect()
 }
 
-fn type_label(ty: &Type) -> String {
+pub(super) fn type_label(ty: &Type) -> String {
     if let Kind::Array(element) = ty.kind() {
         return format!("{}[]", type_label(element));
     }

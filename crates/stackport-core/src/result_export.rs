@@ -81,6 +81,30 @@ impl ExportFile {
         format: ExportFormat,
         columns: &[String],
     ) -> Result<Self> {
+        let mut output = Self::open(destination, format)?;
+        output.write_header(
+            "stackport.sqlite-results",
+            columns,
+            columns.iter().map(String::as_str),
+        )?;
+        Ok(output)
+    }
+
+    pub(crate) fn create_postgres(
+        destination: &str,
+        format: ExportFormat,
+        columns: &[PostgresExportColumn],
+    ) -> Result<Self> {
+        let mut output = Self::open(destination, format)?;
+        output.write_header(
+            "stackport.postgres-results",
+            columns,
+            columns.iter().map(|column| column.name.as_str()),
+        )?;
+        Ok(output)
+    }
+
+    fn open(destination: &str, format: ExportFormat) -> Result<Self> {
         let label = format.label();
         let target = Path::new(destination.trim());
         let name = target
@@ -118,27 +142,38 @@ impl ExportFile {
             .prefix(&prefix)
             .tempfile_in(folder)
             .map_err(|error| format!("{label} 임시 파일을 만들 수 없습니다: {error}"))?;
-        let mut output = Self {
+        Ok(Self {
             target,
             file: BufWriter::with_capacity(64 * 1024, file),
             format,
             protected_fields: 0,
-        };
-        match format {
+        })
+    }
+
+    fn write_header<'a>(
+        &mut self,
+        format_name: &str,
+        columns: &(impl Serialize + ?Sized),
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<()> {
+        match self.format {
             ExportFormat::Csv {
                 include_header: true,
                 ..
-            } => output
-                .write_csv_header(columns)
-                .map_err(|error| format.io(error))?,
+            } => self
+                .write_csv_header(names)
+                .map_err(|error| self.format.io(error))?,
             ExportFormat::Csv { .. } => {}
-            ExportFormat::Json => output.write_json_header(columns)?,
+            ExportFormat::Json => self.write_json_header(format_name, columns)?,
         }
-        Ok(output)
+        Ok(())
     }
 
-    fn write_csv_header(&mut self, columns: &[String]) -> io::Result<()> {
-        for (index, name) in columns.iter().enumerate() {
+    fn write_csv_header<'a>(
+        &mut self,
+        columns: impl IntoIterator<Item = &'a str>,
+    ) -> io::Result<()> {
+        for (index, name) in columns.into_iter().enumerate() {
             self.delimiter(index)?;
             self.write_csv_text(name)?;
         }
@@ -174,14 +209,59 @@ impl ExportFile {
             .map_err(|error| format.io(error))
     }
 
-    fn write_json_header(&mut self, columns: &[String]) -> Result<()> {
+    fn write_json_header(
+        &mut self,
+        format_name: &str,
+        columns: &(impl Serialize + ?Sized),
+    ) -> Result<()> {
         let io = |error| ExportFormat::Json.io(error);
-        self.file
-            .write_all(b"{\"format\":\"stackport.sqlite-results\",\"version\":1,\"columns\":")
-            .map_err(io)?;
+        write!(
+            self.file,
+            "{{\"format\":\"{format_name}\",\"version\":1,\"columns\":"
+        )
+        .map_err(io)?;
         serde_json::to_writer(&mut self.file, columns)
             .map_err(|error| ExportFormat::Json.io(error))?;
         self.file.write_all(b",\"rows\":[").map_err(io)
+    }
+
+    pub(crate) fn write_postgres_row(
+        &mut self,
+        row: &[Option<&str>],
+        columns: &[PostgresExportColumn],
+        previous_rows: u64,
+    ) -> Result<()> {
+        let format = self.format;
+        let io = |error| format.io(error);
+        match format {
+            ExportFormat::Json => {
+                if previous_rows > 0 {
+                    self.file.write_all(b",").map_err(io)?;
+                }
+                self.file.write_all(b"\n").map_err(io)?;
+                serde_json::to_writer(&mut self.file, row).map_err(|error| format.io(error))
+            }
+            ExportFormat::Csv { .. } => {
+                for (index, (value, column)) in row.iter().zip(columns).enumerate() {
+                    self.delimiter(index).map_err(io)?;
+                    match value {
+                        None => self.file.write_all(b"\\N"),
+                        Some(value)
+                            if column.numeric
+                                && value.parse::<f64>().is_ok()
+                                && value.bytes().all(|byte| {
+                                    matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e' | b'E')
+                                }) =>
+                        {
+                            self.file.write_all(value.as_bytes())
+                        }
+                        Some(value) => self.write_csv_text(value),
+                    }
+                    .map_err(io)?;
+                }
+                self.file.write_all(b"\r\n").map_err(io)
+            }
+        }
     }
 
     fn write_json_row(&mut self, row: &Row<'_>, previous_rows: u64) -> Result<()> {
@@ -283,6 +363,14 @@ pub(crate) struct ReadyExport {
     format: ExportFormat,
     size_bytes: u64,
     protected_fields: u64,
+}
+
+#[derive(Serialize)]
+pub(crate) struct PostgresExportColumn {
+    pub(crate) name: String,
+    pub(crate) data_type: String,
+    #[serde(skip)]
+    pub(crate) numeric: bool,
 }
 
 impl ReadyExport {

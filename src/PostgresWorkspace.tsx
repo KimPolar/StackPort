@@ -2,6 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "rea
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ArrowRight, Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
+import { PostgresResultExport, type PostgresExportTarget } from "./PostgresResultExport";
+import type { ExportReport } from "./ResultExportDialog";
 import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
@@ -14,11 +16,12 @@ type ObjectKind = "table" | "partitioned" | "view" | "materialized";
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
 type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null }[];
-  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean };
+  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean; primary_key_columns: string[] };
 type Route = { id: string; name: string; port: number };
 const kindLabels: Record<ObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
+const number = new Intl.NumberFormat("ko-KR");
 
 export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfile; editor: PostgresEditorState }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -26,6 +29,8 @@ export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfil
   const [dialog, setDialog] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState("");
+  const [exportTarget, setExportTarget] = useState<PostgresExportTarget | null>(null);
+  const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const active = useRef<string | null>(null);
   const { name, host, port, database, environment } = profile.settings;
 
@@ -50,6 +55,11 @@ export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfil
     finally { setClosing(false); }
   }
 
+  function requestExport(target: PostgresExportTarget) {
+    setExportReport(null);
+    setExportTarget(target);
+  }
+
   return <section className="postgres-workspace" aria-label="PostgreSQL 작업 공간">
     <div className="content-header">
       <div className="database-target"><h1><Database size={21} aria-hidden /><span title={name}>{name}</span>
@@ -61,6 +71,12 @@ export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfil
       </div>
     </div>
     {error && <p className="error-banner" role="alert">{error}</p>}
+    {exportReport && <div className="success-banner" role="status">
+      <strong>{exportReport.format} 저장 완료 · {number.format(exportReport.rows)}행</strong>
+      <span>{exportReport.path} · {number.format(exportReport.size_bytes)} B</span>
+      {exportReport.protected_fields > 0 && <span>수식으로 해석될 수 있는 필드 {number.format(exportReport.protected_fields)}개 보호</span>}
+      {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
+    </div>}
     <nav className="postgres-views" aria-label="PostgreSQL 보기">
       <button type="button" className="secondary small" aria-pressed={view === "catalog"} onClick={() => setView("catalog")}>객체 탐색</button>
       <button type="button" className="secondary small" aria-pressed={view === "sql"} onClick={() => setView("sql")}><FileCode2 size={14} aria-hidden /> SQL 편집기</button>
@@ -71,10 +87,16 @@ export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfil
         <PostgresBrowse key={session.id} id={session.id} onOpenSql={(schema, table) => {
           editor.add(`SELECT *\nFROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)};`);
           setView("sql");
+        }} onExport={object => {
+          const order = object.primary_key_columns.length > 0 ? ` ORDER BY ${object.primary_key_columns.map(quoteIdentifier).join(", ")}` : "";
+          requestExport({ session: session.id, scope: { kind: "document" }, title: `${object.schema}.${object.name} 조회`,
+            source: `SELECT * FROM ${quoteIdentifier(object.schema)}.${quoteIdentifier(object.name)}${order}` });
         }} />
       </div>
     </>}
-    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={session?.id ?? null} editor={editor} onClosed={closedByQuery} /></div>
+    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={session?.id ?? null} editor={editor} onClosed={closedByQuery} onExport={requestExport} /></div>
+    {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget} onClosed={closedByQuery}
+      onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {dialog && <ConnectDialog profile={profile} onClose={() => setDialog(false)} onOpened={connected => {
       active.current = connected.id; setSession(connected); setDialog(false); setError("");
     }} />}
@@ -139,7 +161,9 @@ function useRead<T>(command: string, args: Record<string, unknown> | null, revis
   return result?.args === args && result.revision === revision ? { ...result, loading: false } : { data: null, error: "", loading: args !== null };
 }
 
-function PostgresBrowse({ id, onOpenSql }: { id: string; onOpenSql: (schema: string, name: string) => void }) {
+function PostgresBrowse({ id, onOpenSql, onExport }: {
+  id: string; onOpenSql: (schema: string, name: string) => void; onExport: (page: Page) => void;
+}) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
   const [objectPage, setObjectPage] = useState(0);
@@ -195,6 +219,7 @@ function PostgresBrowse({ id, onOpenSql }: { id: string; onOpenSql: (schema: str
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
           <button type="button" className="secondary small" onClick={() => onOpenSql(schema.name, object.name)}>SQL로 열기</button>
+          {page.data && <button type="button" className="secondary small" onClick={() => page.data && onExport(page.data)}>결과 내보내기</button>}
           <button type="button" className="secondary small" disabled={page.loading} onClick={() => setRefresh(value => value + 1)}>다시 조회</button>
         </div></div> :
         <p className="result-empty">스키마와 조회할 테이블 또는 뷰를 선택하세요.</p>}

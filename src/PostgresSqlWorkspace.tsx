@@ -5,6 +5,7 @@ import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
 import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter } from "./PostgresParameterDialog";
 import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
+import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
 
 export type PostgresEditorState = {
@@ -17,7 +18,6 @@ export type PostgresEditorState = {
   saveFile: (draft: SqlDraft) => void;
 };
 
-type Scope = { kind: "document" } | { kind: "selection"; start: number; end: number } | { kind: "current"; cursor: number };
 type Mode = "query" | "estimate" | "analyze";
 type ResultView = "data" | "plan";
 export type PostgresCell = { value: string | null; truncated: boolean };
@@ -27,9 +27,9 @@ type QueryStatus = Completed | { status: "plan"; plan: PostgresPlan } | { status
   { status: "interrupted"; timed_out: boolean; server_confirmed: boolean };
 type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
 type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
-type Preview = { id: string; source: string; outcome: QueryStatus };
+type Preview = { id: string; target: QueryTarget; outcome: QueryStatus };
 type TabPreview = { tab: string; active: ResultView; data?: Preview; plan?: Preview };
-type QueryTarget = { session: string; tab: string; title: string; source: string; scope: Scope; mode: Mode };
+type QueryTarget = PostgresExportTarget & { tab: string; mode: Mode };
 type Running = QueryTarget & { request: string };
 type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null };
 const editorId = "postgres-sql-editor";
@@ -39,10 +39,11 @@ const resultViews: ResultView[] = ["data", "plan"];
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석" };
 
-export function PostgresSqlWorkspace({ session, editor, onClosed }: {
+export function PostgresSqlWorkspace({ session, editor, onClosed, onExport }: {
   session: string | null;
   editor: PostgresEditorState;
   onClosed: (id: string) => void;
+  onExport: (target: PostgresExportTarget) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const active = useRef<Running | null>(null);
@@ -93,7 +94,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
     const view = resultView(target.mode);
     setPreviews(previous => {
       const existing = previous.find(item => item.tab === target.tab);
-      return [{ ...existing, tab: target.tab, active: view, [view]: { id: operation.request, source: target.source, outcome: result } },
+      return [{ ...existing, tab: target.tab, active: view, [view]: { id: operation.request, target, outcome: result } },
         ...previous.filter(item => item.tab !== target.tab)].slice(0, retainedPreviews);
     });
   }
@@ -112,7 +113,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
   function execute(current: boolean, mode: Mode = "query", field = input.current) {
     if (!field || !session || !draft || parameterRequest || analysisTarget) return;
     const { selectionStart: start, selectionEnd: end } = field;
-    const scope: Scope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
+    const scope: PostgresScope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
     const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope, mode };
     if (mode === "analyze") setAnalysisTarget(target);
     else void run(target);
@@ -176,7 +177,10 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
       if (!preview) return null;
       const pending = running?.tab === tabs.activeId && view === resultView(running.mode);
       return <div key={view} className="postgres-sql-result" hidden={tabPreview.active !== view || pending}>
-        <PostgresSqlResult key={preview.id} outcome={preview.outcome} jump={source === preview.source ? position => {
+        <PostgresSqlResult key={preview.id} outcome={preview.outcome}
+          onExport={!running && session === preview.target.session && preview.outcome.status === "completed"
+            ? () => onExport({ ...preview.target, title: `${preview.target.title}에서 마지막 실행한 문장` }) : undefined}
+          jump={source === preview.target.source ? position => {
           input.current?.focus();
           input.current?.setSelectionRange(position, position);
         } : undefined} />
@@ -205,7 +209,7 @@ export function PostgresValue({ cell }: { cell: PostgresCell }) {
     <code>{cell.value}{cell.truncated && <span title="512자 미리보기">…</span>}</code>;
 }
 
-function PostgresSqlResult({ outcome, jump }: { outcome: QueryStatus; jump?: (position: number) => void }) {
+function PostgresSqlResult({ outcome, jump, onExport }: { outcome: QueryStatus; jump?: (position: number) => void; onExport?: () => void }) {
   const [page, setPage] = useState(0);
   if (outcome.status === "plan") return <PostgresQueryPlan plan={outcome.plan} />;
   if (outcome.status === "failed") return <div className="error-banner" role="alert">
@@ -220,7 +224,10 @@ function PostgresSqlResult({ outcome, jump }: { outcome: QueryStatus; jump?: (po
   const start = page * resultPageSize;
   const rows = outcome.rows.slice(start, start + resultPageSize);
   return <section className="postgres-data results-card" aria-label="PostgreSQL SQL 조회 결과">
-    <div className="panel-heading"><strong>마지막 실행 결과</strong><span className="result-count">{outcome.rows.length}행 · {outcome.elapsed_ms}ms</span></div>
+    <div className="panel-heading"><strong>마지막 실행 결과</strong>
+      <div className="sql-editor-actions"><span className="result-count">{outcome.rows.length}행 · {outcome.elapsed_ms}ms</span>
+        {onExport && <button type="button" className="secondary small" onClick={onExport}>결과 내보내기</button>}
+      </div></div>
     {(outcome.more_rows || outcome.total_columns > outcome.columns.length) && <p className="form-note postgres-page-note">
       미리보기 {outcome.more_rows && "100행"}{outcome.more_rows && outcome.total_columns > outcome.columns.length && " · "}
       {outcome.total_columns > outcome.columns.length && `전체 ${outcome.total_columns}열 중 ${outcome.columns.length}열`}
