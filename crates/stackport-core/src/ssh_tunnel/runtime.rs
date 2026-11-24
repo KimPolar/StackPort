@@ -89,6 +89,36 @@ pub struct LocalTunnelEndpoint {
     pub port: u16,
 }
 
+#[derive(Clone)]
+pub(crate) struct DatabaseTunnel {
+    stats: Arc<Stats>,
+    done: watch::Receiver<bool>,
+}
+
+impl DatabaseTunnel {
+    pub(crate) fn endpoint(&self) -> LocalTunnelEndpoint {
+        LocalTunnelEndpoint {
+            id: self.stats.tunnel.id.clone(),
+            name: self.stats.tunnel.settings.name.clone(),
+            port: self.stats.listen_port,
+        }
+    }
+
+    pub(crate) fn running(&self) -> bool {
+        self.done.has_changed().is_ok()
+            && !*self.done.borrow()
+            && self
+                .stats
+                .state
+                .lock()
+                .is_ok_and(|state| state.phase == Phase::Running)
+    }
+
+    pub(crate) async fn ended(&self) {
+        let _ = self.done.clone().wait_for(|done| *done).await;
+    }
+}
+
 impl SshTunnelManager {
     pub fn new(store: Store) -> Self {
         Self {
@@ -111,20 +141,40 @@ impl SshTunnelManager {
             .collect()
     }
 
-    pub fn local_database_routes(&self, project: &str, host: &str, port: u16) -> Result<Vec<LocalTunnelEndpoint>> {
-        let sessions = self.sessions.lock().map_err(|_| "실행 중인 터널을 읽을 수 없습니다.")?;
-        let mut routes = Vec::new();
-        for session in sessions.values() {
-            let tunnel = &session.stats.tunnel;
-            let settings = &tunnel.settings;
-            if tunnel.project_id == project && settings.kind == SshTunnelKind::Local
-                && settings.target_host.as_deref() == Some(host) && settings.target_port == Some(port)
-                && session.stats.state.lock().map_err(|_| "터널 상태를 읽을 수 없습니다.")?.phase == Phase::Running {
-                routes.push(LocalTunnelEndpoint { id: tunnel.id.clone(), name: settings.name.clone(), port: session.stats.listen_port });
-            }
-        }
+    pub fn local_database_routes(
+        &self,
+        project: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<Vec<LocalTunnelEndpoint>> {
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| "실행 중인 터널을 읽을 수 없습니다.")?;
+        let mut routes: Vec<_> = sessions
+            .values()
+            .filter_map(|session| session.database_tunnel(project, host, port))
+            .map(|route| route.endpoint())
+            .collect();
         routes.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(routes)
+    }
+
+    pub(crate) fn database_tunnel(
+        &self,
+        id: &str,
+        project: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<DatabaseTunnel> {
+        self.sessions
+            .lock()
+            .map_err(|_| "실행 중인 터널을 읽을 수 없습니다.")?
+            .get(id)
+            .and_then(|session| session.database_tunnel(project, host, port))
+            .ok_or_else(|| {
+                "이 PostgreSQL 대상에 연결된 실행 중인 로컬 SSH 터널을 선택하세요.".into()
+            })
     }
 
     pub async fn start(
@@ -285,6 +335,25 @@ impl SshTunnelManager {
         })
         .await
         .map_err(|_| "터널 설정을 확인할 수 없습니다.")?
+    }
+}
+
+impl Session {
+    fn database_tunnel(&self, project: &str, host: &str, port: u16) -> Option<DatabaseTunnel> {
+        let tunnel = &self.stats.tunnel;
+        let settings = &tunnel.settings;
+        if tunnel.project_id != project
+            || settings.kind != SshTunnelKind::Local
+            || settings.target_host.as_deref() != Some(host)
+            || settings.target_port != Some(port)
+        {
+            return None;
+        }
+        let route = DatabaseTunnel {
+            stats: Arc::clone(&self.stats),
+            done: self.done.clone(),
+        };
+        route.running().then_some(route)
     }
 }
 
@@ -538,6 +607,11 @@ async fn serve(
             }
         }
     };
+    if error.is_some() {
+        if let Ok(mut state) = stats.state.lock() {
+            state.phase = Phase::Stopping;
+        }
+    }
     let cancelled = listener.close(&route).await;
     peers.shutdown().await;
     route.close().await;

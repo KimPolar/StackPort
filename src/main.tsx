@@ -156,6 +156,7 @@ function App() {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [loadedPages, setLoadedPages] = useState<ReadonlySet<WorkspacePage>>(() => new Set(["workspace"]));
+  const [tunnelViewRequest, setTunnelViewRequest] = useState(0);
   const [projects, setProjects] = useState<Project[]>([]);
   const [startupLoaded, setStartupLoaded] = useState(!desktop);
   const [resumeReadError, setResumeReadError] = useState(false);
@@ -1207,6 +1208,7 @@ function App() {
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setPostgresEditExitGuard}
+        onOpenTunnels={() => { setTunnelViewRequest(value => value + 1); showTool("network"); }}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
         select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
@@ -1420,7 +1422,8 @@ function App() {
       </React.Suspense>
     </div>,
     network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body">
-      <NetworkWorkspace projectId={projectId} profiles={sshProfiles} visible={toolVisible("network")} onTunnelCountChange={updateTunnelCount} />
+      <NetworkWorkspace projectId={projectId} profiles={sshProfiles} visible={toolVisible("network")}
+        tunnelViewRequest={tunnelViewRequest} onTunnelCountChange={updateTunnelCount} />
     </div>,
     rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">

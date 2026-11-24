@@ -27,9 +27,10 @@ function changed({ field, kind, value }: Draft) {
   return (kind === "null" ? null : value) !== field.current.value;
 }
 
-export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy, onClose, onApplied, onUnknown, onExitGuard }: {
+export function PostgresEditDialog({ id, object, stamp, column, profile, unavailable, onBusy, onClose, onApplied, onUnknown, onExitGuard }: {
   id: string; object: number; stamp: PostgresRowStamp; column: string;
   profile: { name: string; environment: string };
+  unavailable: string;
   onBusy: (busy: boolean) => void;
   onClose: () => void;
   onApplied: (cells: number, auditWarning: boolean) => void;
@@ -93,7 +94,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
   }
 
   async function addField() {
-    if (pending.current || !session || !next || drafts.length >= maxCells) return;
+    if (pending.current || !session || unavailable || !next || drafts.length >= maxCells) return;
     pending.current = true;
     setBusy(true);
     setError("");
@@ -110,7 +111,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (pending.current || !session || expired || discard || !dirty ||
+    if (pending.current || !session || unavailable || expired || discard || !dirty ||
         (preview && production && confirmation !== "PROD")) return;
     pending.current = true;
     setBusy(true);
@@ -142,6 +143,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
   return <Dialog title="PostgreSQL 행 편집" onClose={requestClose} busy={busy} interceptEscape>
     <form onSubmit={event => void submit(event)} aria-busy={busy} aria-describedby={error ? errorId : undefined}>
       <p className="confirm-copy"><strong>{profile.name} · {session?.table ?? column}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>
+      {unavailable && <p className="form-error" role="alert">{unavailable} 창을 닫고 다시 연결하세요.</p>}
       {busy && !session && <p className="form-note" role="status">현재 행을 읽는 중…</p>}
       {discard ? <>
         <p role="alert" className="form-note">적용하지 않은 변경이 있습니다.</p>
@@ -169,7 +171,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
             {drafts.length > 1 && <button type="button" className="secondary small" aria-label={`${draft.field.column} 변경 제거`}
               onClick={() => { setError(""); setDrafts(values => values.filter(item => item !== draft)); }}>이 열 제거</button>}
           </fieldset>)}
-          {next && drafts.length < maxCells && <div className="postgres-edit-add">
+          {!unavailable && next && drafts.length < maxCells && <div className="postgres-edit-add">
             <label className="field">추가할 열<select value={next} disabled={busy} onChange={event => setNextColumn(event.target.value)}>
               {remaining.map(name => <option key={name} value={name}>{name}</option>)}
             </select></label>
@@ -197,7 +199,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
           <button type="button" className="secondary" disabled={busy} onClick={requestClose}>닫기</button>
           {preview && !expired && <button type="button" className="secondary" disabled={busy}
             onClick={() => { setPreview(null); setConfirmation(""); setError(""); }}>다시 편집</button>}
-          {session && !expired && <button type="submit" className={preview ? "danger" : "primary"} disabled={busy || !dirty}>
+          {session && !expired && <button type="submit" className={preview ? "danger" : "primary"} disabled={busy || !dirty || Boolean(unavailable)}>
             {busy ? "처리 중…" : preview ? "변경 적용" : "변경 미리보기"}
           </button>}
         </div>

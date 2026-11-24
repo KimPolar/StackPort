@@ -136,7 +136,7 @@ async function startPostgres() {
   } };
 }
 
-async function startGateway(target) {
+async function startGateway(target, targetHost = 'localhost') {
   const key = utils.generateKeyPairSync('ed25519').private;
   const fingerprint = 'SHA256:' + createHash('sha256').update(utils.parseKey(key).getPublicSSH()).digest('base64').replace(/=+$/, '');
   const clients = new Set();
@@ -150,7 +150,7 @@ async function startGateway(target) {
       else auth.reject(['password']);
     });
     client.on('ready', () => client.on('tcpip', (accept, reject, info) => {
-      if (info.destIP !== 'localhost' || info.destPort !== target) return reject();
+      if (info.destIP !== targetHost || info.destPort !== target) return reject();
       const socket = net.connect(target, '127.0.0.1');
       socket.once('error', reject);
       socket.once('connect', () => {
@@ -166,13 +166,16 @@ async function startGateway(target) {
     }));
   }).listen(0, '127.0.0.1');
   await once(server, 'listening');
-  return { port: server.address().port, fingerprint, forwarded: () => forwards, close() {
+  function dropClients() {
     for (const client of clients) client.end();
+  }
+  return { port: server.address().port, fingerprint, forwarded: () => forwards, dropClients, close() {
+    dropClients();
     server.close();
   } };
 }
 
-async function verify(browser, fixture, gateway) {
+async function verify(browser, fixture, gateway, jump) {
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15_000);
   const errors = [];
@@ -914,14 +917,23 @@ async function verify(browser, fixture, gateway) {
   const ssh = await command('create_ssh_profile', { projectId: project.id, input: {
     name: 'PG 게이트웨이', host: '127.0.0.1', port: gateway.port, username: 'fixture', environment: 'DEV',
   } });
+  const jumpProfile = await command('create_ssh_profile', { projectId: project.id, input: {
+    name: 'PG 점프', host: '127.0.0.1', port: jump.port, username: 'fixture', environment: 'DEV',
+  } });
   const tunnel = await command('create_ssh_tunnel', { projectId: project.id, input: {
     name: '보고서 터널', ssh_profile_id: ssh.id, kind: 'local', listen_port: 0, target_host: 'localhost', target_port: fixture.port,
   } });
-  const start = () => command('start_ssh_tunnel', { tunnel, profile: ssh, authentication: { kind: 'password', password: 'fixture-gateway' }, hops: [], confirmation: '' });
-  const trust = await start();
-  assert.equal(trust.status, 'trust_required');
-  assert.ok(trust.host.keys.some(key => key.fingerprint === gateway.fingerprint));
-  await command('trust_ssh_host', { token: trust.host.token, fingerprint: gateway.fingerprint, confirmation: '' });
+  const authentication = { kind: 'password', password: 'fixture-gateway' };
+  const start = () => command('start_ssh_tunnel', {
+    tunnel, profile: ssh, authentication, hops: [{ profile: jumpProfile, authentication }], confirmation: '',
+  });
+  for (const [stage, server] of [['경유 1 · PG 점프', jump], ['대상 · PG 게이트웨이', gateway]]) {
+    const trust = await start();
+    assert.equal(trust.status, 'trust_required');
+    assert.equal(trust.stage, stage);
+    assert.ok(trust.host.keys.some(key => key.fingerprint === server.fingerprint));
+    await command('trust_ssh_host', { token: trust.host.token, fingerprint: server.fingerprint, confirmation: '' });
+  }
   const running = await start();
   assert.equal(running.status, 'open');
   try {
@@ -931,6 +943,7 @@ async function verify(browser, fixture, gateway) {
     await page.getByRole('button', { name: /visible 뷰/ }).click();
     await data.getByText('4', { exact: true }).waitFor();
     assert.equal(gateway.forwarded(), 1);
+    assert.ok(jump.forwarded() > 0);
     await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
     await sql.fill('SELECT pg_sleep($1::float8)');
     await analyze.click();
@@ -954,7 +967,59 @@ async function verify(browser, fixture, gateway) {
     await exportDialog.waitFor({ state: 'detached' });
     assert.deepEqual(JSON.parse(fs.readFileSync(tunnelExport, 'utf8')).rows, [['123']]);
     assert.equal(gateway.forwarded(), 2);
-    await disconnect();
+
+    const draft = 'SELECT $1::int + 90';
+    await sql.fill(draft);
+    await sql.press('Control+Enter');
+    await parameters.getByLabel('$1 값', { exact: true }).waitFor();
+    await command('stop_ssh_tunnel', { id: tunnel.id });
+    const lossMessage = /SSH 터널 ‘보고서 터널’이 중단되어 PostgreSQL 연결/;
+    const loss = page.locator('.postgres-recovery').getByRole('alert').filter({ hasText: lossMessage });
+    const reconnect = page.getByRole('button', { name: 'PostgreSQL 다시 연결', exact: true });
+    await loss.waitFor();
+    await parameters.waitFor({ state: 'detached' });
+    assert.equal(await sql.inputValue(), draft);
+    assert.equal(await page.getByRole('button', { name: '쿼리 실행', exact: true }).isEnabled(), false);
+    await reconnect.click();
+    const route = connection.getByLabel('연결 경로');
+    assert.equal(await route.inputValue(), tunnel.id);
+    await route.locator('option').filter({ hasText: '보고서 터널 · 사용할 수 없음' }).waitFor({ state: 'attached' });
+    await connection.getByLabel('PostgreSQL 암호').fill(password);
+    await connection.getByLabel('운영 환경 확인').fill('PROD');
+    const connectButton = connection.getByRole('button', { name: '연결', exact: true });
+    assert.equal(await connectButton.isEnabled(), false);
+    await connection.getByRole('button', { name: 'SSH 터널 열기', exact: true }).click();
+    await page.getByRole('table', { name: '저장된 SSH 터널' }).getByText('보고서 터널', { exact: true }).waitFor();
+    assert.equal((await start()).status, 'open');
+    const liveTunnel = page.getByRole('table', { name: '실행 중인 SSH 터널' }).getByRole('row').filter({ hasText: '보고서 터널' });
+    await liveTunnel.getByText(/PG 점프.*PG 게이트웨이/).waitFor();
+    await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
+    await reconnect.click();
+    assert.equal(await route.inputValue(), tunnel.id);
+    await connection.getByLabel('PostgreSQL 암호').fill(password);
+    await connection.getByLabel('운영 환경 확인').fill('PROD');
+    await connectButton.click();
+    await connection.waitFor({ state: 'detached' });
+    assert.equal(await sql.inputValue(), draft);
+    await sql.press('Control+Enter');
+    await parameters.getByLabel('$1 값', { exact: true }).fill('7');
+    await submitValues();
+    await results.getByText('97', { exact: true }).waitFor();
+
+    const interruptedExport = path.join(root, 'postgres-tunnel-interrupted.csv');
+    await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+    await exportDialog.getByLabel('새 CSV 파일 경로', { exact: true }).fill(interruptedExport);
+    await exportDialog.getByRole('button', { name: 'CSV 저장', exact: true }).click();
+    await parameters.getByLabel('$1 값', { exact: true }).waitFor();
+    jump.dropClients();
+    await parameters.waitFor({ state: 'detached' });
+    await exportDialog.getByRole('alert').filter({ hasText: lossMessage }).waitFor();
+    assert.equal(await exportDialog.getByRole('button', { name: 'CSV 저장', exact: true }).isEnabled(), false);
+    await exportDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+    await loss.waitFor();
+    assert.equal(await sql.inputValue(), draft);
+    assert.equal(fs.existsSync(interruptedExport), false);
+    await reconnect.waitFor();
   } finally { await command('stop_ssh_tunnel', { id: tunnel.id }); }
   await assert.rejects(open(profile, password, 'PROD', tunnel.id), /실행 중인 로컬 SSH 터널/);
   assert.deepEqual(errors, []);
@@ -1077,14 +1142,17 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
 async function main() {
   const fixture = await startPostgres();
   let gateway;
+  let jump;
   let browser;
   try {
     gateway = await startGateway(fixture.port);
+    jump = await startGateway(gateway.port, '127.0.0.1');
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
-    await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (atomic row editing, rollback, conflicts, filters, exports, SQL and TLS).');
+    await verify(browser, fixture, gateway, jump);
+    console.log('Windows PostgreSQL E2E passed (grid editing, rollback, SQL, TLS and SSH jump recovery).');
   } finally {
     await browser?.close();
+    jump?.close();
     gateway?.close();
     fixture.close();
   }

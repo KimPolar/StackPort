@@ -9,8 +9,8 @@ use super::{
     sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
-    quote_identifier, table_query::bounded_filter_text, Result, SshTunnelManager, Store,
-    TableQueryClauses,
+    quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
+    LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
 };
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
@@ -40,6 +40,7 @@ pub(super) const ROW_SIZE: usize = 100;
 pub(super) const COLUMN_SIZE: usize = 24;
 pub(super) const VALUE_LENGTH: usize = 512;
 const CA_SIZE: u64 = 256 * 1024;
+const TUNNEL_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -60,7 +61,26 @@ pub struct PostgresSessionInfo {
     encoding: String,
     timezone: String,
     tunnel: Option<String>,
+    tunnel_id: Option<String>,
     grid_edit: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresDisconnect {
+    Closed,
+    TunnelStopped,
+    TunneledConnectionClosed,
+}
+
+impl PostgresDisconnect {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Closed => "PostgreSQL 연결이 닫혔습니다. 다시 연결하세요.",
+            Self::TunnelStopped => "SSH 터널이 중단되어 PostgreSQL 연결이 닫혔습니다.",
+            Self::TunneledConnectionClosed => "SSH 터널을 통한 PostgreSQL 연결이 끊겼습니다.",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -133,11 +153,28 @@ struct Session {
     profile: PostgresProfile,
     client: AsyncMutex<Client>,
     connection: JoinHandle<()>,
+    connection_ended: watch::Receiver<bool>,
+    tunnel: Option<DatabaseTunnel>,
     tls: TlsConnector,
     running_sql: Mutex<Option<sql::RunningSql>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
     _permit: OwnedSemaphorePermit,
+}
+
+impl Session {
+    fn closed_reason(&self) -> Option<PostgresDisconnect> {
+        if self.tunnel.as_ref().is_some_and(|route| !route.running()) {
+            return Some(PostgresDisconnect::TunnelStopped);
+        }
+        (self.connection.is_finished() || *self.connection_ended.borrow()).then_some(
+            if self.tunnel.is_some() {
+                PostgresDisconnect::TunneledConnectionClosed
+            } else {
+                PostgresDisconnect::Closed
+            },
+        )
+    }
 }
 
 impl Drop for Session {
@@ -186,43 +223,66 @@ impl PostgresManager {
         config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
             .application_name("StackPort").ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
             .options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog -c standard_conforming_strings=on");
-        let tunnel = if let Some(id) = tunnel_id {
-            let endpoint = tunnels
-                .local_database_routes(&profile.project_id, &settings.host, settings.port)?
-                .into_iter()
-                .find(|route| route.id == id)
-                .ok_or("이 PostgreSQL 대상에 연결된 실행 중인 로컬 SSH 터널을 선택하세요.")?;
+        let tunnel = tunnel_id
+            .map(|id| {
+                tunnels.database_tunnel(id, &profile.project_id, &settings.host, settings.port)
+            })
+            .transpose()?;
+        let endpoint = tunnel.as_ref().map(DatabaseTunnel::endpoint);
+        if let Some(endpoint) = &endpoint {
             // Keep the original host for SNI and certificate validation.
             config
                 .hostaddr(Ipv4Addr::LOCALHOST.into())
                 .port(endpoint.port);
-            Some(endpoint.name)
         } else {
             config.port(settings.port);
-            None
-        };
+        }
         self.sessions
             .lock()
             .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?
-            .retain(|_, session| !session.connection.is_finished());
+            .retain(|_, session| session.closed_reason().is_none());
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| "열린 PostgreSQL 연결이 너무 많습니다. 사용하지 않는 연결을 닫으세요.")?;
-        let (client, connection) = timeout(
+        let connector = timeout(
             CONNECT_TIMEOUT,
             config.connect(MakeTlsConnector::new(tls.clone())),
-        )
-        .await
-        .map_err(|_| "PostgreSQL 연결 시간이 초과되었습니다.")?
-        .map_err(connect_error)?;
+        );
+        let opened = if let Some(route) = &tunnel {
+            tokio::select! {
+                biased;
+                _ = route.ended() => return Err(PostgresDisconnect::TunnelStopped.message().into()),
+                result = connector => result,
+            }
+        } else {
+            connector.await
+        };
+        if tunnel.as_ref().is_some_and(|route| !route.running()) {
+            return Err(PostgresDisconnect::TunnelStopped.message().into());
+        }
+        let (client, connection) = opened
+            .map_err(|_| "PostgreSQL 연결 시간이 초과되었습니다.")?
+            .map_err(connect_error)?;
         drop(config);
         drop(password);
+        let (ended, connection_ended) = watch::channel(false);
+        let link = tunnel.clone();
         let session = Arc::new(Session {
             profile,
             client: AsyncMutex::new(client),
             connection: tokio::spawn(async move {
-                let _ = connection.await;
+                if let Some(route) = link {
+                    tokio::select! {
+                        _ = route.ended() => {}
+                        _ = connection => {}
+                    }
+                } else {
+                    let _ = connection.await;
+                }
+                ended.send_replace(true);
             }),
+            connection_ended,
+            tunnel,
             tls,
             running_sql: Mutex::default(),
             grid_edit,
@@ -230,9 +290,13 @@ impl PostgresManager {
             _permit: permit,
         });
         let id = Uuid::new_v4().to_string();
-        let info = timeout(QUERY_TIMEOUT, server_info(&session, id.clone(), tunnel))
+        let info = timeout(QUERY_TIMEOUT, server_info(&session, id.clone(), endpoint))
             .await
-            .map_err(|_| "PostgreSQL 서버 응답 시간이 초과되었습니다.")??;
+            .map_err(|_| "PostgreSQL 서버 응답 시간이 초과되었습니다.")?;
+        if let Some(reason) = session.closed_reason() {
+            return Err(reason.message().into());
+        }
+        let info = info?;
         self.sessions
             .lock()
             .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?
@@ -258,11 +322,38 @@ impl PostgresManager {
             .sessions
             .lock()
             .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?;
-        sessions
+        let session = sessions
             .get(id)
-            .filter(|session| !session.connection.is_finished())
-            .cloned()
-            .ok_or_else(|| "PostgreSQL 연결이 닫혔습니다. 다시 연결하세요.".into())
+            .ok_or(PostgresDisconnect::Closed.message())?;
+        if let Some(reason) = session.closed_reason() {
+            return Err(reason.message().into());
+        }
+        Ok(Arc::clone(session))
+    }
+
+    pub async fn wait_disconnect(&self, id: &str) -> Result<PostgresDisconnect> {
+        let (mut ended, route) = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?;
+            let Some(session) = sessions.get(id) else {
+                return Ok(PostgresDisconnect::Closed);
+            };
+            (session.connection_ended.clone(), session.tunnel.clone())
+        };
+        let _ = ended.wait_for(|closed| *closed).await;
+        if let Some(route) = route {
+            // The database socket can close just before the SSH worker finishes.
+            if route.running() {
+                let _ = timeout(TUNNEL_CLOSE_GRACE, route.ended()).await;
+            }
+            if !route.running() {
+                return Ok(PostgresDisconnect::TunnelStopped);
+            }
+            return Ok(PostgresDisconnect::TunneledConnectionClosed);
+        }
+        Ok(PostgresDisconnect::Closed)
     }
 
     pub async fn schemas(&self, id: &str, page: u32) -> Result<PostgresSchemaPage> {
@@ -586,7 +677,7 @@ fn edit_token(token: &str) -> Result<Uuid> {
 async fn server_info(
     session: &Session,
     id: String,
-    tunnel: Option<String>,
+    endpoint: Option<LocalTunnelEndpoint>,
 ) -> Result<PostgresSessionInfo> {
     let client = session.client.lock().await;
     let row = client.query_one(
@@ -603,7 +694,8 @@ async fn server_info(
         username: field(&row, 2)?,
         encoding: field(&row, 3)?,
         timezone: field(&row, 4)?,
-        tunnel,
+        tunnel_id: endpoint.as_ref().map(|route| route.id.clone()),
+        tunnel: endpoint.map(|route| route.name),
         grid_edit: session.grid_edit,
     })
 }

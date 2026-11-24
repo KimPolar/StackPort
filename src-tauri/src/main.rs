@@ -15,7 +15,7 @@ use stackport_core::{
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
-    PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
+    PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -809,6 +809,11 @@ fn close_postgres(postgres: State<'_, PostgresManager>, id: String) -> Result<()
 }
 
 #[tauri::command]
+async fn wait_postgres_disconnect(postgres: State<'_, PostgresManager>, id: String) -> Result<PostgresDisconnect, String> {
+    postgres.wait_disconnect(&id).await
+}
+
+#[tauri::command]
 async fn postgres_schemas(postgres: State<'_, PostgresManager>, id: String, page: u32) -> Result<PostgresSchemaPage, String> {
     postgres.schemas(&id, page).await
 }
@@ -1550,6 +1555,7 @@ fn main() {
             postgres_tunnel_options,
             open_postgres,
             close_postgres,
+            wait_postgres_disconnect,
             postgres_schemas,
             postgres_objects,
             postgres_page,

@@ -11,10 +11,10 @@ type NativeOutcome = { status: "exported"; report: ExportReport } |
   { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
 type Prompt = { token: string; parameters: PostgresParameter[]; error: string | null };
 
-export function PostgresResultExport({ profile, target, onClosed, onClose, onExported }: {
+export function PostgresResultExport({ profile, target, unavailable, onClose, onExported }: {
   profile: { name: string; environment: string };
   target: PostgresExportTarget;
-  onClosed: (session: string) => void;
+  unavailable: string;
   onClose: () => void;
   onExported: (report: ExportReport) => void;
 }) {
@@ -23,6 +23,8 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
   const [cancelStatus, setCancelStatus] = useState("");
   const [written, setWritten] = useState(0);
   const resolveValues = useRef<((value: PostgresBindings | null) => void) | null>(null);
+  const connectionError = useRef(unavailable);
+  connectionError.current = unavailable;
 
   function answer(value: PostgresBindings | null) {
     const resolve = resolveValues.current;
@@ -33,6 +35,7 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
   }
 
   useEffect(() => () => { resolveValues.current?.(null); resolveValues.current = null; }, []);
+  useEffect(() => { if (unavailable) { resolveValues.current?.(null); resolveValues.current = null; } }, [unavailable]);
 
   const cancelQuery = (token: string) => invoke<boolean>("cancel_postgres_sql", { id: target.session, request: token });
   async function run(token: string, options: ExportFileOptions): Promise<ExportOutcome> {
@@ -40,17 +43,18 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
     setWritten(0);
     try {
       for (;;) {
+        if (connectionError.current) throw new Error(connectionError.current);
         const response = await invoke<NativeOutcome & { connection_closed: boolean }>("execute_postgres_sql", {
           id: target.session, request: token, source: target.source, scope: target.scope, bindings,
           export: { ...options, format: options.format.toLowerCase() },
         });
-        if (response.connection_closed) onClosed(target.session);
         if (response.status === "exported") return response;
         if (response.status === "interrupted") return { status: response.timed_out ? "timed_out" : "cancelled" };
         if (response.status === "failed") throw new Error(response.error);
         if (response.status !== "parameters_required" || response.connection_closed) {
           throw new Error("PostgreSQL 연결을 확인한 뒤 다시 내보내세요.");
         }
+        if (connectionError.current) throw new Error(connectionError.current);
         if (target.bindings) throw new Error("그리드에서 필터를 다시 적용한 뒤 내보내세요.");
         setSubmitting(false); setCancelStatus("");
         const next = await new Promise<PostgresBindings | null>(resolve => {
@@ -83,8 +87,8 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
     cancel: cancelQuery,
   };
   return <>
-    <ResultFileDialog profile={profile} source={target.title} driver={driver} onClose={onClose} onExported={onExported} />
-    {prompt && <PostgresParameterDialog key={prompt.parameters.map(parameter => parameter.oid).join(",")}
+    <ResultFileDialog profile={profile} source={target.title} driver={driver} onClose={onClose} onExported={onExported} unavailable={unavailable} />
+    {prompt && !unavailable && <PostgresParameterDialog key={prompt.parameters.map(parameter => parameter.oid).join(",")}
       parameters={prompt.parameters} title={target.title} error={prompt.error} running={submitting}
       cancelStatus={cancelStatus || String(written) + "행 기록 · 파일을 만드는 중"}
       onSubmit={answer} onClose={() => answer(null)} onCancelQuery={() => void cancelPromptQuery(prompt.token)} />}

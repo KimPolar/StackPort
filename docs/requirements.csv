@@ -128,7 +128,7 @@ SP-DB-001,멀티 엔진,"MySQL, MariaDB, PostgreSQL, Microsoft SQL Server, Oracl
 SP-DB-002,호환 엔진,"TiDB, OceanBase, openGauss, IvorySQL, KingbaseES, Dameng, Microsoft Garnet 등은 기반 프로토콜 적합성과 DDL 차이를 검증해 매트릭스 표기.",not_started,,
 SP-DB-003,클라우드 서비스,"AWS RDS/Aurora, Azure SQL/관리형 DB, Cloud SQL, Oracle Cloud, Atlas, 관리형 Redis 등은 연결 주소·인증·TLS·방화벽 설정에 맞춰 지원.",not_started,,
 SP-DB-004,연결 옵션,"DSN/URI, 호스트·포트, DB·스키마, 기본 역할, 접속 파라미터, 문자셋, 시간대, 세션 초기화 SQL.",partial,PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
-SP-DB-005,연결 보안,TLS 설정·인증서 검증·클라이언트 인증서·SSH 터널·승인된 HTTP 터널을 지원.,partial,PostgreSQL TLS 인증서 검증과 실행 중인 로컬 SSH 터널 경유,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-005,연결 보안,TLS 설정·인증서 검증·클라이언트 인증서·SSH 터널·승인된 HTTP 터널을 지원.,partial,PostgreSQL TLS 인증서 검증과 점프 호스트를 지원하는 로컬 SSH 터널 경유,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-006,인증 모드,"사용자/암호, 지원되는 OS 통합 인증·Kerberos·AD·LDAP/PAM·SSO·MFA, 클라우드 임시 토큰.",partial,PostgreSQL 세션별 사용자 이름·암호 인증,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-007,다중 연결,같은 서버의 여러 DB·서로 다른 서버·다중 계정을 한 프로젝트에서 별도 권한으로 관리.,partial,한 프로젝트에 여러 SQLite·PostgreSQL 연결 정의,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-008,연결 풀,"작업 유형별 풀 크기, 쿼리/편집/백업 연결 분리, 트랜잭션 고정, 유휴 연결 정리.",not_started,,
@@ -410,7 +410,7 @@ SP-AT-002,SSH + SFTP 연동,SSH 접속→파일 탐색→원격 파일 편집·�
 SP-AT-003,파일 저장 충돌,원격 파일이 타 사용자에 의해 변경된 경우 덮어쓰기 전에 충돌 감지 및 선택 제공,partial,"SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 원격 파일 또는 로컬 초안 보관",crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx
 SP-AT-004,다중 터미널,"2/4분할, 탭 분리·복귀·그룹 실행, 종료·재접속 후 상태 일관성",not_started,,
 SP-AT-005,다중 입력 안전,"선택 대상/호스트 표시, 운영 대상 경고, 입력 송신 결과를 호스트별 확인",not_started,,
-SP-AT-006,SSH 터널+DB,"SSH 점프 경유 DB 접속, 터널 중단 시 DB 연결에 오류/복구 경로 표시",not_started,,
+SP-AT-006,SSH 터널+DB,"SSH 점프 경유 DB 접속, 터널 중단 시 DB 연결에 오류/복구 경로 표시",partial,"Windows에서 SSH 점프 경유 PostgreSQL 연결, 터널 중단 안내와 동일 터널 재연결, SQL 초안 유지 및 실행",crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs
 SP-AT-007,로컬 셸/직렬,Windows 터미널 프로세스·직렬 입출력·포트 해제 시 오류 없이 복구,partial,Windows 로컬 CMD·PowerShell 입출력과 종료 정리,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-AT-008,RDP/VNC,인증·화면 렌더링·키보드·마우스·클립보드가 지원 기능표대로 동작,not_started,,
 SP-AT-009,X11,SSH 경유 X11 GUI 애플리케이션이 로컬 X 화면에 출력되고 세션 종료 시 리소스 반환,not_started,,

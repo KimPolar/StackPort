@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use runtime::{LocalTunnelEndpoint, SshTunnelManager, SshTunnelStatus};
+pub(crate) use runtime::DatabaseTunnel;
 
 pub(crate) const SCHEMA: &str = "CREATE TABLE ssh_tunnels (
     id TEXT PRIMARY KEY,

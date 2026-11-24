@@ -23,11 +23,18 @@ function address(endpoint: Endpoint) {
   return host.includes(":") ? `[${host}]:${endpoint.port}` : `${host}:${endpoint.port}`;
 }
 
-export function NetworkWorkspace({ projectId, profiles, visible, onTunnelCountChange }: {
-  projectId: string; profiles: SshProfile[]; visible: boolean; onTunnelCountChange: (count: number) => void;
+export function NetworkWorkspace({ projectId, profiles, visible, tunnelViewRequest, onTunnelCountChange }: {
+  projectId: string; profiles: SshProfile[]; visible: boolean; tunnelViewRequest: number; onTunnelCountChange: (count: number) => void;
 }) {
   const [mode, setMode] = useState<"ports" | "diagnostics" | "tunnels">("ports");
   const [tunnelsVisited, setTunnelsVisited] = useState(false);
+  const tunnelTab = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!tunnelViewRequest) return;
+    setMode("tunnels");
+    setTunnelsVisited(true);
+    tunnelTab.current?.focus();
+  }, [tunnelViewRequest]);
   return <section className="network-workspace" aria-label="네트워크 도구">
     <header className="network-heading">
       <h1><Network size={20} aria-hidden /> 네트워크</h1>
@@ -36,7 +43,7 @@ export function NetworkWorkspace({ projectId, profiles, visible, onTunnelCountCh
           onClick={() => setMode("ports")}><Network size={14} aria-hidden /> 로컬 포트</button>
         <button type="button" className="secondary small" aria-pressed={mode === "diagnostics"} aria-controls="network-diagnostics"
           onClick={() => setMode("diagnostics")}><Activity size={14} aria-hidden /> 연결 진단</button>
-        <button type="button" className="secondary small" aria-pressed={mode === "tunnels"} aria-controls="network-tunnels"
+        <button type="button" className="secondary small" aria-pressed={mode === "tunnels"} aria-controls="network-tunnels" ref={tunnelTab}
           onClick={() => { setMode("tunnels"); setTunnelsVisited(true); }}><Route size={14} aria-hidden /> SSH 터널</button>
       </nav>
     </header>

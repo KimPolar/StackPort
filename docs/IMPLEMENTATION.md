@@ -12,6 +12,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
 
+로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
+
 PostgreSQL 14 이상에서 시스템 스키마를 제외한 스키마와 테이블·파티션 테이블·뷰·구체화 뷰를 조회합니다. 연결과 조회 트랜잭션에 읽기 전용 정책을 적용하고 스키마 접근 권한과 테이블·뷰의 SELECT 권한을 표시합니다. 데이터는 한 번에 100행과 24열, 값 하나를 512자까지 표시합니다. 숫자는 서버가 반환한 문자열을 유지하며 NULL과 빈 문자열을 구분합니다. 기본 키가 있는 객체는 키 순서로 읽습니다. 다른 객체의 페이지 순서는 서버 실행 계획에 따라 달라질 수 있습니다. [PostgreSQL 세션 제한](https://www.postgresql.org/docs/current/runtime-config-client.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/current/sql-set-transaction.html)
 
 **필터 및 정렬**은 현재 열 페이지 밖의 열도 사용할 수 있습니다. 비교·범위·문자열 포함·NULL 조건을 최대 16개까지 AND 또는 OR로 결합합니다. 입력값은 PostgreSQL이 추론한 타입으로 바인딩합니다. 날짜 범위를 입력할 때는 날짜 선택기를 사용할 수 있습니다. 최대 8개 열에 방향과 NULL 순서를 지정할 수 있으며, 기본 키가 있으면 정렬 목록에 없는 키 열을 마지막에 적용해 동률을 구분합니다. 조건을 적용하거나 초기화하면 첫 행 페이지로 이동합니다. **조회 SQL**과 **SQL로 열기**는 필터 값 대신 `$1` 같은 매개변수를 표시합니다. SQL 편집기에서 문장을 별도로 실행할 때는 값을 입력합니다. [PostgreSQL 매개변수 타입 추론](https://www.postgresql.org/docs/18/sql-prepare.html) · [PostgreSQL 정렬](https://www.postgresql.org/docs/18/queries-order.html)
@@ -299,6 +301,8 @@ node tests/desktop-smoke.cjs
 ```
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
+
+SSH 점프 호스트와 게이트웨이를 각각 루프백에서 실행해 두 호스트 키를 확인하고, 경유 연결에서 PostgreSQL 조회와 서버 취소를 검증합니다. 터널을 중단하거나 점프 연결을 끊었을 때의 안내와 복구 버튼, 중단된 터널 선택 시 연결 제한, 같은 터널을 다시 시작한 뒤 남은 SQL 초안 실행도 확인합니다. 내보내기 매개변수를 입력하는 도중 연결이 끊기면 저장을 중단하고 결과 파일을 만들지 않는지 검사합니다.
 
 객체 구조 검사에서는 복합 외래 키 열 순서, 생성 열, 부분 인덱스, 비활성 트리거, 하위 파티션의 직접 조회 권한, 구조 목록의 페이지 이동과 뷰 정의 파일의 내용을 확인합니다.
 

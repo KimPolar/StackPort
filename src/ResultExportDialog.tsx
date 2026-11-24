@@ -41,12 +41,13 @@ export function ResultExportDialog({ profile, query, onClose, onExported }: {
   return <ResultFileDialog profile={profile} source={source} driver={driver} onClose={onClose} onExported={onExported} />;
 }
 
-export function ResultFileDialog({ profile, source, driver, onClose, onExported }: {
+export function ResultFileDialog({ profile, source, driver, onClose, onExported, unavailable = "" }: {
   profile: { name: string; environment: string };
   source: string;
   driver: ExportDriver;
   onClose: () => void;
   onExported: (report: ExportReport) => void;
+  unavailable?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pathId = useId();
@@ -103,7 +104,7 @@ export function ResultFileDialog({ profile, source, driver, onClose, onExported 
   }
 
   async function start() {
-    if (pending.current) return;
+    if (pending.current || unavailable) return;
     pending.current = true;
     setBusy(true); setRows(0); setNotice(""); setError("");
     try {
@@ -163,10 +164,11 @@ export function ResultFileDialog({ profile, source, driver, onClose, onExported 
       {busy && <p role="status" className="query-notice">{notice || `${number.format(rows)}행 기록 · 파일을 만드는 중`}</p>}
       {!busy && notice && <p role="status" className="query-notice">{notice}</p>}
       {error && <p role="alert" className="form-error">{error}</p>}
+      {unavailable && <p role="alert" className="form-error">{unavailable}</p>}
       <div className="dialog-actions">
         {busy ? <button type="button" className="secondary" disabled={!token || stopping} onClick={() => void cancel()}>내보내기 중단</button> : <>
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
-          <button type="submit" className="primary">{format} 저장</button>
+          <button type="submit" className="primary" disabled={Boolean(unavailable)}>{format} 저장</button>
         </>}
       </div>
     </form>

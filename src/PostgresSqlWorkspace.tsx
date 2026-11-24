@@ -39,10 +39,9 @@ const resultViews: ResultView[] = ["data", "plan"];
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석" };
 
-export function PostgresSqlWorkspace({ session, editor, onClosed, onExport }: {
+export function PostgresSqlWorkspace({ session, editor, onExport }: {
   session: string | null;
   editor: PostgresEditorState;
-  onClosed: (id: string) => void;
   onExport: (target: PostgresExportTarget) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
@@ -73,7 +72,6 @@ export function PostgresSqlWorkspace({ session, editor, onClosed, onExport }: {
       outcome = await invoke<Outcome>("execute_postgres_sql", {
         id: target.session, request: operation.request, source: target.source, scope: target.scope, bindings, mode: target.mode,
       });
-      if (outcome.connection_closed) onClosed(target.session);
     } catch (error) { outcome = { status: "failed", error: String(error) }; }
     active.current = null;
     setRunning(null);
@@ -111,7 +109,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed, onExport }: {
   }
 
   function execute(current: boolean, mode: Mode = "query", field = input.current) {
-    if (!field || !session || !draft || parameterRequest || analysisTarget) return;
+    if (!field || !session || !draft || parameterRequest?.target.session === session || analysisTarget?.session === session) return;
     const { selectionStart: start, selectionEnd: end } = field;
     const scope: PostgresScope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
     const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope, mode };

@@ -79,7 +79,7 @@ PARTIAL = {
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
     "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집",
     "SP-DB-004": "PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
-    "SP-DB-005": "PostgreSQL TLS 인증서 검증과 실행 중인 로컬 SSH 터널 경유",
+    "SP-DB-005": "PostgreSQL TLS 인증서 검증과 점프 호스트를 지원하는 로컬 SSH 터널 경유",
     "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
     "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL 스키마와 테이블·뷰의 지연 조회 및 접근 불가 표시",
@@ -172,6 +172,7 @@ PARTIAL = {
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
     "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
     "SP-AT-003": "SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 원격 파일 또는 로컬 초안 보관",
+    "SP-AT-006": "Windows에서 SSH 점프 경유 PostgreSQL 연결, 터널 중단 안내와 동일 터널 재연결, SQL 초안 유지 및 실행",
 }
 
 items = {}
@@ -204,6 +205,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-017", "SP-DB-020"}:
                 evidence = "tests/postgres-smoke.cjs"
+            elif requirement_id == "SP-AT-006":
+                evidence = "crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:
                 evidence = "crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MG-014", "SP-MG-018"}:
