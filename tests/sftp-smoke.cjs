@@ -904,6 +904,17 @@ async function verifyEditor(page, remote, uploads, local) {
   await text.waitFor();
   assert.equal(await text.inputValue(), 'alpha\nstart\n');
   await dialog.getByText(/UTF-8 BOM · CRLF/).waitFor();
+  await text.press('Control+Home');
+  await text.press('Shift+End');
+  await text.press('Control+f');
+  const search = dialog.getByRole('searchbox', { name: '찾을 텍스트', exact: true });
+  assert.equal(await search.inputValue(), 'alpha');
+  await search.press('Enter');
+  await dialog.getByText('1 / 1', { exact: true }).waitFor();
+  assert.equal(await text.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), 'alpha');
+  await text.press('Escape');
+  await search.waitFor({ state: 'detached' });
+  assert.equal(await text.inputValue(), 'alpha\nstart\n');
   const multiline = [...Array.from({ length: 199 }, () => 'fixture line'), '한😀'].join('\n');
   await text.fill(multiline);
   await text.press('Control+End');
