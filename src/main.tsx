@@ -13,6 +13,7 @@ import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQ
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
+import { emptySqlDocument, isSqlDraftDirty, SqlFileDialog, type SqlDocument, type SqlDraft } from "./SqlFileDialog";
 import { ResultExportDialog, type ExportReport, type ExportSource } from "./ResultExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
@@ -103,7 +104,8 @@ function App() {
   const [objectDetails, setObjectDetails] = useState<ObjectDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [sql, setSql] = useState("");
+  const [sqlDrafts, setSqlDrafts] = useState<Record<string, SqlDraft>>({});
+  const [sqlFileAction, setSqlFileAction] = useState<{ mode: "open" | "save"; draft: SqlDraft } | null>(null);
   const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
@@ -141,6 +143,7 @@ function App() {
   const closeApproved = useRef(false);
   const closePending = useRef(false);
   const sftpExitGuard = useRef<(() => void) | null>(null);
+  const sqlFileBusy = useRef(false);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
     terminalCount.current = count;
@@ -154,9 +157,12 @@ function App() {
   const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
-  const drafts = useRef<Record<string, string>>({});
+  const drafts = useRef(sqlDrafts);
+  drafts.current = sqlDrafts;
   const project = projects.find(item => item.id === projectId);
   const profile = profiles.find(item => item.id === profileId && item.project_id === projectId);
+  const sqlDraft = profile && sqlDrafts[profile.id];
+  const sql = sqlDraft?.document.text ?? "";
   const restoringProfile = startupProfile.current?.projectId === projectId ? startupProfile.current.profileId : null;
   const { initialize: initializeResume, flush: flushResume, notice: resumeNotice, retry: retryResume } = useWorkspaceResume(
     desktop && startupLoaded ? {
@@ -244,7 +250,7 @@ function App() {
     let live = true;
     abandonQuery();
     objectGeneration.current++;
-    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedQuery(null);
+    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setExecutedQuery(null);
     setRestoreReport(null);
     queryGeneration.current++;
     if (projectId) {
@@ -266,7 +272,7 @@ function App() {
     let live = true;
     abandonQuery();
     const generation = ++objectGeneration.current;
-    setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
+    setObjects([]); setResult(null); setExecutedQuery(null); setError("");
     setSqlEditorOpen(true);
     setParameterRequest(null);
     setQueryPlan(null);
@@ -289,7 +295,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || Object.values(drafts.current).some(draft => draft.trim()))) {
+      if (!closeApproved.current && (sqlFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || Object.values(drafts.current).some(isSqlDraftDirty))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -299,7 +305,7 @@ function App() {
   }, []);
 
   const requestAppClose = useCallback(() => {
-    if (closeApproved.current || closePending.current) return;
+    if (closeApproved.current || closePending.current || sqlFileBusy.current) return;
     if (sftpExitGuard.current) {
       sftpExitGuard.current();
       return;
@@ -307,7 +313,7 @@ function App() {
     const notes: string[] = [];
     if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
     if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
-    if (Object.values(drafts.current).some(draft => draft.trim())) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
+    if (Object.values(drafts.current).some(isSqlDraftDirty)) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
     if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
     closePending.current = true;
     void flushResume().then(() => {
@@ -333,9 +339,32 @@ function App() {
   }, [requestAppClose]);
 
   function changeSql(value: string) {
-    setSql(value);
+    const draft = currentSqlDraft();
+    if (!draft) return;
+    setSqlDrafts(current => ({ ...current, [draft.profileId]: { ...draft, document: { ...draft.document, text: value } } }));
     setQueryPlan(null);
-    if (profileId) drafts.current[profileId] = value;
+  }
+
+  function currentSqlDraft(): SqlDraft | null {
+    if (!profile || !project) return null;
+    const draft = sqlDraft ?? {
+      profileId: profile.id, projectId: project.id,
+      document: emptySqlDocument, savedText: "", savedPath: "",
+    };
+    return { ...draft, targetName: `${project.name} · ${profile.name}` };
+  }
+
+  function openSqlFileDialog(mode: "open" | "save") {
+    const draft = currentSqlDraft();
+    if (draft) setSqlFileAction({ mode, draft });
+  }
+
+  function finishSqlFile(draft: SqlDraft, document: SqlDocument, path: string) {
+    setSqlDrafts(current => ({ ...current, [draft.profileId]: {
+      ...draft, document, savedText: document.text, savedPath: path,
+    } }));
+    setSqlFileAction(null);
+    setQueryPlan(null);
   }
 
   function openObject(object: DatabaseObject) {
@@ -588,11 +617,11 @@ function App() {
         await reloadProfiles(project.id, created.id);
       } else if (modal === "deleteProject" && project) {
         await call("delete_project", { id: project.id });
-        for (const item of profiles) delete drafts.current[item.id];
+        setSqlDrafts(current => Object.fromEntries(Object.entries(current).filter(([, draft]) => draft.projectId !== project.id)));
         await reloadProjects();
       } else if (modal === "deleteProfile" && project && profile) {
         await call("delete_profile", { id: profile.id });
-        delete drafts.current[profile.id];
+        setSqlDrafts(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== profile.id)));
         await reloadProfiles(project.id, "");
       } else if (modal === "backup" && profile) {
         const report = await call<BackupReport>("backup_sqlite", { profileId: profile.id, destination: path });
@@ -667,8 +696,26 @@ function App() {
           </div>}
         </div>
         <div id="sql-editor-panel" hidden={!sqlEditorOpen}>
-          <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (!querying) void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
-          <div className="editor-footer"><span>초안은 앱을 닫을 때까지 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
+          <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql}
+            onChange={e => changeSql(e.target.value)} onKeyDown={e => {
+              if (!(e.ctrlKey || e.metaKey) || e.nativeEvent.isComposing) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                if (!querying) void runQuery(sql);
+              } else if (e.key.toLowerCase() === "s") {
+                e.preventDefault();
+                if (sqlDraft) openSqlFileDialog("save");
+              }
+            }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
+          <div className="editor-footer">
+            <div className="sql-file-actions">
+              <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
+              <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+            </div>
+            <span className="sql-file-state" role="status" title={sqlDraft?.savedPath || undefined}>
+              {sqlDraft && isSqlDraftDirty(sqlDraft) ? "저장하지 않은 변경" : sqlDraft?.savedPath.split(/[/\\]/).at(-1) || "Ctrl + Enter 실행"}
+            </span>
+          </div>
         </div>
       </div>
       {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
@@ -803,6 +850,10 @@ function App() {
       void reloadProjects(id).catch(error => setError(errorText(error)));
     }} />}
     {workspaceCopyOpen && <WorkspaceCopyDialog displayPath={displayPath} onClose={() => setWorkspaceCopyOpen(false)} />}
+    {sqlFileAction && <SqlFileDialog mode={sqlFileAction.mode} target={sqlFileAction.draft.targetName} document={sqlFileAction.draft.document}
+      replacesDraft={isSqlDraftDirty(sqlFileAction.draft)} onClose={() => setSqlFileAction(null)}
+      onBusy={busy => { sqlFileBusy.current = busy; }}
+      onDone={(document, path) => finishSqlFile(sqlFileAction.draft, document, path)} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}

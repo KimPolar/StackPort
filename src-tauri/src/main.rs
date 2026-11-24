@@ -11,6 +11,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
+    open_sql_file, save_sql_file, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
@@ -815,6 +816,30 @@ async fn choose_local_text_draft_path() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_sql_document_path(save: bool) -> Result<Option<String>, String> {
+    worker(move || {
+        let dialog = rfd::FileDialog::new().add_filter("SQL", &["sql"]);
+        let path = if save {
+            dialog.set_title("SQL 파일로 저장").set_file_name("StackPort-query.sql").save_file()
+        } else {
+            dialog.set_title("SQL 파일 열기").pick_file()
+        };
+        Ok(path.map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn read_sql_document(source: String) -> Result<SqlDocument, String> {
+    worker(move || open_sql_file(&source)).await
+}
+
+#[tauri::command]
+async fn write_sql_document(destination: String, document: SqlDocument) -> Result<usize, String> {
+    worker(move || save_sql_file(&destination, &document)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1030,6 +1055,9 @@ fn main() {
             browse_local_directory,
             choose_local_browse_directory,
             choose_local_text_draft_path,
+            choose_sql_document_path,
+            read_sql_document,
+            write_sql_document,
             choose_sqlite_file,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,
