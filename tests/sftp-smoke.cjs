@@ -12,6 +12,7 @@ const root = process.env.STACKPORT_TEST_ROOT;
 const password = 'fixture-sftp-password';
 const passphrase = 'fixture-encrypted-key';
 const { STATUS_CODE: code } = utils.sftp;
+const posixRename = 'posix-rename@openssh.com';
 const htmlSource = '<!doctype html><strong>보고서</strong>';
 const downloadFixtures = new Map([
   ['대시보드.txt', { data: Buffer.from('0123456789abcdef!') }],
@@ -31,6 +32,28 @@ const file = (filename) => {
 };
 
 function sftpChannel(channel, uploads) {
+  if (uploads.advertiseEdit) {
+    // ssh2's test server sends an extension-free v3 VERSION packet by default.
+    const protocol = channel._protocol;
+    const sendData = protocol.channelData;
+    const fields = [posixRename, '1'].map(value => {
+      const data = Buffer.from(value);
+      const field = Buffer.alloc(4 + data.length);
+      field.writeUInt32BE(data.length);
+      data.copy(field, 4);
+      return field;
+    });
+    protocol.channelData = function (id, payload) {
+      if (id === channel.outgoing.id && payload.length === 9 && payload[4] === 2) {
+        protocol.channelData = sendData;
+        const packet = Buffer.concat([payload, ...fields]);
+        packet.writeUInt32BE(packet.length - 4);
+        channel.outgoing.window -= packet.length - payload.length;
+        return sendData.call(this, id, packet);
+      }
+      return sendData.call(this, id, payload);
+    };
+  }
   const directories = new Map([
     ['/home', [directory('stackport')]],
     ['/home/stackport', [directory('.'), directory('..'), file('.숨김'), directory('문서'), directory('정리'), ...Array.from(downloadFixtures.keys(), file)]],
@@ -73,6 +96,12 @@ function sftpChannel(channel, uploads) {
     channel.name(id, entries.splice(0, 2));
   });
   channel.on('CLOSE', (id, handle) => {
+    const opened = handles.get(handle.toString('hex'));
+    if (opened?.writable && uploads.editRace) {
+      const change = uploads.editRace;
+      uploads.editRace = null;
+      change();
+    }
     channel.status(id, handles.delete(handle.toString('hex')) ? code.OK : code.FAILURE);
   });
   channel.on('LSTAT', (id, remotePath) => {
@@ -118,6 +147,30 @@ function sftpChannel(channel, uploads) {
     const attrs = { ...open.fixture.attrs };
     if (open.fixture.changed && open.stats++ > 0) attrs.mtime++;
     channel.attrs(id, attrs);
+  });
+  channel.on('FSETSTAT', (id, handle, attrs) => {
+    const opened = handles.get(handle.toString('hex'));
+    if (!opened?.writable) return channel.status(id, code.PERMISSION_DENIED);
+    opened.fixture.attrs.mode = 0o100000 | attrs.mode;
+    opened.fixture.attrs.uid = attrs.uid;
+    opened.fixture.attrs.gid = attrs.gid;
+    channel.status(id, code.OK);
+  });
+  channel.on('EXTENDED', (id, extension, data) => {
+    if (!uploads.advertiseEdit || extension !== posixRename) return channel.status(id, code.OP_UNSUPPORTED);
+    const firstLength = data.readUInt32BE();
+    const secondOffset = 4 + firstLength;
+    const from = data.toString('utf8', 4, secondOffset);
+    const length = data.readUInt32BE(secondOffset);
+    const to = data.toString('utf8', secondOffset + 4);
+    if (secondOffset + 4 + length !== data.length || !path.posix.basename(from).startsWith('.stackport-upload-')
+      || path.posix.dirname(from) !== path.posix.dirname(to) || !uploads.files.has(from) || !uploads.files.has(to)) {
+      return channel.status(id, code.FAILURE);
+    }
+    uploads.files.set(to, uploads.files.get(from));
+    uploads.files.delete(from);
+    uploads.edits++;
+    channel.status(id, code.OK);
   });
   channel.on('READ', (id, handle, offset, length) => {
     const open = handles.get(handle.toString('hex'));
@@ -204,7 +257,8 @@ function makeHost() {
 async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
-  const uploads = { files: new Map(), behavior: '', aliases: new Map(), moves: 0, moveCollision: false, deletions: 0 };
+  const uploads = { files: new Map(), behavior: '', aliases: new Map(), moves: 0, moveCollision: false,
+    deletions: 0, edits: 0, editRace: null, advertiseEdit: true };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
     client.on('error', () => {});
@@ -335,8 +389,10 @@ async function main() {
     await verifyMoves(page, remote, server.uploads);
     await verifyCopies(page, remote, server.uploads, local);
     await verifyDeletes(page, remote, server.uploads);
+    await verifyEditor(page, remote, server.uploads);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
+    server.uploads.advertiseEdit = false;
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
     await page.getByLabel('인증 방식').selectOption('private_key');
     await page.getByLabel('개인 키 파일 경로').fill(keyFile);
@@ -346,6 +402,7 @@ async function main() {
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
     assert.equal(server.stats.signatures, 1);
     assert.equal(server.stats.subsystem, 2);
+    await verifyEditorCopyOnly(page, remote, server.uploads);
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await connect.waitFor({ state: 'detached' });
     const updatedProfile = await verifyDeleteToken(command, profile, authentication, server.uploads);
@@ -357,7 +414,7 @@ async function main() {
     assert.equal(server.stats.subsystem, 0);
     await verifyFileAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, previews, verified transfers, remote file operations and deletes, production confirmation and audit passed.');
+    console.log('Pinned SFTP host, previews, verified transfers, remote file edits and operations, production confirmation and audit passed.');
   } finally {
     await browser.close();
     await server.close();
@@ -783,6 +840,108 @@ async function verifyDeleteToken(command, profile, authentication, uploads) {
   }
 }
 
+async function verifyEditor(page, remote, uploads) {
+  const folder = '/home/stackport/정리';
+  const fileName = '편집 원본.txt';
+  const filePath = `${folder}/${fileName}`;
+  const original = Buffer.from('\uFEFFalpha\r\nstart\r\n');
+  const saved = Buffer.from('\uFEFFalpha\r\nsaved\r\n');
+  const external = Buffer.from('\uFEFFalpha\r\nother\r\n');
+  const draft = 'alpha\n편집 내용 유지\n';
+  const dialog = page.getByRole('dialog', { name: '원격 텍스트 편집' });
+  const text = dialog.getByLabel('파일 내용');
+  const confirmation = dialog.getByLabel('운영 환경 저장 확인');
+  const save = dialog.getByRole('button', { name: '저장', exact: true });
+  const sourceMetadata = { ...file('').attrs, size: original.length, uid: 1001, gid: 1002, mode: 0o100640 };
+  uploads.files.set(filePath, { data: original, attrs: sourceMetadata });
+  uploads.files.set(`${folder}/편집 불가.bin`, { data: Buffer.from([0, 255]), attrs: { ...file('').attrs, size: 2 } });
+  const tooBig = Buffer.alloc(512 * 1024 + 1, 65);
+  uploads.files.set(`${folder}/편집 큰 파일.txt`, { data: tooBig, attrs: { ...file('').attrs, size: tooBig.length } });
+  await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
+  const open = name => remote.getByRole('button', { name: `${name} 편집`, exact: true }).click();
+  const error = pattern => dialog.getByRole('alert').getByText(pattern).waitFor();
+  const done = async () => {
+    await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('status').getByText('원격 파일 저장 완료', { exact: true }).waitFor();
+  };
+  const noPartials = () => assert.ok(Array.from(uploads.files.keys()).every(name => !path.posix.basename(name).startsWith('.stackport-upload-')));
+
+  for (const [name, message] of [['편집 불가.bin', /UTF-8 텍스트/], ['편집 큰 파일.txt', /512 KiB/]]) {
+    await open(name);
+    await error(message);
+    await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+    await dialog.waitFor({ state: 'detached' });
+  }
+
+  await open(fileName);
+  await text.waitFor();
+  assert.equal(await text.inputValue(), 'alpha\nstart\n');
+  await dialog.getByText(/UTF-8 BOM · CRLF/).waitFor();
+  await text.fill('alpha\nsaved\n');
+  await confirmation.fill('prod');
+  assert.equal(await save.isDisabled(), true);
+  await confirmation.fill('PROD');
+  await text.press('Control+s');
+  await done();
+  assert.equal(uploads.edits, 1);
+  assert.deepEqual(uploads.files.get(filePath).data, saved);
+  const attrs = uploads.files.get(filePath).attrs;
+  assert.equal(attrs.mode, sourceMetadata.mode);
+  assert.equal(attrs.uid, sourceMetadata.uid);
+  assert.equal(attrs.gid, sourceMetadata.gid);
+  await page.getByText('SHA-256', { exact: true }).click();
+  await page.getByText(createHash('sha256').update(saved).digest('hex'), { exact: true }).waitFor();
+  noPartials();
+
+  await open(fileName);
+  await text.waitFor();
+  assert.equal(await text.inputValue(), 'alpha\nsaved\n');
+  await text.fill(draft);
+  await confirmation.fill('PROD');
+  const version = uploads.files.get(filePath);
+  assert.equal(saved.length, external.length);
+  version.data = external;
+  await save.click();
+  await error(/원격 파일이 변경/);
+  assert.equal(await text.inputValue(), draft);
+  assert.equal(uploads.edits, 1);
+  assert.deepEqual(uploads.files.get(filePath).data, external);
+
+  version.data = saved;
+  uploads.editRace = () => { version.data = external; };
+  await save.click();
+  await error(/원격 파일이 변경/);
+  assert.equal(uploads.editRace, null);
+  assert.equal(uploads.edits, 1);
+  assert.deepEqual(uploads.files.get(filePath).data, external);
+  noPartials();
+
+  await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await dialog.getByRole('button', { name: '계속 편집', exact: true }).click();
+  assert.equal(await text.inputValue(), draft);
+  await dialog.getByLabel('저장 위치').selectOption('copy');
+  await dialog.getByLabel('새 파일 이름').fill('편집 보존본.txt');
+  await dialog.getByRole('button', { name: '새 이름으로 저장', exact: true }).click();
+  await done();
+  assert.deepEqual(uploads.files.get(filePath).data, external);
+  assert.deepEqual(uploads.files.get(`${folder}/편집 보존본.txt`).data, Buffer.from('\uFEFF' + draft.replace(/\n/g, '\r\n')));
+  noPartials();
+}
+
+async function verifyEditorCopyOnly(page, remote, uploads) {
+  await remote.getByRole('button', { name: '대시보드.txt 편집', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '원격 텍스트 편집' });
+  await dialog.getByText(/같은 폴더에 새 이름으로 저장/).waitFor();
+  assert.equal(await dialog.getByLabel('저장 위치').count(), 0);
+  await dialog.getByLabel('파일 내용').fill('편집 복사본');
+  await dialog.getByLabel('새 파일 이름').fill('확장 없는 서버의 복사본.txt');
+  await dialog.getByRole('button', { name: '새 이름으로 저장', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await remote.getByText('확장 없는 서버의 복사본.txt', { exact: true }).waitFor();
+  assert.equal(uploads.files.get('/home/stackport/확장 없는 서버의 복사본.txt').data.toString(), '편집 복사본');
+  assert.equal(uploads.edits, 1);
+}
+
 async function verifyFileAudit(page, command, project, profile, localPath) {
   const fileEvents = [];
   let before = null;
@@ -821,22 +980,41 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
   const serialized = JSON.stringify(fileEvents);
-  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', password, passphrase]) {
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', '편집 원본.txt', '편집 내용 유지', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
   }
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
   await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
+  const expected = [];
   for (const action of ['SFTP 다운로드', 'SFTP 업로드', 'SFTP 복사']) {
-    const rows = page.getByRole('listitem').filter({ hasText: action });
     for (const state of ['시작', '완료', '실패', '중단']) {
-      await rows.getByText(state, { exact: true }).first().waitFor();
+      expected.push({ action, state });
     }
   }
-  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제']) {
-    const rows = page.getByRole('listitem').filter({ hasText: action });
-    await rows.getByText('완료', { exact: true }).first().waitFor();
-    await rows.getByText('실패', { exact: true }).first().waitFor();
+  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제', 'SFTP 편집 저장']) {
+    expected.push({ action, state: '완료' }, { action, state: '실패' });
   }
+  const history = page.locator('.audit-card .audit-list');
+  const older = page.getByRole('button', { name: '이전 기록 더 보기', exact: true });
+  await history.waitFor();
+  while (expected.length) {
+    for (let i = expected.length - 1; i >= 0; i--) {
+      const { action, state } = expected[i];
+      const rows = history.getByRole('listitem').filter({ hasText: action });
+      if (await rows.getByText(state, { exact: true }).count()) expected.splice(i, 1);
+    }
+    if (!expected.length || !await older.isEnabled()) break;
+    const first = await history.locator('dd').first().textContent();
+    await older.click();
+    await page.waitForFunction(id => {
+      const current = document.querySelector('.audit-card .audit-list dd');
+      return current && current.textContent !== id;
+    }, first);
+  }
+  assert.deepEqual(expected, []);
+  assert.ok(fileEvents.some(event => event.operation === 'sftp.edit' && event.outcome === 'failed'));
+  assert.ok(fileEvents.some(event => event.operation === 'sftp.edit' && event.outcome === 'succeeded'));
+  assert.ok(fileEvents.some(event => event.operation === 'sftp.edit.copy' && event.outcome === 'succeeded'));
 }
 
 async function verifyPreviews(page, remote, local) {

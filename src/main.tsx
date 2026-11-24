@@ -604,6 +604,8 @@ const auditOperationNames: Record<string, string> = {
   "sftp.move": "SFTP 이동",
   "sftp.copy": "SFTP 복사", "sftp.copy.cancel": "SFTP 복사",
   "sftp.delete": "SFTP 삭제",
+  "sftp.edit": "SFTP 편집 저장", "sftp.edit.cancel": "SFTP 편집 저장",
+  "sftp.edit.copy": "SFTP 편집본 새 이름 저장", "sftp.edit.copy.cancel": "SFTP 편집본 새 이름 저장",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
 

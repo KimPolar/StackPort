@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { SftpTransferStatus, useSftpTransfer } from "./SftpTransferStatus";
 
-export type TransferResult = { kind: TransferSelection["kind"] | "copy"; path: string; bytes: string; sha256: string; auditWarning: string | null };
+export type TransferResult = { kind: TransferSelection["kind"] | "copy" | "edit"; path: string; bytes: string; sha256: string; auditWarning: string | null };
 export type FileSelection = { name: string; location: string };
 export type TransferSelection = FileSelection & (
   | { kind: "download"; folder: string }

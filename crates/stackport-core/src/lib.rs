@@ -36,7 +36,8 @@ pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
 pub use sftp::{
     list_local_directory, preview_local_file, BrowseDirectory, FilePreview, RemotePath,
-    SftpAuthentication, SftpDeletePreview, SftpEntrySource, SftpManager, SftpMutationReport, SftpOpened,
+    SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
+    SftpManager, SftpMutationReport, SftpOpened,
     SftpTransferProgress, SftpTransferReport,
 };
 mod terminal;
@@ -789,6 +790,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sftp.copy" | "sftp.copy.cancel" => "sftp-pinned-host-verified-copy-no-overwrite",
         "sftp.delete" if record.environment == Some("PROD") => "sftp-delete-preview-prod-required",
         "sftp.delete" => "sftp-delete-preview-single-item",
+        "sftp.edit" | "sftp.edit.cancel" => "sftp-edit-hash-verified-posix-replace",
+        "sftp.edit.copy" | "sftp.edit.copy.cancel" => "sftp-edit-copy-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

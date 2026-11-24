@@ -48,9 +48,11 @@ PARTIAL = {
     "SP-FL-008": "전송·복사·원격 이름 변경·이동에서 기존 대상 보존, 파일 크기·수정 시간 변경 감지",
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",
     "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
+    "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, BOM·LF/CRLF 유지, Ctrl+S와 저장하지 않은 변경 확인",
+    "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
-    "SP-FL-021": "SFTP 업로드·원격 복사의 원본·복사본 SHA-256 비교, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
-    "SP-FL-023": "SFTP 전송·복사·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
+    "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
+    "SP-FL-023": "SFTP 전송·복사·편집·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
     "SP-FL-024": "SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",
     "SP-RG-002": "사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",
@@ -103,7 +105,7 @@ PARTIAL = {
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 키 신뢰·교체 이력 기록",
-    "SP-SEC-015": "SQLite PROD 단일 셀 변경과 SFTP PROD 항목 삭제 시 추가 확인 적용",
+    "SP-SEC-015": "SQLite PROD 단일 셀 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v3 작업 공간을 백업한 뒤 트랜잭션으로 v4 이관",
@@ -114,6 +116,8 @@ PARTIAL = {
     "SP-AT-011": "SQLite 바인딩 쿼리와 실행 계획, 페이지 이동·취소·시간 초과 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
+    "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
+    "SP-AT-003": "SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 이름 저장 선택",
 }
 
 items = {}
@@ -168,6 +172,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/src/sftp/copy.rs; tests/sftp-smoke.cjs; src/SftpTransferStatus.tsx; src-tauri/"
             elif requirement_id == "SP-FL-011":
                 evidence = "crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/"
+            elif requirement_id in {"SP-FL-012", "SP-FL-013", "SP-AT-002", "SP-AT-003"}:
+                evidence = "crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx"
             elif requirement_id in {"SP-FL-003", "SP-FL-024"}:
                 evidence = "crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-FL-019":
@@ -197,7 +203,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence = "crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/"
             elif requirement_id in {"SP-SEC-003", "SP-SEC-015"}:
-                evidence = "crates/stackport-core/tests/edit.rs; crates/stackport-core/src/sftp/delete.rs; tests/desktop-smoke.cjs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx"
+                evidence = "crates/stackport-core/tests/edit.rs; crates/stackport-core/src/sftp/delete.rs; crates/stackport-core/src/sftp/editor.rs; tests/desktop-smoke.cjs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx; src/SftpEditorDialog.tsx"
             elif (requirement_id.startswith("SP-DT-") and requirement_id != "SP-DT-001") or requirement_id == "SP-AT-010":
                 evidence = "crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             else:

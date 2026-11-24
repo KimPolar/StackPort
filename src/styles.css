@@ -186,6 +186,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-table th { position: sticky; top: 0; background: #eef4f0; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
+.dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }
+.sftp-editor-text { min-height: 220px; max-height: 48vh; resize: vertical; padding: 10px; border: 1px solid #dce7df; border-radius: 5px; color: #30473b; font: 13px/1.55 Consolas, monospace; }
 .dialog.files-preview { width: min(760px, calc(100vw - 32px)); }
 .files-preview-body { padding: 0 21px 21px; }
 .files-preview-name { margin: 0; overflow-wrap: anywhere; }

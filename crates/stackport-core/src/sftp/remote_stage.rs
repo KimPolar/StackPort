@@ -16,6 +16,7 @@ use std::{
 };
 use uuid::Uuid;
 
+#[derive(Clone, Copy)]
 pub(super) struct StagingTarget<'a> {
     pub directory: &'a SftpString,
     pub path: &'a SftpString,
@@ -33,13 +34,38 @@ pub(super) async fn stage_remote_file<F>(
 where
     F: Future<Output = Result<[u8; 32]>>,
 {
+    ensure_vacant(files, target.path).await?;
+    stage_and_publish(files, target, transfer, progress, write_contents, |temporary| async move {
+        ensure_vacant(files, target.path).await?;
+        transfer.begin_publication()?;
+        rename_to_vacant(
+            files,
+            &temporary,
+            target.path,
+            "원격 서버에서 게시 응답을 받지 못했습니다. 재시도하기 전에 원격 폴더를 새로고침하세요.",
+        )
+        .await
+    }).await
+}
+
+pub(super) async fn stage_and_publish<F, P>(
+    files: &RawSftpSession,
+    target: StagingTarget<'_>,
+    transfer: &Transfer,
+    progress: &impl Fn(u64, Option<u64>, bool),
+    write_contents: impl FnOnce(SftpHandle) -> F,
+    publish: impl FnOnce(SftpString) -> P,
+) -> Result<SftpTransferOutcome>
+where
+    F: Future<Output = Result<[u8; 32]>>,
+    P: Future<Output = Result<()>>,
+{
     let temporary = target
         .directory
         .join(format!(".stackport-upload-{}.part", Uuid::new_v4()).as_bytes());
     if temporary.len() > MAX_REMOTE_PATH {
         return Err("원격 임시 파일 경로가 너무 깁니다.".into());
     }
-    ensure_vacant(files, target.path).await?;
     transfer.check()?;
     let handle = request(files.open(
         temporary.clone(),
@@ -77,17 +103,13 @@ where
         let sha256 = staged?;
         closed?;
         transfer.check()?;
-        ensure_vacant(files, target.path).await?;
-        transfer.begin_publication()?;
-        rename_to_vacant(
-            files,
-            &temporary,
-            target.path,
-            "원격 서버에서 게시 응답을 받지 못했습니다. 재시도하기 전에 원격 폴더를 새로고침하세요.",
-        )
-        .await?;
-        Ok(SftpTransferOutcome::Saved { bytes: target.size.to_string(), sha256 })
-    }.await;
+        publish(temporary.clone()).await?;
+        Ok(SftpTransferOutcome::Saved {
+            bytes: target.size.to_string(),
+            sha256,
+        })
+    }
+    .await;
 
     match published {
         Ok(saved) => Ok(saved),

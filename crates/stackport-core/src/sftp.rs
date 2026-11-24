@@ -4,6 +4,7 @@ mod audit;
 mod copy;
 mod delete;
 mod download;
+mod editor;
 mod mutation;
 mod preview;
 mod remote_stage;
@@ -11,6 +12,7 @@ mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
 pub use delete::SftpDeletePreview;
+pub use editor::{SftpEditDocument, SftpEditSave};
 pub use mutation::{SftpEntrySource, SftpMutationReport};
 pub use preview::{preview_local_file, FilePreview};
 pub use transfer::SftpTransferProgress;
@@ -136,8 +138,10 @@ struct FilesSession {
     files: RawSftpSession,
     operation: AsyncMutex<()>,
     pending_delete: Mutex<Option<delete::PendingDelete>>,
+    pending_edit: Mutex<Option<editor::PendingEdit>>,
     transfers: Mutex<transfer::TransferState>,
     fsync_supported: bool,
+    posix_rename_supported: bool,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -346,8 +350,10 @@ async fn start_session(
             files,
             operation: AsyncMutex::new(()),
             pending_delete: Mutex::new(None),
+            pending_edit: Mutex::new(None),
             transfers: Mutex::new(transfer::TransferState::default()),
             fsync_supported: version.extensions.get("fsync@openssh.com").is_some_and(|value| value == "1"),
+            posix_rename_supported: version.extensions.get(russh_sftp::extensions::POSIX_RENAME).is_some_and(|value| value == "1"),
             _permit: permit,
         },
         directory,

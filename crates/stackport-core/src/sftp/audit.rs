@@ -18,6 +18,8 @@ pub(super) enum FileOperation {
     Move,
     Copy,
     Delete,
+    Edit,
+    EditedCopy,
 }
 
 impl FileOperation {
@@ -33,6 +35,10 @@ impl FileOperation {
             (Self::Copy, false) => "sftp.copy",
             (Self::Copy, true) => "sftp.copy.cancel",
             (Self::Delete, _) => "sftp.delete",
+            (Self::Edit, false) => "sftp.edit",
+            (Self::Edit, true) => "sftp.edit.cancel",
+            (Self::EditedCopy, false) => "sftp.edit.copy",
+            (Self::EditedCopy, true) => "sftp.edit.copy.cancel",
         }
     }
 }

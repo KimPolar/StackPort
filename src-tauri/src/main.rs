@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpDeletePreview, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -616,6 +616,33 @@ async fn preview_sftp_file(
 }
 
 #[tauri::command]
+async fn open_sftp_editor(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    source: SftpEntrySource,
+) -> Result<SftpEditDocument, String> {
+    sftp.open_editor(&id, parent, source).await
+}
+
+#[tauri::command]
+fn discard_sftp_editor(sftp: State<'_, SftpManager>, id: String, token: String) {
+    sftp.discard_editor(&id, &token);
+}
+
+#[tauri::command]
+async fn save_sftp_editor(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    input: SftpEditSave,
+    progress: Channel<SftpTransferProgress>,
+) -> Result<SftpTransferReport, String> {
+    sftp.save_editor(&id, input, |update| {
+        let _ = progress.send(update);
+    }).await
+}
+
+#[tauri::command]
 async fn create_sftp_folder(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -942,6 +969,9 @@ fn main() {
             open_sftp,
             list_sftp_directory,
             preview_sftp_file,
+            open_sftp_editor,
+            discard_sftp_editor,
+            save_sftp_editor,
             create_sftp_folder,
             rename_sftp_entry,
             move_sftp_entry,
