@@ -111,6 +111,8 @@ function App() {
   const [exitClosing, setExitClosing] = useState(false);
   const [exitError, setExitError] = useState("");
   const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
+  const [sqlSelection, setSqlSelection] = useState<{ start: number; end: number } | null>(null);
+  const sqlEditor = useRef<HTMLTextAreaElement>(null);
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
@@ -169,6 +171,7 @@ function App() {
   const profile = profiles.find(item => item.id === profileId && item.project_id === projectId);
   const sqlDraft = profile && sqlDrafts[profile.id];
   const sql = sqlDraft?.document.text ?? "";
+  const sqlToRun = sqlSelection ? sql.slice(sqlSelection.start, sqlSelection.end) : sql;
   const restoringProfile = startupProfile.current?.projectId === projectId ? startupProfile.current.profileId : null;
   const { initialize: initializeResume, flush: flushResume, notice: resumeNotice, retry: retryResume } = useWorkspaceResume(
     desktop && startupLoaded ? {
@@ -280,6 +283,7 @@ function App() {
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setExecutedQuery(null); setError("");
     setSqlEditorOpen(true);
+    setSqlSelection(null);
     setParameterRequest(null);
     setQueryPlan(null);
     setExportReport(null);
@@ -365,6 +369,7 @@ function App() {
     const draft = currentSqlDraft();
     if (!draft) return;
     setSqlDrafts(current => ({ ...current, [draft.profileId]: { ...draft, document: { ...draft.document, text: value } } }));
+    setSqlSelection(null);
     setQueryPlan(null);
   }
 
@@ -387,6 +392,10 @@ function App() {
       ...draft, document, savedText: document.text, savedPath: path,
     } }));
     setSqlFileAction(null);
+    if (sqlFileAction?.mode === "open" && draft.profileId === profileId) {
+      sqlEditor.current?.setSelectionRange(0, 0);
+      setSqlSelection(null);
+    }
     setQueryPlan(null);
   }
 
@@ -470,7 +479,7 @@ function App() {
           setResult(response.result); setExecutedQuery(target);
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
         } else if (response.status === "plan" && target.kind === "sql") {
-          setQueryPlan({ sql: target.sql, plan: response.plan });
+          setQueryPlan({ sql, plan: response.plan });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
           if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters });
           else setQueryNotice("쿼리 실행을 중단했습니다.");
@@ -714,17 +723,27 @@ function App() {
           </button>
           {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
           : sqlEditorOpen && <div className="sql-editor-actions">
-          <button className="secondary small" disabled={!sql.trim()} onClick={() => runQuery(sql, true)}>실행 계획</button>
-          <button className="primary small" disabled={!sql.trim()} onClick={() => runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>
+          <button className="secondary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun, true)}>실행 계획</button>
+          <button className="primary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun)}>
+            <Play size={14} fill="currentColor" /> {sqlSelection ? "선택 영역 실행" : "쿼리 실행"}
+          </button>
           </div>}
         </div>
         <div id="sql-editor-panel" hidden={!sqlEditorOpen}>
-          <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql}
-            onChange={e => changeSql(e.target.value)} onKeyDown={e => {
+          <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea key={profile.id} ref={sqlEditor} id="sql-editor" spellCheck={false} value={sql}
+            onChange={e => changeSql(e.target.value)}
+            onSelect={event => {
+              const { selectionStart: start, selectionEnd: end } = event.currentTarget;
+              setSqlSelection(start === end ? null : { start, end });
+            }} onKeyDown={e => {
               if (!(e.ctrlKey || e.metaKey) || e.nativeEvent.isComposing) return;
               if (e.key === "Enter") {
                 e.preventDefault();
-                if (!querying) void runQuery(sql);
+                const { selectionStart, selectionEnd } = e.currentTarget;
+                if (!querying) {
+                  const query = selectionStart === selectionEnd ? sql : sql.slice(selectionStart, selectionEnd);
+                  runQuery(query);
+                }
               } else if (e.key.toLowerCase() === "s") {
                 e.preventDefault();
                 if (sqlDraft) openSqlFileDialog("save");
