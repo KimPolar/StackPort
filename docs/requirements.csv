@@ -95,7 +95,7 @@ SP-FL-007,실패 복구,"연결 단절 이후 재시도, 청크 재개 가능 �
 SP-FL-008,충돌 정책,"덮어쓰기/건너뛰기/이름 변경/날짜·크기 비교/해시 비교, 배치별 공통 정책.",partial,업·다운로드 대상의 기존 파일 보존과 전송 중 크기·수정 시간 변경 감지,crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; tests/sftp-smoke.cjs; src/SftpTransferDialog.tsx; src-tauri/
 SP-FL-009,파일 속성,"크기, 시간, 유형, 소유자/그룹/Unix 권한, 심볼릭 링크, 숨김 파일 표시.",partial,"로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-010,원격 권한 변경,chmod/chown 등 서버가 지원하는 수정 기능과 실패 사유 표시.,not_started,,
-SP-FL-011,파일 미리보기,텍스트·이미지·바이너리 HEX·웹 문서·JSON·XML·CSV의 안전한 보기.,not_started,,
+SP-FL-011,파일 미리보기,텍스트·이미지·바이너리 HEX·웹 문서·JSON·XML·CSV의 안전한 보기.,partial,"로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/
 SP-FL-012,통합 에디터,"문법 강조, 인코딩, 줄바꿈, 검색·치환, 줄 번호, 코드 접기, 대용량 읽기 전용 모드.",not_started,,
 SP-FL-013,원격 즉시 편집,파일 열기→임시 복사→편집→안전한 저장→원격 업로드; 충돌 시 원본 보존.,not_started,,
 SP-FL-014,외부 편집기,"사용자가 지정한 로컬 편집기 연동, 변경 감시 후 재업로드 확인.",not_started,,

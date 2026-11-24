@@ -20,6 +20,8 @@ SSH 터미널은 현재 Windows OpenSSH와 영문 호스트/IP·영문 사용자
 
 파일 탐색은 저장된 SSH 연결로 별도 SFTP v3 연결을 열고, 인증 전에 SSH 터미널과 같은 호스트 키 원본을 비교합니다. 암호와 단일 개인 키 파일을 지원하며, 암호화 개인 키의 암호는 한 번 입력합니다. 인증 정보는 연결 설정에 보존하지 않습니다. `PROD` 확인과 연결 정의 변경 검사는 SSH 터미널과 동일하게 적용합니다. 로컬·원격 폴더를 나란히 표시하며 상위 폴더 이동·새로고침·숨김 파일 표시를 제공합니다. 원격 항목의 파일 크기·수정 시간·소유자와 그룹 ID·권한은 서버가 제공한 값입니다. 첫 2,000개 항목을 표시하고 유효한 원격 경로의 원본 바이트는 목록 이동에 유지합니다. 기존 터미널은 자체 연결을 유지합니다. [Russh](https://github.com/Eugeny/russh) · [Russh SFTP](https://github.com/AspectUnk/russh-sftp)
 
+로컬·SFTP 목록의 미리보기는 일반 파일을 읽기 전용으로 엽니다. HTML·XML·JSON·CSV를 포함한 UTF-8은 처음 64 KiB까지 원문으로 표시하고, 바이너리는 처음 4 KiB까지 오프셋·HEX·ASCII로 표시합니다. 정적 PNG는 1 MiB와 가로·세로 각 2,048픽셀 한도를 적용하며 부가 메타데이터를 제거한 이미지로 표시합니다. 텍스트와 이미지 데이터는 미리보기 창에만 둡니다. 읽기 전후의 파일 크기와 수정 시간이 달라지면 결과를 폐기합니다. [W3C PNG 규격](https://www.w3.org/TR/png-3/)
+
 SFTP 다운로드는 선택한 일반 파일을 최대 32 KiB 단위로 읽고, 사용자가 지정한 로컬 폴더의 임시 파일에 기록합니다. 전송한 바이트 수, 평균 속도와 예상 잔여 시간을 표시하며, 완료 후 받은 바이트의 SHA-256을 표시합니다. 전송 전후의 원격 크기와 수정 시간을 비교하고 예상 길이보다 일찍 끝난 파일은 폐기합니다. 같은 크기와 수정 시간을 가진 동시 변경은 SFTP 메타데이터만으로 검출할 수 없습니다. 파일을 디스크에 동기화한 뒤 새 경로로 옮기며, 같은 이름의 기존 파일은 그대로 보존합니다. 전송 중 중단을 요청하면 진행 중인 요청이 정리된 뒤 임시 파일을 없앱니다. 현재 연결당 한 파일을 처리하며, 앱 강제 종료 시 임시 파일이 남을 수 있습니다. [SFTP v3 파일 읽기](https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-02#section-6.4)
 
 SFTP 업로드는 현재 원격 폴더에 임시 파일을 새로 만들고 최대 32 KiB씩 전송합니다. 임시 파일을 다시 읽어 원본 SHA-256과 크기를 비교하며, 서버에서 지원하면 원격 `fsync`도 실행합니다. 게시할 때는 기존 이름을 교체하지 않는 SFTP v3 `RENAME`을 사용합니다. 서버가 Unix 권한을 적용하면 새 파일은 소유자 읽기·쓰기(`0600`)로 생성됩니다. 성공하면 원격 목록을 새로고침합니다. 검증 실패, 충돌 또는 중단 시 생성한 임시 파일을 정리하며, 연결이 끊겨 정리를 확인할 수 없으면 해당 경로를 표시합니다. 서버가 게시 응답을 보내기 전에 연결이 끊기면 사용자가 목록을 새로고침해 저장 상태를 확인할 수 있게 안내합니다. [SFTP v3 이름 변경](https://datatracker.ietf.org/doc/html/draft-ietf-secsh-filexfer-02#section-6.5)
@@ -97,6 +99,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/src/sftp.rs` 단위 테스트와 `tests/sftp-smoke.cjs`에서 로컬·원격 탐색, `PROD`와 정의 버전 확인, 암호·암호화 키 인증, 폴더 이동·권한·숨김 파일 표시, 호스트 키 변경 시 사용자 인증 차단을 검사합니다.
 - `crates/stackport-core/src/sftp/download.rs` 단위 테스트와 `tests/sftp-smoke.cjs`에서 SFTP 다운로드의 바이트·체크섬·빈 파일, 전송 전과 전송 중 충돌, 중단과 원격 변경 시 임시 파일 정리를 검사합니다.
 - `tests/sftp-smoke.cjs`에서 SFTP 업로드의 실제 바이트와 SHA-256, 빈 파일, 업로드 후 목록 갱신, 충돌·중단·해시 불일치의 임시 파일 정리와 상위 경로 입력 차단을 검사합니다.
+- `crates/stackport-core/src/sftp/preview.rs` 단위 테스트와 `tests/sftp-smoke.cjs`에서 로컬 UTF-8과 키보드 조작, 원격 HTML의 원문 표시, 정적 PNG, HEX 표시 범위, 빈 파일과 읽기 중 변경을 검사합니다.
 - `tests/portable-smoke.cjs`: 새 폴더에 복사한 Windows EXE에서 지정 모드, 버전 표시, 데이터 파일과 휴대형 WebView2 프로필 위치를 확인합니다.
 - `crates/stackport-core/tests/workspace_copy.rs`: Windows에서 WAL이 있는 작업 공간의 복사, 선택한 신뢰 저장소, 체크섬, 기존 대상 거절 및 실패 시 대상 폴더 부재를 확인합니다.
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.

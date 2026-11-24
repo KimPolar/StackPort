@@ -1,8 +1,10 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
 mod download;
+mod preview;
 mod transfer;
 mod upload;
+pub use preview::{preview_local_file, FilePreview};
 pub use transfer::{SftpTransferOutcome, SftpTransferProgress};
 
 use crate::{ssh, Result, SshManager, SshProfile};
@@ -539,6 +541,34 @@ pub fn list_local_directory(value: &str) -> Result<BrowseDirectory> {
         entries,
         truncated,
     })
+}
+
+fn open_local_file(value: &str) -> Result<fs::File> {
+    let path = Path::new(value);
+    if !path.is_absolute() || (cfg!(windows) && value.starts_with("\\\\.\\")) {
+        return Err("로컬 파일의 절대 경로를 확인하세요.".into());
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| "로컬 파일을 찾을 수 없습니다.")?;
+    if !metadata.is_file() {
+        return Err("로컬 경로가 일반 파일인지 확인하세요.".into());
+    }
+    let mut open = fs::OpenOptions::new();
+    open.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        open.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = open.open(path).map_err(|_| "로컬 파일을 열 수 없습니다.")?;
+    if !file
+        .metadata()
+        .map_err(|_| "로컬 파일의 속성을 읽을 수 없습니다.")?
+        .is_file()
+    {
+        return Err("로컬 경로가 일반 파일인지 확인하세요.".into());
+    }
+    Ok(file)
 }
 
 #[cfg(windows)]

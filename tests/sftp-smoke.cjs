@@ -12,8 +12,11 @@ const root = process.env.STACKPORT_TEST_ROOT;
 const password = 'fixture-sftp-password';
 const passphrase = 'fixture-encrypted-key';
 const { STATUS_CODE: code } = utils.sftp;
+const htmlSource = '<!doctype html><strong>보고서</strong>';
 const downloadFixtures = new Map([
   ['대시보드.txt', { data: Buffer.from('0123456789abcdef!') }],
+  ['보고서.html', { data: Buffer.from(htmlSource) }],
+  ['미리보기.png', { data: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMIqIgCAAI+ASOK5tZ4AAAAAElFTkSuQmCC', 'base64') }],
   ['빈 파일.txt', { data: Buffer.alloc(0) }],
   ['전송.bin', { data: Buffer.from(Array.from({ length: 145_000 }, (_, index) => index % 251)) }],
   ['느린 파일.bin', { data: Buffer.alloc(384 * 1024, 17), delay: 70 }],
@@ -194,6 +197,7 @@ async function main() {
   fs.mkdirSync(local);
   fs.mkdirSync(path.join(local, '하위 폴더'));
   fs.writeFileSync(path.join(local, '로컬 파일.txt'), 'fixture');
+  fs.writeFileSync(path.join(local, '로컬 문서.json'), '\uFEFF{"제목":"보고서"}');
   const keyFile = path.join(root, 'encrypted-identity');
   const sshKeygen = path.join(process.env.SystemRoot, 'System32', 'OpenSSH', 'ssh-keygen.exe');
   execFileSync(sshKeygen, ['-q', '-t', 'ed25519', '-N', passphrase, '-f', keyFile], { stdio: 'pipe' });
@@ -266,6 +270,7 @@ async function main() {
     await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
 
+    await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
 
@@ -288,11 +293,59 @@ async function main() {
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, file navigation, verified uploads/downloads, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, file navigation and previews, verified uploads/downloads, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
   }
+}
+
+async function verifyPreviews(page, remote, local) {
+  const dialog = page.getByRole('dialog', { name: '파일 미리보기' });
+  const open = async (pane, name) => {
+    const button = pane.getByRole('button', { name: `${name} 미리보기`, exact: true });
+    await button.click();
+    await dialog.waitFor();
+    return button;
+  };
+  const close = async () => {
+    await dialog.getByRole('button', { name: '닫기' }).click();
+    await dialog.waitFor({ state: 'detached' });
+  };
+
+  const localButton = await open(local, '로컬 문서.json');
+  await dialog.getByText('{"제목":"보고서"}', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await localButton.evaluate(button => button === document.activeElement), true);
+
+  await open(remote, '보고서.html');
+  const source = dialog.getByLabel('UTF-8 원문', { exact: true });
+  await source.waitFor();
+  assert.equal(await source.textContent(), htmlSource);
+  assert.equal(await source.locator('strong').count(), 0);
+  await close();
+
+  await open(remote, '미리보기.png');
+  const image = dialog.getByRole('img', { name: '미리보기.png' });
+  await image.waitFor();
+  await page.waitForFunction(() => document.querySelector('img[alt="미리보기.png"]')?.naturalWidth === 1);
+  await close();
+
+  await open(remote, '전송.bin');
+  await dialog.getByText(/처음 4,096 B 표시/).waitFor();
+  const hex = await dialog.getByLabel('HEX', { exact: true }).textContent();
+  assert.ok(hex.startsWith('00000000  00 01 02 03'));
+  assert.ok(hex.split('\n').at(-2).startsWith('00000FF0'));
+  await close();
+
+  await open(remote, '빈 파일.txt');
+  await dialog.getByText('빈 파일입니다.', { exact: true }).waitFor();
+  await close();
+
+  await open(remote, '전송 중 수정.txt');
+  await dialog.getByRole('alert').getByText(/미리보기 중 변경되었습니다/).waitFor();
+  await close();
 }
 
 async function verifyDownloads(page, remote, local) {

@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Download, File, FolderOpen, Link, RefreshCw, Upload } from "lucide-react";
+import { ArrowUp, Download, Eye, File, FolderOpen, Link, RefreshCw, Upload } from "lucide-react";
+import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
@@ -20,6 +21,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [localFolder, setLocalFolder] = useState("");
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
+  const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
   const [remoteRefresh, setRemoteRefresh] = useState(0);
   const [error, setError] = useState("");
@@ -54,6 +56,14 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     else setRemoteRefresh(value => value + 1);
   }
 
+  function choosePreview(name: string, source: string, result: Promise<FilePreview>) {
+    setPreview({
+      name,
+      source,
+      result: result.then(preview => ({ preview }), error => ({ error: String(error) })),
+    });
+  }
+
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
     <div className="terminal-heading"><div><h1><FolderOpen size={20} /> 파일 탐색</h1></div></div>
     {remote ? <div className="results-card files-connection" aria-label="SFTP 연결 대상">
@@ -77,14 +87,18 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     <div className="files-panes">
       <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
         onFolder={directory => setLocalFolder(displayPath(directory.path))} refresh={localRefresh}
+        onPreview={file => choosePreview(file.name, "로컬 파일", invoke("preview_local_browse_file", { path: file.location }))}
         action={remote ? { kind: "upload", run: file => chooseTransfer({ ...file, kind: "upload", remotePath: remote.directory.path, remoteDirectory: remote.directory.location }) } : undefined} />
       {remote ? <DirectoryPane key={remote.id} title="원격 파일" initial={remote.directory}
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
+        onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
+          invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
     </div>
     {remote && transfer && <SftpTransferDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       file={transfer} onClose={() => setTransfer(null)} onSaved={transferSaved} />}
+    {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
 
@@ -175,8 +189,9 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder, onFolder, action, refresh }: {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, action, refresh }: {
   title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
+  onPreview: (file: FileSelection) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -238,7 +253,7 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, action, r
     {error && <p className="form-error files-note" role="alert">{error}</p>}
     {directory?.truncated && <p className="form-note files-note">처음 2,000개 항목을 표시합니다. 하위 폴더는 경로를 입력해 열 수 있습니다.</p>}
     {directory && <div className="files-table-wrap"><table className="files-table" aria-label={`${title} 목록`}>
-      <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}{action && <th scope="col"><span className="sr-only">{actionLabel}</span></th>}</tr></thead>
+      <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}<th scope="col"><span className="sr-only">파일 작업</span></th></tr></thead>
       <tbody>{shown.map((entry, index) => {
         const location = entry.location;
         const icon = entry.kind === "directory" ? <FolderOpen size={14} /> : entry.kind === "symlink" ? <Link size={14} /> : <File size={14} />;
@@ -249,9 +264,13 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, action, r
           <td>{entry.kind !== "directory" && entry.size !== null ? `${numbers.format(BigInt(entry.size))} B` : "—"}</td>
           <td>{entry.modified === null ? "—" : dates.format(entry.modified * 1000)}</td>
           {!chooseFolder && <td>{entry.mode === null ? "—" : entry.mode.toString(8).padStart(4, "0")} · {entry.uid ?? "—"}/{entry.gid ?? "—"}</td>}
-          {action && <td>{entry.kind === "file" && location && <button type="button" className="icon-button" disabled={busy}
-            aria-label={`${entry.name} ${actionLabel}`} title={actionLabel} onClick={() => action.run({ name: entry.name, location })}>
-            {action.kind === "upload" ? <Upload size={14} /> : <Download size={14} />}</button>}</td>}
+          <td>{entry.kind === "file" && location && <div className="files-row-actions">
+            <button type="button" className="icon-button" disabled={busy} aria-label={`${entry.name} 미리보기`} title="미리보기"
+              onClick={() => onPreview({ name: entry.name, location })}><Eye size={14} /></button>
+            {action && <button type="button" className="icon-button" disabled={busy}
+              aria-label={`${entry.name} ${actionLabel}`} title={actionLabel} onClick={() => action.run({ name: entry.name, location })}>
+              {action.kind === "upload" ? <Upload size={14} /> : <Download size={14} />}</button>}
+          </div>}</td>
         </tr>;
       })}</tbody>
     </table></div>}

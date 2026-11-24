@@ -1,7 +1,7 @@
 //! Verify a remote staging file before asking the server to publish it.
 
 use super::{
-    file_error,
+    file_error, open_local_file,
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, MAX_REMOTE_PATH,
 };
@@ -13,7 +13,6 @@ use russh_sftp::{
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    path::Path,
     time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
@@ -66,7 +65,7 @@ async fn upload_file(
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>, bool),
 ) -> Result<SftpTransferOutcome> {
-    let source = tokio::task::spawn_blocking(move || open_local_source(&source))
+    let source = tokio::task::spawn_blocking(move || open_local_file(&source))
         .await
         .map_err(|_| "업로드할 로컬 파일을 열 수 없습니다.")??;
     let mut local = tokio::fs::File::from_std(source);
@@ -248,35 +247,4 @@ fn validate_name(name: &str) -> Result<()> {
         return Err("경로 구분자 없이 새 원격 파일 이름을 입력하세요.".into());
     }
     Ok(())
-}
-
-fn open_local_source(value: &str) -> Result<fs::File> {
-    let path = Path::new(value);
-    if !path.is_absolute() {
-        return Err("업로드할 로컬 파일의 절대 경로를 확인하세요.".into());
-    }
-    let metadata =
-        fs::symlink_metadata(path).map_err(|_| "업로드할 로컬 파일을 찾을 수 없습니다.")?;
-    if !metadata.is_file() {
-        return Err("업로드할 로컬 경로가 일반 파일인지 확인하세요.".into());
-    }
-    let mut open = fs::OpenOptions::new();
-    open.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
-        open.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = open
-        .open(path)
-        .map_err(|_| "업로드할 로컬 파일을 열 수 없습니다.")?;
-    if !file
-        .metadata()
-        .map_err(|_| "업로드할 로컬 파일의 속성을 읽을 수 없습니다.")?
-        .is_file()
-    {
-        return Err("업로드할 로컬 경로가 일반 파일인지 확인하세요.".into());
-    }
-    Ok(file)
 }

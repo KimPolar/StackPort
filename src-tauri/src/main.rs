@@ -5,7 +5,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
-    list_local_directory, local_ports, BrowseDirectory, EditSession, NetworkDiagnostics, NetworkManager,
+    list_local_directory, local_ports, preview_local_file, BrowseDirectory, EditSession, FilePreview, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
@@ -607,6 +607,20 @@ async fn list_sftp_directory(
 }
 
 #[tauri::command]
+async fn preview_sftp_file(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    location: String,
+) -> Result<FilePreview, String> {
+    sftp.preview(&id, location).await
+}
+
+#[tauri::command]
+async fn preview_local_browse_file(path: String) -> Result<FilePreview, String> {
+    worker(move || preview_local_file(&path)).await
+}
+
+#[tauri::command]
 async fn download_sftp_file(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -855,6 +869,8 @@ fn main() {
             open_saved_ssh_terminal,
             open_sftp,
             list_sftp_directory,
+            preview_sftp_file,
+            preview_local_browse_file,
             download_sftp_file,
             upload_sftp_file,
             cancel_sftp_transfer,

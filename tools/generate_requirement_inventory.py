@@ -46,6 +46,7 @@ PARTIAL = {
     "SP-FL-007": "SFTP 전송 실패·중단 시 임시 파일 정리, 완료 파일 게시와 수동 재시도",
     "SP-FL-008": "업·다운로드 대상의 기존 파일 보존과 전송 중 크기·수정 시간 변경 감지",
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",
+    "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
     "SP-FL-021": "SFTP 업로드의 원본·원격 SHA-256 비교, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",
     "SP-RG-002": "사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",
@@ -161,6 +162,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/web_check.rs; tests/ports-smoke.cjs; src/WebDiagnosticResult.tsx; src-tauri/"
             elif requirement_id in {"SP-FL-006", "SP-FL-007", "SP-FL-008", "SP-FL-021"}:
                 evidence = "crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; tests/sftp-smoke.cjs; src/SftpTransferDialog.tsx; src-tauri/"
+            elif requirement_id == "SP-FL-011":
+                evidence = "crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/"
             elif requirement_id.startswith("SP-FL-"):
                 evidence = "crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-RG-001", "SP-RG-002", "SP-RG-003", "SP-RG-004", "SP-RG-018"}:

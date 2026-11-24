@@ -34,7 +34,10 @@ pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
-pub use sftp::{list_local_directory, BrowseDirectory, RemotePath, SftpAuthentication, SftpTransferOutcome, SftpTransferProgress, SftpManager, SftpOpened};
+pub use sftp::{
+    list_local_directory, preview_local_file, BrowseDirectory, FilePreview, RemotePath,
+    SftpAuthentication, SftpManager, SftpOpened, SftpTransferOutcome, SftpTransferProgress,
+};
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
 mod terminal_output;
