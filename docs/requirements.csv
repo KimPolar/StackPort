@@ -1,5 +1,5 @@
 ﻿id,title,requirement,status,implemented_subset,evidence
-SP-UI-001,프로젝트 관리,"프로젝트/워크스페이스의 생성·복제·이름변경·보관·삭제, 계층형 폴더·태그·설명·아이콘·색상 지정.",partial,프로젝트 생성·이름 변경·삭제,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-UI-001,프로젝트 관리,"프로젝트/워크스페이스의 생성·복제·이름변경·보관·삭제, 계층형 폴더·태그·설명·아이콘·색상 지정.",partial,프로젝트 생성·이름 변경·복제·삭제와 복제 시 SQLite·SSH 연결 정의 복사,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-UI-002,통합 탐색기,"좌측 탐색 트리에서 호스트, 세션, DB 연결, DB 객체, 원격 파일, 모델, 작업, 대시보드를 일관되게 탐색.",partial,프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-UI-003,무제한 탭,서로 다른 유형의 탭을 동시에 열고 순서 변경·고정·복제·일괄 닫기·최근 닫은 탭 복원.,partial,여러 Windows 로컬 터미널 탭 열기·전환·닫기,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-UI-004,화면 분할,"2분할 수평/수직, 4분할, 자유 분할 및 크기 조절. 터미널과 SQL 편집기 등을 교차 배치.",not_started,,

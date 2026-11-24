@@ -264,8 +264,28 @@ async function main() {
   if ([database, backupPath, restoredPath, filteredCsv, sqlCsv, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
+
+  await page.getByRole('button', { name: '작업 기록' }).click();
+  const projectSelector = page.getByLabel('프로젝트', { exact: true });
+  const sourceProject = await projectSelector.inputValue();
+  await page.getByRole('button', { name: 'SSH 연결 추가' }).click();
+  await page.getByLabel('연결 이름').fill('복제할 SSH');
+  await page.getByLabel('호스트 또는 IP').fill('example.test');
+  await page.getByLabel('사용자 이름').fill('stackport');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
+  await page.getByRole('button', { name: '복제', exact: true }).click();
+  await page.getByLabel('이름', { exact: true }).fill('E2E 복제본');
+  await page.getByRole('button', { name: '프로젝트 복제', exact: true }).click();
+  await page.getByRole('option', { name: 'E2E 복제본' }).waitFor({ state: 'attached' });
+  if (await projectSelector.inputValue() === sourceProject) throw new Error('Duplicated project was not selected.');
+  await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
+  await page.getByRole('button', { name: /운영 DB.*PROD/ }).click();
+  await page.getByRole('button', { name: 'people' }).click();
+  await page.getByText('백업 이후 변경', { exact: true }).waitFor();
+
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, query cancellation, editing, CSV export, backup, verified restore, and audit passed.');
+  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, and project duplication passed.');
   await browser.close();
 }
 

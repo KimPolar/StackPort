@@ -42,6 +42,12 @@ async fn create_project(store: State<'_, Store>, name: String) -> Result<Project
 }
 
 #[tauri::command]
+async fn duplicate_project(store: State<'_, Store>, source: String, name: String) -> Result<Project, String> {
+    let store = store.inner().clone();
+    worker(move || store.duplicate_project(&source, &name)).await
+}
+
+#[tauri::command]
 async fn rename_project(store: State<'_, Store>, id: String, name: String) -> Result<(), String> {
     let store = store.inner().clone();
     worker(move || store.rename_project(&id, &name)).await
@@ -579,6 +585,7 @@ fn main() {
             list_projects,
             list_audit_events,
             create_project,
+            duplicate_project,
             rename_project,
             delete_project,
             list_profiles,

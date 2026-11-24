@@ -10,6 +10,7 @@ mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
+mod project_lifecycle;
 mod query;
 pub use query::{QueryOutcome, SqlParameterValue};
 mod restore;
@@ -438,7 +439,10 @@ impl Store {
     }
 
     pub fn list_profiles(&self, project_id: &str) -> Result<Vec<Profile>> {
-        let db = self.connect()?;
+        Self::list_profiles_on(&self.connect()?, project_id)
+    }
+
+    fn list_profiles_on(db: &Connection, project_id: &str) -> Result<Vec<Profile>> {
         let mut stmt = db.prepare("SELECT id, project_id, name, path, environment FROM profiles WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, id").map_err(db_error)?;
         let items = stmt
             .query_map([project_id], profile_from_row)
@@ -742,6 +746,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
+        "project.duplicate" => "local-project-metadata-only",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

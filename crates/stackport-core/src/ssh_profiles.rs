@@ -1,7 +1,7 @@
 //! Project-scoped SSH connection definitions without credentials.
 
 use crate::{db_error, insert_audit, ssh, valid_name, AuditRecord, Result, Store};
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -88,7 +88,13 @@ pub(crate) fn verify_saved(db: &rusqlite::Connection, profile: &SshProfile) -> R
 
 impl Store {
     pub fn list_ssh_profiles(&self, project_id: &str) -> Result<Vec<SshProfile>> {
-        let db = self.connect()?;
+        Self::list_ssh_profiles_on(&self.connect()?, project_id)
+    }
+
+    pub(crate) fn list_ssh_profiles_on(
+        db: &Connection,
+        project_id: &str,
+    ) -> Result<Vec<SshProfile>> {
         let mut statement = db.prepare("SELECT id, project_id, name, host, port, username, environment, revision FROM ssh_profiles WHERE project_id=?1 ORDER BY name COLLATE NOCASE, id").map_err(db_error)?;
         let profiles = statement
             .query_map([project_id], from_row)

@@ -9,7 +9,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
-    "SP-UI-001": "프로젝트 생성·이름 변경·삭제",
+    "SP-UI-001": "프로젝트 생성·이름 변경·복제·삭제와 복제 시 SQLite·SSH 연결 정의 복사",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색",
     "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
@@ -130,7 +130,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
                 evidence = "crates/stackport-core/tests/migration.rs"
-            elif requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
+            elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
                 evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"

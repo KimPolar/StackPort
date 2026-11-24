@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use stackport_core::{Store, PAGE_SIZE};
+use stackport_core::{SshProfileInput, Store, PAGE_SIZE};
 use tempfile::TempDir;
 
 fn fixture() -> (TempDir, Store, String, String) {
@@ -41,6 +41,106 @@ fn project_and_profiles_survive_reopen_and_delete_cascades() {
     reopened.delete_project(&project_id).unwrap();
     assert!(reopened.list_profiles(&project_id).unwrap().is_empty());
     assert!(reopened.query(&profile_id, "SELECT 1", 0).is_err());
+}
+
+#[test]
+fn duplicate_project_keeps_targets_but_gives_connections_new_ids() {
+    let (dir, store, source, sqlite_id) = fixture();
+    let ssh = store
+        .create_ssh_profile(
+            &source,
+            SshProfileInput {
+                name: "production".into(),
+                host: "server.example.com".into(),
+                port: 2222,
+                username: "alice".into(),
+                environment: "PROD".into(),
+            },
+        )
+        .unwrap();
+    let ssh = store
+        .update_ssh_profile(
+            &ssh.id,
+            1,
+            SshProfileInput {
+                name: "production updated".into(),
+                host: ssh.host,
+                port: ssh.port,
+                username: ssh.username,
+                environment: ssh.environment,
+            },
+        )
+        .unwrap();
+    let new_project = store.duplicate_project(&source, " copy ").unwrap();
+    assert_ne!(new_project.id, source);
+    assert_eq!(new_project.name, "copy");
+    let reopened = Store::open(dir.path().join("workspace.sqlite")).unwrap();
+    let sqlite_copy = reopened
+        .list_profiles(&new_project.id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let sqlite_original = reopened.list_profiles(&source).unwrap().pop().unwrap();
+    assert_eq!(sqlite_original.id, sqlite_id);
+    assert_ne!(sqlite_copy.id, sqlite_original.id);
+    assert_eq!(sqlite_copy.project_id, new_project.id);
+    assert_eq!(sqlite_copy.path, sqlite_original.path);
+    assert_eq!(sqlite_copy.environment, sqlite_original.environment);
+    let ssh_copy = reopened
+        .list_ssh_profiles(&new_project.id)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_ne!(ssh_copy.id, ssh.id);
+    assert_eq!(ssh_copy.project_id, new_project.id);
+    assert_eq!(
+        (
+            ssh_copy.host,
+            ssh_copy.port,
+            ssh_copy.username,
+            ssh_copy.environment,
+            ssh_copy.revision
+        ),
+        (ssh.host, ssh.port, ssh.username, ssh.environment, 1)
+    );
+    let event = &reopened.list_audit_events(None).unwrap().events[0];
+    assert_eq!(event.operation, "project.duplicate");
+    assert_eq!(event.affected_count, Some(3));
+    assert_eq!(event.project_id.as_deref(), Some(new_project.id.as_str()));
+    reopened.delete_project(&new_project.id).unwrap();
+    assert_eq!(reopened.list_ssh_profiles(&source).unwrap().len(), 1);
+    assert_eq!(
+        reopened
+            .query(&sqlite_id, "SELECT count(*) FROM things", 0)
+            .unwrap()
+            .rows[0][0]
+            .display,
+        "201"
+    );
+}
+
+#[test]
+fn project_duplicate_rolls_back_connections_when_audit_fails() {
+    let (dir, store, source, _sqlite) = fixture();
+    let workspace = Connection::open(dir.path().join("workspace.sqlite")).unwrap();
+    workspace
+        .execute_batch(
+            "CREATE TRIGGER reject_duplicate_audit BEFORE INSERT ON audit_events
+         WHEN NEW.operation='project.duplicate'
+         BEGIN SELECT raise(ABORT, 'duplicate audit fixture'); END;",
+        )
+        .unwrap();
+    assert!(store.duplicate_project("missing", "copy").is_err());
+    assert!(store.duplicate_project(&source, " ").is_err());
+    assert!(store.duplicate_project(&source, "copy").is_err());
+    assert_eq!(store.list_projects().unwrap().len(), 1);
+    assert_eq!(
+        workspace
+            .query_row("SELECT count(*) FROM profiles", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
 }
 
 #[test]

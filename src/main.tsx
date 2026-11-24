@@ -40,7 +40,7 @@ type EditSession = { token: string; table: string; environment: string; keys: Ed
 type EditPreview = { column: string; before: Cell; after: Cell };
 type EditResult = { actual: Cell; audit_warning: string | null };
 type EditRequest = { profile: Profile; object: DatabaseObject; keys: EditKey[] };
-type Modal = "project" | "profile" | "rename" | "deleteProject" | "deleteProfile" | "backup" | null;
+type Modal = "project" | "profile" | "rename" | "duplicateProject" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
 const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
@@ -306,7 +306,8 @@ function App() {
   }
 
   function openModal(next: Modal) {
-    setFormError(""); setName(next === "rename" ? project?.name ?? "" : "");
+    setFormError("");
+    setName(next === "rename" ? project?.name ?? "" : next === "duplicateProject" && project ? `${project.name} 복사본` : "");
     setPath(""); setEnvironment("DEV"); setModal(next);
   }
 
@@ -318,6 +319,9 @@ function App() {
       if (modal === "project") {
         const created = await call<Project>("create_project", { name });
         await reloadProjects(created.id);
+      } else if (modal === "duplicateProject" && project) {
+        const duplicate = await call<Project>("duplicate_project", { source: project.id, name });
+        await reloadProjects(duplicate.id);
       } else if (modal === "rename" && project) {
         await call("rename_project", { id: project.id, name });
         await reloadProjects(project.id);
@@ -387,7 +391,7 @@ function App() {
             {!projects.length && <option value="">프로젝트 없음</option>}
             {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select><ChevronDown size={15} /></div>
-          {project && <div className="project-actions"><button onClick={() => openModal("rename")}>이름 변경</button><button onClick={() => openModal("deleteProject")}>삭제</button></div>}
+          {project && <div className="project-actions"><button onClick={() => openModal("rename")}>이름 변경</button><button onClick={() => openModal("duplicateProject")}>복제</button><button onClick={() => openModal("deleteProject")}>삭제</button></div>}
           <div className="section-heading"><span>데이터베이스</span><div>
             <button className="icon-button" onClick={() => { setRestoreOpen(true); setHistoryOpen(false); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
@@ -475,14 +479,15 @@ function App() {
       <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense>}</div>
       <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
     </div>
-    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
-      {(modal === "project" || modal === "rename" || modal === "profile") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
+    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
+      {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
+      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite 및 SSH 연결 정의를 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}
       {modal === "profile" && <><label className="field">SQLite 파일 경로<span className="file-input"><input required value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" /><button type="button" className="secondary" onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label><label className="field">환경<select value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label><p className="form-note">기존 파일만 열 수 있습니다. SQL은 읽기 전용이며 지원되는 셀은 별도 미리보기와 승인 후 수정할 수 있습니다.</p></>}
       {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
       {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개 및 해당 SQL 초안을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
-      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
+      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : modal === "duplicateProject" ? "프로젝트 복제" : "저장"}</button></div>
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
@@ -538,7 +543,7 @@ function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mo
 }
 
 const auditOperationNames: Record<string, string> = {
-  "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
+  "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.restore": "SQLite 복원",
   "sqlite.export.csv": "SQLite CSV 내보내기",
