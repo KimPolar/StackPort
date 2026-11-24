@@ -4,6 +4,7 @@ use super::{
     db_error, insert_audit, require_changed, sql_templates::copy_project_templates, ssh_profiles, valid_name, AuditRecord, Project,
     Result, Store,
 };
+use crate::workspace_favorites::copy_project_favorites;
 use rusqlite::{params, TransactionBehavior};
 use serde::Serialize;
 use uuid::Uuid;
@@ -91,12 +92,14 @@ impl Store {
         let mut ssh_profiles = Self::list_ssh_profiles_on(&tx, source)?;
         let mut copied_total = db_profiles.len() + ssh_profiles.len() + copy_project_templates(&tx, source, &duplicate.id)?;
         copied_total += crate::postgres::copy_profiles(&tx, source, &duplicate.id)?;
-        for source in db_profiles {
+        for profile in db_profiles {
+            let new_id = Uuid::new_v4().to_string();
             let changed = tx.execute(
                 "INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![Uuid::new_v4().to_string(), duplicate.id, source.name, source.path, source.environment],
+                params![new_id, duplicate.id, profile.name, profile.path, profile.environment],
             ).map_err(db_error)?;
             require_changed(changed, "SQLite 연결 정의를 복제할 수 없습니다.")?;
+            copied_total += copy_project_favorites(&tx, source, &duplicate.id, &profile.id, &new_id)?;
         }
         for profile in &mut ssh_profiles {
             let source_id = std::mem::replace(&mut profile.id, Uuid::new_v4().to_string());
@@ -107,6 +110,7 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
                 params![profile.id, profile.project_id, profile.name, profile.host, profile.port, profile.username, profile.environment],
             ).map_err(db_error)?;
+            copied_total += copy_project_favorites(&tx, source, &duplicate.id, &source_id, &profile.id)?;
             copied_total += crate::ssh_tunnel::copy_tunnels_for_profile(&tx, &source_id, &duplicate.id, &profile.id)?;
         }
         for profile in &ssh_profiles {

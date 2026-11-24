@@ -46,10 +46,19 @@ async function writeLayout(page, invoke) {
   await page.reload();
   const projectSelect = page.getByLabel('프로젝트', { exact: true });
   await projectSelect.selectOption(secondProject.id);
-  await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
+  await page.getByRole('button', { name: `${secondProfileName} DEV`, exact: true }).click();
   await editor.fill(discardedDraft);
   await projectSelect.selectOption(project.id);
-  await page.getByRole('button', { name: new RegExp(profileName) }).click();
+  await page.getByRole('button', { name: `${profileName} DEV`, exact: true }).click();
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기' });
+  const scales = explorer.getByRole('group', { name: '즐겨찾기 범위', exact: true });
+  await explorer.getByRole('button', { name: `${profileName} 개인 즐겨찾기`, exact: true }).click();
+  await explorer.getByRole('button', { name: `개인 즐겨찾기 ${profileName} 열기`, exact: true }).waitFor();
+  await explorer.getByRole('button', { name: 'people 개인 즐겨찾기', exact: true }).click();
+  await explorer.getByRole('button', { name: '개인 즐겨찾기 people 열기', exact: true }).waitFor();
+  await scales.getByRole('button', { name: '프로젝트', exact: true }).click();
+  await explorer.getByRole('button', { name: '복구 SSH 정의 프로젝트 즐겨찾기', exact: true }).click();
+  await explorer.getByRole('button', { name: '프로젝트 즐겨찾기 복구 SSH 정의 열기', exact: true }).waitFor();
   await editor.fill(draft);
   await page.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
   await editor.fill(discardedDraft + ' -- same connection');
@@ -128,6 +137,15 @@ async function readLayout(page, invoke) {
   const project = page.getByLabel('프로젝트', { exact: true });
   assert.equal(await project.evaluate(select => select.selectedOptions[0].textContent), projectName);
   await page.getByRole('button', { name: 'SSH 복구 SSH 정의 연결', exact: true }).waitFor();
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기' });
+  const scales = explorer.getByRole('group', { name: '즐겨찾기 범위', exact: true });
+  await explorer.getByRole('button', { name: `개인 즐겨찾기 ${profileName} 열기`, exact: true }).waitFor();
+  await explorer.getByRole('button', { name: '개인 즐겨찾기 people 열기', exact: true }).waitFor();
+  await scales.getByRole('button', { name: '프로젝트', exact: true }).click();
+  await explorer.getByRole('button', { name: '프로젝트 즐겨찾기 복구 SSH 정의 열기', exact: true }).click();
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await ssh.getByText('PROD', { exact: true }).waitFor();
+  await ssh.getByRole('button', { name: '취소', exact: true }).click();
   await page.getByRole('button', { name: 'SQL 파일 열기', exact: true }).click();
   const fileDialog = page.getByRole('dialog', { name: 'SQL 파일 열기', exact: true });
   await fileDialog.getByLabel('SQL 파일 경로', { exact: true }).fill(savedFile());
@@ -135,7 +153,8 @@ async function readLayout(page, invoke) {
   await fileDialog.waitFor({ state: 'detached' });
   assert.equal(await editor.inputValue(), draft);
   await project.selectOption({ label: secondProjectName });
-  await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
+  await page.getByRole('button', { name: `${secondProfileName} DEV`, exact: true }).click();
+  await explorer.getByRole('button', { name: '프로젝트 즐겨찾기 복구 SSH 정의 열기', exact: true }).waitFor({ state: 'detached' });
   assert.equal(await editor.inputValue(), '');
 }
 

@@ -132,12 +132,13 @@ impl Store {
 
 pub(crate) fn copy_profiles(db: &Connection, source: &str, destination: &str) -> Result<usize> {
     let profiles = list(db, source)?;
-    let count = profiles.len();
+    let mut count = profiles.len();
     for mut profile in profiles {
-        profile.id = Uuid::new_v4().to_string();
+        let source_id = std::mem::replace(&mut profile.id, Uuid::new_v4().to_string());
         profile.project_id = destination.into();
         profile.revision = 1;
         insert(db, &profile)?;
+        count += crate::workspace_favorites::copy_project_favorites(db, source, destination, &source_id, &profile.id)?;
     }
     Ok(count)
 }

@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive, ChevronDown, ChevronRight, Copy, Database, Ellipsis, FileDown, FileUp, FolderOpen,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Table2, TerminalSquare, Trash2, X, type LucideIcon,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Star, Table2, TerminalSquare, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import type { DatabaseObject } from "./SqlSchemaDetails";
 import type { PostgresProfile, PostgresProfileAction } from "./PostgresWorkspace";
 import type { SshProfile } from "./ssh-profile-types";
 import { networkAddressText } from "./quickConnect";
 import { matchesWorkspaceSearch, workspaceSearchTerms } from "./workspaceSearch";
+import { favoriteKey, type FavoriteScope, type FavoriteTarget, type WorkspaceFavorites } from "./workspaceFavorites";
 import "./workspaceExplorer.css";
 
 type Project = { id: string; name: string };
@@ -20,10 +21,11 @@ type ExplorerProps = {
   hidden: boolean;
   projectId: string;
   projects: Project[];
+  favorites: WorkspaceFavorites;
   sqlite: {
     profiles: SqliteProfile[]; loadedId: string; active: boolean; objects: DatabaseObject[];
     selected: string | undefined; loading: boolean; displayPath: (path: string) => string;
-    open: (id: string) => void; openObject: (item: DatabaseObject) => void; refresh: () => void;
+    open: (id: string) => void; openObject: (item: DatabaseObject) => void; openPinnedObject: (id: string, name: string) => void; refresh: () => void;
     add: () => void; restore: () => void;
   };
   postgres: { profiles: PostgresProfile[]; activeId: string; open: (id: string) => void; action: (action: PostgresProfileAction) => void };
@@ -41,16 +43,17 @@ const projectActions = [
   { id: "copy", label: "데이터 복사", Icon: FileDown },
 ] as const;
 
-function ExplorerButton({ label, Icon, onClick, disabled }: {
-  label: string; Icon: LucideIcon; onClick: () => void; disabled?: boolean;
+function ExplorerButton({ label, Icon, onClick, disabled, pressed, busy }: {
+  label: string; Icon: LucideIcon; onClick: () => void; disabled?: boolean; pressed?: boolean; busy?: boolean;
 }) {
-  return <button type="button" className="icon-button" aria-label={label} title={label} onClick={onClick} disabled={disabled}>
+  return <button type="button" className="icon-button" aria-label={label} title={label} onClick={busy ? undefined : onClick}
+    disabled={disabled} aria-disabled={busy || undefined} aria-pressed={pressed}>
     <Icon size={15} aria-hidden />
   </button>;
 }
 
-function ExplorerGroup({ id, name, Icon, count, filtering, actions, children }: {
-  id: string; name: string; Icon: LucideIcon; count: number; filtering: boolean; actions: ReactNode; children: ReactNode;
+function ExplorerGroup({ id, name, Icon, count, filtering, actions, children, unit = "연결" }: {
+  id: string; name: string; Icon: LucideIcon; count: number; filtering: boolean; actions: ReactNode; children: ReactNode; unit?: string;
 }) {
   const [expanded, setExpanded] = useState(true);
   const open = filtering || expanded;
@@ -58,7 +61,7 @@ function ExplorerGroup({ id, name, Icon, count, filtering, actions, children }: 
     <div className="explorer-group-heading">
       {filtering ? <div className="explorer-group-title"><Icon size={14} aria-hidden /><strong>{name}</strong><span>{count}</span></div> :
         <button type="button" className="explorer-group-title" aria-label={name}
-          aria-description={`연결 ${count}개`} aria-expanded={open} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+          aria-description={`${unit} ${count}개`} aria-expanded={open} aria-controls={id} onClick={() => setExpanded(!expanded)}>
           {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
           <strong>{name}</strong><span aria-hidden>{count}</span>
         </button>}
@@ -84,23 +87,31 @@ function ExplorerProfile({ name, environment, detail, label, selected, Icon, onO
   </div>;
 }
 
-function ObjectGroup({ name, items, selected, onOpen }: {
+function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
   name: string; items: DatabaseObject[]; selected: string | undefined; onOpen: (item: DatabaseObject) => void;
+  favoriteAction: (item: DatabaseObject) => ReactNode;
 }) {
   return items.length > 0 && <div className="object-group">
     <div className="group-title">{name} <span>{items.length}</span></div>
-    {items.map(item => <button type="button" key={item.name} className="object-row" title={item.name}
-      aria-current={item.name === selected ? "true" : undefined} onClick={() => onOpen(item)}>
-      <Table2 size={13} aria-hidden /><span>{item.name}</span>
-    </button>)}
+    {items.map(item => <div className="explorer-object" key={item.name}>
+      <button type="button" className="object-row" title={item.name}
+        aria-current={item.name === selected ? "true" : undefined} onClick={() => onOpen(item)}>
+        <Table2 size={13} aria-hidden /><span>{item.name}</span>
+      </button>
+      {favoriteAction(item)}
+    </div>)}
   </div>;
 }
 
-export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite, postgres, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
+const scopeNames: Record<FavoriteScope, string> = { personal: "개인", project: "프로젝트" };
+
+export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, sqlite, postgres, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [favoriteScope, setFavoriteScope] = useState<FavoriteScope>("personal");
   const input = useRef<HTMLInputElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const scopeButtons = useRef<HTMLDivElement>(null);
   const project = projects.find(item => item.id === projectId);
   const terms = useMemo(() => workspaceSearchTerms(query), [query]);
   const filtering = terms.length > 0;
@@ -108,6 +119,8 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
   useEffect(() => { setQuery(""); setMenuOpen(false); }, [projectId]);
 
   const sqliteProfiles = sqlite.profiles.filter(item => item.project_id === projectId);
+  const postgresProfiles = postgres.profiles.filter(item => item.project_id === projectId);
+  const sshProfiles = ssh.profiles.filter(item => item.project_id === projectId);
   const loaded = sqliteProfiles.find(item => item.id === sqlite.loadedId);
   const sqliteFields = (item: SqliteProfile) => [item.name, item.environment, sqlite.displayPath(item.path), "SQLite 데이터베이스"];
   const sqliteMatches = sqliteProfiles.filter(item => matchesWorkspaceSearch(terms, ...sqliteFields(item)));
@@ -116,11 +129,44 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
     item.name, item.kind === "table" ? "테이블 table" : "뷰 view", ...sqliteContext)) : [];
   const visibleSqlite = objects.length && loaded && !sqliteMatches.includes(loaded)
     ? sqliteProfiles.filter(item => item === loaded || sqliteMatches.includes(item)) : sqliteMatches;
-  const postgresMatches = postgres.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+  const postgresMatches = postgresProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "PostgreSQL 데이터베이스"));
-  const sshMatches = ssh.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+  const sshMatches = sshProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.name, item.host, item.port, item.environment, "SSH 서버"));
   const connections = sqliteMatches.length + postgresMatches.length + sshMatches.length;
+  const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
+
+  function favoriteEntry(target: FavoriteTarget) {
+    if (target.kind === "ssh") {
+      const profile = sshProfiles.find(item => item.id === target.profile_id);
+      return profile && { name: profile.name, detail: `SSH · ${networkAddressText(profile)}`, environment: profile.environment,
+        Icon: TerminalSquare, open: () => ssh.open(profile) };
+    }
+    if (target.kind === "postgres") {
+      const profile = postgresProfiles.find(item => item.id === target.profile_id);
+      return profile && { name: profile.settings.name, detail: `PostgreSQL · ${networkAddressText(profile.settings)} / ${profile.settings.database}`, environment: profile.settings.environment,
+        Icon: Database, open: () => postgres.open(profile.id) };
+    }
+    const profile = sqliteProfiles.find(item => item.id === target.profile_id);
+    if (!profile) return undefined;
+    if (target.kind === "sqlite_object") return { name: target.object_name, detail: `SQLite · ${profile.name}`, environment: profile.environment,
+      Icon: Table2, open: () => sqlite.openPinnedObject(profile.id, target.object_name) };
+    return { name: profile.name, detail: `SQLite · ${sqlite.displayPath(profile.path)}`, environment: profile.environment,
+      Icon: Database, open: () => sqlite.open(profile.id) };
+  }
+
+  const visibleFavorites = favorites.items.flatMap(item => {
+    if (!filtering && item.scope !== favoriteScope) return [];
+    const entry = favoriteEntry(item.target);
+    return entry && matchesWorkspaceSearch(terms, entry.name, entry.detail, entry.environment, scopeNames[item.scope], "즐겨찾기")
+      ? [{ ...item, ...entry, id: `${item.scope}:${favoriteKey(item.target)}` }] : [];
+  });
+
+  function favoriteButton(target: FavoriteTarget, name: string) {
+    const current = pinned.has(favoriteKey(target));
+    return desktop && <ExplorerButton Icon={Star} label={`${name} ${scopeNames[favoriteScope]} 즐겨찾기`} pressed={current}
+      disabled={!favorites.ready} busy={favorites.busy} onClick={() => void favorites.change(favoriteScope, target, !current)} />;
+  }
 
   function clearSearch() {
     setQuery("");
@@ -174,9 +220,32 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
     <div className="explorer-scroll">
       {!project ? <p className="sidebar-empty">프로젝트를 선택하거나 새 프로젝트를 만드세요.</p> : <>
         {filtering && <p className="explorer-search-status" role="status">
-          {connections || objects.length ? `연결 ${connections}개 · 객체 ${objects.length}개` :
+          {connections || objects.length || visibleFavorites.length ? `연결 ${connections}개 · 객체 ${objects.length}개${visibleFavorites.length ? ` · 즐겨찾기 ${visibleFavorites.length}개` : ""}` :
             sqlite.loading && loaded ? "SQLite 객체를 불러오는 중…" : "일치하는 연결이나 객체가 없습니다."}
         </p>}
+        {favorites.error && <div className="explorer-favorite-error">
+          <p role="alert">{favorites.error}</p>
+          <button type="button" className="secondary small" onClick={() => void favorites.refresh()}>즐겨찾기 다시 읽기</button>
+        </div>}
+        {desktop && <ExplorerGroup id="explorer-favorites" name="즐겨찾기" unit="즐겨찾기" Icon={Star}
+          count={visibleFavorites.length} filtering={filtering} actions={<div ref={scopeButtons} className="explorer-favorite-scopes" role="group" aria-label="즐겨찾기 범위">
+            {(Object.entries(scopeNames) as [FavoriteScope, string][]).map(([scope, label]) =>
+              <button type="button" key={scope} aria-pressed={scope === favoriteScope} onClick={() => setFavoriteScope(scope)}>{label}</button>)}
+          </div>}>
+          {!visibleFavorites.length && <p className="sidebar-empty">
+            {favorites.ready ? "연결이나 객체의 별을 눌러 추가하세요." : "즐겨찾기를 불러오는 중…"}
+          </p>}
+          {visibleFavorites.map(entry => <ExplorerProfile key={entry.id} name={entry.name} environment={entry.environment}
+            detail={filtering ? `${scopeNames[entry.scope]} · ${entry.detail}` : entry.detail}
+            label={`${scopeNames[entry.scope]} 즐겨찾기 ${entry.name} 열기`} Icon={entry.Icon} onOpen={entry.open}>
+            <ExplorerButton Icon={Star} pressed={true} label={`${entry.name} ${scopeNames[entry.scope]} 즐겨찾기 해제`}
+              busy={favorites.busy} onClick={() => {
+                if (filtering) input.current?.focus();
+                else scopeButtons.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus();
+                void favorites.change(entry.scope, entry.target, false);
+              }} />
+          </ExplorerProfile>)}
+        </ExplorerGroup>}
         <ExplorerGroup id="explorer-sqlite" name="SQLite" Icon={Database} count={visibleSqlite.length} filtering={filtering} actions={<>
           <ExplorerButton label="SQLite 백업 복원" Icon={RotateCcw} onClick={sqlite.restore} />
           <ExplorerButton label="SQLite 연결 추가" Icon={Plus} onClick={sqlite.add} />
@@ -184,15 +253,19 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
           {!visibleSqlite.length && <p className="sidebar-empty">저장된 SQLite 연결이 없습니다.</p>}
           {visibleSqlite.map(item => <div key={item.id}>
             <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)}
-              Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)} />
+              Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)}>
+              {favoriteButton({ kind: "sqlite", profile_id: item.id }, item.name)}
+            </ExplorerProfile>
             {item === loaded && (sqlite.active || filtering) && <div className="object-list">
               <div className="object-toolbar"><span>객체</span>
                 <ExplorerButton label="객체 새로고침" Icon={RefreshCw} onClick={sqlite.refresh} disabled={sqlite.loading} />
               </div>
               {sqlite.loading ? <p className="sidebar-empty" role="status">불러오는 중…</p> :
                 !objects.length ? <p className="sidebar-empty">{filtering ? "일치하는 객체가 없습니다." : "테이블이나 뷰가 없습니다."}</p> : <>
-                  <ObjectGroup name="테이블" items={objects.filter(item => item.kind === "table")} selected={sqlite.selected} onOpen={sqlite.openObject} />
-                  <ObjectGroup name="뷰" items={objects.filter(item => item.kind === "view")} selected={sqlite.selected} onOpen={sqlite.openObject} />
+                  <ObjectGroup name="테이블" items={objects.filter(item => item.kind === "table")} selected={sqlite.selected} onOpen={sqlite.openObject}
+                    favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
+                  <ObjectGroup name="뷰" items={objects.filter(item => item.kind === "view")} selected={sqlite.selected} onOpen={sqlite.openObject}
+                    favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
                 </>}
             </div>}
           </div>)}
@@ -203,6 +276,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
           {postgresMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
             detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} label={`PostgreSQL ${item.settings.name} 열기`}
             Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
+            {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
             <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
             <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
           </ExplorerProfile>)}
@@ -210,13 +284,14 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, sqlite
         <ExplorerGroup id="explorer-ssh" name="SSH" Icon={TerminalSquare} count={sshMatches.length} filtering={filtering} actions={<>
           <ExplorerButton label="SSH 연결 가져오기" Icon={FileUp} onClick={() => ssh.action("import")} />
           <ExplorerButton label="SSH 연결 내보내기" Icon={FileDown} onClick={() => ssh.action("export")}
-            disabled={!ssh.profiles.some(item => item.project_id === projectId)} />
+            disabled={!sshProfiles.length} />
           <ExplorerButton label="SSH 연결 새로고침" Icon={RefreshCw} onClick={() => ssh.action("refresh")} />
           <ExplorerButton label="SSH 연결 추가" Icon={Plus} onClick={() => ssh.action("create")} />
         </>}>
           {!sshMatches.length && <p className="sidebar-empty">저장된 SSH 연결이 없습니다.</p>}
           {sshMatches.map(item => <ExplorerProfile key={item.id} name={item.name} environment={item.environment}
             detail={`${item.username}@${networkAddressText(item)}`} label={`SSH ${item.name} 연결`} Icon={TerminalSquare} onOpen={() => ssh.open(item)}>
+            {favoriteButton({ kind: "ssh", profile_id: item.id }, item.name)}
             <ExplorerButton label={`${item.name} SSH 연결 수정`} Icon={Pencil} onClick={() => ssh.action("edit", item)} />
             <ExplorerButton label={`${item.name} SSH 연결 삭제`} Icon={Trash2} onClick={() => ssh.action("delete", item)} />
           </ExplorerProfile>)}

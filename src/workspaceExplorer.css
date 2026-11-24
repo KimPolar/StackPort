@@ -114,8 +114,17 @@ button.explorer-group-title:hover { background: var(--surface-hover); color: var
   text-align: left;
   font-size: 12px;
 }
-.profile-row { flex: 1; min-height: 40px; padding: 5px 6px; }
+.profile-row {
+  display: grid;
+  flex: 1;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  column-gap: 6px;
+  row-gap: 2px;
+  min-height: 40px;
+  padding: 5px 6px;
+}
 .object-row { min-height: 28px; padding: 4px 6px; }
+.profile-row > svg { grid-row: span 2; }
 .profile-row > svg, .object-row > svg { flex-shrink: 0; }
 .profile-row:hover, .object-row:hover { background: var(--surface-hover); }
 .profile-row[aria-current="true"], .object-row[aria-current="true"] {
@@ -123,19 +132,32 @@ button.explorer-group-title:hover { background: var(--surface-hover); color: var
   color: var(--text-accent);
   box-shadow: inset 2px 0 var(--primary);
 }
-.profile-row .environment { flex: 0 0 auto; padding: 3px 4px; }
-.explorer-profile-text { flex: 1; display: grid; min-width: 0; gap: 3px; }
+.profile-row .environment { grid-column: 3; grid-row: 2; justify-self: end; padding: 2px 4px; }
+.explorer-profile-text { display: contents; }
 .explorer-profile-text strong, .explorer-profile-text small, .object-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.explorer-profile-text strong { color: var(--text); font-weight: 600; }
+.explorer-profile-text strong { grid-column: 2 / -1; color: var(--text); font-weight: 600; }
 .profile-row[aria-current="true"] .explorer-profile-text strong { color: var(--text-accent); }
 .explorer-profile-text small { color: var(--text-muted); font-size: 10px; }
 .explorer-profile-actions { flex: 0 0 auto; display: flex; }
 .explorer-profile-actions .icon-button { width: 24px; height: 28px; }
 .explorer-profile-actions .icon-button svg { width: 13px; height: 13px; }
+.explorer-object { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.explorer-object > .object-row { flex: 1; }
+.explorer-object > .icon-button { flex: 0 0 24px; height: 26px; }
+.explorer-object > .icon-button svg { width: 13px; height: 13px; }
+.explorer :is(.explorer-object, .explorer-profile-actions) .icon-button[aria-pressed="true"] { color: var(--warning-text); }
+.explorer :is(.explorer-object, .explorer-profile-actions) .icon-button[aria-pressed="true"] svg { fill: currentColor; }
+.explorer .icon-button[aria-disabled="true"] { cursor: wait; opacity: .6; }
+.explorer-favorite-scopes { display: flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); }
+.explorer-favorite-scopes button { min-height: 24px; padding: 2px 6px; border: 0; border-radius: 3px; color: var(--text-muted); background: transparent; font-size: 10px; }
+.explorer-favorite-scopes button:hover { background: var(--surface-hover); }
+.explorer-favorite-scopes button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-accent); font-weight: 700; }
+.explorer-favorite-error { padding: 5px; color: var(--danger-text); font-size: 11px; }
+.explorer-favorite-error p { margin: 0 0 5px; overflow-wrap: anywhere; }
 .object-list { margin: 4px 0 5px 11px; padding-left: 7px; border-left: 1px solid var(--border); }
 .object-toolbar, .group-title { color: var(--text-muted); font-size: 11px; font-weight: 600; }
 .object-toolbar { padding-left: 4px; }

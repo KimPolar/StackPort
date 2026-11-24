@@ -152,6 +152,12 @@ async function main() {
   }
   assert.equal(await explorerSearch.inputValue(), `${path.basename(database)} ＰＥＯＰＬＥ table`);
   await explorerSearch.press('Escape');
+  const pinPeople = explorer.getByRole('button', { name: 'people 개인 즐겨찾기', exact: true });
+  await pinPeople.press('Enter');
+  const pinnedPeople = explorer.getByRole('button', { name: '개인 즐겨찾기 people 열기', exact: true });
+  await pinnedPeople.waitFor();
+  assert.equal(await pinPeople.getAttribute('aria-pressed'), 'true');
+  assert.equal(await pinPeople.evaluate(button => document.activeElement === button), true);
   const otherDatabase = path.join(path.dirname(database), 'explorer-catalog.sqlite');
   execFileSync(python, ['-c', 'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("CREATE TABLE catalog_only (id INTEGER)"); db.commit(); db.close()', otherDatabase]);
   await explorer.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).click();
@@ -163,8 +169,15 @@ async function main() {
   await differentObject.waitFor();
   await people.waitFor({ state: 'hidden' });
   await explorerSearch.fill('people');
-  await explorer.getByRole('status').getByText('일치하는 연결이나 객체가 없습니다.').waitFor();
+  await explorer.getByRole('status').getByText('연결 0개 · 객체 0개 · 즐겨찾기 1개', { exact: true }).waitFor();
+  await pinnedPeople.click();
+  await explorer.locator('button.object-row[aria-current="true"]').getByText('people', { exact: true }).waitFor();
+  await explorer.getByRole('button', { name: 'people 개인 즐겨찾기 해제', exact: true }).click();
+  await pinnedPeople.waitFor({ state: 'detached' });
+  assert.equal(await explorerSearch.evaluate(input => document.activeElement === input), true);
   await explorerSearch.press('Escape');
+  await explorer.getByRole('button', { name: '다른 카탈로그 DEV', exact: true }).click();
+  await differentObject.waitFor();
   await page.getByRole('button', { name: '연결 삭제', exact: true }).click();
   await page.getByRole('dialog', { name: '연결 삭제', exact: true }).getByRole('button', { name: '삭제', exact: true }).click();
   await explorer.getByRole('button', { name: '다른 카탈로그 DEV', exact: true }).waitFor({ state: 'detached' });
@@ -229,7 +242,7 @@ async function main() {
   await edit.waitFor({ state: 'detached' });
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption({ label: 'E2E 테스트' });
-  await explorer.getByRole('button', { name: /테스트 DB/ }).click();
+  await explorer.getByRole('button', { name: '테스트 DB DEV', exact: true }).click();
   await people.click();
   await page.getByText('사용자 1', { exact: true }).waitFor();
   assert.deepEqual(await gridHeaders.allTextContents(), ['#', 'name', 'note', '작업']);
@@ -919,7 +932,7 @@ async function main() {
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();
 
-  await page.getByRole('button', { name: 'people' }).click();
+  await people.click();
   await editor.waitFor({ state: 'hidden' });
   await editorToggle.press('Enter');
   if (await editor.inputValue() !== 'SELECT COUNT(*) AS total FROM people') throw new Error('Browsing an object replaced the SQL draft.');
@@ -951,7 +964,7 @@ async function main() {
   await page.getByLabel('SQLite 파일 경로').fill(database);
   await page.getByLabel('환경').selectOption('PROD');
   await page.getByRole('button', { name: '저장' }).click();
-  await page.getByRole('button', { name: 'people' }).click();
+  await people.click();
   await page.getByRole('button', { name: '1행 편집', exact: true }).click();
   await page.getByLabel('변경할 열').selectOption('note');
   await edit.getByLabel('새 값의 형식').selectOption('text');
@@ -997,7 +1010,7 @@ async function main() {
   await page.getByLabel('이름', { exact: true }).fill('복원 검증');
   await page.getByLabel('SQLite 파일 경로').fill(restoredPath);
   await page.getByRole('button', { name: '저장' }).click();
-  await page.getByRole('button', { name: 'people' }).click();
+  await people.click();
   await page.getByText('100개 행', { exact: true }).waitFor();
   await editorToggle.press('Enter');
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
@@ -1051,7 +1064,7 @@ async function main() {
   assert.equal(await explorerSearch.inputValue(), '');
   await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
   await page.getByRole('button', { name: /운영 DB.*PROD/ }).click();
-  await page.getByRole('button', { name: 'people' }).click();
+  await people.click();
   await page.getByText('백업 이후 변경', { exact: true }).waitFor();
   const copyProject = await projectSelector.inputValue();
   await projectManagement.click();

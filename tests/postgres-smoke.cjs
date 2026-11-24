@@ -303,6 +303,10 @@ async function verify(browser, fixture, gateway, jump) {
   await explorerSearch.fill('fixture_reader');
   await explorer.getByRole('status').getByText('일치하는 연결이나 객체가 없습니다.').waitFor();
   await explorerSearch.press('Escape');
+  const scopes = explorer.getByRole('group', { name: '즐겨찾기 범위', exact: true });
+  await scopes.getByRole('button', { name: '프로젝트', exact: true }).click();
+  await explorer.getByRole('button', { name: 'PG 검증 프로젝트 즐겨찾기', exact: true }).click();
+  await explorer.getByRole('button', { name: '프로젝트 즐겨찾기 PG 검증 열기', exact: true }).click();
   const close = id => command('close_postgres', { id });
   const open = (settings = profile, secret = password, confirmation = 'PROD', tunnelId = null, gridEdit = false) =>
     command('open_postgres', { profile: settings, password: secret, confirmation, tunnelId, gridEdit });

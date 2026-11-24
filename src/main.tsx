@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -55,6 +55,7 @@ import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
 import { WorkspaceExplorer, type ExplorerProjectAction, type ExplorerSshAction } from "./WorkspaceExplorer";
 import { WorkspaceStatus, type QueryActivity } from "./WorkspaceStatus";
+import { useWorkspaceFavorites } from "./workspaceFavorites";
 import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
 import {
   editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
@@ -170,6 +171,7 @@ function App() {
   const [resumeReadError, setResumeReadError] = useState(false);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
+  const favorites = useWorkspaceFavorites(projectId, desktop);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [postgresProfiles, setPostgresProfiles] = useState<PostgresProfile[]>([]);
   const [postgresId, setPostgresId] = useState("");
@@ -181,7 +183,8 @@ function App() {
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
   const [profileId, setProfileId] = useState("");
-  const [catalog, setCatalog] = useState<{ profileId: string; objects: DatabaseObject[] } | null>(null);
+  const [catalog, setCatalog] = useState<{ profileId: string; objects: DatabaseObject[]; failed?: boolean } | null>(null);
+  const [favoriteObject, setFavoriteObject] = useState<{ projectId: string; profileId: string; name: string } | null>(null);
   const objects = catalog?.profileId === profileId ? catalog.objects : [];
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
   const [schemaDetailsOpen, setSchemaDetailsOpen] = useState(false);
@@ -432,7 +435,12 @@ function App() {
       setLoading(true);
       call<DatabaseObject[]>("list_objects", { profileId })
         .then(items => { if (live && objectGeneration.current === generation) setCatalog({ profileId, objects: items }); })
-        .catch(e => { if (live && objectGeneration.current === generation) setError(errorText(e)); })
+        .catch(e => {
+          if (live && objectGeneration.current === generation) {
+            setCatalog({ profileId, objects: [], failed: true });
+            setError(errorText(e));
+          }
+        })
         .finally(() => { if (live && objectGeneration.current === generation) setLoading(false); });
     } else setLoading(false);
     return () => { live = false; };
@@ -789,6 +797,7 @@ function App() {
   }
 
   function openObject(object: DatabaseObject, revealSchema = false) {
+    setFavoriteObject(null);
     setPostgresId("");
     setEditReport(null);
     showTool("workspace");
@@ -801,6 +810,28 @@ function App() {
       .catch(e => { if (detailsGeneration.current === generation) setDetailsError(errorText(e)); })
       .finally(() => { if (detailsGeneration.current === generation) setDetailsLoading(false); });
     void executeQuery({ kind: "table", request: defaultTableQuery(object.name) });
+  }
+
+  const openFavoriteFromCatalog = useEffectEvent((name: string, items: DatabaseObject[]) => {
+    const object = items.find(item => item.name === name);
+    if (object) openObject(object);
+    else setError(`즐겨찾기 대상 ‘${name}’을 찾을 수 없습니다. 객체 이름과 데이터베이스를 확인하세요.`);
+  });
+
+  useEffect(() => {
+    if (!favoriteObject) return;
+    if (favoriteObject.projectId !== projectId || favoriteObject.profileId !== profileId) {
+      setFavoriteObject(null);
+      return;
+    }
+    if (loading || catalog?.profileId !== profileId) return;
+    setFavoriteObject(null);
+    if (!catalog.failed) openFavoriteFromCatalog(favoriteObject.name, catalog.objects);
+  }, [favoriteObject, projectId, profileId, loading, catalog]);
+
+  function openPinnedObject(connectionId: string, name: string) {
+    selectSqliteProfile(connectionId);
+    setFavoriteObject({ projectId, profileId: connectionId, name });
   }
 
   async function refreshObjects() {
@@ -1033,12 +1064,14 @@ function App() {
   }
 
   function selectSqliteProfile(id: string) {
+    setFavoriteObject(null);
     setPostgresId("");
     setProfileId(id);
     showTool("workspace");
   }
 
   function selectPostgresProfile(id: string) {
+    setFavoriteObject(null);
     setPostgresId(id);
     setHistoryOpen(false);
     showTool("workspace");
@@ -1702,10 +1735,10 @@ function App() {
         {resumeNotice?.retry && <button type="button" className="secondary small" onClick={retryResume}>이 창의 배치 저장</button>}
       </div>}
       <div className="body-layout">
-        <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects}
+        <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects} favorites={favorites}
           onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction}
           sqlite={{ profiles, loadedId: profileId, active: !postgresProfile, objects, selected: postgresProfile ? undefined : selectedObject?.name,
-            loading, displayPath, open: selectSqliteProfile, openObject, refresh: refreshObjects,
+            loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
             add: () => openModal("profile"), restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
           postgres={{ profiles: postgresProfiles, activeId: postgresId, open: selectPostgresProfile, action: setPostgresAction }}
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />

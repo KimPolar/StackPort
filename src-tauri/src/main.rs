@@ -30,6 +30,7 @@ use stackport_core::{
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
     WorkspaceResumeRecord, WorkspaceResumeWrite,
+    FavoriteScope, FavoriteTarget, WorkspaceFavorite,
 };
 use std::sync::Arc;
 use tauri::{ipc::Channel, Manager, RunEvent, State};
@@ -59,6 +60,20 @@ fn get_runtime_info(location: State<'_, DataLocation>) -> RuntimeInfo {
 async fn get_workspace_resume(store: State<'_, Store>) -> Result<WorkspaceResumeRecord, String> {
     let store = store.inner().clone();
     worker(move || store.workspace_resume()).await
+}
+
+#[tauri::command]
+async fn list_workspace_favorites(store: State<'_, Store>, project_id: String) -> Result<Vec<WorkspaceFavorite>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_workspace_favorites(&project_id)).await
+}
+
+#[tauri::command]
+async fn set_workspace_favorite(
+    store: State<'_, Store>, project_id: String, scope: FavoriteScope, target: FavoriteTarget, present: bool,
+) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.set_workspace_favorite(&project_id, scope, &target, present)).await
 }
 
 #[tauri::command]
@@ -1701,6 +1716,8 @@ fn main() {
             list_projects,
             get_runtime_info,
             get_workspace_resume,
+            list_workspace_favorites,
+            set_workspace_favorite,
             save_workspace_resume,
             preview_workspace_copy,
             copy_workspace,

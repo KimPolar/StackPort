@@ -13,9 +13,10 @@ PARTIAL = {
     "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·SSH 연결 그룹, 주소·환경 표시와 SQLite 연결 아래의 테이블·뷰 탐색",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
-    "SP-UI-006": "탐색기에서 현재 프로젝트의 연결 이름·경로·주소·환경과 열린 SQLite 연결의 테이블·뷰 필터링, 명령 팔레트에서 도구·프로젝트 검색",
+    "SP-UI-006": "탐색기에서 현재 프로젝트의 연결 이름·경로·주소·환경, 즐겨찾기, 열린 SQLite 연결의 테이블·뷰 필터링과 명령 팔레트 검색",
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
     "SP-UI-008": "Windows 상단·단축키에서 SSH·RDP·PostgreSQL 주소와 SQLite 파일 경로 판별, 현재 프로젝트 저장 연결 재사용, 새 대상 양식 채우기와 SSH 등록",
+    "SP-UI-009": "SQLite·PostgreSQL·SSH 연결과 SQLite 테이블·뷰를 개인 또는 프로젝트 범위로 고정, 검색·재시작 복원, 프로젝트 복제 시 연결 ID 재매핑",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "쿼리 실행·중단·시간 초과·오류와 읽기 전용 표시, 하단 상태 표시줄에 터미널·RDP·SSH 터널 수와 PostgreSQL 연결 및 DB 실행 상태 표시",
@@ -158,7 +159,7 @@ PARTIAL = {
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-013": "독립된 SQLite 백업의 새 복원 경로·버전·객체/행 수·SHA-256 미리보기",
     "SP-BK-014": "SQLite 백업 검사와 별도 복원본을 열어 무결성·객체/행 수·SHA-256 검증",
-    "SP-ST-006": "프로젝트와 연결 정의, 작업 공간 배치 저장 및 손상된 배치의 이전 스냅샷 복원",
+    "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
     "SP-ST-001": "화면 설정의 라이트·다크·시스템 테마와 기본·컴팩트 밀도, 재시작 뒤 선택 유지",
@@ -372,6 +373,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; src/WorkspaceExplorer.tsx; src/workspaceExplorer.css"
                 if requirement_id != "SP-UI-006":
                     evidence += "; tests/desktop-smoke.cjs"
+            if requirement_id in {"SP-UI-006", "SP-UI-009", "SP-ST-006"}:
+                evidence += "; src/workspaceFavorites.ts; crates/stackport-core/src/workspace_favorites.rs; crates/stackport-core/tests/workspace_favorites.rs; tests/workspace-resume-smoke.cjs"
+                if requirement_id == "SP-UI-009":
+                    evidence += "; src/WorkspaceExplorer.tsx; tests/desktop-smoke.cjs; tests/postgres-smoke.cjs"
             if requirement_id == "SP-UI-014":
                 evidence += "; src/WorkspaceStatus.tsx; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs; tests/ssh-tunnel-smoke.cjs"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006"}:

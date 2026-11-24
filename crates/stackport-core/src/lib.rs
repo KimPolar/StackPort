@@ -93,6 +93,8 @@ mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};
 mod workspace_copy;
 pub use workspace_copy::{WorkspaceCopyPreview, WorkspaceCopyReport};
+mod workspace_favorites;
+pub use workspace_favorites::{FavoriteScope, FavoriteTarget, WorkspaceFavorite};
 mod workspace_resume;
 pub use workspace_resume::{
     ResumeDirection, ResumeLayout, ResumeTool, WorkspaceResume, WorkspaceResumeRecord,
@@ -117,7 +119,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -395,6 +397,7 @@ impl Store {
                 tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -437,7 +440,10 @@ impl Store {
                 if current < 10 {
                     tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                if current < 11 {
+                    tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
