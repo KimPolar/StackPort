@@ -29,6 +29,8 @@ mod table_query;
 pub use table_query::TableQuery;
 mod schema_diagram;
 pub use schema_diagram::{DiagramColumn, DiagramTable};
+mod schema_compare;
+pub use schema_compare::{SchemaComparison, SchemaComparisonConnection, SchemaDifferenceStatus, SchemaMemberDifference, SchemaObjectDifference};
 mod schema_document;
 pub use schema_document::{SchemaDocumentFormat, SchemaDocumentReport};
 mod ssh;
@@ -145,7 +147,7 @@ pub struct DatabaseObject {
     pub ddl: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ColumnInfo {
     pub position: i64,
     pub name: String,
@@ -156,7 +158,7 @@ pub struct ColumnInfo {
     pub hidden: i64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IndexColumn {
     pub position: i64,
     pub name: Option<String>,
@@ -164,7 +166,7 @@ pub struct IndexColumn {
     pub collation: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IndexInfo {
     pub name: String,
     pub unique: bool,
@@ -173,7 +175,7 @@ pub struct IndexInfo {
     pub columns: Vec<IndexColumn>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ForeignKeyInfo {
     pub id: i64,
     pub sequence: i64,
@@ -190,6 +192,13 @@ pub struct ObjectDetails {
     pub columns: Vec<ColumnInfo>,
     pub indexes: Vec<IndexInfo>,
     pub foreign_keys: Vec<ForeignKeyInfo>,
+}
+
+#[derive(PartialEq, Eq)]
+struct SchemaDefinition {
+    kind: String,
+    name: String,
+    sql: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -703,6 +712,18 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)?;
         Ok(names)
+    }
+
+    fn schema_definitions(db: &Connection, name: &str) -> Result<Vec<SchemaDefinition>> {
+        let mut statement = db.prepare_cached(
+            "SELECT type, name, sql FROM main.sqlite_schema
+             WHERE tbl_name = ?1 AND type IN ('index', 'trigger') AND sql IS NOT NULL
+             ORDER BY type, name COLLATE NOCASE",
+        ).map_err(db_error)?;
+        let definitions = statement.query_map([name], |row| {
+            Ok(SchemaDefinition { kind: row.get(0)?, name: row.get(1)?, sql: row.get(2)? })
+        }).map_err(db_error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)?;
+        Ok(definitions)
     }
 
     fn describe_object_on(db: &Connection, name: &str) -> Result<ObjectDetails> {

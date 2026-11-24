@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { FileDown, RefreshCw, Search, Table2, X } from "lucide-react";
+import { ArrowLeftRight, FileDown, RefreshCw, Search, Table2, X } from "lucide-react";
 import { sqliteNameKey } from "./sqlCompletion";
 import { diagramCard, indexSchemaDiagram, layoutSchemaDiagram, type DiagramRelationship, type DiagramTable } from "./sqlSchemaDiagram";
 import "./schemaDiagram.css";
@@ -83,12 +83,13 @@ function DiagramCanvas({ selected, relationships, tables, zoom, onSelect }: {
   </div>;
 }
 
-export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, onOpen, onExport, onClose }: {
+export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, onOpen, onExport, onCompare, onClose }: {
   profileId: string;
   connection: string;
   initialTable: string | null;
   onOpen: (name: string) => void;
   onExport: (name: string) => void;
+  onCompare: () => void;
   onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -171,6 +172,9 @@ export function SqlSchemaDiagramDialog({ profileId, connection, initialTable, on
           </select></label>
           <button type="button" className="secondary small" aria-haspopup="dialog" onClick={() => onExport(current.name)}>
             <FileDown size={14} aria-hidden /> 데이터 사전
+          </button>
+          <button type="button" className="secondary small" aria-haspopup="dialog" onClick={onCompare}>
+            <ArrowLeftRight size={14} aria-hidden /> 스키마 비교
           </button>
           <button type="button" className="secondary small" onClick={() => {
             dialog.current?.close();

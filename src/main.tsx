@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
+  ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
   Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
   Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, X, Play,
 } from "lucide-react";
@@ -109,6 +109,7 @@ const SqlHistoryDialog = React.lazy(() => import("./SqlHistoryDialog").then(modu
 const SqlQueryBuilderDialog = React.lazy(() => import("./SqlQueryBuilderDialog").then(module => ({ default: module.SqlQueryBuilderDialog })));
 const SqlSchemaDiagramDialog = React.lazy(() => import("./SqlSchemaDiagramDialog").then(module => ({ default: module.SqlSchemaDiagramDialog })));
 const SchemaDocumentDialog = React.lazy(() => import("./SchemaDocumentDialog").then(module => ({ default: module.SchemaDocumentDialog })));
+const SchemaComparisonDialog = React.lazy(() => import("./SchemaComparisonDialog").then(module => ({ default: module.SchemaComparisonDialog })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -186,6 +187,7 @@ function App() {
   const [sqlBuilderProfile, setSqlBuilderProfile] = useState<string | null>(null);
   const [diagramProfile, setDiagramProfile] = useState<string | null>(null);
   const [schemaDocumentRequest, setSchemaDocumentRequest] = useState<{ profileId: string; object: string | null } | null>(null);
+  const [schemaComparisonSource, setSchemaComparisonSource] = useState<string | null>(null);
   const nextSqlHistoryId = useRef(0);
   const pendingSqlHistory = useRef(new Map<number, string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
@@ -1051,6 +1053,8 @@ function App() {
     if (desktop && profile) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
       keywords: "schema data dictionary markdown html 구조 문서", Icon: FileDown,
       run: () => setSchemaDocumentRequest({ profileId: profile.id, object: selectedObject?.name ?? null }) });
+    if (desktop && profile) commands.push({ id: "open:schema-comparison", title: "SQLite 스키마 비교", group: "작업",
+      keywords: "schema compare diff 구조 차이", Icon: ArrowLeftRight, run: () => setSchemaComparisonSource(profile.id) });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
         id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
@@ -1537,7 +1541,11 @@ function App() {
           setDiagramProfile(null);
           openObject({ name, kind: "table", ddl: null }, true);
         }} onExport={object => setSchemaDocumentRequest({ profileId: profile.id, object })}
+        onCompare={() => setSchemaComparisonSource(profile.id)}
         onClose={() => setDiagramProfile(null)} />
+    </React.Suspense>}
+    {profile && schemaComparisonSource === profile.id && <React.Suspense fallback={null}>
+      <SchemaComparisonDialog initial={schemaComparisonSource} onClose={() => setSchemaComparisonSource(null)} />
     </React.Suspense>}
     {profile && schemaDocumentRequest?.profileId === profile.id && <React.Suspense fallback={null}>
       <SchemaDocumentDialog profile={profile} object={schemaDocumentRequest.object}

@@ -1,6 +1,6 @@
 use super::{
-    db_error, insert_audit, local_file::write_new_file, open_schema_db, AuditRecord, ObjectDetails,
-    Result, Store,
+    insert_audit, local_file::write_new_file, open_schema_db, AuditRecord, ObjectDetails, Result,
+    Store,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -69,39 +69,21 @@ impl Store {
             let mut document =
                 Document::new(format, &profile.name, &profile.environment, names.len())
                     .map_err(|_| TOO_LARGE)?;
-            let mut definitions = db
-                .prepare(
-                    "SELECT type, name, sql FROM main.sqlite_schema
-                 WHERE tbl_name = ?1 AND type IN ('index', 'trigger') AND sql IS NOT NULL
-                 ORDER BY type, name COLLATE NOCASE",
-                )
-                .map_err(db_error)?;
             for name in &names {
                 let details = Self::describe_object_on(&db, name)
                     .map_err(|error| format!("{name} 구조를 읽을 수 없습니다. {error}"))?;
                 document.object(&details).map_err(|_| TOO_LARGE)?;
-                let definitions = definitions
-                    .query_map([name], |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    })
-                    .map_err(db_error)?;
-                for definition in definitions {
-                    let (kind, name, sql) = definition.map_err(db_error)?;
-                    let label = if kind == "index" {
+                for definition in Self::schema_definitions(&db, name)? {
+                    let label = if definition.kind == "index" {
                         "인덱스"
                     } else {
                         "트리거"
                     };
                     document
-                        .definition(&format!("{label} {name}"), &sql)
+                        .definition(&format!("{label} {}", definition.name), &definition.sql)
                         .map_err(|_| TOO_LARGE)?;
                 }
             }
-            drop(definitions);
             drop(db);
             let text = document.finish().map_err(|_| TOO_LARGE)?;
             let size_bytes = write_new_file(

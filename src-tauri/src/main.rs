@@ -6,7 +6,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
-    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaDocumentFormat, SchemaDocumentReport,
+    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
@@ -313,6 +313,18 @@ async fn describe_object(
 async fn sqlite_schema_diagram(store: State<'_, Store>, profile_id: String) -> Result<Vec<DiagramTable>, String> {
     let store = store.inner().clone();
     worker(move || store.schema_diagram(&profile_id)).await
+}
+
+#[tauri::command]
+async fn compare_sqlite_schema(store: State<'_, Store>, source_id: String, target_id: String) -> Result<SchemaComparison, String> {
+    let store = store.inner().clone();
+    worker(move || store.compare_sqlite_schema(&source_id, &target_id)).await
+}
+
+#[tauri::command]
+async fn schema_comparison_connections(store: State<'_, Store>) -> Result<Vec<SchemaComparisonConnection>, String> {
+    let store = store.inner().clone();
+    worker(move || store.schema_comparison_connections()).await
 }
 
 #[tauri::command]
@@ -1219,6 +1231,8 @@ fn main() {
             list_objects,
             describe_object,
             sqlite_schema_diagram,
+            compare_sqlite_schema,
+            schema_comparison_connections,
             choose_sqlite_schema_document_path,
             export_sqlite_schema_document,
             sql_completion_catalog,

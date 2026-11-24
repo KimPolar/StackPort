@@ -78,6 +78,7 @@ PARTIAL = {
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
     "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기",
+    "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "읽기 전용 연결과 쓰기 차단",
     "SP-DT-001": "100행 단위 결과 페이지",
     "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀 수정",
@@ -120,6 +121,7 @@ PARTIAL = {
     "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
     "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
+    "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-024": "SQLite 선택 객체 또는 전체 스키마의 열·키·관계·규칙과 생성 SQL 주석을 Markdown·HTML로 내보내기",
     "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·CSV 보호 필드 수 보고와 작업 기록",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
@@ -182,6 +184,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-DB-026", "SP-MG-013"}:
+                evidence = "crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MD-016", "SP-MD-020", "SP-MG-024"}:
                 evidence = "crates/stackport-core/src/schema_document.rs; crates/stackport-core/tests/schema.rs; src/SchemaDocumentDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):

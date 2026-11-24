@@ -345,8 +345,9 @@ async function main() {
     await verifySqlQueryBuilder(page, editor, sqlTabs);
     await verifySqlSchemaDiagram(page, editor, isolatedPath);
     await verifySqlSchemaDocument(page, editor);
+    await verifySqlSchemaComparison(page, editor, invoke, isolatedPath);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, plans, batches, result pins, comparisons and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, schema comparison, plans, batches, result pins and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -1097,6 +1098,76 @@ async function verifySqlSchemaDocument(page, editor) {
   await commands.press('Enter');
   assert.equal(await scope.inputValue(), 'selected');
   await dialog.getByRole('button', { name: '데이터 사전 닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+}
+
+async function verifySqlSchemaComparison(page, editor, invoke, source) {
+  const target = path.join(process.env.STACKPORT_TEST_ROOT, 'schema-target.sqlite');
+  const db = new DatabaseSync(target);
+  db.exec('CREATE TABLE departments (dept_id INTEGER PRIMARY KEY, dept_name BLOB NOT NULL);');
+  db.exec('CREATE VIEW "web view" AS SELECT dept_id FROM departments;');
+  db.exec('CREATE TABLE "retired""table" (value TEXT);');
+  db.close();
+  const originalSource = fs.readFileSync(source);
+  const originalTarget = fs.readFileSync(target);
+  const separate = await invoke('create_project', { name: '스키마 비교 별도 프로젝트' });
+  await invoke('create_sqlite_profile', { projectId: separate.id, name: '스키마 대상', path: target, environment: 'STAGING' });
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption({ label: 'SQL 파일 검증' });
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  const draft = "SELECT '스키마 비교에서 보존될 SQL';";
+  await editor.fill(draft);
+  await page.getByRole('button', { name: '관계도', exact: true }).click();
+  const diagram = page.getByRole('dialog', { name: 'SQLite 관계도', exact: true });
+  await diagram.getByRole('button', { name: '스키마 비교', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'SQLite 스키마 비교', exact: true });
+  const targetSelect = dialog.getByRole('combobox', { name: '대상 연결', exact: true });
+  const run = dialog.getByRole('button', { name: '비교 실행', exact: true });
+  await targetSelect.selectOption({ label: '스키마 비교 별도 프로젝트 / 스키마 대상 · STAGING' });
+  await run.click();
+  const list = dialog.getByRole('complementary', { name: '스키마 차이 목록', exact: true });
+  const search = list.getByRole('textbox', { name: '변경 객체 검색', exact: true });
+  await search.fill('DEPARTMENTS');
+  await list.getByRole('button', { name: /departments.*정의가 다름/ }).waitFor();
+  const attributes = dialog.getByRole('table', { name: '객체 속성 차이', exact: true });
+  await attributes.getByText('dept_name', { exact: true }).waitFor();
+  await attributes.getByText(/BLOB · NOT NULL/).waitFor();
+  await dialog.getByText('정의 SQL', { exact: true }).click();
+  assert.match(await dialog.getByLabel('기준 정의 SQL').textContent(), /dept_name TEXT/);
+  assert.match(await dialog.getByLabel('대상 정의 SQL').textContent(), /dept_name BLOB NOT NULL/);
+  await page.screenshot({ path: path.join(process.env.STACKPORT_TEST_ROOT, 'schema-comparison.png') });
+  await search.fill('web view');
+  await dialog.getByText('대상 뷰 재정의 SQL 초안', { exact: true }).click();
+  assert.match(await dialog.getByLabel('대상 뷰 재정의 SQL 초안').textContent(), /DROP VIEW main\."web view"/);
+  const filter = list.getByRole('combobox', { name: '차이 범위', exact: true });
+  await search.fill('staff');
+  await filter.selectOption('source_only');
+  await list.getByRole('button', { name: /staff.*기준에만 있음/ }).waitFor();
+  await dialog.getByText('대상 생성 SQL 초안', { exact: true }).click();
+  assert.match(await dialog.getByLabel('대상 생성 SQL 초안').textContent(), /CREATE TABLE staff/);
+  await search.fill('retired');
+  await filter.selectOption('target_only');
+  await dialog.getByText('대상 삭제 SQL 초안', { exact: true }).click();
+  assert.match(await dialog.getByLabel('대상 삭제 SQL 초안').textContent(), /DROP TABLE main\."retired""table";/);
+  await dialog.getByRole('button', { name: '기준과 대상 바꾸기', exact: true }).click();
+  await list.waitFor({ state: 'detached' });
+  await run.click();
+  await search.fill('retired');
+  await list.getByRole('button', { name: /retired.*기준에만 있음/ }).waitFor();
+  await dialog.getByRole('button', { name: '스키마 비교 닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await diagram.getByRole('button', { name: '관계도 닫기', exact: true }).click();
+  await diagram.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), draft);
+  assert.deepEqual(fs.readFileSync(source), originalSource);
+  assert.deepEqual(fs.readFileSync(target), originalTarget);
+  await page.keyboard.press('Control+Shift+P');
+  const commands = page.getByRole('combobox', { name: '명령 검색', exact: true });
+  await commands.fill('SQLite 스키마 비교');
+  await page.getByRole('option', { name: /SQLite 스키마 비교/, selected: true }).waitFor();
+  await commands.press('Enter');
+  await targetSelect.waitFor();
+  await dialog.getByRole('button', { name: '스키마 비교 닫기', exact: true }).click();
   await dialog.waitFor({ state: 'detached' });
 }
 
