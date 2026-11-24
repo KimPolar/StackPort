@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, ArrowLeft, ArrowRight, Network, RefreshCw } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Network, RefreshCw, Route } from "lucide-react";
 import { NetworkDiagnosticsPanel } from "./NetworkDiagnosticsPanel";
+import { SshTunnelPanel } from "./SshTunnelPanel";
+import type { SshProfile } from "./ssh-profile-types";
 
 type Endpoint = { address: string; port: number };
 type LocalPort = {
@@ -21,8 +23,11 @@ function address(endpoint: Endpoint) {
   return host.includes(":") ? `[${host}]:${endpoint.port}` : `${host}:${endpoint.port}`;
 }
 
-export function NetworkWorkspace() {
-  const [mode, setMode] = useState<"ports" | "diagnostics">("ports");
+export function NetworkWorkspace({ projectId, profiles, visible, onTunnelCountChange }: {
+  projectId: string; profiles: SshProfile[]; visible: boolean; onTunnelCountChange: (count: number) => void;
+}) {
+  const [mode, setMode] = useState<"ports" | "diagnostics" | "tunnels">("ports");
+  const [tunnelsVisited, setTunnelsVisited] = useState(false);
   return <section className="network-workspace" aria-label="네트워크 도구">
     <header className="network-heading">
       <h1><Network size={20} aria-hidden /> 네트워크</h1>
@@ -31,10 +36,14 @@ export function NetworkWorkspace() {
           onClick={() => setMode("ports")}><Network size={14} aria-hidden /> 로컬 포트</button>
         <button type="button" className="secondary small" aria-pressed={mode === "diagnostics"} aria-controls="network-diagnostics"
           onClick={() => setMode("diagnostics")}><Activity size={14} aria-hidden /> 연결 진단</button>
+        <button type="button" className="secondary small" aria-pressed={mode === "tunnels"} aria-controls="network-tunnels"
+          onClick={() => { setMode("tunnels"); setTunnelsVisited(true); }}><Route size={14} aria-hidden /> SSH 터널</button>
       </nav>
     </header>
     <div id="network-ports" hidden={mode !== "ports"}><LocalPorts /></div>
     <div id="network-diagnostics" hidden={mode !== "diagnostics"}><NetworkDiagnosticsPanel /></div>
+    <div id="network-tunnels" hidden={mode !== "tunnels"}>{tunnelsVisited && <SshTunnelPanel projectId={projectId}
+      profiles={profiles.filter(profile => profile.project_id === projectId)} visible={visible && mode === "tunnels"} onCountChange={onTunnelCountChange} />}</div>
   </section>;
 }
 

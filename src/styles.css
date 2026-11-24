@@ -436,6 +436,11 @@ textarea:focus { outline-offset: -2px; }
 .sftp-route-select { margin-bottom: 8px; }
 .sftp-route-select .field, .sftp-route-credentials .field { flex: 1 1 155px; margin: 0; }
 .sftp-route-fingerprint { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.ssh-tunnel-card + .ssh-tunnel-card { margin-top: 14px; }
+.ssh-tunnel-card h3 { margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ssh-tunnel-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ssh-tunnel-fields { min-width: 0; padding: 0; margin: 0; border: 0; }
+.ssh-tunnel-error { margin: 5px 0 0; max-width: 280px; }
 .files-connection { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 5px 8px; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .files-connection strong { color: var(--text); }
 .files-pane-switch { display: none; gap: 6px; }

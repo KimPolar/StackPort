@@ -158,6 +158,7 @@ function App() {
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [terminalTabCount, setTerminalTabCount] = useState(0);
   const [rdpClientCount, setRdpClientCount] = useState(0);
+  const [sshTunnelCount, setSshTunnelCount] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [loadedPages, setLoadedPages] = useState<ReadonlySet<WorkspacePage>>(() => new Set(["workspace"]));
@@ -233,6 +234,7 @@ function App() {
   const detailsGeneration = useRef(0);
   const terminalCount = useRef(0);
   const rdpCount = useRef(0);
+  const tunnelCount = useRef(0);
   const sshRequestSequence = useRef(0);
   const selectedProject = useRef(projectId);
   selectedProject.current = projectId;
@@ -250,6 +252,10 @@ function App() {
   const updateRdpCount = useCallback((count: number) => {
     rdpCount.current = count;
     setRdpClientCount(count);
+  }, []);
+  const updateTunnelCount = useCallback((count: number) => {
+    tunnelCount.current = count;
+    setSshTunnelCount(count);
   }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
   const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
@@ -407,7 +413,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (localFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
+      if (!closeApproved.current && (localFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || tunnelCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -451,6 +457,7 @@ function App() {
     const notes: string[] = [];
     if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
     if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
+    if (tunnelCount.current) notes.push(`실행 중이거나 준비 중인 SSH 터널 ${tunnelCount.current}개가 종료됩니다.`);
     if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
     finishAppClose();
   }, [finishAppClose]);
@@ -1353,7 +1360,9 @@ function App() {
           onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} />
       </React.Suspense>
     </div>,
-    network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body"><NetworkWorkspace /></div>,
+    network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body">
+      <NetworkWorkspace projectId={projectId} profiles={sshProfiles} visible={toolVisible("network")} onTunnelCountChange={updateTunnelCount} />
+    </div>,
     rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
       <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard}
@@ -1482,7 +1491,7 @@ function App() {
     {workspaceCopyOpen && <WorkspaceCopyDialog displayPath={displayPath} onClose={() => setWorkspaceCopyOpen(false)} />}
     {exitPrompt && <WorkspaceExitDialog drafts={Object.values(sqlTabSets).flatMap(group => group.tabs).filter(isSqlDraftDirty).map(draft => ({
       ...draft, projectName: projects.find(item => item.id === draft.projectId)?.name ?? draft.projectName,
-    }))} terminals={terminalTabCount} rdpClients={rdpClientCount}
+    }))} terminals={terminalTabCount} rdpClients={rdpClientCount} sshTunnels={sshTunnelCount}
       busy={exitClosing} error={exitError} onClose={() => setExitPrompt(false)}
       onSave={draft => setSqlFileAction({ mode: "save", draft })} onExit={finishAppClose} />}
     {closingSqlTab && <CloseSqlTabDialog draft={closingSqlTab} onCancel={() => setClosingSqlTab(null)}
@@ -1616,6 +1625,7 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.export.csv": "SQLite CSV 내보내기",
   "sqlite.export.json": "SQLite JSON 내보내기",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
+  "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",

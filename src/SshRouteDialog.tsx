@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
 import type { SshProfile } from "./ssh-profile-types";
+import type { SavedSshTunnel } from "./SshTunnelPanel";
 
 type Credentials = { method: "password" | "private_key"; path: string; secret: string };
 type Hop = { profile: SshProfile; credentials: Credentials };
@@ -12,13 +13,18 @@ type RouteResponse<Session> = { status: "open"; session: Session } | TrustReques
 
 const maxHops = 3;
 const emptyCredentials: Credentials = { method: "password", path: "", secret: "" };
-const address = (profile: SshProfile) => `${profile.host}:${profile.port}`;
+const address = ({ host, port }: Pick<SshProfile, "host" | "port">) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
 const authentication = (credentials: Credentials) => credentials.method === "password"
   ? { kind: "password", password: credentials.secret }
   : { kind: "private_key", path: credentials.path, passphrase: credentials.secret };
 
-export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = [], onBusy, onClose, onOpened }: {
+export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initialHops = [], onBusy, onClose, onOpened }: ({
   tool: "sftp" | "terminal";
+  tunnel?: never;
+} | {
+  tool: "tunnel";
+  tunnel: SavedSshTunnel;
+}) & {
   target: SshProfile;
   profiles: SshProfile[];
   initialHops?: string[];
@@ -43,8 +49,9 @@ export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = 
   const [compared, setCompared] = useState(false);
   const [notice, setNotice] = useState("");
   const production = target.environment === "PROD" || hops.some(hop => hop.profile.environment === "PROD");
-  const connectLabel = tool === "sftp" ? "SFTP 연결" : "SSH 터미널 연결";
-  const heading = tool === "sftp" ? "SSH 경유로 SFTP 연결" : "경유 서버로 SSH 터미널 연결";
+  const connectLabel = tool === "sftp" ? "SFTP 연결" : tool === "tunnel" ? "터널 시작" : "SSH 터미널 연결";
+  const heading = tool === "sftp" ? "SSH 경유로 SFTP 연결" : tool === "tunnel" ? "로컬 SSH 터널 시작" : "경유 서버로 SSH 터미널 연결";
+  const command = tool === "sftp" ? "open_routed_sftp" : tool === "tunnel" ? "start_ssh_tunnel" : "open_routed_ssh_terminal";
 
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => { if (trust) trustHeading.current?.focus(); }, [trust]);
@@ -81,12 +88,13 @@ export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = 
 
   function open(event: FormEvent) {
     event.preventDefault();
-    if (!hops.length) return;
+    if (!tunnel && !hops.length) return;
     void perform(async () => {
-      const result = await invoke<RouteResponse<Session>>(tool === "sftp" ? "open_routed_sftp" : "open_routed_ssh_terminal", {
+      const result = await invoke<RouteResponse<Session>>(command, {
         profile: target, confirmation, authentication: authentication(credentials),
         hops: hops.map(hop => ({ profile: hop.profile, authentication: authentication(hop.credentials) })),
         ...(tool === "terminal" ? { rows: 24, cols: 80 } : {}),
+        ...(tunnel ? { tunnel } : {}),
       });
       if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile));
       else { setNotice(""); setCompared(false); setTrust(result); }
@@ -114,6 +122,7 @@ export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = 
           })}>확인한 키 신뢰</button>
         </div>
       </fieldset> : <fieldset className="sftp-route-settings" disabled={busy}>
+        {tunnel && <p className="confirm-copy"><strong>{tunnel.settings.name}</strong> · 127.0.0.1:{tunnel.settings.local_port || "자동"} → {address({ host: tunnel.settings.target_host, port: tunnel.settings.target_port })}</p>}
         <p className="form-note">경유 서버는 위에서 아래로 연결합니다. 각 서버에 사용할 인증 정보를 입력하세요.</p>
         <ol className="sftp-route-list">
           {hops.map((hop, index) => <li key={hop.profile.id}>
@@ -136,13 +145,13 @@ export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = 
         </ol>
         {next && hops.length < maxHops && <button type="button" className="secondary small" onClick={() => editHops([...hops, { profile: next, credentials: emptyCredentials }])}>경유 서버 추가</button>}
         <fieldset className="sftp-route-stage">
-          <legend>대상 · {target.name}</legend>
+          <legend>{tunnel ? "SSH 서버" : "대상"} · {target.name}</legend>
           <p className={`files-target ${target.environment.toLowerCase()}`}>{target.username}@{address(target)} · {target.environment}</p>
           <CredentialFields value={credentials} onChange={setCredentials} onChoose={chooseKey} />
         </fieldset>
         {production && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
         {notice && <p className="form-note" role="status">{notice}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={!hops.length}>{connectLabel}</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={!tunnel && !hops.length}>{connectLabel}</button></div>
       </fieldset>}
       {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}

@@ -89,7 +89,7 @@ impl Store {
         require_changed(created, "복제할 프로젝트를 찾을 수 없습니다.")?;
         let db_profiles = Self::list_profiles_on(&tx, source)?;
         let mut ssh_profiles = Self::list_ssh_profiles_on(&tx, source)?;
-        let copied_total = db_profiles.len() + ssh_profiles.len() + copy_project_templates(&tx, source, &duplicate.id)?;
+        let mut copied_total = db_profiles.len() + ssh_profiles.len() + copy_project_templates(&tx, source, &duplicate.id)?;
         for source in db_profiles {
             let changed = tx.execute(
                 "INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -98,7 +98,7 @@ impl Store {
             require_changed(changed, "SQLite 연결 정의를 복제할 수 없습니다.")?;
         }
         for profile in &mut ssh_profiles {
-            profile.id = Uuid::new_v4().to_string();
+            let source_id = std::mem::replace(&mut profile.id, Uuid::new_v4().to_string());
             profile.project_id.clone_from(&duplicate.id);
             profile.revision = 1;
             tx.execute(
@@ -106,6 +106,7 @@ impl Store {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
                 params![profile.id, profile.project_id, profile.name, profile.host, profile.port, profile.username, profile.environment],
             ).map_err(db_error)?;
+            copied_total += crate::ssh_tunnel::copy_tunnels_for_profile(&tx, &source_id, &duplicate.id, &profile.id)?;
         }
         for profile in &ssh_profiles {
             ssh_profiles::verify_saved(&tx, profile)?;

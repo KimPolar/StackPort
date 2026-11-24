@@ -13,6 +13,7 @@ use stackport_core::{
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
+    SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -758,6 +759,54 @@ async fn confirmed_ssh_route(
 }
 
 #[tauri::command]
+async fn list_ssh_tunnels(store: State<'_, Store>, project_id: String) -> Result<Vec<SavedSshTunnel>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_ssh_tunnels(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_ssh_tunnel(store: State<'_, Store>, project_id: String, input: SshTunnelInput) -> Result<SavedSshTunnel, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_ssh_tunnel(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_ssh_tunnel(store: State<'_, Store>, id: String, revision: i64, input: SshTunnelInput) -> Result<SavedSshTunnel, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_ssh_tunnel(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_ssh_tunnel(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_ssh_tunnel(&id, revision)).await
+}
+
+#[tauri::command]
+fn ssh_tunnel_status(tunnels: State<'_, SshTunnelManager>) -> Result<Vec<SshTunnelStatus>, String> {
+    tunnels.status()
+}
+
+#[tauri::command]
+async fn start_ssh_tunnel(
+    tunnels: State<'_, SshTunnelManager>,
+    ssh: State<'_, Arc<SshManager>>,
+    tunnel: SavedSshTunnel,
+    profile: SshProfile,
+    authentication: SshCredentials,
+    hops: Vec<SshRouteHop>,
+    confirmation: String,
+) -> Result<SshRouteResult<SshTunnelStatus>, String> {
+    let gateway = SshRouteHop { profile, authentication };
+    tunnels.start(Arc::clone(ssh.inner()), tunnel, gateway, hops, &confirmation).await
+}
+
+#[tauri::command]
+async fn stop_ssh_tunnel(tunnels: State<'_, SshTunnelManager>, id: String) -> Result<SshTunnelStatus, String> {
+    tunnels.stop(&id).await
+}
+
+#[tauri::command]
 async fn list_sftp_directory(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1256,6 +1305,7 @@ fn main() {
             let path = location.directory.join("workspace.sqlite");
             let store = Store::open(path).map_err(std::io::Error::other)?;
             app.manage(SftpManager::new(store.clone()));
+            app.manage(SshTunnelManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -1336,6 +1386,13 @@ fn main() {
             open_ssh_terminal,
             open_saved_ssh_terminal,
             open_routed_ssh_terminal,
+            list_ssh_tunnels,
+            create_ssh_tunnel,
+            update_ssh_tunnel,
+            delete_ssh_tunnel,
+            ssh_tunnel_status,
+            start_ssh_tunnel,
+            stop_ssh_tunnel,
             open_sftp,
             open_routed_sftp,
             list_sftp_directory,
@@ -1397,6 +1454,7 @@ fn main() {
     match run {
         Ok(app) => app.run(|handle, event| {
             if matches!(event, RunEvent::Exit) {
+                handle.state::<SshTunnelManager>().shutdown();
                 handle.state::<Arc<RdpManager>>().shutdown();
             }
         }),

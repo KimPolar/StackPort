@@ -2,10 +2,11 @@ import { useEffect, useRef } from "react";
 import { FileDown, X } from "lucide-react";
 import { sqlTabTitle, type SqlDraft } from "./SqlTabs";
 
-export function WorkspaceExitDialog({ drafts, terminals, rdpClients, busy, error, onSave, onClose, onExit }: {
+export function WorkspaceExitDialog({ drafts, terminals, rdpClients, sshTunnels, busy, error, onSave, onClose, onExit }: {
   drafts: SqlDraft[];
   terminals: number;
   rdpClients: number;
+  sshTunnels: number;
   busy: boolean;
   error: string;
   onSave: (draft: SqlDraft) => void;
@@ -32,6 +33,7 @@ export function WorkspaceExitDialog({ drafts, terminals, rdpClients, busy, error
       </ul>}
       {terminals > 0 && <p className="form-note">열린 터미널 {terminals}개와 연결된 작업이 종료됩니다.</p>}
       {rdpClients > 0 && <p className="form-note">열린 RDP 클라이언트 {rdpClients}개가 종료됩니다.</p>}
+      {sshTunnels > 0 && <p className="form-note">실행 중이거나 준비 중인 SSH 터널 {sshTunnels}개가 종료됩니다.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" autoFocus className="secondary" disabled={busy} onClick={onClose}>계속 작업</button>
