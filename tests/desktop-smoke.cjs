@@ -317,6 +317,48 @@ async function main() {
   await pasteDialog.getByRole('button', { name: '변경 버리기', exact: true }).click();
   await pasteDialog.waitFor({ state: 'detached' });
 
+  mutateFixture('CREATE TABLE imported_records (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, note TEXT, amount INTEGER)');
+  await refreshObjects.click();
+  await explorer.getByRole('button', { name: 'imported_records', exact: true }).click();
+  const fileImport = page.getByRole('button', { name: '파일 가져오기', exact: true });
+  const importDialog = page.getByRole('dialog', { name: 'SQLite 파일 가져오기', exact: true });
+  const importFile = path.join(path.dirname(database), 'sqlite-import-utf16.csv');
+  const importRecords = [
+    'code;note;amount',
+    '파일 1;\\N;9007199254740993',
+    '파일 2;"";0',
+    '파일 3;"\\N";42',
+    '파일 4;"한 줄;포함\r\n다음 ""줄""";-2',
+    ...Array.from({ length: 116 }, (_, index) => '파일 ' + (index + 5) + ';일반;' + index),
+  ];
+  fs.writeFileSync(importFile, '\uFEFF' + importRecords.join('\r\n'), 'utf16le');
+  await fileImport.click();
+  const importPicker = importDialog.getByLabel('가져올 파일');
+  await importPicker.setInputFiles(importFile);
+  await importDialog.getByLabel('StackPort의 NULL과 빈 문자열 복원').check();
+  const importMapping = importDialog.getByRole('button', { name: '열 매핑', exact: true });
+  await importMapping.click();
+  await importDialog.getByText(/UTF-16 LE.*세미콜론/).waitFor();
+  await importDialog.getByText('원본 형식 · 정수', { exact: true }).waitFor();
+  await importDialog.getByRole('button', { name: '파일 설정 수정', exact: true }).click();
+  assert.equal(await importPicker.evaluate(input => input.files[0].name), 'sqlite-import-utf16.csv');
+  await importMapping.click();
+  await importDialog.getByRole('button', { name: '가져오기 미리보기', exact: true }).click();
+  const importedPreview = importDialog.getByRole('table', { name: '가져오기 미리보기', exact: true });
+  await importedPreview.getByText('9007199254740993', { exact: true }).waitFor();
+  assert.equal(await importedPreview.getByRole('row').count(), 26);
+  await importDialog.getByText(/120개 행을 새로 추가/).waitFor();
+  await importedPreview.getByText('(빈 문자열)', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM imported_records'), '0');
+  await importDialog.getByRole('button', { name: '가져오기 적용', exact: true }).click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 120개 가져오기 완료', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM imported_records'), '120');
+  assert.equal(scalar("SELECT (note IS NULL) || '|' || amount FROM imported_records WHERE code='파일 1'"), '1|9007199254740993');
+  assert.equal(scalar("SELECT length(note) FROM imported_records WHERE code='파일 2'"), '0');
+  assert.equal(scalar("SELECT note FROM imported_records WHERE code='파일 3'"), '\\N');
+  assert.equal(scalar("SELECT replace(note, char(13) || char(10), '|') FROM imported_records WHERE code='파일 4'"), '한 줄;포함|다음 "줄"');
+
   mutateFixture(`CREATE TABLE multi_edit (id INTEGER PRIMARY KEY, label TEXT NOT NULL, amount INTEGER NOT NULL,
     CHECK ((label='원래' AND amount=3) OR (label='함께' AND amount=8)))`);
   mutateFixture("INSERT INTO multi_edit VALUES (1, '원래', 3)");
@@ -445,6 +487,7 @@ async function main() {
   mutateFixture('DROP TABLE text_keys');
   mutateFixture('DROP TABLE bulk_edit');
   mutateFixture('DROP TABLE multi_edit');
+  mutateFixture('DROP TABLE imported_records');
   mutateFixture('DROP TABLE row_actions');
   mutateFixture('DROP TABLE display_examples');
   await refreshObjects.click();

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { encodeClipboardRows, formatStructuredPreview, parseClipboardRows, structuredFormat } from "../src/structuredFilePreview.ts";
+import { encodeClipboardRows, formatStructuredPreview, inferSourceColumn, parseClipboardRows, parseDelimitedImport, structuredFormat } from "../src/structuredFilePreview.ts";
 
 test("parses tab-separated clipboard ranges with headers, blanks and quoted cells", () => {
   const source = '\uFEFFname\tnote\tcount\r\n"한\t글"\t"두\r\n줄 ""인용"""\t9007199254740993\r\n둘째\t\t0\r\n';
@@ -41,6 +41,38 @@ test("clipboard protection prefixes formula-like text and headers while preservi
   const exact = encodeClipboardRows(rows, headers, false);
   assert.equal(exact.protectedFields, 0);
   assert.deepEqual(parseClipboardRows(exact.text, true, true).rows[0], values);
+});
+
+test("detects BOM and delimiters while keeping quoted newlines, empty text, and NULL markers", () => {
+  const source = '\uFEFFname;blank;literal;number\r\n"쉼;표\r\n새 줄";"";"\\N";9223372036854775807\r\n다음;\\N;abc;0\r\n';
+  const bytes = new Uint8Array(Buffer.from(source, "utf16le")).buffer;
+  const result = parseDelimitedImport(bytes, "input.txt", { encoding: "auto", delimiter: "auto", header: true, preserveBlanks: true });
+  assert.equal(result.encoding, "utf-16le");
+  assert.equal(result.delimiter, ";");
+  assert.deepEqual(result.source.headers, ["name", "blank", "literal", "number"]);
+  assert.deepEqual(result.source.rows, [["쉼;표\r\n새 줄", "", "\\N", "9223372036854775807"], ["다음", null, "abc", "0"]]);
+  assert.deepEqual(result.source.quotedEmpty, [new Set([1]), new Set()]);
+  assert.equal(inferSourceColumn(result.source.rows, 3), "정수");
+  assert.equal(inferSourceColumn([["001"], ["002"]], 0), "문자열");
+  assert.equal(inferSourceColumn([["9223372036854775808"]], 0), "문자열");
+  assert.equal(inferSourceColumn([["2026-02-31"]], 0), "문자열");
+});
+
+test("requires an explicit legacy encoding and reports ambiguous and malformed files", () => {
+  const options = { encoding: "auto", delimiter: "auto", header: true, preserveBlanks: false };
+  const bytes = text => new TextEncoder().encode(text).buffer;
+  const korean = new Uint8Array([0x61, 0x09, 0x62, 0x0a, 0xb0, 0xa1, 0x09, 0x31]).buffer;
+  assert.match(parseDelimitedImport(korean, "input.tsv", options).error, /UTF-8로 읽을 수 없습니다/);
+  const decoded = parseDelimitedImport(korean, "input.tsv", { ...options, encoding: "euc-kr" });
+  assert.equal(decoded.delimiter, "\t");
+  assert.deepEqual(decoded.source.rows, [["가", "1"]]);
+  assert.match(parseDelimitedImport(bytes("a,b;c\nx,y;z"), "input.csv", options).error, /여러 구분자/);
+  assert.match(parseDelimitedImport(bytes('a,b\n"unterminated'), "input.csv", options).error, /2번째 레코드.*따옴표/);
+  assert.match(parseDelimitedImport(bytes("a,b\nx,y\nz"), "input.csv", options).error, /3번째 레코드.*열 수/);
+  assert.match(parseDelimitedImport(bytes("\uFEFFa,b\nx,y"), "input.csv", { ...options, encoding: "utf-16le" }).error, /BOM.*UTF-8/);
+  assert.match(parseDelimitedImport(bytes("a,b\nx,\0"), "input.csv", options).error, /NUL/);
+  assert.equal(parseDelimitedImport(bytes("a\n" + "x\n".repeat(1000)), "input.csv", options).source.rows.length, 1000);
+  assert.match(parseDelimitedImport(bytes("a\n" + "x\n".repeat(1001)), "input.csv", options).error, /1000행/);
 });
 
 test("recognizes extensions and formats JSON without rounding values or dropping keys", () => {

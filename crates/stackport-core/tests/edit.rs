@@ -37,6 +37,88 @@ fn input(kind: &str, value: &str) -> EditInput {
 }
 
 #[test]
+fn delimited_import_validates_all_rows_beyond_the_sample_and_commits_once() {
+    let (dir, store, profile) = setup("PROD");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute(
+        "CREATE TABLE intake (id INTEGER PRIMARY KEY, tag TEXT NOT NULL UNIQUE)",
+        [],
+    )
+    .unwrap();
+    let make_rows = |duplicate_last| {
+        (1..=120)
+            .map(|index| {
+                let value = if duplicate_last && index == 120 {
+                    1
+                } else {
+                    index
+                };
+                vec![RowInsertField {
+                    column: "tag".into(),
+                    input: input("text", &format!("file-record-{value}")),
+                }]
+            })
+            .collect()
+    };
+    let columns = || vec!["tag".into()];
+    let count = || {
+        db.query_row("SELECT count(*) FROM intake", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap()
+    };
+
+    let clipboard = store
+        .begin_row_change(&profile, "intake", RowChange::Paste)
+        .unwrap();
+    assert!(store
+        .preview_row_paste(&clipboard.token, columns(), make_rows(false))
+        .is_err());
+    let import = || {
+        store
+            .begin_row_change(&profile, "intake", RowChange::ImportDelimited)
+            .unwrap()
+    };
+    let invalid = import();
+    let proposal = store
+        .preview_row_paste(&invalid.token, columns(), make_rows(true))
+        .unwrap();
+    assert_eq!((proposal.row_count, proposal.rows.len()), (120, 25));
+    assert_eq!(count(), 0);
+    let error = store
+        .apply_row_paste(&invalid.token, &proposal.approval, "PROD")
+        .err()
+        .expect("duplicate must roll back");
+    assert!(
+        error.contains("가져오기 120행") && error.contains("전체를 롤백"),
+        "{error}"
+    );
+    assert_eq!(count(), 0);
+
+    let valid = import();
+    let proposal = store
+        .preview_row_paste(&valid.token, columns(), make_rows(false))
+        .unwrap();
+    assert!(store
+        .apply_row_paste(&valid.token, &proposal.approval, "")
+        .is_err());
+    let saved = store
+        .apply_row_paste(&valid.token, &proposal.approval, "PROD")
+        .unwrap();
+    assert_eq!(saved.rows, 120);
+    assert_eq!(count(), 120);
+    let history = store.list_audit_events(None).unwrap().events;
+    assert!(history
+        .iter()
+        .any(|event| event.operation == "sqlite.row.import"
+            && event.outcome == "succeeded"
+            && event.affected_count == Some(120)));
+    assert!(!serde_json::to_string(&history)
+        .unwrap()
+        .contains("file-record"));
+}
+
+#[test]
 fn clipboard_rows_are_previewed_and_applied_atomically() {
     let (dir, store, profile) = setup("PROD");
     let db = Connection::open(dir.path().join("data.sqlite")).unwrap();

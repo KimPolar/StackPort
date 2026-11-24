@@ -1067,14 +1067,16 @@ impl PostgresManager {
         let session = self.edit_session(id)?;
         let mut pending = session.row_edit.lock().await;
         let token = edit_token(token)?;
-        checked_row_change(&mut pending, token)?.clear_paste_preview()?;
-        timeout(QUERY_TIMEOUT, async {
+        let plan = checked_row_change(&mut pending, token)?;
+        plan.clear_paste_preview()?;
+        let deadline = plan.batch_preview_timeout(QUERY_TIMEOUT);
+        timeout(deadline, async {
             let mut client = session.client.lock().await;
             let plan = checked_row_change(&mut pending, token)?;
             row_edit::paste::preview(&mut client, plan, columns, rows).await
         })
         .await
-        .map_err(|_| "붙여넣기 미리보기 시간이 초과되었습니다.")?
+        .map_err(|_| "여러 행의 미리보기 시간이 초과되었습니다.")?
     }
 
     pub async fn apply_row_paste(

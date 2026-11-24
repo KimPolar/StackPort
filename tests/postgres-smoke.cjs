@@ -1295,6 +1295,73 @@ async function verify(browser, fixture, gateway, jump) {
   await data.getByText('다음 붙여넣기', { exact: true }).waitFor();
   assert.equal(await data.getByText('남으면 안 되는 행', { exact: true }).count(), 0);
 
+  const fileImport = page.getByRole('button', { name: '파일 가져오기', exact: true });
+  const importDialog = page.getByRole('dialog', { name: 'PostgreSQL 파일 가져오기', exact: true });
+  const importPicker = importDialog.getByLabel('가져올 파일');
+  const mapFile = importDialog.getByRole('button', { name: '열 매핑', exact: true });
+  const previewFile = importDialog.getByRole('button', { name: '가져오기 미리보기', exact: true });
+  const applyFile = importDialog.getByRole('button', { name: '가져오기 적용', exact: true });
+  const confirmFile = importDialog.getByLabel('운영 환경 확인 · PROD 입력');
+  const inputFile = path.join(root, 'postgres-import-949.tsv');
+  const remainingRows = Array.from({ length: 104 }, (_, index) => 'file-entry-' + (index + 2) + '\t\t\t');
+  fs.writeFileSync(inputFile, Buffer.concat([
+    Buffer.from('row label\tempty_text\toptional\tamount\r\n', 'ascii'),
+    Buffer.from([0xb0, 0xa1]),
+    Buffer.from('\t""\t\\N\t9007199254740993.125\r\n' + remainingRows.join('\r\n'), 'ascii'),
+  ]));
+  await fileImport.click();
+  await importPicker.setInputFiles(inputFile);
+  await importDialog.getByLabel('StackPort의 NULL과 빈 문자열 복원').check();
+  await mapFile.click();
+  await importDialog.getByRole('alert').getByText(/UTF-8로 읽을 수 없습니다/).waitFor();
+  await importDialog.getByLabel('파일 인코딩').selectOption('euc-kr');
+  await mapFile.click();
+  await importDialog.getByText('postgres-import-949.tsv · 한국어 Windows-949 (EUC-KR) · 탭', { exact: true }).waitFor();
+  await previewFile.click();
+  const importPreview = importDialog.getByRole('table', { name: '가져오기 미리보기', exact: true });
+  await importPreview.getByText('9007199254740993.13', { exact: true }).waitFor();
+  assert.equal(await importPreview.getByRole('row').count(), 26);
+  await importDialog.getByText(/105개 행을 새로 추가/).waitFor();
+  await applyFile.click();
+  await importDialog.getByRole('alert').getByText(/PROD/).waitFor();
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 105개 가져오기 완료', { exact: true }).waitFor();
+  await data.getByText('가', { exact: true }).waitFor();
+
+  await fileImport.click();
+  await importPicker.setInputFiles({
+    name: 'reject-last.csv', mimeType: 'text/csv',
+    buffer: Buffer.from('row label\n' + Array.from({ length: 104 }, (_, index) => 'reject-entry-' + index).join('\n') + '\ndeny'),
+  });
+  await mapFile.click();
+  await previewFile.click();
+  await importDialog.getByText(/105개 행을 새로 추가/).waitFor();
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.getByRole('alert').getByText(/가져오기 전체를 롤백/).waitFor();
+  await importDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await importDialog.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await importDialog.waitFor({ state: 'detached' });
+  const importReader = await open();
+  try {
+    const imported = await command('execute_postgres_sql', {
+      id: importReader.id, request: randomUUID(), scope: { kind: 'document' },
+      source: "SELECT count(*) FILTER (WHERE \"row label\" LIKE 'file-entry-%' OR \"row label\" = '가'), " +
+        "count(*) FILTER (WHERE \"row label\" LIKE 'reject-entry-%'), " +
+        "count(*) FILTER (WHERE \"row label\" = '가' AND empty_text = '' AND optional IS NULL AND amount = 9007199254740993.13) " +
+        'FROM report."row actions"',
+    });
+    assert.deepEqual(imported.rows[0].map(cell => cell.value), ['105', '0', '1']);
+  } finally {
+    await close(importReader.id);
+  }
+  const importHistory = (await command('list_audit_events', { before: null })).events.filter(event => event.operation === 'postgres.row.import');
+  assert.ok(importHistory.some(event => event.outcome === 'succeeded' && event.affected_count === 105));
+  assert.ok(importHistory.some(event => event.outcome === 'failed'));
+  assert.doesNotMatch(JSON.stringify(importHistory), /postgres-import-949|file-entry|reject-entry/);
+
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
   const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });
   const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });

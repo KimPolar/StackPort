@@ -2,8 +2,8 @@ use super::{
     display_value, editable_table, ensure_identity, file_handle, insert_audit, key_predicate,
     open_edit_db, open_schema_db, parse_input, quote, read_row, schema_version, validate_keys,
     verify_profile, wipe_value, AuditRecord, Cell, Connection, EditInput, EditKey, Handle,
-    ObjectDetails, Path, Profile, Result, Store, TransactionBehavior, Uuid, Value, ValueRef,
-    PASTE_BYTES, PASTE_COLUMNS, PASTE_ROWS, SESSION_LIFETIME,
+    ObjectDetails, Path, Profile, Result, RowBatchSource, Store, TransactionBehavior, Uuid, Value,
+    ValueRef, SESSION_LIFETIME,
 };
 use crate::db_error;
 use rusqlite::{params_from_iter, OptionalExtension, Transaction};
@@ -21,6 +21,7 @@ const EXPIRED: &str = "행 작업이 만료되었습니다. 테이블을 다시 
 pub enum RowChange {
     Insert,
     Paste,
+    ImportDelimited,
     Delete { keys: Vec<EditKey> },
 }
 
@@ -85,6 +86,7 @@ pub struct RowPastePreview {
     pub approval: String,
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Option<Cell>>>,
+    pub row_count: usize,
 }
 
 #[derive(Serialize)]
@@ -115,7 +117,7 @@ impl Drop for Values {
 
 enum Action {
     Insert(Values),
-    Paste(Vec<Values>),
+    Paste(RowBatchSource, Vec<Values>),
     Delete { keys: Values, fingerprint: [u8; 32] },
 }
 
@@ -173,7 +175,17 @@ impl Store {
                 insert_columns(&details),
                 None,
             ),
-            RowChange::Paste => (Action::Paste(Vec::new()), insert_columns(&details), None),
+            RowChange::Paste | RowChange::ImportDelimited => {
+                let source = match change {
+                    RowChange::ImportDelimited => RowBatchSource::DelimitedFile,
+                    _ => RowBatchSource::Clipboard,
+                };
+                (
+                    Action::Paste(source, Vec::new()),
+                    insert_columns(&details),
+                    None,
+                )
+            }
             RowChange::Delete { keys } => {
                 ensure_delete_scope(&db, table)?;
                 let keys = Values(validate_keys(&details, &keys)?);
@@ -266,29 +278,21 @@ impl Store {
     ) -> Result<RowPastePreview> {
         let mut state = self.edits.lock()?;
         let plan = active_plan(&mut state.rows, token)?;
-        if !matches!(plan.action, Action::Paste(_)) {
-            return Err("붙여넣기 작업을 다시 여세요.".into());
-        }
+        let Action::Paste(source, existing) = &mut plan.action else {
+            return Err("여러 행 추가 작업을 다시 여세요.".into());
+        };
+        let source = *source;
         plan.approval = None;
-        plan.action = Action::Paste(Vec::new());
-        if rows.is_empty()
-            || rows.len() > PASTE_ROWS
-            || columns.is_empty()
-            || columns.len() > PASTE_COLUMNS
-        {
-            return Err(format!(
-                "붙여넣을 범위를 1~{PASTE_ROWS}행, 1~{PASTE_COLUMNS}열로 선택하세요."
-            ));
-        }
-        if rows
-            .iter()
-            .flatten()
-            .map(|field| field.input.value.len())
-            .sum::<usize>()
-            > PASTE_BYTES
-        {
-            return Err("붙여넣을 값의 전체 크기를 256 KiB 이하로 줄이세요.".into());
-        }
+        existing.clear();
+        source.validate(
+            rows.len(),
+            columns.len(),
+            rows.iter()
+                .flatten()
+                .map(|field| field.input.value.len())
+                .sum(),
+        )?;
+        let operation = source.name();
         let db = open_schema_db(Path::new(&plan.profile.path))?;
         plan.check_target(self, &db)?;
         let table_columns = insert_columns(&editable_table(&db, &plan.table)?);
@@ -302,30 +306,35 @@ impl Store {
         {
             return Err("테이블에 없는 열이 포함되었습니다. 다시 조회하세요.".into());
         }
-        let mut prepared = Vec::with_capacity(rows.len());
-        let mut previews = Vec::with_capacity(rows.len());
+        let row_count = rows.len();
+        let preview_rows = source.limits().preview_rows.min(row_count);
+        let mut prepared = Vec::with_capacity(row_count);
+        let mut previews = Vec::with_capacity(preview_rows);
         for (index, fields) in rows.into_iter().enumerate() {
             if fields
                 .iter()
                 .any(|field| !names.contains(field.column.as_str()))
             {
                 return Err(format!(
-                    "붙여넣기 {}행에 매핑되지 않은 열이 있습니다.",
+                    "{operation} {}행에 매핑되지 않은 열이 있습니다.",
                     index + 1
                 ));
             }
             let values = prepare_insert(&table_columns, fields)
-                .map_err(|error| format!("붙여넣기 {}행 · {error}", index + 1))?;
-            previews.push(columns.iter().map(|name| values.cell(name)).collect());
+                .map_err(|error| format!("{operation} {}행 · {error}", index + 1))?;
+            if index < preview_rows {
+                previews.push(columns.iter().map(|name| values.cell(name)).collect());
+            }
             prepared.push(values);
         }
         let approval = Uuid::new_v4().to_string();
         plan.approval = Some(approval.clone());
-        plan.action = Action::Paste(prepared);
+        plan.action = Action::Paste(source, prepared);
         Ok(RowPastePreview {
             approval,
             columns,
             rows: previews,
+            row_count,
         })
     }
 
@@ -366,7 +375,7 @@ impl Store {
             let mut state = self.edits.lock()?;
             let plan = active_plan(&mut state.rows, token)?;
             if plan.approval.as_deref() != Some(approval)
-                || matches!(plan.action, Action::Paste(_)) != paste
+                || matches!(plan.action, Action::Paste(..)) != paste
             {
                 return Err("현재 행 작업을 다시 미리보세요.".into());
             }
@@ -378,7 +387,8 @@ impl Store {
         verify_profile(self, &plan.profile)?;
         let operation = match plan.action {
             Action::Insert(_) => "sqlite.row.insert",
-            Action::Paste(_) => "sqlite.row.paste",
+            Action::Paste(RowBatchSource::Clipboard, _) => "sqlite.row.paste",
+            Action::Paste(RowBatchSource::DelimitedFile, _) => "sqlite.row.import",
             Action::Delete { .. } => "sqlite.row.delete",
         };
         let correlation_id = Uuid::new_v4().to_string();
@@ -527,11 +537,12 @@ fn apply(store: &Store, plan: &Plan) -> Result<Applied> {
             count: 1,
             fields: execute_insert(&tx, &details, &values.0, true)?,
         },
-        Action::Paste(rows) => {
+        Action::Paste(source, rows) => {
+            let operation = source.name();
             for (index, values) in rows.iter().enumerate() {
                 execute_insert(&tx, &details, &values.0, false).map_err(|error| {
                     format!(
-                        "붙여넣기 {}행 저장에 실패해 전체를 롤백했습니다. {error}",
+                        "{operation} {}행 저장에 실패해 전체를 롤백했습니다. {error}",
                         index + 1
                     )
                 })?;

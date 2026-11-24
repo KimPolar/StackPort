@@ -139,14 +139,19 @@ PARTIAL = {
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
+    "SP-MG-001": "SQLite·PostgreSQL의 지원 테이블에 CSV·TSV·TXT 구분 텍스트 가져오기와 구분자 인식",
     "SP-MG-002": "SQLite·PostgreSQL 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
-    "SP-MG-005": "SQLite 저장 타입과 PostgreSQL 열 타입·정확한 텍스트·NULL 보존, CSV의 NULL·빈 문자열 구분",
-    "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
+    "SP-MG-004": "두 엔진에서 파일·인코딩·구분자·헤더 선택, 원본 형식 추정, 대상 열 매핑과 검증 미리보기",
+    "SP-MG-005": "SQLite 정수·실수·문자열과 PostgreSQL 서버 타입으로 가져오기, CSV에서 NULL·빈 문자열과 명시적 생략 구분, 내보내기 값 보존",
+    "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
+    "SP-MG-007": "파일 인코딩 오류, 따옴표·열 수 오류 레코드와 DB의 타입·제약 위반 메시지 표시",
+    "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
     "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
     "SP-MG-024": "SQLite 선택 객체 또는 전체 스키마의 열·키·관계·규칙과 생성 SQL 주석을 Markdown·HTML로 내보내기",
-    "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·CSV 보호 필드 수 보고와 작업 기록",
+    "SP-MG-026": "SQLite·PostgreSQL 파일 가져오기에서 대상과 환경, 추가 예정 건수와 값 미리보기, 운영 확인 및 실패 시 전체 롤백",
+    "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·보호 필드 보고, SQLite·PostgreSQL 파일 가져오기의 예상·저장 행 수와 대상 작업 기록",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
     "SP-BK-002": "SQLite 온라인 백업 API",
     "SP-BK-003": "복원 가능한 SQLite 바이너리 파일",
@@ -224,6 +229,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/schema_sync.rs; crates/stackport-core/tests/schema_sync.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MD-016", "SP-MD-020", "SP-MG-024"}:
                 evidence = "crates/stackport-core/src/schema_document.rs; crates/stackport-core/tests/schema.rs; src/SchemaDocumentDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
+            elif requirement_id in {"SP-MG-001", "SP-MG-004", "SP-MG-006", "SP-MG-007", "SP-MG-026"}:
+                evidence = "src/main.tsx; src/PostgresWorkspace.tsx"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):
                 evidence = "crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-011", "SP-SEC-011", "SP-FL-023"}:
@@ -403,6 +410,12 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-DB-022", "SP-MG-002", "SP-MG-005", "SP-MG-008", "SP-SEC-011"}:
                 evidence += "; crates/stackport-core/src/postgres/export.rs; src/PostgresResultExport.tsx"
                 if requirement_id != "SP-DB-022":
+                    evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-MG-001", "SP-MG-004", "SP-MG-005", "SP-MG-006", "SP-MG-007", "SP-MG-026", "SP-MG-028"}:
+                evidence += "; src/GridPasteDialog.tsx; src/structuredFilePreview.ts; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row/paste.rs; crates/stackport-core/tests/edit.rs; tests/structured-preview.test.mjs"
+                if requirement_id not in {"SP-MG-005", "SP-MG-028"}:
+                    evidence += "; tests/desktop-smoke.cjs"
+                if requirement_id != "SP-MG-005":
                     evidence += "; tests/postgres-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

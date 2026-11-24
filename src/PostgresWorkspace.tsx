@@ -404,11 +404,11 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     });
   }
 
-  function openRowPaste(trigger: HTMLButtonElement) {
+  function openRowBatch(trigger: HTMLButtonElement, source: GridPasteRequest["source"]) {
     if (!object || !result || unavailable) return;
     const settings = profile.settings;
     setRowReport(null); setPasteReport(null); setEditNotice("");
-    setPaste({ trigger, request: { engine: "postgres", id, object: object.id,
+    setPaste({ trigger, request: { engine: "postgres", source, id, object: object.id,
       table: `${result.schema}.${result.name}`, profileName: settings.name, environment: settings.environment,
       location: `${settings.username}@${endpoint(settings.host, settings.port)}/${settings.database}` } });
   }
@@ -463,7 +463,9 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           {result?.row_insert && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {result?.row_paste && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
-            onClick={event => openRowPaste(event.currentTarget)}>행 붙여넣기</button>}
+            onClick={event => openRowBatch(event.currentTarget, "clipboard")}>행 붙여넣기</button>}
+          {result?.row_paste && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
+            onClick={event => openRowBatch(event.currentTarget, "file")}>파일 가져오기</button>}
           <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
           {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && exportPage(page.data)}>결과 내보내기</button>}
           {!structureOpen && !!filterColumns?.length && <button ref={columnSettings} type="button" className="secondary small"
@@ -490,7 +492,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       <div hidden={structureOpen}>
         {grid.error && <p className="form-note" role="status">{grid.error}</p>}
         {editNotice && <p className="success-banner" role="status">{editNotice}</p>}
-        {pasteReport && <p className="success-banner" role="status">행 {pasteReport.rows}개 붙여넣기 완료
+        {pasteReport && <p className="success-banner" role="status">행 {pasteReport.rows}개 {pasteReport.source === "file" ? "가져오기" : "붙여넣기"} 완료
           {pasteReport.audit_warning && <strong className="audit-warning">{pasteReport.audit_warning}</strong>}</p>}
         {rowReport && <div className="row-change-report">
           <p className="success-banner" role="status">{rowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}

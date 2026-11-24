@@ -1214,13 +1214,13 @@ function App() {
       else rowAddButton.current?.focus();
     });
   }
-  function openRowPaste(trigger: HTMLButtonElement) {
+  function openRowBatch(trigger: HTMLButtonElement, source: GridPasteRequest["source"]) {
     if (!profile || !rowChangeTable) return;
     rowChangeTrigger.current = trigger;
     setRowReport(null);
     setPasteReport(null);
     setEditReport(null);
-    setPasteRequest({ engine: "sqlite", profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
+    setPasteRequest({ engine: "sqlite", source, profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
       environment: profile.environment, table: rowChangeTable });
   }
   function closeRowPaste() {
@@ -1433,7 +1433,9 @@ function App() {
           {rowChangeTable && <button type="button" ref={rowAddButton} className="secondary small" disabled={querying}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {rowChangeTable && <button type="button" className="secondary small" disabled={querying}
-            onClick={event => openRowPaste(event.currentTarget)}>행 붙여넣기</button>}
+            onClick={event => openRowBatch(event.currentTarget, "clipboard")}>행 붙여넣기</button>}
+          {rowChangeTable && <button type="button" className="secondary small" disabled={querying}
+            onClick={event => openRowBatch(event.currentTarget, "file")}>파일 가져오기</button>}
           {tableLayoutKey && !!result?.columns.length && <button ref={sqliteLayoutButton} type="button" className="secondary small"
             onClick={() => setSqliteLayoutDialog(tableLayoutKey)}>열 설정</button>}
           {!pinned && liveQueryResult?.target.kind === "sql" && <button type="button" className="secondary small"
@@ -1510,7 +1512,7 @@ function App() {
         </details>}
         {result?.metrics && <SqlQueryMetrics metrics={result.metrics} />}
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
-        {currentPasteReport && <p className="success-banner" role="status">행 {currentPasteReport.rows}개 붙여넣기 완료
+        {currentPasteReport && <p className="success-banner" role="status">행 {currentPasteReport.rows}개 {currentPasteReport.source === "file" ? "가져오기" : "붙여넣기"} 완료
           {currentPasteReport.audit_warning && <strong className="audit-warning">{currentPasteReport.audit_warning}</strong>}</p>}
         {currentRowReport && <div className="sqlite-row-report">
           <p className="success-banner" role="status">{currentRowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}
@@ -1870,10 +1872,12 @@ const auditOperationNames: Record<string, string> = {
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
   "sqlite.row.paste": "SQLite 행 붙여넣기",
+  "sqlite.row.import": "SQLite 파일 가져오기",
   "sqlite.row.update": "SQLite 행 변경",
   "sqlite.grid.update": "SQLite 여러 행 변경",
   "postgres.row.insert": "PostgreSQL 행 추가", "postgres.row.delete": "PostgreSQL 행 삭제",
   "postgres.row.paste": "PostgreSQL 행 붙여넣기",
+  "postgres.row.import": "PostgreSQL 파일 가져오기",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.schema.sync": "SQLite 스키마 변경 적용",
   "sqlite.restore": "SQLite 복원",

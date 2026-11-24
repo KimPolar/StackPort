@@ -11,9 +11,61 @@ pub use row::{
     RowChangeValue, RowInsertField, RowPastePreview, RowPasteResult,
 };
 
-pub(crate) const PASTE_ROWS: usize = 100;
-pub(crate) const PASTE_COLUMNS: usize = 64;
-pub(crate) const PASTE_BYTES: usize = 256 * 1024;
+#[derive(Clone, Copy)]
+pub(crate) enum RowBatchSource {
+    Clipboard,
+    DelimitedFile,
+}
+
+pub(crate) struct RowBatchLimits {
+    pub rows: usize,
+    pub bytes: usize,
+    pub preview_rows: usize,
+}
+
+impl RowBatchSource {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Clipboard => "붙여넣기",
+            Self::DelimitedFile => "가져오기",
+        }
+    }
+
+    pub(crate) fn limits(self) -> RowBatchLimits {
+        match self {
+            Self::Clipboard => RowBatchLimits {
+                rows: 100,
+                bytes: 256 * 1024,
+                preview_rows: 100,
+            },
+            Self::DelimitedFile => RowBatchLimits {
+                rows: 1000,
+                bytes: 4 * 1024 * 1024,
+                preview_rows: 25,
+            },
+        }
+    }
+
+    pub(crate) fn validate(self, rows: usize, columns: usize, bytes: usize) -> Result<()> {
+        // 1,000 × 64 also stays within PostgreSQL's 65,535 parameters per statement.
+        const MAX_COLUMNS: usize = 64;
+        let limits = self.limits();
+        let operation = self.name();
+        if !(1..=limits.rows).contains(&rows) || !(1..=MAX_COLUMNS).contains(&columns) {
+            return Err(format!(
+                "{operation} 범위는 1~{}행, 1~{MAX_COLUMNS}열입니다.",
+                limits.rows
+            ));
+        }
+        if bytes > limits.bytes {
+            return Err(format!(
+                "{operation} 값의 전체 크기를 {} KiB 이하로 줄이세요.",
+                limits.bytes / 1024
+            ));
+        }
+        Ok(())
+    }
+}
 
 use super::quote_identifier as quote;
 use super::{

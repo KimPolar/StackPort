@@ -7,13 +7,16 @@ use super::{
 };
 use crate::{
     edit::{
-        InsertColumn, RowChangeField, RowChangePreview, RowChangeResult, RowChangeSession,
-        RowChangeValue, RowPasteResult,
+        InsertColumn, RowBatchSource, RowChangeField, RowChangePreview, RowChangeResult,
+        RowChangeSession, RowChangeValue, RowPasteResult,
     },
     quote_identifier as quote, Cell,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use tokio::time::timeout;
 
 pub(in crate::postgres) mod paste;
@@ -23,6 +26,7 @@ pub(in crate::postgres) mod paste;
 pub enum PostgresRowChange {
     Insert,
     Paste,
+    ImportDelimited,
     Delete { stamp: PostgresRowStamp },
 }
 
@@ -42,7 +46,7 @@ struct FieldChange {
 
 enum Action {
     Insert(Vec<FieldChange>),
-    Paste(Option<paste::PasteRows>),
+    Paste(RowBatchSource, Option<paste::PasteRows>),
     Delete(PostgresRowStamp),
 }
 
@@ -67,15 +71,29 @@ impl Plan {
     }
 
     pub(in crate::postgres) fn is_paste(&self) -> bool {
-        matches!(self.action, Action::Paste(_))
+        self.batch_source().is_some()
+    }
+
+    fn batch_source(&self) -> Option<RowBatchSource> {
+        match self.action {
+            Action::Paste(source, _) => Some(source),
+            _ => None,
+        }
+    }
+
+    pub(in crate::postgres) fn batch_preview_timeout(&self, normal: Duration) -> Duration {
+        match self.batch_source() {
+            Some(RowBatchSource::DelimitedFile) => Duration::from_secs(30),
+            _ => normal,
+        }
     }
 
     pub(in crate::postgres) fn clear_paste_preview(&mut self) -> Result<()> {
-        if !self.is_paste() {
-            return Err("붙여넣기 작업을 다시 여세요.".into());
-        }
+        let Action::Paste(_, batch) = &mut self.action else {
+            return Err("여러 행 추가 작업을 다시 여세요.".into());
+        };
         self.approval = None;
-        self.action = Action::Paste(None);
+        *batch = None;
         Ok(())
     }
 
@@ -98,7 +116,7 @@ impl Plan {
             return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
         }
         match self.action {
-            Action::Insert(_) | Action::Paste(_) => check_insert(&current),
+            Action::Insert(_) | Action::Paste(..) => check_insert(&current),
             Action::Delete(_) => check_delete(&current),
         }
     }
@@ -114,10 +132,12 @@ pub(in crate::postgres) async fn begin(
     let table = format!("{}.{}", quote(&relation.schema), quote(&relation.name));
     let edit = access(&tx, object, relation.kind).await?.allowed()?;
     let (action, columns, preview) = match change {
-        PostgresRowChange::Insert | PostgresRowChange::Paste => {
+        PostgresRowChange::Insert
+        | PostgresRowChange::Paste
+        | PostgresRowChange::ImportDelimited => {
             check_insert(&edit)?;
-            if matches!(change, PostgresRowChange::Paste) && !edit.allow_paste() {
-                return Err("이 테이블에는 붙여넣을 수 있는 대상 열이 없습니다.".into());
+            if !matches!(change, PostgresRowChange::Insert) && !edit.allow_paste() {
+                return Err("이 테이블에는 여러 행을 추가할 수 있는 대상 열이 없습니다.".into());
             }
             let columns = edit
                 .shape
@@ -132,10 +152,12 @@ pub(in crate::postgres) async fn begin(
                     editable: column.insertable(),
                 })
                 .collect();
-            let action = if matches!(change, PostgresRowChange::Paste) {
-                Action::Paste(None)
-            } else {
-                Action::Insert(Vec::new())
+            let action = match change {
+                PostgresRowChange::Paste => Action::Paste(RowBatchSource::Clipboard, None),
+                PostgresRowChange::ImportDelimited => {
+                    Action::Paste(RowBatchSource::DelimitedFile, None)
+                }
+                _ => Action::Insert(Vec::new()),
             };
             (action, columns, None)
         }
@@ -279,8 +301,13 @@ pub(in crate::postgres) async fn apply(
     let (operation, count) = match &plan.action {
         Action::Insert(_) => ("postgres.row.insert", 1),
         Action::Delete(_) => ("postgres.row.delete", 1),
-        Action::Paste(Some(batch)) => ("postgres.row.paste", batch.count()),
-        Action::Paste(None) => return Err("붙여넣을 행을 먼저 미리 보세요.".into()),
+        Action::Paste(RowBatchSource::Clipboard, Some(batch)) => {
+            ("postgres.row.paste", batch.count())
+        }
+        Action::Paste(RowBatchSource::DelimitedFile, Some(batch)) => {
+            ("postgres.row.import", batch.count())
+        }
+        Action::Paste(_, None) => return Err("추가할 행을 먼저 미리 보세요.".into()),
     };
     let record = |status| {
         audit(
@@ -329,8 +356,8 @@ pub(in crate::postgres) async fn apply(
         }
         Err(error) => {
             let _ = record("failed").await;
-            if plan.is_paste() {
-                Err(format!("붙여넣기 전체를 롤백했습니다. {error}"))
+            if let Some(source) = plan.batch_source() {
+                Err(format!("{} 전체를 롤백했습니다. {error}", source.name()))
             } else {
                 Err(error)
             }
@@ -358,13 +385,13 @@ async fn write<'a>(
     plan.recheck(&tx).await?;
     let fields = match &plan.action {
         Action::Insert(changes) => execute_insert(&tx, plan, changes).await?,
-        Action::Paste(Some(batch)) => {
+        Action::Paste(source, Some(batch)) => {
             paste::apply(&tx, &plan.table, batch)
                 .await
-                .map_err(|error| format!("붙여넣기 전체를 롤백했습니다. {error}"))?;
+                .map_err(|error| format!("{} 전체를 롤백했습니다. {error}", source.name()))?;
             Vec::new()
         }
-        Action::Paste(None) => return Err("붙여넣을 행을 먼저 미리 보세요.".into()),
+        Action::Paste(_, None) => return Err("추가할 행을 먼저 미리 보세요.".into()),
         Action::Delete(stamp) => {
             let mut values = stamp.values();
             let predicate = key_predicate(plan.object, &plan.key);
