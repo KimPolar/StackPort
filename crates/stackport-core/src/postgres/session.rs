@@ -8,6 +8,7 @@ use super::{
     parameters::Value,
     sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
+use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use crate::{
     quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
     LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
@@ -396,6 +397,21 @@ impl PostgresManager {
             let objects = rows.iter().take(CATALOG_SIZE).map(|row| Ok(Object { id: field(row, 0)?, name: field(row, 1)?, kind: kind(field::<String>(row, 2)?.as_str())?, readable: field(row, 3)? })).collect::<Result<_>>()?;
             Ok(PostgresObjectPage { objects, has_next })
         }).await.map_err(|_| "객체 목록을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn search_objects(
+        &self,
+        id: &str,
+        input: PostgresSearchInput,
+    ) -> Result<PostgresSearchPage> {
+        input.validate()?;
+        let session = self.session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let client = session.client.lock().await;
+            search::objects(&client, input).await
+        })
+        .await
+        .map_err(|_| "PostgreSQL 객체 검색 시간이 초과되었습니다.")?
     }
 
     pub async fn page(

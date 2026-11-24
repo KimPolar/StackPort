@@ -88,7 +88,7 @@ PARTIAL = {
     "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
-    "SP-DB-021": "PostgreSQL 스키마 내 테이블·뷰 이름 검색",
+    "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
     "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
@@ -352,6 +352,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/catalog.rs; src/PostgresObjectStructure.tsx"
                 if requirement_id in {"SP-DB-014", "SP-DB-018"}:
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id == "SP-DB-021":
+                evidence += "; crates/stackport-core/src/postgres/search.rs; src/PostgresSearchDialog.tsx"
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
                 evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"

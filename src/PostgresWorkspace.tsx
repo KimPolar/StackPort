@@ -1,8 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, FileCode2, Pencil, Plug, ShieldCheck, X } from "lucide-react";
+import { Database, FileCode2, Pencil, Plug, Search, ShieldCheck, X } from "lucide-react";
 import { PostgresEditDialog, type PostgresEditExitGuard, type PostgresRowStamp } from "./PostgresEditDialog";
-import { PostgresObjectStructure, type PostgresObjectKind, type PostgresRelationLink } from "./PostgresObjectStructure";
+import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
+  type PostgresStructureSection } from "./PostgresObjectStructure";
+import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
@@ -28,7 +30,6 @@ type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: s
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null; edit_reason: string | null };
 type Route = { id: string; name: string; port: number };
 type RouteChoice = Pick<Route, "id" | "name">;
-const kindLabels: Record<ObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const number = new Intl.NumberFormat("ko-KR");
@@ -238,11 +239,14 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [objectPage, setObjectPage] = useState(0);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const [object, setObject] = useState<DatabaseObject | null>(null);
   const [rowPage, setRowPage] = useState(0);
   const [columnPage, setColumnPage] = useState(0);
   const [refresh, setRefresh] = useState(0);
+  const [gridRequested, setGridRequested] = useState(false);
   const [structureOpen, setStructureOpen] = useState(false);
+  const [structureStart, setStructureStart] = useState<{ section: PostgresStructureSection; version: number }>({ section: "overview", version: 0 });
   const [structureRevision, setStructureRevision] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
@@ -253,8 +257,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const schemaArgs = useMemo(() => unavailable ? null : { id, page: schemaPage }, [id, schemaPage, unavailable]);
   const objectArgs = useMemo(() => schema && !unavailable ? { id, schema: schema.id, search: query, page: objectPage } : null,
     [id, schema, query, objectPage, unavailable]);
-  const pageArgs = useMemo(() => object && !unavailable ? { id, object: object.id, rowPage, columnPage, query: tableQuery } : null,
-    [id, object, rowPage, columnPage, tableQuery, unavailable]);
+  const pageArgs = useMemo(() => object && !unavailable && gridRequested ? { id, object: object.id, rowPage, columnPage, query: tableQuery } : null,
+    [id, object, rowPage, columnPage, tableQuery, unavailable, gridRequested]);
   const schemas = useRead<SchemaPage>("postgres_schemas", schemaArgs);
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
@@ -265,8 +269,10 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
 
   useEffect(() => { if (page.data) setFilterColumns(page.data.column_names); }, [page.data]);
 
-  function selectObject(next: DatabaseObject | null, structure = false) {
-    setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(structure);
+  function selectObject(next: DatabaseObject | null, section?: PostgresStructureSection) {
+    setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(Boolean(section));
+    setGridRequested(next !== null && section === undefined);
+    setStructureStart(current => ({ section: section ?? "overview", version: current.version + 1 }));
     setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
     setEditNotice("");
   }
@@ -282,7 +288,14 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   function follow(link: PostgresRelationLink) {
     if (!link.target) return;
     chooseSchema({ id: link.target.schema_id, name: link.schema, accessible: true });
-    selectObject({ id: link.target.id, name: link.name, kind: link.target.kind, readable: true }, true);
+    selectObject({ id: link.target.id, name: link.name, kind: link.target.kind, readable: true }, "overview");
+  }
+
+  function openSearchHit(hit: PostgresSearchHit) {
+    chooseSchema({ id: hit.schema_id, name: hit.schema, accessible: true });
+    selectObject({ id: hit.id, name: hit.name, kind: hit.kind, readable: true }, hit.section);
+    setSearchOpen(false);
+    requestAnimationFrame(() => dataPanel.current?.focus());
   }
 
   function exportPage(data: Page) {
@@ -303,7 +316,9 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
 
   return <><div className="postgres-layout" hidden={Boolean(unavailable)}>
     <aside className="postgres-catalog results-card" aria-label="PostgreSQL 객체 탐색">
-      <div className="panel-heading"><strong>스키마</strong></div>
+      <div className="panel-heading"><strong>스키마</strong>
+        <button className="secondary small" type="button" onClick={() => setSearchOpen(true)}><Search size={14} aria-hidden /> 객체 검색</button>
+      </div>
       {schemas.error && <p className="error-banner" role="alert">{schemas.error}</p>}
       {schemas.loading && <p className="result-empty" role="status">스키마를 읽는 중…</p>}
       {schemas.data && <>
@@ -340,10 +355,11 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <p className="result-empty">스키마와 조회할 테이블 또는 뷰를 선택하세요.</p>}
       {object && schema && <>
         <div className="postgres-result-views postgres-object-views" role="group" aria-label="객체 보기">
-          <button type="button" className="secondary small" aria-pressed={!structureOpen} onClick={() => setStructureOpen(false)}>데이터</button>
+          <button type="button" className="secondary small" aria-pressed={!structureOpen} onClick={() => { setStructureOpen(false); setGridRequested(true); }}>데이터</button>
           <button type="button" className="secondary small" aria-pressed={structureOpen} onClick={() => setStructureOpen(true)}>구조</button>
         </div>
-        {!unavailable && <PostgresObjectStructure key={object.id} id={id} object={object.id} relation={schema.name + "." + object.name} kind={object.kind}
+        {!unavailable && <PostgresObjectStructure key={`${object.id}-${structureStart.version}`} id={id} object={object.id}
+          relation={schema.name + "." + object.name} kind={object.kind} initialSection={structureStart.section}
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />}
       </>}
       <div hidden={structureOpen}>
@@ -392,6 +408,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       </div>
     </section>
   </div>
+      {searchOpen && !unavailable && <PostgresSearchDialog id={id} database={profile.settings.database} schema={schema}
+        onClose={() => setSearchOpen(false)} onOpen={openSearchHit} />}
       {edit && <PostgresEditDialog id={id} object={edit.object} stamp={edit.stamp} column={edit.column} profile={profile.settings}
         unavailable={unavailable} onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onExitGuard={onEditExitGuard} onApplied={(cells, warning) => {
           const result = cells === 1 ? "셀 변경 완료" : `${cells}개 셀 변경 완료`;

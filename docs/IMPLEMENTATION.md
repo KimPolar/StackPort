@@ -26,6 +26,8 @@ PostgreSQL 연결 창의 **이 연결에서 데이터 그리드 편집 허용**�
 
 객체의 **데이터**와 **구조**를 오갈 수 있습니다. 구조에서 현재 역할의 객체 권한과 행 수준 보안 상태를 확인하고, 열의 기본값·생성 식·정렬 규칙, 제약조건, 인덱스, 트리거, 파티션을 열어 봅니다. 선택한 항목만 읽기 전용 스냅샷으로 조회하며 목록은 32개씩 표시합니다. 현재 역할에 스키마 `USAGE`와 대상 `SELECT` 권한이 있으면 외래 키의 참조 대상이나 하위 파티션의 구조로 이동할 수 있습니다. [PostgreSQL 권한 검사 함수](https://www.postgresql.org/docs/18/functions-info.html) · [PostgreSQL 열 카탈로그](https://www.postgresql.org/docs/16/catalog-pg-attribute.html)
 
+**객체 검색**은 연결한 데이터베이스의 사용자 스키마 전체 또는 선택한 스키마에서 테이블·파티션 테이블·뷰·구체화 뷰를 찾습니다. 이름·열 이름·객체와 열의 주석·SQL 정의를 대소문자 구분 없이 검색하고, 검색어 없이 객체 종류만 선택할 수도 있습니다. SQL 정의 검색에는 뷰 본문, 열의 기본값과 생성 식, 제약조건·인덱스·트리거·파티션 정의가 포함됩니다. 결과는 현재 역할에 `USAGE`와 `SELECT`가 있는 객체를 40개씩 표시하며, 일치한 항목의 구조로 이동합니다. [PostgreSQL 객체 카탈로그](https://www.postgresql.org/docs/18/catalog-pg-class.html) · [PostgreSQL 시스템 정보 함수](https://www.postgresql.org/docs/18/functions-info.html)
+
 서버에서 가져온 뷰의 조회 정의, 인덱스와 트리거의 생성 SQL, 열·제약조건·파티션의 정의 일부를 복사하거나 새 UTF-8 SQL 파일로 저장합니다. 정의가 16,384자를 넘으면 앞부분을 표시합니다. 복사와 저장은 화면에서 전체를 확인할 수 있는 정의에 제공됩니다. [PostgreSQL 정의 조회 함수](https://www.postgresql.org/docs/18/functions-info.html)
 
 PostgreSQL에서 **SQL 편집기**를 선택하거나 객체의 **SQL로 열기**를 눌러 조회를 작성합니다. 연결별 탭과 UTF-8 파일을 지원하며 파일을 저장할 때 BOM과 LF·CRLF를 유지합니다. `Ctrl+Enter`는 선택한 SQL 또는 문서의 단일 문장을, `Ctrl+Shift+Enter`는 커서가 속한 문장을 실행합니다. 달러 인용 문자열, 이스케이프 문자열, 중첩 블록 주석 안의 세미콜론을 문장 경계에서 제외합니다. 서버 파싱 오류에 위치가 있으면 편집기에서 이동할 수 있습니다. [PostgreSQL SQL 문법](https://www.postgresql.org/docs/18/sql-syntax-lexical.html)
@@ -303,6 +305,8 @@ node tests/desktop-smoke.cjs
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 
 SSH 점프 호스트와 게이트웨이를 각각 루프백에서 실행해 두 호스트 키를 확인하고, 경유 연결에서 PostgreSQL 조회와 서버 취소를 검증합니다. 터널을 중단하거나 점프 연결을 끊었을 때의 안내와 복구 버튼, 중단된 터널 선택 시 연결 제한, 같은 터널을 다시 시작한 뒤 남은 SQL 초안 실행도 확인합니다. 내보내기 매개변수를 입력하는 도중 연결이 끊기면 저장을 중단하고 결과 파일을 만들지 않는지 검사합니다.
+
+객체 검색 검사는 두 스키마의 동명 객체, 리터럴 `%`와 `_`, 열 주석, 표시 한도보다 긴 SQL 정의 뒤쪽의 일치, 접근 권한이 없는 객체, 종류 필터와 40개 단위 페이지 이동을 확인합니다. 검색 결과에서 해당 구조로 이동한 뒤 데이터 보기를 직접 열어 확인합니다.
 
 객체 구조 검사에서는 복합 외래 키 열 순서, 생성 열, 부분 인덱스, 비활성 트리거, 하위 파티션의 직접 조회 권한, 구조 목록의 페이지 이동과 뷰 정의 파일의 내용을 확인합니다.
 

@@ -1,17 +1,18 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
-export function Dialog({ title, children, onClose, busy, interceptEscape = false }: {
+export function Dialog({ title, children, onClose, busy, interceptEscape = false, className = "" }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   busy: boolean;
   interceptEscape?: boolean;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => { ref.current?.showModal(); }, []);
-  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onClose={onClose}
+  return <dialog ref={ref} className={`dialog ${className}`} aria-labelledby={titleId} onClose={onClose}
     onCancel={event => {
       if (busy || interceptEscape) event.preventDefault();
       if (!busy && interceptEscape) onClose();

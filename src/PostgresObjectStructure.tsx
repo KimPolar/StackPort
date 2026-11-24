@@ -5,9 +5,10 @@ import { emptySqlDocument } from "./SqlTabs";
 import { usePostgresRead } from "./usePostgresRead";
 
 export type PostgresObjectKind = "table" | "partitioned" | "view" | "materialized";
+export const postgresObjectLabels: Record<PostgresObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 type RelatedObject = { id: number; schema_id: number; kind: PostgresObjectKind };
 export type PostgresRelationLink = { schema: string; name: string; target: RelatedObject | null };
-type Section = "overview" | "columns" | "constraints" | "indexes" | "triggers" | "partitions";
+export type PostgresStructureSection = "overview" | "columns" | "constraints" | "indexes" | "triggers" | "partitions";
 type Fragment = { text: string; truncated: boolean };
 type Overview = { owner: string; persistence: string; access: string[]; row_security: boolean; force_row_security: boolean;
   populated: boolean | null; comment: Fragment | null; view_sql: Fragment | null; partition_key: Fragment | null; partition_bound: Fragment | null };
@@ -27,7 +28,7 @@ type Structure =
   | { section: "triggers"; triggers: Trigger[]; has_next: boolean }
   | { section: "partitions"; partitions: Partition[]; has_next: boolean };
 
-const label: Record<Section, string> = {
+export const postgresSectionLabels: Record<PostgresStructureSection, string> = {
   overview: "개요", columns: "열", constraints: "제약조건", indexes: "인덱스", triggers: "트리거", partitions: "파티션",
 };
 const constraintNames: Record<string, string> = {
@@ -38,17 +39,18 @@ const persistence: Record<string, string> = { p: "영구", u: "비기록", t: "�
 const number = new Intl.NumberFormat("ko-KR");
 type Save = (title: string, text: string) => void;
 
-export function PostgresObjectStructure({ id, object, relation, kind, visible, revision, onFollow, onFileBusy }: {
+export function PostgresObjectStructure({ id, object, relation, kind, visible, revision, initialSection, onFollow, onFileBusy }: {
   id: string; object: number; relation: string; kind: PostgresObjectKind; visible: boolean; revision: number;
+  initialSection: PostgresStructureSection;
   onFollow: (link: PostgresRelationLink) => void; onFileBusy: (busy: boolean) => void;
 }) {
-  const [section, setSection] = useState<Section>("overview");
+  const [section, setSection] = useState(initialSection);
   const [page, setPage] = useState(0);
   const [save, setSave] = useState<{ title: string; text: string } | null>(null);
   const [saved, setSaved] = useState("");
   const args = useMemo(() => visible ? { id, object, section, page } : null, [visible, id, object, section, page]);
   const read = usePostgresRead<Structure>("postgres_structure", args, revision);
-  const sections: Section[] = ["overview", "columns"];
+  const sections: PostgresStructureSection[] = ["overview", "columns"];
   if (kind === "table" || kind === "partitioned") sections.push("constraints", "indexes", "triggers");
   if (kind === "view") sections.push("triggers");
   if (kind === "materialized") sections.push("indexes");
@@ -57,13 +59,13 @@ export function PostgresObjectStructure({ id, object, relation, kind, visible, r
   return <section className="postgres-structure" aria-label="PostgreSQL 객체 구조" aria-busy={read.loading} hidden={!visible}>
     <nav className="postgres-result-views" aria-label="구조 항목">
       {sections.map(item => <button type="button" className="secondary small" key={item} aria-pressed={item === section}
-        onClick={() => { if (section !== item) { setSection(item); setPage(0); } }}>{label[item]}</button>)}
+        onClick={() => { if (section !== item) { setSection(item); setPage(0); } }}>{postgresSectionLabels[item]}</button>)}
     </nav>
     {read.loading && <p className="result-empty" role="status">구조를 읽는 중…</p>}
     {read.error && <p className="error-banner" role="alert">{read.error}</p>}
     {read.data && <StructureContent data={read.data} onSave={(title, text) => setSave({ title, text })} onFollow={onFollow} />}
     {read.data && read.data.section !== "overview" &&
-      <PostgresPager label={label[read.data.section]} page={page} next={read.data.has_next} change={setPage} />}
+      <PostgresPager label={postgresSectionLabels[read.data.section]} page={page} next={read.data.has_next} change={setPage} />}
     {saved && <p className="form-note" role="status">SQL 파일 저장 완료 · {saved}</p>}
     {save && <SqlFileDialog mode="save" target={relation + " · " + save.title} document={{ ...emptySqlDocument, text: save.text }}
       onBusy={onFileBusy} onClose={() => setSave(null)} onDone={(_, path) => { setSaved(path); setSave(null); }} />}
@@ -137,8 +139,8 @@ function StructureContent({ data, onSave, onFollow }: { data: Structure; onSave:
   }
 }
 
-function Empty({ section }: { section: Section }) {
-  return <p className="result-empty">{label[section]} 항목이 없습니다.</p>;
+function Empty({ section }: { section: PostgresStructureSection }) {
+  return <p className="result-empty">{postgresSectionLabels[section]} 항목이 없습니다.</p>;
 }
 
 function Detail({ title, meta, children }: { title: string; meta: string; children: ReactNode }) {

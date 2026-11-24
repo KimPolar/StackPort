@@ -4,6 +4,7 @@ mod export;
 mod parameters;
 mod plan;
 mod profiles;
+mod search;
 mod session;
 mod sql;
 mod sql_range;
@@ -17,6 +18,7 @@ pub use export::PostgresExportOptions;
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{PostgresProfile, PostgresProfileInput};
+pub use search::{PostgresSearchInput, PostgresSearchPage};
 pub use session::{
     PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
     PostgresSchemaPage, PostgresSessionInfo,

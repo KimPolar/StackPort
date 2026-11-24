@@ -50,6 +50,17 @@
 .postgres-catalog button small, .postgres-data thead small { color: var(--text-muted); white-space: nowrap; }
 .postgres-search { display: flex; gap: 6px; margin: 8px; }
 .postgres-search input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); padding: 0 6px; }
+.dialog.postgres-search-dialog { width: min(610px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
+.postgres-search-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.postgres-search-submit { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.postgres-search-fields .field { min-width: 0; margin-top: 0; }
+.postgres-search-submit .field { margin-bottom: 0; }
+.postgres-search-submit > button { min-height: 38px; }
+.postgres-object-results { padding: 0 21px; }
+.postgres-object-results ul { list-style: none; padding: 0; margin: 12px 0; max-height: min(40vh, 360px); overflow: auto; }
+.postgres-object-results li { padding: 4px 0; border-bottom: 1px solid var(--divider); }
+.postgres-object-results li > button { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; width: 100%; text-align: start; overflow-wrap: anywhere; }
+.postgres-object-results li > p { margin: 6px 8px; color: var(--text-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .postgres-data .table-wrap { max-height: min(56vh, 620px); }
 .postgres-data thead th { position: sticky; top: 0; white-space: nowrap; }
 .postgres-data thead small { display: block; font-weight: 400; }

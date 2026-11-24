@@ -16,6 +16,7 @@ use stackport_core::{
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
+    PostgresSearchInput, PostgresSearchPage,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -824,6 +825,11 @@ async fn postgres_objects(postgres: State<'_, PostgresManager>, id: String, sche
 }
 
 #[tauri::command]
+async fn search_postgres_objects(postgres: State<'_, PostgresManager>, id: String, input: PostgresSearchInput) -> Result<PostgresSearchPage, String> {
+    postgres.search_objects(&id, input).await
+}
+
+#[tauri::command]
 async fn postgres_page(
     postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32,
     query: Option<TableQueryClauses>,
@@ -1558,6 +1564,7 @@ fn main() {
             wait_postgres_disconnect,
             postgres_schemas,
             postgres_objects,
+            search_postgres_objects,
             postgres_page,
             postgres_structure,
             begin_postgres_edit,

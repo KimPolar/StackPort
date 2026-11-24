@@ -38,8 +38,17 @@ async function startPostgres() {
   const seed = [
     `CREATE ROLE fixture_reader LOGIN PASSWORD '${password}';`,
     'CREATE SCHEMA report;',
+    'CREATE SCHEMA archive;',
     'CREATE SCHEMA restricted;',
     'GRANT USAGE ON SCHEMA report TO fixture_reader;',
+    'GRANT USAGE ON SCHEMA archive TO fixture_reader;',
+    'CREATE TABLE archive.meta_child (archive_only integer);',
+    'CREATE TABLE archive."match%_literal" (id integer);',
+    ...Array.from({ length: 41 }, (_, index) => `CREATE VIEW archive.object_search_${String(index).padStart(2, '0')} AS SELECT 1 AS id;`),
+    'GRANT SELECT ON ALL TABLES IN SCHEMA archive TO fixture_reader;',
+    'CREATE TABLE restricted.hidden_object (id integer);',
+    'GRANT SELECT ON restricted.hidden_object TO fixture_reader;',
+    "COMMENT ON TABLE restricted.hidden_object IS 'catalog hidden marker';",
     "CREATE TYPE report.grade AS ENUM ('silver', 'gold');",
     `CREATE TABLE report."quoted table" (id integer PRIMARY KEY, note text, precise numeric(30,3), ${extra});`,
     `INSERT INTO report."quoted table" (id, note, precise, extra_23)
@@ -50,6 +59,7 @@ async function startPostgres() {
     "INSERT INTO report.filtered_dates VALUES (1, NULL), (2, '2025-12-31'), (3, '2026-01-02'), (4, '2026-01-31');",
     'GRANT SELECT ON report.filtered_dates TO fixture_reader;',
     'CREATE TABLE report.denied (id integer);',
+    "COMMENT ON TABLE report.denied IS 'catalog hidden marker';",
     'CREATE TABLE report.write_probe (id integer);',
     'CREATE TABLE report.plan_events (id integer PRIMARY KEY, payload text);',
     "INSERT INTO report.plan_events SELECT i, repeat('abcd', 16) FROM generate_series(1, 4096) AS series(i);",
@@ -72,6 +82,7 @@ async function startPostgres() {
       'CONSTRAINT meta_fk FOREIGN KEY (parent_id, tenant) REFERENCES report.meta_parent (parent_id, tenant) DEFERRABLE INITIALLY DEFERRED);',
     'ALTER TABLE report.meta_child ADD CONSTRAINT tenant_positive CHECK (tenant > 0) NOT VALID;',
     "COMMENT ON TABLE report.meta_child IS '구조 검증 테이블';",
+    "COMMENT ON COLUMN report.meta_child.normalized IS '검색용 열 주석';",
     "COMMENT ON COLUMN report.meta_child.status IS '업무 상태';",
     "CREATE INDEX meta_status_idx ON report.meta_child (lower(status)) WHERE status <> '대기';",
     'CREATE FUNCTION report.meta_touch() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END; $body$;',
@@ -84,7 +95,7 @@ async function startPostgres() {
     'ALTER TABLE report.meta_child FORCE ROW LEVEL SECURITY;',
     'CREATE VIEW report.meta_view AS SELECT status AS payload FROM report.meta_child;',
     'CREATE MATERIALIZED VIEW report.meta_cache AS SELECT count(*) AS tally FROM report.meta_child WITH NO DATA;',
-    "CREATE VIEW report.meta_large AS SELECT '" + '한'.repeat(16_420) + "'::text AS payload;",
+    "CREATE VIEW report.meta_large AS SELECT '" + '한'.repeat(16_420) + "definition_tail_marker'::text AS payload;",
     'CREATE TABLE report.meta_ranges (id integer) PARTITION BY RANGE (id);',
     'CREATE TABLE report.meta_low PARTITION OF report.meta_ranges FOR VALUES FROM (0) TO (10);',
     'CREATE TABLE report.meta_high PARTITION OF report.meta_ranges DEFAULT;',
@@ -136,12 +147,22 @@ async function startPostgres() {
   } };
 }
 
+function gatewayHostKey() {
+  // ssh2's Ed25519 generator can strip leading zero bytes from a generated public key.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const privateKey = utils.generateKeyPairSync('ed25519').private;
+    const parsed = utils.parseKey(privateKey);
+    if (!(parsed instanceof Error)) return { privateKey, publicKey: parsed.getPublicSSH() };
+  }
+  throw new Error('Could not generate a valid SSH fixture host key.');
+}
+
 async function startGateway(target, targetHost = 'localhost') {
-  const key = utils.generateKeyPairSync('ed25519').private;
-  const fingerprint = 'SHA256:' + createHash('sha256').update(utils.parseKey(key).getPublicSSH()).digest('base64').replace(/=+$/, '');
+  const { privateKey, publicKey } = gatewayHostKey();
+  const fingerprint = 'SHA256:' + createHash('sha256').update(publicKey).digest('base64').replace(/=+$/, '');
   const clients = new Set();
   let forwards = 0;
-  const server = new Server({ hostKeys: [key] }, client => {
+  const server = new Server({ hostKeys: [privateKey] }, client => {
     clients.add(client);
     client.on('error', () => {});
     client.once('close', () => clients.delete(client));
@@ -214,6 +235,38 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(schemas.schemas.find(schema => schema.name === 'restricted').accessible, false);
   assert.ok(!schemas.schemas.some(schema => schema.name === 'pg_catalog'));
   const report = schemas.schemas.find(schema => schema.name === 'report');
+  const archive = schemas.schemas.find(schema => schema.name === 'archive');
+  const searchObjects = (term, options = {}) => command('search_postgres_objects', { id: session.id,
+    input: { term, field: 'name', schema: null, kind: null, page: 0, ...options } });
+  const hits = async (term, options) => (await searchObjects(term, options)).hits;
+  assert.deepEqual((await hits('META_CHILD')).map(hit => hit.schema), ['archive', 'report']);
+  assert.deepEqual((await hits('META_CHILD', { schema: report.id })).map(hit => hit.schema), ['report']);
+  assert.deepEqual((await hits('%_')).map(hit => hit.name), ['match%_literal']);
+  assert.deepEqual((await hits('NORMALIZED', { field: 'column' })).map(hit => [hit.name, hit.section, hit.excerpt]),
+    [['meta_child', 'columns', 'normalized']]);
+  assert.deepEqual((await hits('구조 검증', { field: 'comment' })).map(hit => [hit.name, hit.section]), [['meta_child', 'overview']]);
+  assert.deepEqual((await hits('검색용 열', { field: 'comment' })).map(hit => [hit.name, hit.section]), [['meta_child', 'columns']]);
+  for (const [term, name, section] of [
+    ['definition_tail_marker', 'meta_large', 'overview'], ['lower(status)', 'meta_child', 'columns'],
+    ['tenant > 0', 'meta_child', 'constraints'], ['meta_status_idx', 'meta_child', 'indexes'], ['meta_touch()', 'meta_child', 'triggers'],
+  ]) {
+    const match = (await hits(term, { field: 'definition' })).find(hit => hit.name === name);
+    assert.equal(match?.section, section, term);
+    assert.ok(match.excerpt.includes(term), term);
+  }
+  assert.deepEqual(await hits('catalog hidden marker', { field: 'comment' }), []);
+  assert.deepEqual(await hits('hidden_object'), []);
+  assert.deepEqual(await hits('denied'), []);
+  assert.deepEqual(await hits('pg_class', { schema: null }), []);
+  await assert.rejects(searchObjects(''), /검색어/);
+  await assert.rejects(searchObjects('x\0y'), /검색어/);
+  const archiveViews = await searchObjects('', { schema: archive.id, kind: 'view' });
+  assert.equal(archiveViews.hits.length, 40);
+  assert.equal(archiveViews.has_next, true);
+  assert.equal(archiveViews.hits[0].name, 'object_search_00');
+  const lastArchiveViews = await searchObjects('', { schema: archive.id, kind: 'view', page: 1 });
+  assert.deepEqual(lastArchiveViews.hits.map(hit => hit.name), ['object_search_40']);
+  assert.equal(lastArchiveViews.has_next, false);
   const objects = await command('postgres_objects', { id: session.id, schema: report.id, search: '', page: 0 });
   const denied = objects.objects.find(object => object.name === 'denied');
   assert.equal(denied.readable, false);
@@ -561,6 +614,23 @@ async function verify(browser, fixture, gateway, jump) {
   await page.getByText(/TLS 연결됨 · PostgreSQL/).waitFor();
   assert.equal(await page.getByRole('button', { name: /restricted/ }).isEnabled(), false);
   await page.getByRole('button', { name: 'report', exact: true }).click();
+  const catalogSearch = page.getByRole('dialog', { name: 'PostgreSQL 객체 검색', exact: true });
+  await page.getByRole('button', { name: '객체 검색', exact: true }).click();
+  await catalogSearch.getByLabel('검색어').fill('meta_child');
+  await catalogSearch.getByRole('button', { name: '검색', exact: true }).click();
+  await catalogSearch.getByRole('button', { name: /archive\.meta_child/ }).waitFor();
+  await catalogSearch.getByLabel('검색 범위').selectOption('schema');
+  await catalogSearch.getByLabel('검색 기준').selectOption('comment');
+  await catalogSearch.getByLabel('검색어').fill('검색용 열 주석');
+  await catalogSearch.getByRole('button', { name: '검색', exact: true }).click();
+  await catalogSearch.getByText('검색용 열 주석', { exact: true }).waitFor();
+  assert.equal(await catalogSearch.getByRole('button', { name: /archive\.meta_child/ }).count(), 0);
+  await catalogSearch.getByRole('button', { name: /report\.meta_child.*열 열기/ }).click();
+  await catalogSearch.waitFor({ state: 'detached' });
+  await page.getByRole('table', { name: 'PostgreSQL 열 구조', exact: true }).getByRole('rowheader', { name: /normalized/ }).waitFor();
+  assert.equal(await page.getByRole('region', { name: 'PostgreSQL 조회 결과' }).evaluate(element => element === document.activeElement), true);
+  await page.getByRole('button', { name: '데이터', exact: true }).click();
+  await page.getByText('조회된 행이 없습니다.', { exact: true }).waitFor();
   await page.getByRole('button', { name: /denied SELECT 권한 없음/ }).waitFor();
   await page.getByRole('button', { name: /quoted table/ }).click();
   await data.getByRole('columnheader', { name: /id.*PK 1/ }).waitFor();
@@ -1149,7 +1219,7 @@ async function main() {
     jump = await startGateway(gateway.port, '127.0.0.1');
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway, jump);
-    console.log('Windows PostgreSQL E2E passed (grid editing, rollback, SQL, TLS and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (object search, grid editing, SQL, TLS and SSH jump recovery).');
   } finally {
     await browser?.close();
     jump?.close();
