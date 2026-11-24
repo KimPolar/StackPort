@@ -18,6 +18,10 @@ PostgreSQL 14 이상에서 시스템 스키마를 제외한 스키마와 테이�
 
 SQLite와 PostgreSQL의 **저장된 조건**에서 현재 편집 중인 필터 입력값과 정렬을 로컬 작업 공간에 이름을 붙여 저장합니다. 연결과 스키마·테이블 또는 뷰별로 최대 50개를 보관합니다. PostgreSQL에서는 연결의 호스트·포트·데이터베이스·사용자도 저장 범위에 포함합니다. 조건을 선택해 적용하면 첫 행 페이지로 이동하고 날짜 입력 형식과 정렬 우선순위까지 복원합니다. 객체에 필요한 열이 사라진 경우 적용할 때 해당 열을 표시합니다. 저장된 조건은 확인을 거쳐 갱신하거나 삭제할 수 있고, 연결을 삭제하면 그 연결의 조건도 함께 삭제됩니다. 작업 기록에는 작업 종류, 연결, 프로젝트와 환경을 남깁니다. [SQLite 외래 키의 삭제 처리](https://www.sqlite.org/foreignkeys.html)
 
+PostgreSQL 연결 창의 **이 연결에서 데이터 그리드 편집 허용**을 선택하면 지원되는 셀에 편집 버튼이 표시됩니다. 이 선택은 현재 접속에만 적용됩니다. 테이블의 SELECT 및 UPDATE 권한과 즉시 검증되는 기본 키가 필요합니다. 일반 힙 테이블에서 사용자 트리거, 규칙, 생성 열, 상속·파티션 여부를 확인합니다. 기본 키·고유 키·IDENTITY 열은 조회할 수 있습니다. 편집기는 일반 문자열·숫자·날짜·시간·UUID·JSON·XML 등 지원 타입에서 최대 4,096자의 값을 다루고, 빈 문자열과 NULL을 구분합니다. 서버가 입력 타입을 해석한 결과를 미리 보여줍니다. 기본값을 선택하면 기본값 식을 표시하고 실제 값은 변경을 적용할 때 계산합니다. SQL 편집기는 읽기 전용 트랜잭션에서 실행합니다. [PostgreSQL UPDATE](https://www.postgresql.org/docs/18/sql-update.html)
+
+**변경 적용**은 5분 이내의 미리보기를 한 번 사용합니다. 운영 연결에서는 `PROD`를 입력해야 합니다. 쓰기 트랜잭션은 테이블 구조와 권한을 확인하고 기본 키로 행을 고정한 뒤 행 버전을 확인합니다. 다른 연결이 선택한 행을 수정했거나 서버가 타입·제약조건·권한을 거부하면 변경을 중단합니다. 서버가 저장한 값을 확인한 뒤 커밋합니다. 커밋 확인 응답이 돌아오지 않으면 재접속해 현재 값을 확인하도록 표시합니다. 작업 기록에는 연결·환경·변경 결과를 남깁니다. [PostgreSQL 시스템 열](https://www.postgresql.org/docs/18/ddl-system-columns.html) · [트랜잭션 격리](https://www.postgresql.org/docs/18/transaction-iso.html)
+
 객체의 **데이터**와 **구조**를 오갈 수 있습니다. 구조에서 현재 역할의 객체 권한과 행 수준 보안 상태를 확인하고, 열의 기본값·생성 식·정렬 규칙, 제약조건, 인덱스, 트리거, 파티션을 열어 봅니다. 선택한 항목만 읽기 전용 스냅샷으로 조회하며 목록은 32개씩 표시합니다. 현재 역할에 스키마 `USAGE`와 대상 `SELECT` 권한이 있으면 외래 키의 참조 대상이나 하위 파티션의 구조로 이동할 수 있습니다. [PostgreSQL 권한 검사 함수](https://www.postgresql.org/docs/18/functions-info.html) · [PostgreSQL 열 카탈로그](https://www.postgresql.org/docs/16/catalog-pg-attribute.html)
 
 서버에서 가져온 뷰의 조회 정의, 인덱스와 트리거의 생성 SQL, 열·제약조건·파티션의 정의 일부를 복사하거나 새 UTF-8 SQL 파일로 저장합니다. 정의가 16,384자를 넘으면 앞부분을 표시합니다. 복사와 저장은 화면에서 전체를 확인할 수 있는 정의에 제공됩니다. [PostgreSQL 정의 조회 함수](https://www.postgresql.org/docs/18/functions-info.html)
@@ -294,13 +298,15 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한을 확인합니다. PostgreSQL 18.6에서 조회 제한, 쓰기 차단, 타입별 매개변수 바인딩과 Latin-1 인코딩 변환 오류, 예상·실제 실행 계획, 서버 취소·응답 시간 제한, SQL 초안과 파일·결과 탭, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검증합니다.
+PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 
 객체 구조 검사에서는 복합 외래 키 열 순서, 생성 열, 부분 인덱스, 비활성 트리거, 하위 파티션의 직접 조회 권한, 구조 목록의 페이지 이동과 뷰 정의 파일의 내용을 확인합니다.
 
 그리드 검사는 날짜 범위와 NULL 순서, 정밀한 `numeric` 일치, 다른 열 페이지의 필터 조건, 입력 형식 오류 후 수정, 적용한 조건의 페이지 이동과 전체 CSV·JSON 행 순서를 확인합니다.
 
 조회 조건 저장 검사는 PostgreSQL 재접속 후 날짜 범위와 정렬 복원, SQLite에서 저장·적용·갱신·삭제, 작업 공간 재열기 후 데이터 보존, 변경된 연결과 오래된 조건 버전의 재사용 거절을 확인합니다. 버전 10에서 이관하기 전 백업과 이관 실패 시 원본 보존도 검사합니다.
+
+PostgreSQL 셀 편집 검사는 복합 기본 키, 정확한 숫자 미리보기, `PROD` 확인, NULL과 서버 기본값 적용, 제약조건 롤백, 활성 행 수준 보안 정책의 변경 거절, 동시 수정 충돌과 취소를 확인합니다.
 
 ```powershell
 $env:STACKPORT_TEST_ROOT = '<출력된 테스트 폴더>'

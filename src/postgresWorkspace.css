@@ -55,6 +55,10 @@
 .postgres-data thead small { display: block; font-weight: 400; }
 .postgres-data td code { display: block; min-width: 56px; max-width: 300px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .postgres-page-note { margin: 8px 12px; }
+.postgres-edit-opt-in { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; margin: 12px 0; }
+.postgres-editable-cell { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.postgres-editable-cell .icon-button { flex: 0 0 auto; opacity: .65; }
+.postgres-editable-cell .icon-button:hover, .postgres-editable-cell .icon-button:focus-visible { opacity: 1; }
 .postgres-paging { display: flex; flex-wrap: wrap; }
 .postgres-paging .pagination { flex: 1 1 150px; }
 .postgres-null { color: var(--text-muted); font-style: italic; }

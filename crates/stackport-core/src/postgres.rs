@@ -1,4 +1,5 @@
 mod catalog;
+mod edit;
 mod export;
 mod parameters;
 mod plan;
@@ -8,6 +9,10 @@ mod sql;
 mod sql_range;
 
 pub use catalog::{PostgresStructure, PostgresStructureSection};
+pub use edit::{
+    PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession,
+    PostgresRowStamp,
+};
 pub use export::PostgresExportOptions;
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};

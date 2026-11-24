@@ -15,6 +15,7 @@ use stackport_core::{
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
+    PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowStamp,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -797,9 +798,9 @@ fn postgres_tunnel_options(tunnels: State<'_, SshTunnelManager>, profile: Postgr
 #[tauri::command]
 async fn open_postgres(
     postgres: State<'_, PostgresManager>, tunnels: State<'_, SshTunnelManager>, profile: PostgresProfile,
-    password: PostgresPassword, confirmation: String, tunnel_id: Option<String>,
+    password: PostgresPassword, confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
 ) -> Result<PostgresSessionInfo, String> {
-    postgres.open(tunnels.inner(), profile, password, &confirmation, tunnel_id.as_deref()).await
+    postgres.open(tunnels.inner(), profile, password, &confirmation, tunnel_id.as_deref(), grid_edit.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -830,6 +831,32 @@ async fn postgres_structure(
     postgres: State<'_, PostgresManager>, id: String, object: i64, section: PostgresStructureSection, page: u32,
 ) -> Result<PostgresStructure, String> {
     postgres.structure(&id, object, section, page).await
+}
+
+#[tauri::command]
+async fn begin_postgres_edit(
+    postgres: State<'_, PostgresManager>, id: String, object: i64, stamp: PostgresRowStamp, column: String,
+) -> Result<PostgresEditSession, String> {
+    postgres.begin_edit(&id, object, stamp, &column).await
+}
+
+#[tauri::command]
+async fn preview_postgres_edit(
+    postgres: State<'_, PostgresManager>, id: String, token: String, input: PostgresEditInput,
+) -> Result<PostgresEditPreview, String> {
+    postgres.preview_edit(&id, &token, input).await
+}
+
+#[tauri::command]
+async fn apply_postgres_edit(
+    postgres: State<'_, PostgresManager>, id: String, token: String, approval: String, confirmation: String,
+) -> Result<PostgresEditOutcome, String> {
+    postgres.apply_edit(&id, &token, &approval, &confirmation).await
+}
+
+#[tauri::command]
+async fn cancel_postgres_edit(postgres: State<'_, PostgresManager>, id: String, token: String) -> Result<(), String> {
+    postgres.cancel_edit(&id, &token).await
 }
 
 #[tauri::command]
@@ -1513,6 +1540,10 @@ fn main() {
             postgres_objects,
             postgres_page,
             postgres_structure,
+            begin_postgres_edit,
+            preview_postgres_edit,
+            apply_postgres_edit,
+            cancel_postgres_edit,
             execute_postgres_sql,
             postgres_export_progress,
             cancel_postgres_sql,

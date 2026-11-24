@@ -29,7 +29,8 @@ async function startPostgres() {
     '-days', '2', '-out', 'server.pem', '-extfile', 'server.ext']);
   fs.chmodSync(path.join(directory, 'server.key'), 0o600);
   const adminPassword = path.join(directory, 'init-password');
-  fs.writeFileSync(adminPassword, 'fixture-administrator-password\n');
+  const adminSecret = 'fixture-administrator-password';
+  fs.writeFileSync(adminPassword, adminSecret + '\n');
   run(path.join(bin, 'initdb.exe'), ['-D', data, '-U', 'fixture_admin', '--no-instructions', '--no-locale',
     '--encoding=UTF8', '--auth=scram-sha-256', `--pwfile=${adminPassword}`]);
   fs.unlinkSync(adminPassword);
@@ -56,6 +57,14 @@ async function startPostgres() {
     'GRANT SELECT ON report."quoted table", report.visible TO fixture_reader;',
     'GRANT SELECT ON report.plan_events TO fixture_reader;',
     'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
+    'CREATE TABLE report."edit demo" ("tenant key" integer, "row key" uuid, "public note" text DEFAULT \'기본값\', ' +
+      'amount numeric(30,3) NOT NULL CHECK(amount >= 0), "unique note" text UNIQUE, PRIMARY KEY ("tenant key", "row key"));',
+    "INSERT INTO report.\"edit demo\" VALUES (1, '9a048887-22a5-4c98-bbc1-7ceee4ee725d', '초기값', 9007199254740993.123, 'unique-a'), " +
+      "(2, '9a048887-22a5-4c98-bbc1-7ceee4ee725d', '다른 행', 2, 'unique-b');",
+    'ALTER TABLE report."edit demo" ENABLE ROW LEVEL SECURITY;',
+    'CREATE POLICY edit_visible ON report."edit demo" FOR SELECT TO fixture_reader USING (true);',
+    'CREATE POLICY edit_allowed ON report."edit demo" FOR UPDATE TO fixture_reader USING ("tenant key" = 1);',
+    'GRANT SELECT, UPDATE ON report."edit demo" TO fixture_reader;',
     'CREATE TABLE report.meta_parent (parent_id integer, tenant integer, CONSTRAINT meta_parent_pk PRIMARY KEY (parent_id, tenant));',
     'CREATE TABLE report.meta_child (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer, tenant integer, ' +
       "status text COLLATE \"C\" DEFAULT '대기', normalized text GENERATED ALWAYS AS (lower(status)) STORED, " +
@@ -65,6 +74,9 @@ async function startPostgres() {
     "COMMENT ON COLUMN report.meta_child.status IS '업무 상태';",
     "CREATE INDEX meta_status_idx ON report.meta_child (lower(status)) WHERE status <> '대기';",
     'CREATE FUNCTION report.meta_touch() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END; $body$;',
+    'CREATE TABLE report.edit_trigger (id integer PRIMARY KEY, value text);',
+    'CREATE TRIGGER edit_block BEFORE UPDATE ON report.edit_trigger FOR EACH ROW EXECUTE FUNCTION report.meta_touch();',
+    'GRANT SELECT, UPDATE ON report.edit_trigger TO fixture_reader;',
     'CREATE TRIGGER meta_touch_row BEFORE UPDATE ON report.meta_child FOR EACH ROW EXECUTE FUNCTION report.meta_touch();',
     'ALTER TABLE report.meta_child DISABLE TRIGGER meta_touch_row;',
     'ALTER TABLE report.meta_child ENABLE ROW LEVEL SECURITY;',
@@ -77,14 +89,8 @@ async function startPostgres() {
     'CREATE TABLE report.meta_high PARTITION OF report.meta_ranges DEFAULT;',
     'CREATE TABLE report.meta_wide (' + Array.from({ length: 35 }, (_, index) => 'col_' + (index + 1) + ' integer').join(', ') + ');',
     'GRANT SELECT ON report.meta_parent, report.meta_child, report.meta_view, report.meta_cache, report.meta_large, report.meta_ranges, report.meta_low, report.meta_wide TO fixture_reader;',
-    "CREATE DATABASE fixture_latin ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;",
   ].join('\n') + '\n';
   const postgres = path.join(bin, 'postgres.exe');
-  const initialized = spawnSync(postgres, ['--single', '-D', data, 'postgres'], {
-    cwd: directory, encoding: 'utf8', input: seed, windowsHide: true,
-  });
-  assert.equal(initialized.status, 0, initialized.error?.message ?? initialized.stderr);
-  assert.doesNotMatch(initialized.stderr, /ERROR|FATAL|PANIC/);
   fs.writeFileSync(path.join(data, 'pg_hba.conf'), 'hostssl all all 127.0.0.1/32 scram-sha-256\n');
   const reservation = net.createServer().listen(0, '127.0.0.1');
   await once(reservation, 'listening');
@@ -106,6 +112,21 @@ async function startPostgres() {
         if (log.includes('ready to accept connections')) { clearTimeout(timer); resolve(); }
       });
     });
+    // Create ordinary user objects through a live connection so row security
+    // is exercised as it would be on a normally initialized server.
+    const seedFile = path.join(directory, 'seed.sql');
+    fs.writeFileSync(seedFile, seed);
+    const python = process.env.STACKPORT_TEST_PYTHON;
+    const fixtureEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^PG/i.test(name)));
+    const initialized = spawnSync(python || 'py.exe', [
+      ...(python ? [] : ['-3']), path.join(__dirname, 'postgres-seed.py'), bin, seedFile,
+    ], {
+      cwd: directory, encoding: 'utf8', windowsHide: true, timeout: 40_000,
+      env: { ...fixtureEnv, PGHOST: 'localhost', PGHOSTADDR: '127.0.0.1', PGPORT: String(port),
+        PGUSER: 'fixture_admin', PGPASSWORD: adminSecret, PGDATABASE: 'postgres', PGCONNECT_TIMEOUT: '5',
+        PGSSLMODE: 'verify-full', PGSSLROOTCERT: ca, PGCLIENTENCODING: 'UTF8' },
+    });
+    assert.equal(initialized.status, 0, initialized.error?.message ?? initialized.stderr);
   } catch (error) { server.kill(); throw error; }
   return { ca, port, close() {
     const stopped = spawnSync(path.join(bin, 'pg_ctl.exe'), ['stop', '-D', data, '-m', 'fast', '-w', '-t', '10'],
@@ -173,8 +194,8 @@ async function verify(browser, fixture, gateway) {
   const [profile] = await command('list_postgres_profiles', { projectId: project.id });
   assert.ok(!JSON.stringify(profile).includes(password));
   const close = id => command('close_postgres', { id });
-  const open = (settings = profile, secret = password, confirmation = 'PROD', tunnelId = null) =>
-    command('open_postgres', { profile: settings, password: secret, confirmation, tunnelId });
+  const open = (settings = profile, secret = password, confirmation = 'PROD', tunnelId = null, gridEdit = false) =>
+    command('open_postgres', { profile: settings, password: secret, confirmation, tunnelId, gridEdit });
   await assert.rejects(open(profile, password, ''), /PROD/);
   await assert.rejects(open(profile, 'wrong-password'), /암호 또는 접속 권한/);
   const alternate = (name, settings) => command('create_postgres_profile', {
@@ -516,15 +537,17 @@ async function verify(browser, fixture, gateway) {
   assert.equal(afterCancel.rows[0][0].value, '7');
   const deadline = await query('SELECT pg_sleep(12)');
   assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
+  await verifyGridWrites({ command, open, close, profile, session, findObject });
   await close(session.id);
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
 
   const connection = page.getByRole('dialog', { name: 'PostgreSQL 연결', exact: true });
-  async function connect(tunnel) {
+  async function connect(tunnel, gridEdit = false) {
     await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).click();
     if (tunnel) await connection.getByLabel('연결 경로').selectOption(tunnel.id);
     await connection.getByLabel('PostgreSQL 암호').fill(password);
     await connection.getByLabel('운영 환경 확인').fill('PROD');
+    if (gridEdit) await connection.getByLabel('이 연결에서 데이터 그리드 편집 허용').check();
     await connection.getByRole('button', { name: '연결', exact: true }).click();
     await connection.waitFor({ state: 'detached' });
   }
@@ -825,6 +848,33 @@ async function verify(browser, fixture, gateway) {
   await data.getByText('4', { exact: true }).waitFor();
   await disconnect();
 
+  await connect(null, true);
+  await page.getByText('그리드 편집 허용', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'report', exact: true }).click();
+  await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
+  const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 셀 편집', exact: true });
+  const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });
+  assert.equal(await data.getByRole('button', { name: '1행 tenant key 편집', exact: true }).count(), 0);
+  await editNote.click();
+  await cellEditor.getByLabel('값 입력 방식').selectOption('null');
+  await cellEditor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await cellEditor.getByText('변경 미리보기 · 1행 / 1열', { exact: true }).waitFor();
+  await cellEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
+  await cellEditor.getByLabel('운영 환경 확인').fill('PROD');
+  await cellEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
+  await cellEditor.waitFor({ state: 'detached' });
+  await page.getByText('셀 변경 완료', { exact: true }).waitFor();
+  await data.getByRole('row').nth(1).getByText('NULL', { exact: true }).waitFor();
+  await editNote.click();
+  await cellEditor.getByLabel('값 입력 방식').selectOption('default');
+  await cellEditor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await cellEditor.getByText('실제 기본값은 적용할 때 서버에서 계산합니다.', { exact: true }).waitFor();
+  await cellEditor.getByLabel('운영 환경 확인').fill('PROD');
+  await cellEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
+  await cellEditor.waitFor({ state: 'detached' });
+  await data.getByText('기본값', { exact: true }).waitFor();
+  await disconnect();
+
   const ssh = await command('create_ssh_profile', { projectId: project.id, input: {
     name: 'PG 게이트웨이', host: '127.0.0.1', port: gateway.port, username: 'fixture', environment: 'DEV',
   } });
@@ -874,6 +924,93 @@ async function verify(browser, fixture, gateway) {
   assert.deepEqual(errors, []);
 }
 
+async function verifyGridWrites({ command, open, close, profile, session, findObject }) {
+  const object = findObject('edit demo');
+  const page = (id, target = object) => command('postgres_page', { id, object: target, rowPage: 0, columnPage: 0 });
+  const readOnly = await page(session.id);
+  assert.equal(session.grid_edit, false);
+  assert.equal(readOnly.row_stamps, null);
+  await assert.rejects(command('begin_postgres_edit', {
+    id: session.id, object, stamp: { tuple: '(0,1)', version: '1', keys: [] }, column: 'public note',
+  }), /편집을 허용/);
+  const writer = await open(profile, undefined, undefined, null, true);
+  const peer = await open(profile, undefined, undefined, null, true);
+  try {
+    const id = writer.id;
+    const view = await page(id);
+    assert.equal(writer.grid_edit, true);
+    assert.deepEqual(view.row_stamps.map(stamp => stamp.keys[0]), ['1', '2']);
+    const securityState = await command('execute_postgres_sql', {
+      id, request: randomUUID(), source: "SELECT current_user, pg_catalog.row_security_active('report.\"edit demo\"'::regclass)", scope: { kind: 'document' },
+    });
+    assert.deepEqual(securityState.rows[0].map(cell => cell.value), ['fixture_reader', 'true']);
+    assert.deepEqual(view.columns.map(column => [column.name, column.editable]), [
+      ['tenant key', false], ['row key', false], ['public note', true], ['amount', true], ['unique note', false],
+    ]);
+    assert.equal((await page(id, findObject('write_probe'))).row_stamps, null);
+    assert.match((await page(id, findObject('edit_trigger'))).edit_reason, /트리거/);
+    assert.match((await page(id, findObject('quoted table'))).edit_reason, /UPDATE 권한/);
+    assert.equal((await page(id, findObject('meta_ranges'))).row_stamps, null);
+    const begin = (id, stamp, column) => command('begin_postgres_edit', { id, object, stamp, column });
+    const preview = (id, token, input) => command('preview_postgres_edit', { id, token, input });
+    const apply = (id, token, approval, confirmation = 'PROD') => command('apply_postgres_edit', { id, token, approval, confirmation });
+    const input = value => ({ kind: 'text', value });
+    await assert.rejects(begin(id, view.row_stamps[0], 'unique note'), /편집할 수 없습니다/);
+    const amount = await begin(id, view.row_stamps[0], 'amount');
+    assert.deepEqual(amount.keys, [['tenant key', '1'], ['row key', '9a048887-22a5-4c98-bbc1-7ceee4ee725d']]);
+    assert.equal(amount.current.value, '9007199254740993.123');
+    const normalized = await preview(id, amount.token, input('9007199254740993.1247'));
+    assert.equal(normalized.after.value, '9007199254740993.125');
+    await assert.rejects(apply(id, amount.token, normalized.approval, ''), /PROD/);
+    assert.equal((await page(peer.id)).rows[0][3].value, '9007199254740993.123');
+    assert.equal((await apply(id, amount.token, normalized.approval)).actual.value, '9007199254740993.125');
+    await assert.rejects(apply(id, amount.token, normalized.approval), /만료/);
+    await assert.rejects(begin(id, view.row_stamps[0], 'public note'), /행이 변경/);
+
+    const now = await page(id);
+    const bad = await begin(id, now.row_stamps[0], 'amount');
+    const oldApproval = await preview(id, bad.token, input('0'));
+    await assert.rejects(preview(id, bad.token, input('fixture-secret-incompatible')), /열 타입/);
+    await assert.rejects(apply(id, bad.token, oldApproval.approval), /다시 미리/);
+    const constraint = await preview(id, bad.token, input('-1'));
+    await assert.rejects(apply(id, bad.token, constraint.approval), /23514/);
+    assert.equal((await page(peer.id)).rows[0][3].value, '9007199254740993.125');
+
+    const stale = await begin(id, now.row_stamps[0], 'amount');
+    const staleChange = await preview(id, stale.token, input('12.345'));
+    const other = await begin(peer.id, now.row_stamps[0], 'public note');
+    const otherChange = await preview(peer.id, other.token, input('동시 변경'));
+    assert.equal((await apply(peer.id, other.token, otherChange.approval)).status, 'applied');
+    await assert.rejects(apply(id, stale.token, staleChange.approval), /행이 변경/);
+
+    const rls = await begin(id, now.row_stamps[1], 'public note');
+    const rlsChange = await preview(id, rls.token, input('권한 밖의 행'));
+    await assert.rejects(apply(id, rls.token, rlsChange.approval), /편집 권한/);
+    const latest = await page(id);
+    assert.deepEqual(latest.rows.map(row => [row[2].value, row[3].value]), [
+      ['동시 변경', '9007199254740993.125'], ['다른 행', '2.000'],
+    ]);
+    const cancelled = await begin(id, latest.row_stamps[0], 'public note');
+    const discarded = await preview(id, cancelled.token, input(''));
+    assert.equal(discarded.after.value, '');
+    await command('cancel_postgres_edit', { id, token: cancelled.token });
+    await assert.rejects(apply(id, cancelled.token, discarded.approval), /만료/);
+    const raw = await command('execute_postgres_sql', {
+      id, request: randomUUID(), source: 'UPDATE report."edit demo" SET amount = 0 RETURNING amount', scope: { kind: 'document' },
+    });
+    assert.equal(raw.status, 'failed');
+    const history = await command('list_audit_events', { before: null });
+    const edits = history.events.filter(event => event.operation === 'postgres.edit.cell');
+    assert.ok(edits.some(event => event.outcome === 'succeeded' && event.affected_count === 1));
+    assert.ok(edits.some(event => event.outcome === 'failed'));
+    assert.equal(edits.filter(event => event.outcome === 'started').length, 5);
+    assert.doesNotMatch(JSON.stringify(edits), /9a048887|fixture-secret|동시 변경|권한 밖/);
+  } finally {
+    await close(writer.id);
+    await close(peer.id);
+  }
+}
+
 async function main() {
   const fixture = await startPostgres();
   let gateway;
@@ -882,7 +1019,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (grid filters, sort, whole exports, catalog structure, SQL and TLS).');
+    console.log('Windows PostgreSQL E2E passed (guarded cell editing, filters, exports, catalog structure, SQL and TLS).');
   } finally {
     await browser?.close();
     gateway?.close();

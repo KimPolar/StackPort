@@ -77,7 +77,7 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite 어댑터와 PostgreSQL 읽기 전용 어댑터",
+    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·단일 셀 편집",
     "SP-DB-004": "PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
     "SP-DB-005": "PostgreSQL TLS 인증서 검증과 실행 중인 로컬 SSH 터널 경유",
     "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
@@ -92,21 +92,21 @@ PARTIAL = {
     "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
-    "SP-DB-028": "SQLite 읽기 전용 연결과 쓰기 차단, PostgreSQL 읽기 전용 연결 및 스키마·SELECT 권한 확인",
+    "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 객체의 SELECT·UPDATE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
     "SP-DT-001": "SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",
-    "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀 수정",
-    "SP-DT-004": "단일 셀 이전·변경 값 미리보기와 취소",
-    "SP-DT-005": "SQLite 기본 키 검증과 키 없는 테이블 편집 차단",
-    "SP-DT-006": "SQLite의 NULL·빈 문자열·숫자 구분과 단일 셀 입력, PostgreSQL의 NULL·빈 문자열 구분과 숫자 정밀도 유지",
-    "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집",
+    "SP-DT-003": "기본 키로 식별한 SQLite·PostgreSQL 단일 셀 수정",
+    "SP-DT-004": "SQLite·PostgreSQL 단일 셀 이전·변경 값 미리보기와 취소",
+    "SP-DT-005": "SQLite·PostgreSQL 기본 키 검증과 키 없는 테이블 편집 차단",
+    "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자 구분, PostgreSQL 서버 타입 검증과 기본값 적용",
+    "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집, PostgreSQL의 숫자·날짜·UUID·JSON 등 지원 타입 바인딩",
     "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
     "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
     "SP-DT-020": "단일 셀 변경의 시작·성공·실패 감사 기록",
-    "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
-    "SP-DT-022": "SQLite 단일 셀 트랜잭션·롤백과 저장 값 검증",
-    "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
+    "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지",
+    "SP-DT-022": "SQLite·PostgreSQL 단일 셀 트랜잭션·롤백과 저장 값 검증",
+    "SP-DT-024": "SQLite·PostgreSQL 제약·형식·충돌 실패 시 롤백과 오류 표시",
     "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
     "SP-SQ-003": "SQLite 준비 단계의 문법·객체·타입·읽기 전용 진단과 문서 범위 이동, PostgreSQL 실행 전 서버 파싱 오류의 문서 위치 이동",
@@ -159,14 +159,14 @@ PARTIAL = {
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·SQLite 및 PostgreSQL 내보내기·셀 편집, SFTP 파일 작업, SSH 연결 정의와 키 신뢰·교체 이력 기록",
-    "SP-SEC-015": "SQLite PROD 단일 셀 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
+    "SP-SEC-015": "SQLite·PostgreSQL PROD 단일 셀 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
-    "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
+    "SP-AT-010": "SQLite·PostgreSQL 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
@@ -352,6 +352,13 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
                 evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"
+            if requirement_id in {
+                "SP-DB-001", "SP-DB-028", "SP-DT-003", "SP-DT-004", "SP-DT-005", "SP-DT-006", "SP-DT-007",
+                "SP-DT-020", "SP-DT-021", "SP-DT-022", "SP-DT-024", "SP-SEC-015", "SP-AT-010",
+            }:
+                evidence += "; crates/stackport-core/src/postgres/edit.rs; src/PostgresEditDialog.tsx"
+                if requirement_id not in {"SP-DB-001", "SP-DB-028", "SP-DT-006"}:
+                    evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
             if requirement_id in {

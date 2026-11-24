@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
+import { Database, FileCode2, Pencil, Plug, ShieldCheck, X } from "lucide-react";
+import { PostgresEditDialog, type PostgresRowStamp } from "./PostgresEditDialog";
 import { PostgresObjectStructure, type PostgresObjectKind, type PostgresRelationLink } from "./PostgresObjectStructure";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
@@ -14,15 +15,15 @@ import "./postgresWorkspace.css";
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
 export type PostgresProfile = { id: string; project_id: string; revision: number; settings: PostgresSettings };
 export type PostgresProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: PostgresProfile };
-type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string; tunnel: string | null };
+type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string; tunnel: string | null; grid_edit: boolean };
 type Schema = { id: number; name: string; accessible: boolean };
 type SchemaPage = { schemas: Schema[]; has_next: boolean };
 type ObjectKind = PostgresObjectKind;
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
-type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null }[];
+type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null; editable: boolean }[];
   rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean;
-  column_names: string[]; source: string; parameter_types: number[] };
+  column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null; edit_reason: string | null };
 type Route = { id: string; name: string; port: number };
 const kindLabels: Record<ObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
@@ -54,11 +55,11 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
 
   useEffect(() => () => { if (active.current) void invoke("close_postgres", { id: active.current }).catch(() => {}); }, []);
 
-  function closedByQuery(id: string) {
+  function closedByQuery(id: string, message = "PostgreSQL 연결이 닫혔습니다. 다시 연결하세요.") {
     if (active.current !== id) return;
     active.current = null;
     setSession(null);
-    setError("PostgreSQL 연결이 닫혔습니다. 다시 연결하세요.");
+    setError(message);
     void invoke("close_postgres", { id }).catch(() => {});
   }
 
@@ -83,7 +84,7 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
       <div className="database-target"><h1><Database size={21} aria-hidden /><span title={name}>{name}</span>
         <span className={`environment ${environment.toLowerCase()}`}>{environment}</span></h1>
         <p className="path"><span>PostgreSQL · {endpoint(host, port)} / {database}</span></p></div>
-      <div className="header-actions"><span className="readonly"><ShieldCheck size={15} aria-hidden /> 읽기 전용</span>
+      <div className="header-actions"><span className="readonly"><ShieldCheck size={15} aria-hidden /> {session?.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
         {session ? <button type="button" className="secondary" disabled={closing} onClick={() => void disconnect()}>PostgreSQL 연결 끊기</button> :
           <button type="button" className="primary" onClick={() => setDialog(true)}><Plug size={15} aria-hidden /> PostgreSQL 연결</button>}
       </div>
@@ -102,10 +103,12 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
       <div hidden={view !== "catalog"}>
-        <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy} onOpenSql={source => {
-          editor.add(source + ";");
-          setView("sql");
-        }} onExport={requestExport} />
+        <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy}
+          onEditUnknown={() => closedByQuery(session.id, "PostgreSQL 커밋 결과를 확인할 수 없습니다. 다시 연결해 현재 행을 확인하세요.")}
+          onOpenSql={source => {
+            editor.add(source + ";");
+            setView("sql");
+          }} onExport={requestExport} />
       </div>
     </>}
     <div hidden={view !== "sql"}><PostgresSqlWorkspace session={session?.id ?? null} editor={editor} onClosed={closedByQuery} onExport={requestExport} /></div>
@@ -125,6 +128,7 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [tunnelId, setTunnelId] = useState("");
+  const [gridEdit, setGridEdit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const routeArgs = useMemo(() => ({ profile }), [profile]);
@@ -137,7 +141,7 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
     if (pending.current) return;
     pending.current = true; setBusy(true); setError("");
     try {
-      const session = await invoke<Session>("open_postgres", { profile, password, confirmation, tunnelId: tunnelId || null });
+      const session = await invoke<Session>("open_postgres", { profile, password, confirmation, tunnelId: tunnelId || null, gridEdit });
       if (live.current) onOpened(session);
       else await invoke("close_postgres", { id: session.id });
     } catch (reason) { if (live.current) setError(String(reason)); }
@@ -155,6 +159,8 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
       {routes.error && <p className="form-error" role="alert">{routes.error}</p>}
       <label className="field">PostgreSQL 암호<input type="password" autoFocus autoComplete="off" maxLength={4096} value={password} disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
       {environment === "PROD" && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
+      <label className="postgres-edit-opt-in"><input type="checkbox" checked={gridEdit} disabled={busy}
+        onChange={event => setGridEdit(event.target.checked)} /> 이 연결에서 데이터 그리드 편집 허용</label>
       {busy && <p className="form-note" role="status">PostgreSQL에 연결하는 중…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="secondary" type="button" disabled={busy} onClick={() => dialog.current?.close()}>취소</button>
@@ -163,9 +169,10 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
   </dialog>;
 }
 
-function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
+function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown }: {
   id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
   onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
+  onEditUnknown: () => void;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -180,6 +187,9 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
   const [structureRevision, setStructureRevision] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
+  const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
+  const [editNotice, setEditNotice] = useState("");
+  const dataPanel = useRef<HTMLElement>(null);
   const errorId = useId();
   const schemaArgs = useMemo(() => ({ id, page: schemaPage }), [id, schemaPage]);
   const objectArgs = useMemo(() => schema ? { id, schema: schema.id, search: query, page: objectPage } : null, [id, schema, query, objectPage]);
@@ -188,6 +198,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
   const schemas = useRead<SchemaPage>("postgres_schemas", schemaArgs);
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
+  const result = page.data;
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
     ? `SELECT *\nFROM ${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` : null);
@@ -197,6 +208,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
   function selectObject(next: DatabaseObject | null, structure = false) {
     setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(structure);
     setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
+    setEditNotice("");
   }
 
   function chooseSchema(next: Schema | null) {
@@ -216,6 +228,16 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
   function exportPage(data: Page) {
     onExport({ session: id, source: data.source, scope: { kind: "document" }, title: `${data.schema}.${data.name} 조회`,
       bindings: filterBindings(tableQuery, data.parameter_types) });
+  }
+
+  function closeEdit(refreshGrid = false) {
+    const trigger = edit?.trigger;
+    setEdit(null);
+    if (refreshGrid) setRefresh(value => value + 1);
+    requestAnimationFrame(() => {
+      if (!refreshGrid && trigger?.isConnected) trigger.focus();
+      else dataPanel.current?.focus();
+    });
   }
 
   return <div className="postgres-layout">
@@ -245,7 +267,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
         </>}
       </>}
     </aside>
-    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={!structureOpen && page.loading}>
+    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={!structureOpen && page.loading}
+      tabIndex={-1} ref={dataPanel}>
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
           <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
@@ -263,6 +286,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />
       </>}
       <div hidden={structureOpen}>
+        {editNotice && <p className="success-banner" role="status">{editNotice}</p>}
         {schema && object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns}
           target={{ engine: "postgres", profile_id: profile.id, revision: profile.revision, schema: schema.name, object: object.name }}
           busy={page.loading} errorId={page.error ? errorId : undefined} apply={next => {
@@ -271,30 +295,45 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
           }} />}
         {page.error && <p id={errorId} className="error-banner" role="alert">{page.error}</p>}
         {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
-        {page.data && <>
-          <p className="form-note postgres-page-note">{kindLabels[page.data.kind]} · {page.data.rows.length}행 · 전체 {page.data.total_columns}열
+        {result && <>
+          {result.edit_reason && <p className="form-note postgres-page-note">{result.edit_reason}</p>}
+          <p className="form-note postgres-page-note">{kindLabels[result.kind]} · {result.rows.length}행 · 전체 {result.total_columns}열
             {tableQuery.filters.length > 0 && ` · 필터 ${tableQuery.filters.length}개`}
-            {tableQuery.sort.length > 0 ? ` · 정렬 ${tableQuery.sort.length}개` : page.data.primary_key_order ? " · 기본 키 순서" : " · 고정 정렬 없음"}
+            {tableQuery.sort.length > 0 ? ` · 정렬 ${tableQuery.sort.length}개` : result.primary_key_order ? " · 기본 키 순서" : " · 고정 정렬 없음"}
           </p>
           {hasQuery && <details className="table-query-sql">
             <summary>조회 SQL</summary>
-            <pre tabIndex={0} aria-label="PostgreSQL 그리드 조회 SQL">{page.data.source}</pre>
-            {page.data.parameter_types.length > 0 && <p>필터 값은 $1부터 순서대로 바인딩됩니다.</p>}
+            <pre tabIndex={0} aria-label="PostgreSQL 그리드 조회 SQL">{result.source}</pre>
+            {result.parameter_types.length > 0 && <p>필터 값은 $1부터 순서대로 바인딩됩니다.</p>}
           </details>}
-          {page.data.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
-            <table aria-label="PostgreSQL 데이터"><thead><tr>{page.data.columns.map(column => <th key={column.name} scope="col">
+          {result.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
+            <table aria-label="PostgreSQL 데이터"><thead><tr>{result.columns.map(column => <th key={column.name} scope="col">
               {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
             </th>)}</tr></thead>
-              <tbody>{page.data.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>
-                <PostgresValue cell={cell} />
-              </td>)}</tr>)}</tbody></table></div>}
-          {page.data.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
+              <tbody>{result.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => {
+                const field = result.columns[column];
+                const stamp = result.row_stamps?.[index];
+                return <td key={column}>{field.editable && stamp && object ? <div className="postgres-editable-cell">
+                  <PostgresValue cell={cell} />
+                  <button type="button" className="icon-button" aria-label={`${rowPage * 100 + index + 1}행 ${field.name} 편집`}
+                    onClick={event => {
+                      setEditNotice("");
+                      setEdit({ object: object.id, stamp, column: field.name, trigger: event.currentTarget });
+                    }}><Pencil size={14} aria-hidden /></button>
+                </div> : <PostgresValue cell={cell} />}</td>;
+              })}</tr>)}</tbody></table></div>}
+          {result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
           <div className="postgres-paging">
-            <Pager label="데이터" page={rowPage} next={page.data.has_next} change={setRowPage} />
-            {page.data.total_columns > 24 && <Pager label="열" page={columnPage} next={(columnPage + 1) * 24 < page.data.total_columns} change={setColumnPage} />}
+            <Pager label="데이터" page={rowPage} next={result.has_next} change={setRowPage} />
+            {result.total_columns > 24 && <Pager label="열" page={columnPage} next={(columnPage + 1) * 24 < result.total_columns} change={setColumnPage} />}
           </div>
         </>}
       </div>
+      {edit && <PostgresEditDialog id={id} object={edit.object} stamp={edit.stamp} column={edit.column} profile={profile.settings}
+        onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onApplied={warning => {
+          setEditNotice(warning ? "셀 변경 완료 · 작업 기록을 저장할 수 없습니다." : "셀 변경 완료");
+          closeEdit(true);
+        }} />}
     </section>
   </div>;
 }

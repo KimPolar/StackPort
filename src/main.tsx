@@ -1690,6 +1690,7 @@ const auditOperationNames: Record<string, string> = {
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
+  "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.export.csv": "PostgreSQL CSV 내보내기", "postgres.export.json": "PostgreSQL JSON 내보내기",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
