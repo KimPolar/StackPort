@@ -343,8 +343,9 @@ async function main() {
     await verifySqlTemplates(page, editor, sqlTabs);
     await verifySqlHistory(page, editor, sqlTabs, dev, prod);
     await verifySqlQueryBuilder(page, editor, sqlTabs);
+    await verifySqlSchemaDiagram(page, editor, isolatedPath);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, history, query builder, plans, batches, result pins, comparisons and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, plans, batches, result pins, comparisons and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -979,6 +980,66 @@ async function verifySqlQueryBuilder(page, editor, sqlTabs) {
   assert.equal(await metrics.locator('div').filter({ hasText: '읽은 결과 행' }).locator('dd').textContent(), '1');
   const vmSteps = await metrics.locator('div').filter({ hasText: '가상 머신 단계' }).locator('dd').textContent();
   assert.ok(Number(vmSteps.replaceAll(',', '')) > 0, `예상한 SQLite VM 실행 단계가 없습니다: ${vmSteps}`);
+}
+
+async function verifySqlSchemaDiagram(page, editor, database) {
+  const draft = await editor.inputValue();
+  await page.getByRole('button', { name: '관계도', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'SQLite 관계도', exact: true });
+  const tableList = dialog.getByRole('complementary', { name: '관계도 테이블 목록', exact: true });
+  const canvas = dialog.getByRole('region', { name: '관계도 캔버스', exact: true });
+  const relationScope = tableList.getByRole('combobox', { name: '관계 범위', exact: true });
+  await tableList.getByRole('textbox', { name: '관계도 테이블 검색', exact: true }).fill('STAFF');
+  await tableList.getByRole('button', { name: 'staff', exact: true }).click();
+  await canvas.getByRole('button', { name: 'departments', exact: true }).waitFor();
+  assert.equal(await canvas.locator('.erd-link').count(), 1);
+  await dialog.getByText('staff → departments', { exact: true }).click();
+  await dialog.getByText('department_id → dept_id', { exact: true }).waitFor();
+  await dialog.getByRole('combobox', { name: '관계도 확대', exact: true }).selectOption('1.25');
+  await canvas.locator('.erd-canvas[style*="1.25"]').waitFor();
+
+  const external = new DatabaseSync(database);
+  external.exec('CREATE TABLE broken_fk (ref INTEGER REFERENCES removed_parent(id)); CREATE TABLE relation_hub (id INTEGER PRIMARY KEY);');
+  for (let i = 1; i <= 17; i++) {
+    external.exec(`CREATE TABLE leaf_${i} (ref INTEGER REFERENCES relation_hub(id));`);
+  }
+  external.close();
+  await dialog.getByRole('button', { name: '스키마 새로고침', exact: true }).click();
+  await tableList.getByRole('textbox', { name: '관계도 테이블 검색', exact: true }).fill('');
+  await relationScope.selectOption('issue');
+  await tableList.getByRole('button', { name: 'broken_fk', exact: true }).click();
+  await canvas.locator('.erd-table[data-missing]').getByText('removed_parent', { exact: true }).waitFor();
+  await relationScope.selectOption('isolated');
+  await tableList.getByRole('button', { name: 'source', exact: true }).waitFor();
+  assert.equal(await tableList.getByRole('button', { name: 'departments', exact: true }).count(), 0);
+  await relationScope.selectOption('all');
+  await tableList.getByRole('button', { name: 'relation_hub', exact: true }).click();
+  assert.equal(await canvas.locator('.erd-link').count(), 16);
+  await dialog.getByRole('button', { name: '다음 관계', exact: true }).click();
+  await dialog.getByRole('group', { name: '외래 키 페이지', exact: true }).getByText('2 / 2', { exact: true }).waitFor();
+  assert.equal(await canvas.locator('.erd-link').count(), 1);
+  await tableList.getByRole('button', { name: 'staff', exact: true }).click();
+  await canvas.getByRole('button', { name: 'departments', exact: true }).click();
+  await canvas.getByRole('button', { name: 'departments', exact: true, pressed: true }).waitFor();
+  assert.ok(await tableList.getByRole('button', { name: 'departments', exact: true, pressed: true }).evaluate(button => {
+    const list = button.closest('ul').getBoundingClientRect();
+    const row = button.getBoundingClientRect();
+    return row.top >= list.top - 1 && row.bottom <= list.bottom + 1;
+  }));
+  if (process.env.STACKPORT_TEST_ROOT) await page.screenshot({ path: path.join(process.env.STACKPORT_TEST_ROOT, 'sqlite-diagram.png') });
+  await dialog.getByRole('button', { name: '테이블 열기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await page.locator('details.schema-card[open]').getByRole('table', { name: 'departments 열 구조', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  assert.equal(await editor.inputValue(), draft);
+  await page.keyboard.press('Control+Shift+P');
+  const commands = page.getByRole('combobox', { name: '명령 검색', exact: true });
+  await commands.fill('ERD');
+  await page.getByRole('option', { name: /SQLite 관계도/ }).waitFor();
+  await commands.press('Enter');
+  await canvas.getByRole('button', { name: 'departments', exact: true, pressed: true }).waitFor();
+  await dialog.getByRole('button', { name: '관계도 닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

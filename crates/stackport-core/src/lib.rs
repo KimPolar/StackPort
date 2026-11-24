@@ -27,6 +27,8 @@ mod restore;
 pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
 pub use table_query::TableQuery;
+mod schema_diagram;
+pub use schema_diagram::{DiagramColumn, DiagramTable};
 mod ssh;
 pub use ssh::{SshAuthentication, SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
@@ -726,11 +728,22 @@ impl Store {
                 .map_err(db_error)?;
         }
 
-        let mut statement = db.prepare(
-            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete FROM pragma_foreign_key_list(?1) ORDER BY id, seq",
+        let foreign_keys = Self::object_foreign_keys(db, name, i64::MAX)?;
+        Ok(ObjectDetails {
+            object,
+            columns,
+            indexes,
+            foreign_keys,
+        })
+    }
+
+    fn object_foreign_keys(db: &Connection, name: &str, limit: i64) -> Result<Vec<ForeignKeyInfo>> {
+        let mut statement = db.prepare_cached(
+            "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete
+             FROM pragma_foreign_key_list(?1, 'main') ORDER BY id, seq LIMIT ?2",
         ).map_err(db_error)?;
-        let foreign_keys = statement
-            .query_map([name], |row| {
+        let keys = statement
+            .query_map(rusqlite::params![name, limit], |row| {
                 Ok(ForeignKeyInfo {
                     id: row.get(0)?,
                     sequence: row.get(1)?,
@@ -744,12 +757,7 @@ impl Store {
             .map_err(db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)?;
-        Ok(ObjectDetails {
-            object,
-            columns,
-            indexes,
-            foreign_keys,
-        })
+        Ok(keys)
     }
 
     fn read_object(db: &Connection, name: &str) -> Result<DatabaseObject> {

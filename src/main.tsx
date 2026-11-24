@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
   Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
@@ -107,6 +107,7 @@ const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").the
 const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(module => ({ default: module.SqlTemplateLibrary })));
 const SqlHistoryDialog = React.lazy(() => import("./SqlHistoryDialog").then(module => ({ default: module.SqlHistoryDialog })));
 const SqlQueryBuilderDialog = React.lazy(() => import("./SqlQueryBuilderDialog").then(module => ({ default: module.SqlQueryBuilderDialog })));
+const SqlSchemaDiagramDialog = React.lazy(() => import("./SqlSchemaDiagramDialog").then(module => ({ default: module.SqlSchemaDiagramDialog })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -172,6 +173,7 @@ function App() {
   const [profileId, setProfileId] = useState("");
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
+  const [schemaDetailsOpen, setSchemaDetailsOpen] = useState(false);
   const [objectDetails, setObjectDetails] = useState<ObjectDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -181,6 +183,7 @@ function App() {
   const [sqlHistory, setSqlHistory] = useState<SqlHistoryEntry[]>([]);
   const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
   const [sqlBuilderProfile, setSqlBuilderProfile] = useState<string | null>(null);
+  const [diagramProfile, setDiagramProfile] = useState<string | null>(null);
   const nextSqlHistoryId = useRef(0);
   const pendingSqlHistory = useRef(new Map<number, string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
@@ -741,9 +744,10 @@ function App() {
     setSqlFileAction(null);
   }
 
-  function openObject(object: DatabaseObject) {
+  function openObject(object: DatabaseObject, revealSchema = false) {
     showTool("workspace");
     setSqlEditorOpen(false);
+    if (revealSchema || selectedObject?.name !== object.name) setSchemaDetailsOpen(revealSchema);
     const generation = ++detailsGeneration.current;
     setSelectedObject(object); setObjectDetails(null); setDetailsError(""); setDetailsLoading(true);
     call<ObjectDetails>("describe_object", { profileId, name: object.name })
@@ -1040,6 +1044,8 @@ function App() {
       keywords: "query history recent sql", Icon: History, run: openSqlHistory });
     if (desktop && profile) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
       keywords: "query builder join group select sql", Icon: Table2, run: openSqlBuilder });
+    if (desktop && profile) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
+      keywords: "erd schema diagram foreign key 외래 키", Icon: Workflow, run: () => setDiagramProfile(profile.id) });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
         id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
@@ -1149,7 +1155,9 @@ function App() {
     !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
     !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
       <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
-        <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
+        <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span>
+          <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setDiagramProfile(profile.id)}><Workflow size={14} aria-hidden /> 관계도</button>
+          <button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
       </div>
       {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
       {exportReport && <div className="success-banner" role="status">
@@ -1233,7 +1241,8 @@ function App() {
       </div>
       {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
       {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
-      {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
+      {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading}
+        error={detailsError} open={schemaDetailsOpen} onToggle={setSchemaDetailsOpen} />}
       {sqlEditorOpen && sqlDraft && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.data}
         dismiss={() => editSqlQueryView(sqlDraft.id, { plan: null })} />}
       <section className="results-card database-results" aria-label={resultMode === "sql" && sqlDraft ? `${sqlTabTitle(sqlDraft)} 쿼리 결과` : "쿼리 결과"}
@@ -1515,6 +1524,14 @@ function App() {
         connection={`${profile.name} · ${profile.environment}`}
         onOpen={text => { setSqlBuilderProfile(null); openSqlDraft(text); }}
         onClose={() => setSqlBuilderProfile(null)} />
+    </React.Suspense>}
+    {profile && diagramProfile === profile.id && <React.Suspense fallback={null}>
+      <SqlSchemaDiagramDialog key={profile.id} profileId={profile.id} connection={`${profile.name} · ${profile.environment}`}
+        initialTable={selectedObject?.kind === "table" ? selectedObject.name : null}
+        onOpen={name => {
+          setDiagramProfile(null);
+          openObject({ name, kind: "table", ddl: null }, true);
+        }} onClose={() => setDiagramProfile(null)} />
     </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {

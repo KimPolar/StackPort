@@ -4,7 +4,7 @@ mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
-    ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
+    ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
@@ -307,6 +307,12 @@ async fn describe_object(
 ) -> Result<ObjectDetails, String> {
     let store = store.inner().clone();
     worker(move || store.describe_object(&profile_id, &name)).await
+}
+
+#[tauri::command]
+async fn sqlite_schema_diagram(store: State<'_, Store>, profile_id: String) -> Result<Vec<DiagramTable>, String> {
+    let store = store.inner().clone();
+    worker(move || store.schema_diagram(&profile_id)).await
 }
 
 #[tauri::command]
@@ -1190,6 +1196,7 @@ fn main() {
             delete_profile,
             list_objects,
             describe_object,
+            sqlite_schema_diagram,
             sql_completion_catalog,
             diagnose_sql,
             validate_sql_alias_rename,

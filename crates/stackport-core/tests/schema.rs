@@ -65,6 +65,15 @@ fn reports_columns_composite_keys_indexes_foreign_keys_and_ddl() {
     let view = store.describe_object(&profile.id, "preview").unwrap();
     assert_eq!(view.object.kind, "view");
     assert!(view.indexes.is_empty());
+    let diagram = store.schema_diagram(&profile.id).unwrap();
+    assert_eq!(
+        diagram.iter().map(|table| table.name.as_str()).collect::<Vec<_>>(),
+        ["odd\"name", "parent", "sqliteX_visible"]
+    );
+    assert_eq!(diagram[0].columns[2].name, "calculated");
+    assert_eq!(diagram[0].foreign_keys.len(), 2);
+    assert_eq!(diagram[0].foreign_keys[0].on_delete, "CASCADE");
+    assert_eq!(diagram[1].columns[1].primary_key_position, 2);
     assert!(store
         .describe_object(&profile.id, "parent'); DROP TABLE parent; --")
         .is_err());

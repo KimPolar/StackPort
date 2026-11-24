@@ -110,6 +110,10 @@ PARTIAL = {
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "1 MiB 이하 UTF-8 SQL 파일 열기와 새 파일 저장, BOM·LF/CRLF 유지 및 편집기에서 명시 실행",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
+    "SP-MD-002": "SQLite 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
+    "SP-MD-006": "SQLite 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
+    "SP-MD-015": "선택한 SQLite 테이블과 인접 관계 자동 배치, 60~150% 확대·축소",
+    "SP-MD-019": "SQLite 외래 키를 따라 탐색하고 관계 없는 테이블, 찾을 수 없는 참조 테이블·열과 암시 참조 키 불일치 표시",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
@@ -273,6 +277,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; src/SqlHistoryDialog.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-023":
                 evidence = "src/main.tsx; src/sqlHistory.ts; src/SqlHistoryDialog.tsx; tests/sql-history.test.mjs; tests/sql-file-smoke.cjs"
+            elif requirement_id in {"SP-MD-002", "SP-MD-006", "SP-MD-015", "SP-MD-019"}:
+                evidence = "crates/stackport-core/src/schema_diagram.rs; crates/stackport-core/tests/schema.rs; src/sqlSchemaDiagram.ts; src/SqlSchemaDiagramDialog.tsx; tests/sql-schema-diagram.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
                 evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/"
             elif requirement_id == "SP-CN-008":

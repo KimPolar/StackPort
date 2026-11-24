@@ -4,7 +4,7 @@ import { Table2 } from "lucide-react";
 export type DatabaseObject = { name: string; kind: string; ddl: string | null };
 type ColumnInfo = { position: number; name: string; declared_type: string; not_null: boolean; default_value: string | null; primary_key_position: number; hidden: number };
 type IndexInfo = { name: string; unique: boolean; origin: string; partial: boolean; columns: { position: number; name: string | null; descending: boolean; collation: string | null }[] };
-type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from_column: string; to_column: string | null; on_update: string; on_delete: string };
+export type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from_column: string; to_column: string | null; on_update: string; on_delete: string };
 export type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 
 export function SqlSchemaContents({ details, selectedColumn, ddlRef }: {
@@ -37,8 +37,11 @@ export function SqlSchemaContents({ details, selectedColumn, ddlRef }: {
   </>;
 }
 
-export function SchemaDetails({ object, details, loading, error }: { object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string }) {
-  return <details className="schema-card"><summary><span><Table2 size={15} /> <strong>{object.name}</strong> 구조</span>
+export function SchemaDetails({ object, details, loading, error, open, onToggle }: {
+  object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string;
+  open: boolean; onToggle: (value: boolean) => void;
+}) {
+  return <details className="schema-card" open={open} onToggle={event => onToggle(event.currentTarget.open)}><summary><span><Table2 size={15} /> <strong>{object.name}</strong> 구조</span>
     <span className="subtle">{loading ? "불러오는 중…" : details ? `열 ${details.columns.length} · 인덱스 ${details.indexes.length} · 외래 키 ${details.foreign_keys.length}` : "상세 보기"}</span>
     </summary>
     <div className="schema-content" aria-busy={loading}>
