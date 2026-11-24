@@ -26,7 +26,7 @@ SP-CN-004,자동 재연결,"지수 백오프, 최대 재시도, 수동 중지, �
 SP-CN-005,연결 프로필 가져오기/내보내기,선택한 연결만 JSON 등 문서화된 버전형 포맷으로 교환; 비밀번호 기본 제외.,partial,선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기,crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/
 SP-CN-006,URL 핸들러,`stackport://` URI로 명시적 연결/개체 접근; 외부 입력은 확인·검증·권한 검사.,not_started,,
 SP-CN-007,암호 기반 인증,"암호 입력/저장/세션만 사용, 마스킹과 클립보드 관리.",partial,SSH 터미널의 일회성 암호 입력,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
-SP-CN-008,키 기반 SSH,공개키·개인키·암호화 키·여러 키·SSH 에이전트·키 암호(passphrase) 지원.,partial,Windows SSH 세션에서 키 파일 하나 선택과 암호화된 키의 터미널 암호 입력,crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
+SP-CN-008,키 기반 SSH,공개키·개인키·암호화 키·여러 키·SSH 에이전트·키 암호(passphrase) 지원.,partial,Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력,crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-009,SSH 대화형 인증,"keyboard-interactive, 다중 인증 프롬프트, 서버 안내 메시지.",partial,Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-010,SSH 호스트 신뢰,"최초 호스트 키 확인, 핑거프린트 저장, 변경 경고 및 연결 차단 기본값.",partial,SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-011,인증서 인증,TLS 서버 인증서 체인·호스트 이름·유효기간·고정값 검증 및 필요 시 클라이언트 인증서.,not_started,,

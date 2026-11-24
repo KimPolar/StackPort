@@ -43,7 +43,7 @@ async function main() {
   protectTestKey(wrongPath);
 
   const fingerprint = `SHA256:${createHash('sha256').update(hostKey.parsed.getPublicSSH()).digest('base64').replace(/=+$/, '')}`;
-  const stats = { publicKeys: 0, signatures: 0, passwords: 0, sessions: 0, clients: new Set() };
+  const stats = { publicKeys: 0, rejectedKeys: 0, signatures: 0, passwords: 0, sessions: 0, clients: new Set() };
   const server = new Server({ hostKeys: [hostKey.privateKey] }, client => {
     stats.clients.add(client);
     client.on('error', () => {});
@@ -52,6 +52,7 @@ async function main() {
       if (ctx.method === 'password') stats.passwords++;
       if (ctx.method === 'publickey') {
         stats.publicKeys++;
+        if (ctx.key.data.equals(wrong.parsed.getPublicSSH())) stats.rejectedKeys++;
         const matches = ctx.username === 'stackport' && ctx.key.data.equals(identity.parsed.getPublicSSH());
         const verified = !ctx.signature || identity.parsed.verify(ctx.blob, ctx.signature, ctx.hashAlgo) === true;
         if (matches && verified) { if (ctx.signature) stats.signatures++; ctx.accept(); return; }
@@ -78,12 +79,17 @@ async function main() {
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
-  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
-  await page.getByLabel('SSH 키 파일 경로').fill(identityPath);
+  await page.getByLabel('SSH 인증 방식').selectOption('key_files');
+  await page.getByLabel('SSH 키 파일 1 경로').fill(wrongPath);
+  await page.getByRole('button', { name: '키 파일 추가', exact: true }).click();
+  await page.getByLabel('SSH 키 파일 2 경로').fill(wrongPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByText(fingerprint, { exact: true }).waitFor();
   await page.getByRole('radio').check();
   await page.getByRole('button', { name: '지문을 확인하고 신뢰' }).click();
+  await page.getByRole('button', { name: '연결', exact: true }).click();
+  await page.getByRole('alert').getByText('같은 SSH 키 파일을 두 번 지정할 수 없습니다.').waitFor();
+  await page.getByLabel('SSH 키 파일 2 경로').fill(identityPath);
   await page.getByRole('button', { name: '연결', exact: true }).click();
   await page.getByRole('tab', { name: /SSH 1/ }).waitFor();
   await waitForRows(page, 'Enter passphrase for key');
@@ -92,7 +98,7 @@ async function main() {
   await page.keyboard.press('Enter');
   await waitForRows(page, 'STACKPORT_KEY_AUTH_READY');
   if ((await page.locator('[role=tabpanel]:visible .xterm-rows').innerText()).includes(passphrase)) throw new Error('Key passphrase appeared in terminal output.');
-  if (stats.sessions !== 1 || stats.signatures !== 1 || stats.passwords !== 0) throw new Error('Encrypted key authentication did not complete as expected.');
+  if (stats.sessions !== 1 || stats.signatures !== 1 || stats.passwords !== 0 || stats.rejectedKeys !== 1) throw new Error('SSH did not continue from the rejected selected key to the encrypted key.');
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: /SSH 1 .*터미널 닫기/ }).click();
   await page.getByRole('tab', { name: /SSH 1/ }).waitFor({ state: 'detached' });
@@ -101,8 +107,8 @@ async function main() {
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
-  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
-  await page.getByLabel('SSH 키 파일 경로').fill(wrongPath);
+  await page.getByLabel('SSH 인증 방식').selectOption('key_files');
+  await page.getByLabel('SSH 키 파일 1 경로').fill(wrongPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByText(fingerprint, { exact: true }).waitFor();
   await page.getByRole('button', { name: '연결', exact: true }).click();
@@ -125,8 +131,8 @@ async function main() {
   await page.getByRole('dialog').locator('select').selectOption('PROD');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 저장된 운영 서버 연결' }).click();
-  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
-  await page.getByLabel('SSH 키 파일 경로').fill(identityPath);
+  await page.getByLabel('SSH 인증 방식').selectOption('key_files');
+  await page.getByLabel('SSH 키 파일 1 경로').fill(identityPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
   await page.getByRole('button', { name: '연결', exact: true }).click();
@@ -142,13 +148,13 @@ async function main() {
   await page.getByRole('tab', { name: /SSH 3/ }).waitFor({ state: 'detached' });
   for (const name of fs.readdirSync(path.join(root, 'workspace')).filter(name => name.includes('.sqlite'))) {
     const content = fs.readFileSync(path.join(root, 'workspace', name));
-    if (content.includes(Buffer.from(passphrase)) || content.includes(Buffer.from(identity.privateKey)) || content.includes(Buffer.from(identityPath))) throw new Error('SSH key material, passphrase or selected path was saved in workspace metadata.');
+    if ([passphrase, identity.privateKey, wrong.privateKey, identityPath, wrongPath].some(value => content.includes(Buffer.from(value)))) throw new Error('SSH key material, passphrase or selected path was saved in workspace metadata.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   for (const client of stats.clients) client.end();
   await new Promise(resolve => server.close(resolve));
   await browser.close();
-  console.log('Encrypted SSH key login, selected-key-only failure, saved PROD profile, and credential exclusion passed.');
+  console.log('Multiple selected SSH keys, encrypted key login, duplicate rejection, saved PROD profile, and credential exclusion passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

@@ -26,19 +26,21 @@ const TRUST_APPLICATION_ID: i64 = 0x5350484b; // "SPHK"
 const PROBE_LIFETIME: Duration = Duration::from_secs(300);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SCAN_BYTES: u64 = 65536;
+const MAX_IDENTITIES: usize = 8;
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SshAuthentication {
     Automatic,
     KeyFile { path: String },
+    KeyFiles { paths: Vec<String> },
     Password,
     KeyboardInteractive,
 }
 
 enum OpenSshAuthentication<'a> {
     Automatic,
-    KeyFile(&'a str),
+    KeyFiles(&'a [String]),
     Password,
     KeyboardInteractive,
 }
@@ -254,7 +256,7 @@ impl SshManager {
             username,
             rows,
             cols,
-            OpenSshAuthentication::KeyFile(&identity),
+            OpenSshAuthentication::KeyFiles(std::slice::from_ref(&identity)),
         )
     }
 
@@ -274,6 +276,28 @@ impl SshManager {
             SshAuthentication::KeyboardInteractive => OpenSshAuthentication::KeyboardInteractive,
             SshAuthentication::KeyFile { path } => {
                 return self.open_with_identity(terminals, host, port, username, rows, cols, &path);
+            }
+            SshAuthentication::KeyFiles { paths } => {
+                if paths.is_empty() || paths.len() > MAX_IDENTITIES {
+                    return Err("SSH 키 파일을 1개에서 8개까지 지정할 수 있습니다.".into());
+                }
+                let mut identities = Vec::with_capacity(paths.len());
+                for path in paths {
+                    let identity = identity_file(&path)?;
+                    if identities.contains(&identity) {
+                        return Err("같은 SSH 키 파일을 두 번 지정할 수 없습니다.".into());
+                    }
+                    identities.push(identity);
+                }
+                return self.open_internal(
+                    terminals,
+                    host,
+                    port,
+                    username,
+                    rows,
+                    cols,
+                    OpenSshAuthentication::KeyFiles(&identities),
+                );
             }
         };
         self.open_internal(terminals, host, port, username, rows, cols, method)
@@ -724,7 +748,7 @@ fn ssh_command(
     command.args(["-F", "none", "-tt"]);
     let preferred = match authentication {
         OpenSshAuthentication::Automatic => "publickey,keyboard-interactive,password",
-        OpenSshAuthentication::KeyFile(_) => "publickey",
+        OpenSshAuthentication::KeyFiles(_) => "publickey",
         OpenSshAuthentication::Password => "password",
         OpenSshAuthentication::KeyboardInteractive => "keyboard-interactive",
     };
@@ -751,17 +775,13 @@ fn ssh_command(
         command.arg("-o");
         command.arg(option);
     }
-    if let OpenSshAuthentication::KeyFile(identity) = authentication {
+    if let OpenSshAuthentication::KeyFiles(identities) = authentication {
         // `none` prevents OpenSSH from falling back to default identity files if
         // the selected file disappears before the child process starts.
-        command.args([
-            "-o",
-            "IdentityFile=none",
-            "-o",
-            "IdentitiesOnly=yes",
-            "-i",
-            identity,
-        ]);
+        command.args(["-o", "IdentityFile=none", "-o", "IdentitiesOnly=yes"]);
+        for path in identities {
+            command.args(["-i", path]);
+        }
     }
     command.arg("-p");
     command.arg(port.to_string());
@@ -1074,7 +1094,7 @@ mod tests {
             "alice",
             "ssh-ed25519",
             Path::new("C:\\known_hosts"),
-            OpenSshAuthentication::KeyFile(&selected),
+            OpenSshAuthentication::KeyFiles(std::slice::from_ref(&selected)),
         )
         .unwrap();
         let args: Vec<_> = command

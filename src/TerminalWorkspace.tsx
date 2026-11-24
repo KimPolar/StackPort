@@ -13,7 +13,7 @@ type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
 type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean };
 type SshKey = { algorithm: string; fingerprint: string };
-type SshAuthenticationMode = "automatic" | "key_file" | "password" | "keyboard_interactive";
+type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
 type TcpStatus = "connected" | "refused" | "unreachable" | "timed_out" | "failed" | "not_tested";
 type NetworkDiagnostics = { host: string; port: number; dns: { status: "literal" | "resolved" | "failed" | "timed_out" | "busy"; elapsed_ms: number }; tcp: { status: TcpStatus; elapsed_ms: number }; addresses: string[]; attempts: { address: string; status: Exclude<TcpStatus, "not_tested">; elapsed_ms: number }[]; connected_address: string | null };
@@ -285,7 +285,7 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
   const [port, setPort] = useState(String(profile?.port ?? 22));
   const [username, setUsername] = useState(profile?.username ?? "");
   const [authentication, setAuthentication] = useState<SshAuthenticationMode>("automatic");
-  const [identityPath, setIdentityPath] = useState("");
+  const [identityPaths, setIdentityPaths] = useState([""]);
   const [info, setInfo] = useState<SshHost | null>(null);
   const [fingerprint, setFingerprint] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -295,12 +295,16 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
   const [error, setError] = useState("");
   useEffect(() => { dialog.current?.showModal(); }, []);
 
-  async function chooseIdentity() {
+  function updateIdentity(index: number, path: string) {
+    setIdentityPaths(current => current.map((value, position) => position === index ? path : value));
+  }
+
+  async function chooseIdentity(index: number) {
     if (busy) return;
     setBusy("file"); setError("");
     try {
       const chosen = await call<string | null>("choose_ssh_identity_file");
-      if (chosen) setIdentityPath(chosen);
+      if (chosen) updateIdentity(index, chosen);
     } catch (e) { setError(errorText(e)); }
     finally { setBusy(""); }
   }
@@ -344,10 +348,10 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
 
   async function connect() {
     if (!info || info.status !== "trusted" || busy) return;
-    if (authentication === "key_file" && !identityPath.trim()) { setError("SSH 키 파일을 선택하세요."); return; }
+    if (authentication === "key_files" && identityPaths.some(path => !path.trim())) { setError("모든 SSH 키 파일 경로를 입력하거나 빈 줄을 삭제하세요."); return; }
     setBusy("open"); onOpeningChange(true); setError("");
     try {
-      const selectedAuthentication = authentication === "key_file" ? { kind: authentication, path: identityPath } : { kind: authentication };
+      const selectedAuthentication = authentication === "key_files" ? { kind: authentication, paths: identityPaths } : { kind: authentication };
       const terminal = profile
         ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, authentication: selectedAuthentication, rows: 24, cols: 80 })
         : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, authentication: selectedAuthentication, rows: 24, cols: 80 });
@@ -365,11 +369,21 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
       <label className="field">SSH 인증 방식<select disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as SshAuthenticationMode); setError(""); }}>
         <option value="automatic">자동</option>
-        <option value="key_file">지정한 키 파일</option>
+        <option value="key_files">지정한 키 파일</option>
         <option value="password">암호</option>
         <option value="keyboard_interactive">서버 대화형 인증</option>
       </select></label>
-      {authentication === "key_file" && <><label className="field">SSH 키 파일 경로<span className="file-input"><input required disabled={Boolean(busy)} value={identityPath} onChange={event => setIdentityPath(event.target.value)} placeholder="개인 키 또는 에이전트에 등록된 공개 키의 절대 경로" autoComplete="off" /><button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void chooseIdentity()}>찾아보기</button></span></label><p className="form-note">선택한 키만 사용합니다. 키 경로와 암호는 저장하지 않으며, 키 암호가 필요하면 연결 후 터미널에 입력합니다.</p></>}
+      {authentication === "key_files" && <div className="ssh-identity-fields">
+        {identityPaths.map((path, index) => <div className="ssh-identity-row" key={index}>
+          <label className="field">SSH 키 파일 {index + 1} 경로
+            <input required disabled={Boolean(busy)} value={path} onChange={event => updateIdentity(index, event.target.value)} placeholder="개인 키 또는 에이전트에 등록된 공개 키의 절대 경로" autoComplete="off" />
+          </label>
+          <button type="button" className="secondary" aria-label={`SSH 키 파일 ${index + 1} 찾아보기`} disabled={Boolean(busy)} onClick={() => void chooseIdentity(index)}>찾아보기</button>
+          {identityPaths.length > 1 && <button type="button" className="icon-button" aria-label={`SSH 키 파일 ${index + 1} 삭제`} disabled={Boolean(busy)} onClick={() => setIdentityPaths(current => current.filter((_, position) => position !== index))}><X size={16} /></button>}
+        </div>)}
+        <button type="button" className="secondary small" disabled={Boolean(busy) || identityPaths.length >= 8} onClick={() => setIdentityPaths(current => [...current, ""])}><Plus size={14} /> 키 파일 추가</button>
+        <p className="form-note">지정한 키만 사용합니다. 필요한 키 암호는 연결 후 터미널에 입력하세요.</p>
+      </div>}
       {authentication === "keyboard_interactive" && <p className="form-note">연결한 뒤 터미널에서 서버의 질문에 답하세요. 각 답변의 화면 표시 여부는 서버가 지정합니다.</p>}
       <div className="ssh-diagnostic-actions"><button type="button" className="secondary small" disabled={Boolean(busy) || !host.trim() || !port} onClick={() => void diagnose()}>DNS·TCP 진단</button><span>네트워크 연결을 시도하며 로그인하지 않습니다.</span></div>
       {diagnostic && <NetworkDiagnosticResult result={diagnostic} />}
