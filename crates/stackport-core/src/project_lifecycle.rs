@@ -90,6 +90,7 @@ impl Store {
         let db_profiles = Self::list_profiles_on(&tx, source)?;
         let mut ssh_profiles = Self::list_ssh_profiles_on(&tx, source)?;
         let mut copied_total = db_profiles.len() + ssh_profiles.len() + copy_project_templates(&tx, source, &duplicate.id)?;
+        copied_total += crate::postgres::copy_profiles(&tx, source, &duplicate.id)?;
         for source in db_profiles {
             let changed = tx.execute(
                 "INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",

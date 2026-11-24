@@ -17,6 +17,8 @@ mod web_check;
 pub use web_check::{WebDiagnostic, WebMethod, WebResponse, WebSample};
 mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
+mod postgres;
+pub use postgres::{PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo};
 mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;
@@ -45,7 +47,7 @@ mod sftp;
 mod ssh_transport;
 pub use ssh_transport::{SshCredentials, SshRouteHop, SshRouteResult, MAX_SSH_HOPS};
 mod ssh_tunnel;
-pub use ssh_tunnel::{SavedSshTunnel, SshTunnelInput, SshTunnelKind, SshTunnelManager, SshTunnelStatus};
+pub use ssh_tunnel::{LocalTunnelEndpoint, SavedSshTunnel, SshTunnelInput, SshTunnelKind, SshTunnelManager, SshTunnelStatus};
 pub use sftp::{
     list_local_directory, list_local_tree, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, FolderTree, RemotePath,
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
@@ -99,7 +101,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -373,6 +375,7 @@ impl Store {
                 tx.execute_batch(sftp::SYNC_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(sql_templates::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -409,9 +412,10 @@ impl Store {
                 }
                 if current < 8 {
                     tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
-                } else {
+                } else if current < 9 {
                     ssh_tunnel::migrate_v8(&tx)?;
                 }
+                tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

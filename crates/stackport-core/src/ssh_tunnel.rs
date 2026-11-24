@@ -9,7 +9,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use runtime::{SshTunnelManager, SshTunnelStatus};
+pub use runtime::{LocalTunnelEndpoint, SshTunnelManager, SshTunnelStatus};
 
 pub(crate) const SCHEMA: &str = "CREATE TABLE ssh_tunnels (
     id TEXT PRIMARY KEY,

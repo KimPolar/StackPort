@@ -82,6 +82,13 @@ pub struct SshTunnelStatus {
     last_error: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct LocalTunnelEndpoint {
+    pub id: String,
+    pub name: String,
+    pub port: u16,
+}
+
 impl SshTunnelManager {
     pub fn new(store: Store) -> Self {
         Self {
@@ -102,6 +109,22 @@ impl SshTunnelManager {
             .into_iter()
             .map(|session| session.stats.snapshot())
             .collect()
+    }
+
+    pub fn local_database_routes(&self, project: &str, host: &str, port: u16) -> Result<Vec<LocalTunnelEndpoint>> {
+        let sessions = self.sessions.lock().map_err(|_| "실행 중인 터널을 읽을 수 없습니다.")?;
+        let mut routes = Vec::new();
+        for session in sessions.values() {
+            let tunnel = &session.stats.tunnel;
+            let settings = &tunnel.settings;
+            if tunnel.project_id == project && settings.kind == SshTunnelKind::Local
+                && settings.target_host.as_deref() == Some(host) && settings.target_port == Some(port)
+                && session.stats.state.lock().map_err(|_| "터널 상태를 읽을 수 없습니다.")?.phase == Phase::Running {
+                routes.push(LocalTunnelEndpoint { id: tunnel.id.clone(), name: settings.name.clone(), port: session.stats.listen_port });
+            }
+        }
+        routes.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(routes)
     }
 
     pub async fn start(

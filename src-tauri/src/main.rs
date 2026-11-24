@@ -14,6 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
+    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -765,6 +766,63 @@ async fn list_ssh_tunnels(store: State<'_, Store>, project_id: String) -> Result
 }
 
 #[tauri::command]
+async fn list_postgres_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<PostgresProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_postgres_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_postgres_profile(store: State<'_, Store>, project_id: String, input: PostgresProfileInput) -> Result<PostgresProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_postgres_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_postgres_profile(store: State<'_, Store>, id: String, revision: i64, input: PostgresProfileInput) -> Result<PostgresProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_postgres_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_postgres_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_postgres_profile(&id, revision)).await
+}
+
+#[tauri::command]
+fn postgres_tunnel_options(tunnels: State<'_, SshTunnelManager>, profile: PostgresProfile) -> Result<Vec<LocalTunnelEndpoint>, String> {
+    tunnels.local_database_routes(&profile.project_id, &profile.settings.host, profile.settings.port)
+}
+
+#[tauri::command]
+async fn open_postgres(
+    postgres: State<'_, PostgresManager>, tunnels: State<'_, SshTunnelManager>, profile: PostgresProfile,
+    password: PostgresPassword, confirmation: String, tunnel_id: Option<String>,
+) -> Result<PostgresSessionInfo, String> {
+    postgres.open(tunnels.inner(), profile, password, &confirmation, tunnel_id.as_deref()).await
+}
+
+#[tauri::command]
+fn close_postgres(postgres: State<'_, PostgresManager>, id: String) -> Result<(), String> {
+    postgres.close(&id)
+}
+
+#[tauri::command]
+async fn postgres_schemas(postgres: State<'_, PostgresManager>, id: String, page: u32) -> Result<PostgresSchemaPage, String> {
+    postgres.schemas(&id, page).await
+}
+
+#[tauri::command]
+async fn postgres_objects(postgres: State<'_, PostgresManager>, id: String, schema: i64, search: String, page: u32) -> Result<PostgresObjectPage, String> {
+    postgres.objects(&id, schema, &search, page).await
+}
+
+#[tauri::command]
+async fn postgres_page(postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32) -> Result<PostgresPage, String> {
+    postgres.page(&id, object, row_page, column_page).await
+}
+
+#[tauri::command]
 async fn create_ssh_tunnel(store: State<'_, Store>, project_id: String, input: SshTunnelInput) -> Result<SavedSshTunnel, String> {
     let store = store.inner().clone();
     worker(move || store.create_ssh_tunnel(&project_id, input)).await
@@ -1192,6 +1250,13 @@ async fn choose_sqlite_file() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_postgres_ca() -> Result<Option<String>, String> {
+    worker(|| Ok(rfd::FileDialog::new().set_title("PostgreSQL CA 인증서 선택")
+        .add_filter("PEM 인증서", &["pem", "crt", "cer"]).pick_file()
+        .map(|path| path.to_string_lossy().into_owned()))).await
+}
+
+#[tauri::command]
 async fn choose_ssh_profile_import_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1307,6 +1372,7 @@ fn main() {
             let store = Store::open(path).map_err(std::io::Error::other)?;
             app.manage(SftpManager::new(store.clone()));
             app.manage(SshTunnelManager::new(store.clone()));
+            app.manage(PostgresManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -1388,6 +1454,16 @@ fn main() {
             open_saved_ssh_terminal,
             open_routed_ssh_terminal,
             list_ssh_tunnels,
+            list_postgres_profiles,
+            create_postgres_profile,
+            update_postgres_profile,
+            delete_postgres_profile,
+            postgres_tunnel_options,
+            open_postgres,
+            close_postgres,
+            postgres_schemas,
+            postgres_objects,
+            postgres_page,
             create_ssh_tunnel,
             update_ssh_tunnel,
             delete_ssh_tunnel,
@@ -1441,6 +1517,7 @@ fn main() {
             save_sql_template,
             delete_sql_template,
             choose_sqlite_file,
+            choose_postgres_ca,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,
             choose_ssh_profile_export_directory,

@@ -1,0 +1,24 @@
+.postgres-workspace { container-type: inline-size; min-width: 0; }
+.postgres-server { padding: 0 0 10px; font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.postgres-layout { display: grid; grid-template-columns: minmax(168px, 230px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.postgres-layout > * { margin: 0; min-width: 0; }
+.postgres-layout .panel-heading { min-height: 42px; height: auto; padding: 8px 10px; overflow-wrap: anywhere; }
+.postgres-catalog ul { display: grid; max-height: 280px; margin: 0; padding: 4px 6px; overflow: auto; list-style: none; }
+.postgres-catalog li > button { display: flex; gap: 8px; align-items: center; justify-content: space-between; min-width: 0; width: 100%; padding: 7px; text-align: start; background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 4px; font: inherit; font-size: 12px; }
+.postgres-catalog li > button:hover:not(:disabled) { background: var(--surface-hover); }
+.postgres-catalog li > button[aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
+.postgres-catalog button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.postgres-catalog button small, .postgres-data thead small { color: var(--text-muted); white-space: nowrap; }
+.postgres-search { display: flex; gap: 6px; margin: 8px; }
+.postgres-search input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text); padding: 0 6px; }
+.postgres-data .table-wrap { max-height: min(56vh, 620px); }
+.postgres-data thead th { position: sticky; top: 0; white-space: nowrap; }
+.postgres-data thead small { display: block; font-weight: 400; }
+.postgres-data td code { display: block; min-width: 56px; max-width: 300px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.postgres-page-note { margin: 8px 12px; }
+.postgres-paging { display: flex; flex-wrap: wrap; }
+.postgres-paging .pagination { flex: 1 1 150px; }
+.postgres-null { color: var(--text-muted); font-style: italic; }
+.postgres-profile-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.postgres-profile-address { display: grid; grid-template-columns: minmax(0, 1fr) 90px; gap: 10px; }
+@container (max-width: 660px) { .postgres-layout { grid-template-columns: minmax(0, 1fr); } }

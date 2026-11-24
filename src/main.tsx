@@ -35,6 +35,8 @@ import type { ResultComparisonSource } from "./SqlResultComparison";
 import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
+import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction } from "./PostgresWorkspace";
+import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import type { TerminalDirectory } from "./terminalDirectory";
@@ -168,6 +170,10 @@ function App() {
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [postgresProfiles, setPostgresProfiles] = useState<PostgresProfile[]>([]);
+  const [postgresId, setPostgresId] = useState("");
+  const [postgresAction, setPostgresAction] = useState<PostgresProfileAction | null>(null);
+  const postgresProfile = postgresProfiles.find(item => item.id === postgresId && item.project_id === projectId);
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
@@ -370,7 +376,8 @@ function App() {
     let live = true;
     resetActiveQuery();
     objectGeneration.current++;
-    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setTableQueryResult(null);
+    setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null);
+    setProfileId(""); setObjects([]); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => {
@@ -383,6 +390,7 @@ function App() {
         setProfiles(items);
       }).catch(e => { if (live) setError(errorText(e)); });
       call<SshProfile[]>("list_ssh_profiles", { projectId }).then(items => { if (live) setSshProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      call<PostgresProfile[]>("list_postgres_profiles", { projectId }).then(items => { if (live) setPostgresProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
   }, [projectId]);
@@ -756,6 +764,7 @@ function App() {
   }
 
   function openObject(object: DatabaseObject, revealSchema = false) {
+    setPostgresId("");
     showTool("workspace");
     setSqlEditorOpen(false);
     if (revealSchema || selectedObject?.name !== object.name) setSchemaDetailsOpen(revealSchema);
@@ -993,8 +1002,25 @@ function App() {
   }
 
   function selectSqliteProfile(id: string) {
+    setPostgresId("");
     setProfileId(id);
     showTool("workspace");
+  }
+
+  function selectPostgresProfile(id: string) {
+    setPostgresId(id);
+    setHistoryOpen(false);
+    showTool("workspace");
+  }
+
+  function savePostgresProfile(saved: PostgresProfile | null) {
+    if (!postgresAction) return;
+    const previous = postgresAction.kind === "create" ? null : postgresAction.profile.id;
+    setPostgresProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
+      .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
+    if (postgresAction.kind === "create" && saved) selectPostgresProfile(saved.id);
+    if (!saved && previous === postgresId) setPostgresId("");
+    setPostgresAction(null);
   }
 
   function openSavedSsh(item: SshProfile) {
@@ -1034,6 +1060,7 @@ function App() {
     if (project) {
       commands.push(
         { id: "create:sqlite", title: "SQLite 연결 추가", group: "작업", Icon: Database, run: () => openModal("profile") },
+        { id: "create:postgres", title: "PostgreSQL 연결 추가", group: "작업", Icon: Database, run: () => setPostgresAction({ kind: "create" }) },
         { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
       );
       if (desktop) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
@@ -1047,20 +1074,24 @@ function App() {
       id: `sqlite:${item.id}`, title: item.name, group: "SQLite 연결", detail: item.environment,
       Icon: Database, run: () => selectSqliteProfile(item.id),
     });
+    for (const item of postgresProfiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `postgres:${item.id}`, title: item.settings.name, group: "PostgreSQL 연결", detail: item.settings.environment,
+      Icon: Database, run: () => selectPostgresProfile(item.id),
+    });
     for (const item of sshProfiles.filter(item => item.project_id === projectId)) commands.push({
       id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
       Icon: TerminalSquare, run: () => openSavedSsh(item),
     });
-    if (desktop && profile) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
+    if (desktop && profile && !postgresProfile) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
       keywords: "query history recent sql", Icon: History, run: openSqlHistory });
-    if (desktop && profile) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
+    if (desktop && profile && !postgresProfile) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
       keywords: "query builder join group select sql", Icon: Table2, run: openSqlBuilder });
-    if (desktop && profile) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
+    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
       keywords: "erd schema diagram foreign key 외래 키", Icon: Workflow, run: () => setDiagramProfile(profile.id) });
-    if (desktop && profile) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
+    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
       keywords: "schema data dictionary markdown html 구조 문서", Icon: FileDown,
       run: () => setSchemaDocumentRequest({ profileId: profile.id, object: selectedObject?.name ?? null }) });
-    if (desktop && profile) commands.push({ id: "open:schema-comparison", title: "SQLite 스키마 비교", group: "작업",
+    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-comparison", title: "SQLite 스키마 비교", group: "작업",
       keywords: "schema compare diff 구조 차이", Icon: ArrowLeftRight, run: () => setSchemaComparisonSource(profile.id) });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
@@ -1096,6 +1127,7 @@ function App() {
         await reloadProjects(project.id);
       } else if (modal === "profile" && project) {
         const created = await call<Profile>("create_sqlite_profile", { projectId: project.id, name, path, environment });
+        setPostgresId("");
         await reloadProfiles(project.id, created.id);
       } else if (modal === "deleteProject" && project) {
         await call("delete_project", { id: project.id });
@@ -1160,15 +1192,17 @@ function App() {
   </>;
 
   const databasePane = <div id="workspace-pane-workspace" className="main-content">
-    {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
+    {restoreReport && !historyOpen && !postgresProfile && <div className="success-banner restore-result" role="status">
       <strong>SQLite 복원 완료 · 검증 통과</strong>
       <span>{displayPath(restoreReport.path)}</span>
       <span>{restoreCounts(restoreReport)} · 무결성 및 SHA-256 일치</span>
       <code>{restoreReport.sha256}</code>
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
+    {postgresProfile && <div hidden={historyOpen}><PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} /></div>}
     {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
-    !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
+    !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite, PostgreSQL과 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
+    postgresProfile ? null :
     !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
       <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
         <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span>
@@ -1421,10 +1455,10 @@ function App() {
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
           </div></div>
           {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
-          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => selectSqliteProfile(item.id)}>
+          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${!postgresProfile && item.id === profileId ? "selected" : ""}`} onClick={() => selectSqliteProfile(item.id)}>
             {item.id === profileId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Database size={15} /><span>{item.name}</span><small>{item.environment}</small>
           </button>)}</div>
-          {profile && <div className="object-list">
+          {profile && !postgresProfile && <div className="object-list">
             <div className="object-toolbar"><span>객체</span><button className="icon-button" onClick={refreshObjects} disabled={loading} aria-label="객체 새로고침"><RefreshCw size={14} /></button></div>
             <div className="object-search"><Search size={14} /><input aria-label="객체 검색" value={filter} onChange={e => setFilter(e.target.value)} placeholder="이름으로 찾기" /></div>
             {loading ? <p className="sidebar-empty">불러오는 중…</p> : <>
@@ -1432,6 +1466,15 @@ function App() {
               <ObjectGroup name="뷰" items={views} selected={selectedObject?.name} onSelect={openObject} />
             </>}
           </div>}
+          <div className="section-heading"><span>PostgreSQL</span><div>
+            <button type="button" className="icon-button" disabled={!project} aria-label="PostgreSQL 연결 추가" title="PostgreSQL 연결 추가" onClick={() => setPostgresAction({ kind: "create" })}><Plus size={16} aria-hidden /></button>
+          </div></div>
+          <div className="profile-list">{postgresProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
+            <button type="button" className={`profile-row ${item.id === postgresId ? "selected" : ""}`} aria-label={`PostgreSQL ${item.settings.name} 열기`}
+              onClick={() => selectPostgresProfile(item.id)}><Database size={15} aria-hidden /><span>{item.settings.name}</span><small>{item.settings.environment}</small></button>
+            <button type="button" className="icon-button" aria-label={`${item.settings.name} PostgreSQL 연결 수정`} onClick={() => setPostgresAction({ kind: "edit", profile: item })}><Pencil size={14} aria-hidden /></button>
+            <button type="button" className="icon-button" aria-label={`${item.settings.name} PostgreSQL 연결 삭제`} onClick={() => setPostgresAction({ kind: "delete", profile: item })}><Trash2 size={14} aria-hidden /></button>
+          </div>)}</div>
           <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => setSshExchange("import")} disabled={!project} aria-label="SSH 연결 가져오기" title="SSH 연결 가져오기"><FileUp size={14} /></button><button className="icon-button" onClick={() => setSshExchange("export")} disabled={!project || !sshProfiles.length} aria-label="SSH 연결 내보내기" title="SSH 연결 내보내기"><FileDown size={14} /></button><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
           {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
           <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
@@ -1569,6 +1612,7 @@ function App() {
       }} />
     </Dialog>}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
+    {postgresAction && project && <PostgresProfileDialog action={postgresAction} projectId={project.id} onClose={() => setPostgresAction(null)} onSaved={savePostgresProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
@@ -1626,6 +1670,7 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.export.json": "SQLite JSON 내보내기",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
+  "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",

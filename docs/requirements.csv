@@ -1,15 +1,15 @@
 ﻿id,title,requirement,status,implemented_subset,evidence
 SP-UI-001,프로젝트 관리,"프로젝트/워크스페이스의 생성·복제·이름변경·보관·삭제, 계층형 폴더·태그·설명·아이콘·색상 지정.",partial,프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
-SP-UI-002,통합 탐색기,"좌측 탐색 트리에서 호스트, 세션, DB 연결, DB 객체, 원격 파일, 모델, 작업, 대시보드를 일관되게 탐색.",partial,도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH 연결 탐색,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
+SP-UI-002,통합 탐색기,"좌측 탐색 트리에서 호스트, 세션, DB 연결, DB 객체, 원격 파일, 모델, 작업, 대시보드를 일관되게 탐색.",partial,도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH·PostgreSQL 연결 탐색,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-UI-003,무제한 탭,서로 다른 유형의 탭을 동시에 열고 순서 변경·고정·복제·일괄 닫기·최근 닫은 탭 복원.,partial,"연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",src/SqlTabs.tsx; tests/sql-file-smoke.cjs; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs
 SP-UI-004,화면 분할,"2분할 수평/수직, 4분할, 자유 분할 및 크기 조절. 터미널과 SQL 편집기 등을 교차 배치.",partial,"두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",src/WorkspaceLayout.ts; src/WorkspaceSplit.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-005,탭 분리,데스크톱에서 탭을 별도 창으로 분리·재결합하고 전체 화면을 제공.,not_started,,
-SP-UI-006,통합 검색,"연결 이름, 경로, 즐겨찾기, DB 객체, 저장 쿼리, 로그, 도구를 검색. 민감 정보는 색인 제외.",partial,명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결·선택한 SQLite 연결의 테이블과 뷰 검색,src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
+SP-UI-006,통합 검색,"연결 이름, 경로, 즐겨찾기, DB 객체, 저장 쿼리, 로그, 도구를 검색. 민감 정보는 색인 제외.",partial,명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결(SQLite·SSH·PostgreSQL)·선택한 SQLite 연결의 테이블과 뷰 검색,src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-UI-007,명령 팔레트,단축키로 기능·명령·호스트·DB를 빠르게 열고 최근 항목을 우선 표시.,partial,"Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-008,빠른 연결,"호스트/IP/URL/연결 문자열 입력에서 프로토콜 추론, 유효성 검사 및 신규 프로필 저장 제안.",partial,Windows SSH 호스트·포트·사용자 빠른 연결,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-UI-009,즐겨찾기,연결·쿼리·테이블·스크립트·폴더·작업을 고정하고 개인 즐겨찾기 및 프로젝트 공유 구분.,not_started,,
 SP-UI-010,가상 그룹,같은 연결·DB 객체를 실제 위치를 바꾸지 않고 태그/논리 그룹으로 분류.,not_started,,
-SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,"프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
+SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,"프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs; crates/stackport-core/tests/postgres_profiles.rs
 SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목록 복구, 실제 재연결은 정책에 따라 수행.",partial,"재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",crates/stackport-core/src/workspace_resume.rs; crates/stackport-core/tests/workspace_resume.rs; tests/workspace-resume-smoke.cjs; src/WorkspaceResume.ts; src/main.tsx
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
 SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
@@ -19,9 +19,9 @@ SP-UI-017,도움말,"문맥형 설명, 연결 진단, 프로토콜별 오류 가
 SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자로 특정 프로젝트/세션/쿼리/작업 열기.,not_started,,
 SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,"SQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",src/WorkspaceExitDialog.tsx; src/SqlTabs.tsx; src/main.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs
 SP-UI-020,오류 중심 UX,기술 오류 코드와 원인·재시도 조건·안전한 복구 조치를 분리해 제시.,not_started,,
-SP-CN-001,연결 프로필,"프로토콜, 호스트, 포트, 사용자, 별칭, 설명, 색상, 폴더, 자격 증명 참조, 타임아웃을 저장.",partial,프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
+SP-CN-001,연결 프로필,"프로토콜, 호스트, 포트, 사용자, 별칭, 설명, 색상, 폴더, 자격 증명 참조, 타임아웃을 저장.",partial,"프로젝트별 SQLite 파일, SSH·PostgreSQL 호스트·포트·사용자·이름·환경 저장",crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs; crates/stackport-core/tests/postgres_profiles.rs
 SP-CN-002,테스트 연결,"DNS, 네트워크, 핸드셰이크, 인증, 권한 단계를 구분하여 성공/실패를 표시하고 실제 자격 증명을 노출하지 않음.",partial,SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공,crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
-SP-CN-003,수명주기,접속·중단·재접속·복제·삭제·일괄 접속·연결 수 제한·유휴 타임아웃 설정.,partial,"SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
+SP-CN-003,수명주기,접속·중단·재접속·복제·삭제·일괄 접속·연결 수 제한·유휴 타임아웃 설정.,partial,"SQLite 연결 정의 생성·삭제, SSH·PostgreSQL 연결 정의 생성·수정·삭제와 세션 열기·닫기",crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs; crates/stackport-core/tests/postgres_profiles.rs
 SP-CN-004,자동 재연결,"지수 백오프, 최대 재시도, 수동 중지, 실패 원인 기록. 비멱등 명령은 자동 재실행하지 않음.",not_started,,
 SP-CN-005,연결 프로필 가져오기/내보내기,선택한 연결만 JSON 등 문서화된 버전형 포맷으로 교환; 비밀번호 기본 제외.,partial,선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기,crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/
 SP-CN-006,URL 핸들러,`stackport://` URI로 명시적 연결/개체 접근; 외부 입력은 확인·검증·권한 검사.,not_started,,
@@ -29,8 +29,8 @@ SP-CN-007,암호 기반 인증,"암호 입력/저장/세션만 사용, 마스킹
 SP-CN-008,키 기반 SSH,공개키·개인키·암호화 키·여러 키·SSH 에이전트·키 암호(passphrase) 지원.,partial,Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력,crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-009,SSH 대화형 인증,"keyboard-interactive, 다중 인증 프롬프트, 서버 안내 메시지.",partial,Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-CN-010,SSH 호스트 신뢰,"최초 호스트 키 확인, 핑거프린트 저장, 변경 경고 및 연결 차단 기본값.",partial,SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
-SP-CN-011,인증서 인증,TLS 서버 인증서 체인·호스트 이름·유효기간·고정값 검증 및 필요 시 클라이언트 인증서.,not_started,,
-SP-CN-012,DB 인증,암호·OS 통합 인증·Kerberos·LDAP/PAM·AD·SSO·MFA 등 엔진에서 제공하는 모드 지원.,not_started,,
+SP-CN-011,인증서 인증,TLS 서버 인증서 체인·호스트 이름·유효기간·고정값 검증 및 필요 시 클라이언트 인증서.,partial,PostgreSQL TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 인증서 체인·호스트 이름·유효기간 검증,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-CN-012,DB 인증,암호·OS 통합 인증·Kerberos·LDAP/PAM·AD·SSO·MFA 등 엔진에서 제공하는 모드 지원.,partial,PostgreSQL 사용자 이름과 세션별 암호 인증,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-CN-013,시크릿 저장소,"운영체제 보안 저장소 또는 암호화된 독립 보관함, 마스터 암호, 잠금/해제·암호 변경·자동 잠금.",not_started,,
 SP-CN-014,시크릿 분리,연결 설정 공유와 암호 공유를 분리하고 로그/백업/내보내기에 시크릿을 포함하지 않음.,partial,SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외,crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/
 SP-CN-015,SSH 경유 접속,단일 또는 다단계 점프 호스트로 SSH·RDP·VNC·DB·파일 연결; 중첩 실패 지점 표시.,partial,"같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/terminal/routed.rs; src/SshRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs
@@ -41,7 +41,7 @@ SP-CN-019,세션별 오버라이드,글로벌 기본값을 프로필별로 글�
 SP-CN-020,세션 그룹,폴더/프로젝트의 여러 세션을 한 번에 열고 시작 순서·의존 연결을 설정.,not_started,,
 SP-CN-021,공유 연결 정의,"읽기 전용 공유/편집 가능한 공유, 프로젝트 소유, 변경 이력 및 충돌 처리.",not_started,,
 SP-CN-022,연결 정책,관리자가 허용하는 프로토콜·인증 방식·호스트 범위·TLS 검증 예외를 설정.,not_started,,
-SP-CN-023,환경 분리,"DEV/STAGING/PROD 구분, 색상·배너·파괴적 명령 승인 정책.",partial,저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
+SP-CN-023,환경 분리,"DEV/STAGING/PROD 구분, 색상·배너·파괴적 명령 승인 정책.",partial,저장된 SSH·PostgreSQL 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-CN-024,인증 실패 처리,로그인 실패 횟수·재시도 제한·계정 잠금 메시지를 구분하고 무차별 재시도를 금지.,partial,SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-001,로컬 셸,"PowerShell, CMD, WSL, 설치된 Bash/Zsh 등 사용자 지정 실행 파일을 터미널 탭에서 실행.",partial,Windows PowerShell·CMD 로컬 터미널과 셸별 바로 열기,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-002,원격 셸,"SSH, Telnet, Rlogin/Rsh, Mosh 세션에서 명령 입력·표준입출력·종료 코드·에러 스트림 처리.",partial,Windows OpenSSH의 대화형 원격 셸과 SSH 경유 PTY의 입출력·크기 변경·종료 코드,crates/stackport-core/src/ssh.rs; crates/stackport-core/src/terminal/routed.rs; src/TerminalWorkspace.tsx; tests/ssh-smoke.cjs; tests/sftp-smoke.cjs
@@ -124,16 +124,16 @@ SP-NW-012,서버 프로파일,"서비스별 포트, 허용 IP, 인증, 파일 �
 SP-NW-013,충돌 경고,"이미 사용 중인 포트, 방화벽 정책, 관리자 권한 부족, 공개 네트워크 연결 여부 안내.",not_started,,
 SP-NW-014,서비스 수명주기,"앱 종료 시 자동 종료 기본값, 사용자가 선택한 지속 실행은 서비스 관리자에 위임.",not_started,,
 SP-NW-015,도구 플러그인,"신뢰 가능한 확장 도구 설치, 최소 권한·서명·버전·업데이트 및 사용자 승인.",not_started,,
-SP-DB-001,멀티 엔진,"MySQL, MariaDB, PostgreSQL, Microsoft SQL Server, Oracle Database, SQLite, Snowflake, MongoDB, Redis 연결을 개별 네이티브 어댑터로 제공.",partial,SQLite 읽기 전용 어댑터,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-DB-001,멀티 엔진,"MySQL, MariaDB, PostgreSQL, Microsoft SQL Server, Oracle Database, SQLite, Snowflake, MongoDB, Redis 연결을 개별 네이티브 어댑터로 제공.",partial,SQLite 어댑터와 PostgreSQL 읽기 전용 어댑터,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-002,호환 엔진,"TiDB, OceanBase, openGauss, IvorySQL, KingbaseES, Dameng, Microsoft Garnet 등은 기반 프로토콜 적합성과 DDL 차이를 검증해 매트릭스 표기.",not_started,,
 SP-DB-003,클라우드 서비스,"AWS RDS/Aurora, Azure SQL/관리형 DB, Cloud SQL, Oracle Cloud, Atlas, 관리형 Redis 등은 연결 주소·인증·TLS·방화벽 설정에 맞춰 지원.",not_started,,
-SP-DB-004,연결 옵션,"DSN/URI, 호스트·포트, DB·스키마, 기본 역할, 접속 파라미터, 문자셋, 시간대, 세션 초기화 SQL.",not_started,,
-SP-DB-005,연결 보안,TLS 설정·인증서 검증·클라이언트 인증서·SSH 터널·승인된 HTTP 터널을 지원.,not_started,,
-SP-DB-006,인증 모드,"사용자/암호, 지원되는 OS 통합 인증·Kerberos·AD·LDAP/PAM·SSO·MFA, 클라우드 임시 토큰.",not_started,,
-SP-DB-007,다중 연결,같은 서버의 여러 DB·서로 다른 서버·다중 계정을 한 프로젝트에서 별도 권한으로 관리.,partial,한 프로젝트에 여러 SQLite 연결 정의,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-DB-004,연결 옵션,"DSN/URI, 호스트·포트, DB·스키마, 기본 역할, 접속 파라미터, 문자셋, 시간대, 세션 초기화 SQL.",partial,PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-005,연결 보안,TLS 설정·인증서 검증·클라이언트 인증서·SSH 터널·승인된 HTTP 터널을 지원.,partial,PostgreSQL TLS 인증서 검증과 실행 중인 로컬 SSH 터널 경유,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-006,인증 모드,"사용자/암호, 지원되는 OS 통합 인증·Kerberos·AD·LDAP/PAM·SSO·MFA, 클라우드 임시 토큰.",partial,PostgreSQL 세션별 사용자 이름·암호 인증,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-007,다중 연결,같은 서버의 여러 DB·서로 다른 서버·다중 계정을 한 프로젝트에서 별도 권한으로 관리.,partial,한 프로젝트에 여러 SQLite·PostgreSQL 연결 정의,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-008,연결 풀,"작업 유형별 풀 크기, 쿼리/편집/백업 연결 분리, 트랜잭션 고정, 유휴 연결 정리.",not_started,,
-SP-DB-009,DB 트리,"연결→카탈로그/DB→스키마→객체 종류→객체를 지연 로딩으로 표시, 접근 불가 영역 명시.",partial,SQLite 테이블·뷰 목록,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-DB-010,객체 종류,"테이블, 뷰, 물리화 뷰, 인덱스, 제약조건, PK/FK, 시퀀스, 트리거, 함수, 프로시저, 패키지, 이벤트, 타입, 확장 등을 엔진에 맞게 노출.",partial,SQLite 테이블·뷰와 열·기본 키·외래 키·인덱스 열람,crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-DB-009,DB 트리,"연결→카탈로그/DB→스키마→객체 종류→객체를 지연 로딩으로 표시, 접근 불가 영역 명시.",partial,"SQLite 테이블·뷰 목록, PostgreSQL 스키마와 테이블·뷰의 지연 조회 및 접근 불가 표시",crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-010,객체 종류,"테이블, 뷰, 물리화 뷰, 인덱스, 제약조건, PK/FK, 시퀀스, 트리거, 함수, 프로시저, 패키지, 이벤트, 타입, 확장 등을 엔진에 맞게 노출.",partial,"SQLite 테이블·뷰와 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열과 기본 키 열람",crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-011,객체 생성,시각적 디자이너로 테이블·열·데이터 타입·기본값·NULL·자동 증가·PK·FK·UNIQUE·CHECK·인덱스·주석 구성.,not_started,,
 SP-DB-012,객체 수정,"열 추가/삭제·타입·순서·이름 변경, 인덱스·제약·외래키·트리거 수정과 영향 경고.",not_started,,
 SP-DB-013,객체 삭제·복제,"DROP/TRUNCATE/복제/이름 변경, 종속성 분석과 생성될 DDL 미리보기, 위험 확인.",not_started,,
@@ -144,22 +144,22 @@ SP-DB-017,트리거·이벤트,"생성/수정/삭제/활성·비활성(엔진 �
 SP-DB-018,인덱스 관리,인덱스 구성·선택도/크기 확인·삭제/재생성 및 온라인 작업 지원 여부 안내.,partial,SQLite 인덱스 구성과 고유·부분 여부 열람,crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DB-019,사용자·역할,"서버 사용자/역할/그룹 조회, 생성·수정·삭제, 비밀번호 변경, 최소 권한 부여·회수.",not_started,,
 SP-DB-020,권한 시각화,데이터베이스/스키마/객체별 권한 표와 역할 상속·유효 권한 표시.,not_started,,
-SP-DB-021,객체 검색,"서버/DB/스키마 범위에서 이름, 타입, SQL 정의, 주석, 컬럼별 검색.",not_started,,
-SP-DB-022,빠른 액션,선택한 객체에 대해 구조·데이터·DDL·쿼리·ERD·내보내기·백업·권한 메뉴 제공.,partial,SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기,crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/
-SP-DB-023,서버 정보,제품/버전/인코딩/시간대/설정·스토리지/세션 수·연결 통계·가동 시간 표시.,not_started,,
+SP-DB-021,객체 검색,"서버/DB/스키마 범위에서 이름, 타입, SQL 정의, 주석, 컬럼별 검색.",partial,PostgreSQL 스키마 내 테이블·뷰 이름 검색,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-022,빠른 액션,선택한 객체에 대해 구조·데이터·DDL·쿼리·ERD·내보내기·백업·권한 메뉴 제공.,partial,"SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 객체의 열·데이터 미리보기",crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-023,서버 정보,제품/버전/인코딩/시간대/설정·스토리지/세션 수·연결 통계·가동 시간 표시.,partial,PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-024,서버 모니터,"지원 DB에서 활동 세션, 실행 중 쿼리, 잠금·블로킹, 느린 쿼리, 성능 지표를 조회.",not_started,,
 SP-DB-025,명령 모니터,"실행 명령/세션 보기, 종료·취소·kill은 대상/영향/권한 확인 후 실행.",not_started,,
 SP-DB-026,스키마 비교,서로 다른 두 DB/스키마의 객체·속성 차이와 생성·수정·삭제 SQL 작성.,partial,"두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs
 SP-DB-027,서버별 확장,"PostgreSQL extension, Oracle tablespace, SQL Server Agent/작업 등 엔진별 관리자 패널 제공.",not_started,,
-SP-DB-028,권한 제한 처리,"읽기 전용 계정에서 수정 UI 비활성화 또는 실행 전 권한 진단, 거부 사유 제시.",partial,읽기 전용 연결과 쓰기 차단,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-DB-029,연결 격리,인증 상태·세션 변수·트랜잭션·타임존이 연결 탭 간 유출되지 않음.,not_started,,
+SP-DB-028,권한 제한 처리,"읽기 전용 계정에서 수정 UI 비활성화 또는 실행 전 권한 진단, 거부 사유 제시.",partial,"SQLite 읽기 전용 연결과 쓰기 차단, PostgreSQL 읽기 전용 연결 및 스키마·SELECT 권한 확인",crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
+SP-DB-029,연결 격리,인증 상태·세션 변수·트랜잭션·타임존이 연결 탭 간 유출되지 않음.,partial,PostgreSQL 접속마다 독립적인 세션과 읽기 전용 트랜잭션,crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DB-030,엔진 기능 감지,서버 버전·방언·지원 기능을 연결 시 협상하고 불가능한 작업을 무리하게 실행하지 않음.,not_started,,
-SP-DT-001,데이터 그리드,페이지네이션/가상 스크롤을 통해 결과를 표시하고 대규모 데이터를 한꺼번에 메모리 로드하지 않음.,partial,100행 단위 결과 페이지,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
+SP-DT-001,데이터 그리드,페이지네이션/가상 스크롤을 통해 결과를 표시하고 대규모 데이터를 한꺼번에 메모리 로드하지 않음.,partial,"SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",crates/stackport-core/tests/workspace.rs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DT-002,다중 보기,"그리드, 행 단위 폼, 트리, JSON, 원시 텍스트, HEX, 이미지 등 데이터 타입별 보기.",not_started,,
 SP-DT-003,CRUD,"테이블 데이터 추가·조회·수정·삭제, 다중 행 붙여넣기·복사·일괄 편집.",partial,기본 키로 식별한 SQLite 단일 셀 수정,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DT-004,수정 버퍼,"변경된 셀/행 강조, 적용/취소, 수정 전/후 비교, 미반영 변경 경고.",partial,단일 셀 이전·변경 값 미리보기와 취소,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DT-005,안전한 UPDATE,안정적인 PK/UNIQUE 식별자가 없는 테이블은 변경 대상을 확인하거나 읽기 전용 처리.,partial,SQLite 기본 키 검증과 키 없는 테이블 편집 차단,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-DT-006,NULL·기본값,"NULL/빈 문자열/DEFAULT/0의 구분, 타입 맞춤 입력·검증, 서버 측 기본값 반영.",partial,NULL·빈 문자열·숫자 구분 및 단일 셀 입력,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-DT-006,NULL·기본값,"NULL/빈 문자열/DEFAULT/0의 구분, 타입 맞춤 입력·검증, 서버 측 기본값 반영.",partial,"SQLite의 NULL·빈 문자열·숫자 구분과 단일 셀 입력, PostgreSQL의 NULL·빈 문자열 구분과 숫자 정밀도 유지",crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs
 SP-DT-007,데이터 타입,숫자·날짜·시간대·UUID·JSON/JSONB·XML·ARRAY·BLOB/CLOB·지리정보 등 각 타입의 안전한 표시/수정.,partial,SQLite 문자열·정수·실수·NULL 셀 편집,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DT-008,대용량 값,"BLOB/CLOB/BFile·이미지·파일·문자열을 필요할 때 별도 로드, 저장/열기/내보내기.",not_started,,
 SP-DT-009,FK 선택,외래키 셀을 참조 대상 테이블의 검색 가능한 레코드 선택기로 수정.,not_started,,
@@ -429,5 +429,5 @@ SP-AT-021,AI 안전,승인 전 원본 레코드 송신 안 됨; 생성 SQL이 �
 SP-AT-022,협업,연결 정의만 공유되고 개인 시크릿/원본 레코드는 팀 동기화에 포함되지 않음,not_started,,
 SP-AT-023,브라우저 보안,인증 없는 연결 및 임의 대상 TCP 프록시 요청을 게이트웨이가 차단하고 감사 이벤트 기록,not_started,,
 SP-AT-024,오프라인,중앙 서비스 없이 로컬 저장 연결/작업과 기존 오프라인 자산을 이용 가능,partial,SQLite 로컬 메타데이터 및 로컬 조회,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-AT-025,이전 버전 호환,"저장 포맷 업데이트 전 백업 후 마이그레이션, 실패 시 원본 파일 보존",partial,v1~v4 백업 후 v5 이관·이관 실패 시 원본 보존,crates/stackport-core/tests/migration.rs
+SP-AT-025,이전 버전 호환,"저장 포맷 업데이트 전 백업 후 마이그레이션, 실패 시 원본 파일 보존",partial,v1~v9 백업 후 v10 이관·이관 실패 시 원본 보존,crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/postgres_profiles.rs
 SP-AT-026,플러그인 격리,허용되지 않은 파일·네트워크·시크릿 접근 시도가 차단되고 권한 요청이 기록됨,not_started,,
