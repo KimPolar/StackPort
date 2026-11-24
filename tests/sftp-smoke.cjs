@@ -412,7 +412,11 @@ async function main() {
     await verifyMoves(page, remote, server.uploads);
     await verifyCopies(page, remote, server.uploads, local);
     await verifyDeletes(page, remote, server.uploads);
-    await verifyEditor(page, remote, server.uploads);
+    if (await verifyEditor(page, remote, server.uploads, local)) {
+      assert.deepEqual(errors, []);
+      console.log('Native Windows exit exported the draft before closing; the remote original was unchanged.');
+      return;
+    }
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     server.uploads.advertiseEdit = false;
@@ -863,7 +867,7 @@ async function verifyDeleteToken(command, profile, authentication, uploads) {
   }
 }
 
-async function verifyEditor(page, remote, uploads) {
+async function verifyEditor(page, remote, uploads, local) {
   const folder = '/home/stackport/정리';
   const fileName = '편집 원본.txt';
   const filePath = `${folder}/${fileName}`;
@@ -965,13 +969,56 @@ async function verifyEditor(page, remote, uploads) {
   await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
   await dialog.getByRole('button', { name: '계속 편집', exact: true }).click();
   assert.equal(await text.inputValue(), draft);
+
+  const chooseDraft = dialog.getByRole('button', { name: '로컬에 초안 저장', exact: true });
+  const draftPath = dialog.getByLabel('새 로컬 초안 파일 경로');
+  const localFile = path.join(local, '복구 초안.txt');
+  const occupied = path.join(local, '기존 초안.txt');
+  fs.writeFileSync(occupied, 'keep this file');
+  await chooseDraft.click();
+  await draftPath.fill(occupied);
+  await dialog.getByRole('button', { name: '초안 저장', exact: true }).click();
+  await error(/같은 이름의 파일/);
+  assert.equal(fs.readFileSync(occupied, 'utf8'), 'keep this file');
+  assert.equal(await text.inputValue(), draft);
+  await draftPath.fill(localFile);
+  await dialog.getByRole('button', { name: '초안 저장', exact: true }).click();
+  await dialog.getByRole('status').getByText(/로컬 초안 저장 완료/).waitFor();
+  const expected = Buffer.from('\uFEFF' + draft.replace(/\n/g, '\r\n'));
+  assert.deepEqual(fs.readFileSync(localFile), expected);
+  assert.equal(await text.inputValue(), draft);
+  assert.equal(uploads.edits, 1);
+  assert.deepEqual(uploads.files.get(filePath).data, external);
+
   await dialog.getByLabel('저장 위치').selectOption('copy');
   await dialog.getByLabel('새 파일 이름').fill('편집 보존본.txt');
   await dialog.getByRole('button', { name: '새 이름으로 저장', exact: true }).click();
   await done();
   assert.deepEqual(uploads.files.get(filePath).data, external);
-  assert.deepEqual(uploads.files.get(`${folder}/편집 보존본.txt`).data, Buffer.from('\uFEFF' + draft.replace(/\n/g, '\r\n')));
+  assert.deepEqual(uploads.files.get(`${folder}/편집 보존본.txt`).data, expected);
   noPartials();
+
+  await open(fileName);
+  await text.fill(draft);
+  const exit = process.env.STACKPORT_TEST_DRAFT_EXIT === '1';
+  if (exit) {
+    assert.ok(windowPid, 'Native draft exit requires STACKPORT_TEST_WINDOW_PID.');
+    requestNativeClose(windowPid);
+    await dialog.getByRole('status').getByText(/앱을 닫기 전에 처리 방법/).waitFor();
+  } else {
+    await text.press('Escape');
+    await dialog.getByRole('status').getByText(/편집기를 닫기 전에 처리 방법/).waitFor();
+  }
+  await chooseDraft.click();
+  const destination = path.join(local, '닫기 전 초안.txt');
+  await draftPath.fill(destination);
+  const closed = exit ? page.waitForEvent('close') : dialog.waitFor({ state: 'detached' });
+  await dialog.getByRole('button', { name: exit ? '초안 저장 후 앱 종료' : '초안 저장 후 닫기', exact: true }).click();
+  await closed;
+  if (!exit) await page.getByRole('status').getByText('로컬 초안 저장 완료', { exact: true }).waitFor();
+  assert.deepEqual(fs.readFileSync(destination), expected);
+  assert.deepEqual(uploads.files.get(filePath).data, external);
+  return exit;
 }
 
 async function verifyEditorCopyOnly(page, remote, uploads) {

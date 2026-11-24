@@ -8,7 +8,7 @@ use super::{
     },
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
 };
-use crate::Result;
+use crate::{local_file::valid_filename, Result};
 use russh_sftp::{
     client::RawSftpSession,
     protocol::{FileAttributes, OpenFlags, SftpHandle, SftpString},
@@ -163,39 +163,6 @@ fn prepare_destination(destination: &str) -> Result<(PathBuf, NamedTempFile)> {
         .tempfile_in(parent)
         .map_err(|_| "다운로드 임시 파일을 만들 수 없습니다.")?;
     Ok((destination, temporary))
-}
-
-fn valid_filename(name: &str) -> bool {
-    if !cfg!(windows) {
-        return !name.contains('\0');
-    }
-    if name.ends_with([' ', '.'])
-        || name
-            .chars()
-            .any(|ch| ch.is_control() || "<>:\"/\\|?*".contains(ch))
-    {
-        return false;
-    }
-    let stem = name
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .trim_end()
-        .to_ascii_uppercase();
-    let number_device = stem
-        .strip_prefix("COM")
-        .or_else(|| stem.strip_prefix("LPT"))
-        .is_some_and(|value| {
-            matches!(
-                value,
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-            )
-        });
-    !number_device
-        && !matches!(
-            stem.as_str(),
-            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-        )
 }
 
 fn publish(temporary: TempPath, destination: PathBuf) -> Result<()> {

@@ -9,7 +9,10 @@ use super::{
     RemotePath, SftpEntrySource, SftpError, SftpManager, SftpTransferOutcome, SftpTransferProgress,
     SftpTransferReport, BROWSE_TIMEOUT,
 };
-use crate::Result;
+use crate::{
+    text_draft::{encode_text, UTF8_BOM},
+    Result, TextLineEnding,
+};
 use russh_sftp::{
     client::RawSftpSession,
     protocol::{FileAttributes, OpenFlags, SftpString},
@@ -20,24 +23,16 @@ use tokio::time::timeout;
 use uuid::Uuid;
 
 const LIMIT: usize = 512 * 1024;
-const BOM: &[u8] = b"\xef\xbb\xbf";
 const CLOSED: &str = "편집 세션이 닫혔습니다. 원격 파일을 다시 여세요.";
 const CONFLICT: &str =
     "편집을 시작한 뒤 원격 파일이 변경되었습니다. 변경 내용을 보관하거나 다른 이름으로 저장하세요.";
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum LineEnding {
-    Lf,
-    Crlf,
-}
 
 #[derive(Serialize)]
 pub struct SftpEditDocument {
     token: String,
     path: String,
     text: String,
-    line_ending: LineEnding,
+    line_ending: TextLineEnding,
     bom: bool,
     replace_supported: bool,
     production: bool,
@@ -60,7 +55,7 @@ pub(super) struct PendingEdit {
     path: SftpString,
     attrs: FileAttributes,
     digest: [u8; 32],
-    line_ending: LineEnding,
+    line_ending: TextLineEnding,
     bom: bool,
     replace_supported: bool,
 }
@@ -167,7 +162,12 @@ impl SftpManager {
             if !replacing && edit.path == destination {
                 return Err("원본과 다른 새 파일 이름을 입력하세요.".into());
             }
-            let bytes = encode_text(&input.text, edit.line_ending, edit.bom)?;
+            if input.text.len() > LIMIT {
+                return Err("편집한 파일은 512 KiB 이하여야 합니다.".into());
+            }
+            check_text(&input.text)?;
+            let bytes = encode_text(&input.text, edit.line_ending, edit.bom, LIMIT)
+                .ok_or("편집한 파일은 512 KiB 이하여야 합니다.")?;
             let files = &session.files;
             transfer.check()?;
             ensure_current_directory(files, &edit.parent).await?;
@@ -304,9 +304,9 @@ async fn read_text_file(
     Ok(bytes)
 }
 
-fn decode_text(bytes: &[u8]) -> Result<(String, LineEnding, bool)> {
-    let bom = bytes.starts_with(BOM);
-    let raw = std::str::from_utf8(bytes.strip_prefix(BOM).unwrap_or(bytes))
+fn decode_text(bytes: &[u8]) -> Result<(String, TextLineEnding, bool)> {
+    let bom = bytes.starts_with(UTF8_BOM);
+    let raw = std::str::from_utf8(bytes.strip_prefix(UTF8_BOM).unwrap_or(bytes))
         .map_err(|_| "UTF-8 텍스트 파일만 편집할 수 있습니다.")?;
     let crlf = raw.contains("\r\n");
     let normalized = raw.replace("\r\n", "\n");
@@ -323,9 +323,9 @@ fn decode_text(bytes: &[u8]) -> Result<(String, LineEnding, bool)> {
     Ok((
         normalized,
         if crlf {
-            LineEnding::Crlf
+            TextLineEnding::Crlf
         } else {
-            LineEnding::Lf
+            TextLineEnding::Lf
         },
         bom,
     ))
@@ -339,20 +339,4 @@ fn check_text(text: &str) -> Result<()> {
         return Err("UTF-8 일반 텍스트 파일만 편집할 수 있습니다.".into());
     }
     Ok(())
-}
-
-fn encode_text(text: &str, line_ending: LineEnding, bom: bool) -> Result<Vec<u8>> {
-    if text.len() > LIMIT {
-        return Err("편집한 파일은 512 KiB 이하여야 합니다.".into());
-    }
-    check_text(text)?;
-    let mut bytes = if bom { BOM.to_vec() } else { Vec::new() };
-    match line_ending {
-        LineEnding::Lf => bytes.extend(text.as_bytes()),
-        LineEnding::Crlf => bytes.extend(text.replace('\n', "\r\n").as_bytes()),
-    }
-    if bytes.len() > LIMIT {
-        return Err("편집한 파일은 512 KiB 이하여야 합니다.".into());
-    }
-    Ok(bytes)
 }

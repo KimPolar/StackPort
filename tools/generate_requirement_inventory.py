@@ -19,7 +19,7 @@ PARTIAL = {
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
-    "SP-UI-019": "연결별 SQL 초안을 메모리에 유지하고, 미저장 원격 편집의 편집기·앱 닫기 시 확인 및 저장 중 종료 보호",
+    "SP-UI-019": "연결별 SQL 초안을 메모리에 유지하고, 미저장 원격 편집의 닫기 시 확인과 새 로컬 파일 보관 및 저장 중 종료 보호",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
@@ -52,7 +52,7 @@ PARTIAL = {
     "SP-FL-008": "전송·복사·원격 이름 변경·이동에서 기존 대상 보존, 파일 크기·수정 시간 변경 감지",
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",
     "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
-    "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, BOM·LF/CRLF 유지, Ctrl+S와 저장하지 않은 변경 확인",
+    "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, BOM·LF/CRLF 유지, Ctrl+S와 미저장 변경 확인 및 로컬 초안 보관",
     "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
     "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
@@ -122,7 +122,7 @@ PARTIAL = {
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
     "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
-    "SP-AT-003": "SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 이름 저장 선택",
+    "SP-AT-003": "SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 원격 파일 또는 로컬 초안 보관",
 }
 
 items = {}
@@ -174,7 +174,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-UI-004":
                 evidence = "src/WorkspaceLayout.ts; src/WorkspaceSplit.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-019":
-                evidence = "src/main.tsx; src/SftpWorkspace.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs"
+                evidence = "src/main.tsx; src/SftpWorkspace.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id == "SP-UI-003":
                 evidence = "src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
@@ -190,7 +190,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-FL-011":
                 evidence = "crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/"
             elif requirement_id in {"SP-FL-012", "SP-FL-013", "SP-AT-002", "SP-AT-003"}:
-                evidence = "crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx"
+                evidence = "crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx"
             elif requirement_id in {"SP-FL-003", "SP-FL-024"}:
                 evidence = "crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-FL-019":

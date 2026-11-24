@@ -10,9 +10,9 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
-    TerminalManager, TerminalOutputFormat, TerminalRead,
+    TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
     WorkspaceResumeRecord, WorkspaceResumeWrite,
 };
@@ -660,6 +660,16 @@ async fn save_sftp_editor(
 }
 
 #[tauri::command]
+async fn save_local_text_draft(
+    destination: String,
+    text: String,
+    line_ending: TextLineEnding,
+    bom: bool,
+) -> Result<usize, String> {
+    worker(move || save_text_draft(&destination, &text, line_ending, bom)).await
+}
+
+#[tauri::command]
 async fn create_sftp_folder(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -786,6 +796,19 @@ async fn choose_local_browse_directory() -> Result<Option<String>, String> {
         Ok(rfd::FileDialog::new()
             .set_title("탐색할 로컬 폴더 선택")
             .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn choose_local_text_draft_path() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("로컬 초안 파일 저장")
+            .set_file_name("StackPort-remote-draft.txt")
+            .add_filter("텍스트", &["txt"])
+            .save_file()
             .map(|path| path.to_string_lossy().into_owned()))
     })
     .await
@@ -991,6 +1014,7 @@ fn main() {
             open_sftp_editor,
             discard_sftp_editor,
             save_sftp_editor,
+            save_local_text_draft,
             create_sftp_folder,
             rename_sftp_entry,
             move_sftp_entry,
@@ -1005,6 +1029,7 @@ fn main() {
             close_sftp,
             browse_local_directory,
             choose_local_browse_directory,
+            choose_local_text_draft_path,
             choose_sqlite_file,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,

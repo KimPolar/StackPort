@@ -37,6 +37,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [destinationSelection, setDestinationSelection] = useState<SftpDestinationSelection | null>(null);
   const [deleteSelection, setDeleteSelection] = useState<SftpDeleteSelection | null>(null);
   const [editorSelection, setEditorSelection] = useState<SftpEditorSelection | null>(null);
+  const [savedDraftPath, setSavedDraftPath] = useState("");
   const [nameResult, setNameResult] = useState<{ kind: keyof typeof mutationTitles; name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -57,6 +58,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       setDestinationSelection(null);
       setDeleteSelection(null);
       setEditorSelection(null);
+      setSavedDraftPath("");
       setNameResult(null);
       setRemoteRefresh(0);
     } catch (error) {
@@ -120,6 +122,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     if (!remote) return;
     setFinished(null);
     setNameResult(null);
+    setSavedDraftPath("");
     const result = invoke<SftpEditDocument>("open_sftp_editor", { id: remote.id, parent: parent.location, source: listedItemSnapshot(item) });
     setEditorSelection({
       name: item.name,
@@ -177,6 +180,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       <strong>{mutationTitles[nameResult.kind]}</strong><span>{nameResult.name}</span>
       {nameResult.auditWarning && <strong className="audit-warning">{nameResult.auditWarning}</strong>}
     </div>}
+    {savedDraftPath && <div className="success-banner files-download-result" role="status">
+      <strong>로컬 초안 저장 완료</strong><span>{savedDraftPath}</span>
+    </div>}
     <div className="files-pane-switch" role="group" aria-label="파일 창 선택">
       <button type="button" className="secondary small" aria-pressed={activePane === "local"} aria-controls="local-files"
         onClick={() => setActivePane("local")}><HardDrive size={14} aria-hidden /> 로컬 파일 보기</button>
@@ -214,7 +220,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     {remote && deleteSelection && <SftpDeleteDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       selection={deleteSelection} onClose={closeDelete} onDeleted={(path, warning) => mutationSaved("delete", path, warning)} />}
     {remote && editorSelection && <SftpEditorDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
-      selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
+      selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
+      onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }

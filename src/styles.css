@@ -257,6 +257,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }
 .sftp-editor-text { min-height: 220px; max-height: 48vh; resize: vertical; padding: 10px; border: 1px solid #dce7df; border-radius: 5px; color: #30473b; font: 13px/1.55 Consolas, monospace; }
+.sftp-editor .dialog-actions { flex-wrap: wrap; }
+.sftp-editor .form-note { overflow-wrap: anywhere; }
 .dialog.files-preview { width: min(760px, calc(100vw - 32px)); }
 .files-preview-body { padding: 0 21px 21px; }
 .files-preview-name { margin: 0; overflow-wrap: anywhere; }
