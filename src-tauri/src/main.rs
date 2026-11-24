@@ -17,6 +17,7 @@ use stackport_core::{
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
+    PostgresValuePage, PostgresValueSave, PostgresValueTarget,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -853,6 +854,16 @@ async fn postgres_page(
 }
 
 #[tauri::command]
+async fn postgres_value_page(postgres: State<'_, PostgresManager>, id: String, target: PostgresValueTarget, page: u32) -> Result<PostgresValuePage, String> {
+    postgres.value_page(&id, target, page).await
+}
+
+#[tauri::command]
+async fn save_postgres_value(postgres: State<'_, PostgresManager>, id: String, target: PostgresValueTarget, destination: String) -> Result<PostgresValueSave, String> {
+    postgres.save_value(&id, target, destination).await
+}
+
+#[tauri::command]
 async fn postgres_structure(
     postgres: State<'_, PostgresManager>, id: String, object: i64, section: PostgresStructureSection, page: u32,
 ) -> Result<PostgresStructure, String> {
@@ -1584,6 +1595,8 @@ fn main() {
             postgres_objects,
             search_postgres_objects,
             postgres_page,
+            postgres_value_page,
+            save_postgres_value,
             postgres_structure,
             begin_postgres_edit,
             preview_postgres_edit,

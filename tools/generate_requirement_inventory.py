@@ -97,11 +97,13 @@ PARTIAL = {
     "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 객체의 SELECT·UPDATE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
     "SP-DT-001": "SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",
+    "SP-DT-002": "PostgreSQL 일반 힙 테이블 그리드에서 긴 값의 원문 텍스트·bytea HEX를 별도 창에서 페이지 조회",
     "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀과 PostgreSQL 한 행의 최대 16개 셀 수정",
     "SP-DT-004": "SQLite 단일 셀과 PostgreSQL 한 행의 여러 셀 미리보기·변경 강조·미적용 변경 확인과 취소",
     "SP-DT-005": "SQLite·PostgreSQL 기본 키 검증과 키 없는 테이블 편집 차단",
     "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자 구분, PostgreSQL 서버 타입 검증과 기본값 적용",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집, PostgreSQL의 숫자·날짜·UUID·JSON 등 지원 타입 바인딩",
+    "SP-DT-008": "PostgreSQL 일반 힙 테이블의 긴 텍스트·JSON·XML과 bytea 부분 조회 및 UTF-8·바이너리 새 파일 저장",
     "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
     "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
@@ -209,6 +211,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-023", "SP-DB-024", "SP-DB-025"}:
                 evidence = "crates/stackport-core/src/postgres/monitor.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresServerMonitor.tsx; tests/postgres-smoke.cjs"
+            elif requirement_id in {"SP-DT-002", "SP-DT-008"}:
+                evidence = "crates/stackport-core/src/postgres/value.rs; crates/stackport-core/src/local_file.rs; src/PostgresValueDialog.tsx; tests/postgres-smoke.cjs"
             elif requirement_id == "SP-AT-006":
                 evidence = "crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:

@@ -24,6 +24,7 @@ pub use postgres::PostgresDisconnect;
 pub use postgres::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use postgres::{PostgresSearchInput, PostgresSearchPage};
 pub use postgres::{PostgresStatementStats, PostgresStatementStatsInput};
+pub use postgres::{PostgresValuePage, PostgresValueSave, PostgresValueTarget};
 mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;

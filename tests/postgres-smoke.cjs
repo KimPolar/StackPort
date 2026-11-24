@@ -13,6 +13,8 @@ const bin = process.env.STACKPORT_POSTGRES_BIN;
 const openssl = process.env.STACKPORT_TEST_OPENSSL || 'openssl';
 const password = 'fixture-reader-password';
 const otherPassword = 'fixture-unrelated-role-password';
+const binaryCell = Buffer.from('007fff5c00a1'.repeat(15_000) + 'cafe', 'hex');
+const unicodeCell = '한😀'.repeat(36_000) + '\r\n끝';
 if (!root || !bin) throw new Error('Set STACKPORT_TEST_ROOT and STACKPORT_POSTGRES_BIN.');
 
 const readStatementStats = (command, id, options = {}) => command('postgres_statement_stats', { id,
@@ -68,6 +70,14 @@ async function startPostgres(preloadStats = true) {
     'CREATE TABLE report.filtered_dates (id integer PRIMARY KEY, "due date" date);',
     "INSERT INTO report.filtered_dates VALUES (1, NULL), (2, '2025-12-31'), (3, '2026-01-02'), (4, '2026-01-31');",
     'GRANT SELECT ON report.filtered_dates TO fixture_reader;',
+    'CREATE TABLE report.raw_cells (id integer, note text, payload bytea);',
+    "INSERT INTO report.raw_cells VALUES (1, repeat('한😀', 36000) || chr(13) || chr(10) || '끝', decode(repeat('007fff5c00a1',15000) || 'cafe','hex'))," +
+      "(2, '', decode('','hex')), (3, NULL, NULL), (4, 'private source cell', decode('0100','hex'));",
+    'ALTER TABLE report.raw_cells ENABLE ROW LEVEL SECURITY;',
+    'GRANT SELECT ON report.raw_cells TO fixture_reader, fixture_unrelated;',
+    'GRANT USAGE ON SCHEMA report TO fixture_unrelated;',
+    'CREATE POLICY raw_reader_cells ON report.raw_cells FOR SELECT TO fixture_reader USING (id < 4);',
+    'CREATE POLICY raw_other_cell ON report.raw_cells FOR SELECT TO fixture_unrelated USING (id = 4);',
     'CREATE TABLE report.denied (id integer);',
     "COMMENT ON TABLE report.denied IS 'catalog hidden marker';",
     'CREATE TABLE report.write_probe (id integer);',
@@ -615,6 +625,7 @@ async function verify(browser, fixture, gateway, jump) {
   const deadline = await query('SELECT pg_sleep(12)');
   assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
   const unrelated = await alternate('Unrelated monitor role', { username: 'fixture_unrelated' });
+  await verifyCellFiles({ command, open, close, session, unrelated, findObject });
   await verifyServerMonitor({ command, open, close, unrelated });
   await verifyStatementStats({ command, query, open, close, session, unrelated });
   await verifyGridWrites({ command, open, close, profile, session, findObject });
@@ -679,6 +690,27 @@ async function verify(browser, fixture, gateway, jump) {
   await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: /restricted/ }).isEnabled(), false);
   await page.getByRole('button', { name: 'report', exact: true }).click();
+  await page.getByRole('button', { name: /raw_cells 테이블/ }).click();
+  const originalDialog = page.getByRole('dialog', { name: 'PostgreSQL 셀 원본', exact: true });
+  const rawButton = data.getByRole('button', { name: '1행 payload 원본 열기', exact: true });
+  await rawButton.click();
+  const hex = originalDialog.getByLabel('셀 HEX', { exact: true });
+  await hex.waitFor();
+  assert.match(await hex.textContent(), /00000000  00 7F FF 5C/);
+  await originalDialog.getByRole('button', { name: '다음 셀 원본 페이지', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="셀 HEX"]')?.textContent?.startsWith('00001000'));
+  const cellOutput = path.join(root, 'postgres-ui-cell.bin');
+  await originalDialog.getByLabel('새 파일 경로', { exact: true }).fill(cellOutput);
+  await originalDialog.getByRole('button', { name: '전체 값 저장', exact: true }).click();
+  await originalDialog.getByText(/전체 값 저장 완료/).waitFor();
+  assert.deepEqual(fs.readFileSync(cellOutput), binaryCell);
+  await originalDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await originalDialog.waitFor({ state: 'detached' });
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '1행 payload 원본 열기');
+  await data.getByRole('button', { name: '1행 note 원본 열기', exact: true }).click();
+  await originalDialog.getByLabel('셀 원본 텍스트', { exact: true }).waitFor();
+  await originalDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await originalDialog.waitFor({ state: 'detached' });
   const catalogSearch = page.getByRole('dialog', { name: 'PostgreSQL 객체 검색', exact: true });
   await page.getByRole('button', { name: '객체 검색', exact: true }).click();
   await catalogSearch.getByLabel('검색어').fill('meta_child');
@@ -1313,6 +1345,73 @@ async function verifyStatsWithoutPreload(browser, fixture) {
   } finally { await command('close_postgres', { id: workspace.id }); }
 }
 
+async function verifyCellFiles({ command, open, close, session, unrelated, findObject }) {
+  const id = session.id;
+  const object = findObject('raw_cells');
+  const grid = (id, object) => command('postgres_page', { id, object, rowPage: 0, columnPage: 0 });
+  const read = (target, page = 0) => command('postgres_value_page', { id, target, page });
+  const save = (target, destination) => command('save_postgres_value', { id, target, destination });
+  const page = await grid(id, object);
+  assert.equal(page.primary_key_order, false);
+  assert.equal(page.row_stamps, null);
+  assert.deepEqual(page.columns.map(column => column.value_kind), [null, 'text', 'binary']);
+  const first = page.rows.findIndex(row => row[0].value === '1');
+  assert.equal(page.rows[first][2].value, '\\x' + binaryCell.subarray(0, 255).toString('hex'));
+  assert.equal(page.rows[first][2].truncated, true);
+  const row = page.value_rows[first];
+  const text = { object, row, column: 'note' };
+  const binary = { object, row, column: 'payload' };
+  const firstText = await read(text);
+  assert.equal(firstText.kind, 'text');
+  assert.equal(firstText.text, '한😀'.repeat(2048));
+  assert.equal(firstText.total_units, 72_003);
+  assert.equal(firstText.has_next, true);
+  assert.equal((await read(text, 17)).text, '한😀'.repeat(1184) + '\r\n끝');
+  assert.equal((await read(text, 17)).has_next, false);
+  await assert.rejects(read(text, 18), /페이지 범위/);
+  const last = Math.floor((binaryCell.length - 1) / 4096);
+  const lastBinary = await read(binary, last);
+  assert.equal(lastBinary.total_units, binaryCell.length);
+  assert.equal(lastBinary.offset, last * 4096);
+  assert.equal(lastBinary.has_next, false);
+  assert.deepEqual(Buffer.from(lastBinary.bytes), binaryCell.subarray(last * 4096));
+  const empty = { object, column: 'payload', row: page.value_rows[page.rows.findIndex(row => row[0].value === '2')] };
+  assert.deepEqual(await read(empty), { kind: 'binary', offset: 0, total_units: 0, has_next: false, bytes: [] });
+  const nullCell = { object, column: 'note', row: page.value_rows[page.rows.findIndex(row => row[0].value === '3')] };
+  await assert.rejects(read(nullCell), /NULL/);
+  await assert.rejects(read({ ...text, column: 'id' }), /형식을 지원하지/);
+  await assert.rejects(read({ ...text, object: findObject('denied') }), /SELECT 권한/);
+  assert.equal((await grid(id, findObject('meta_view'))).value_rows, null);
+
+  const other = await open(unrelated, otherPassword);
+  try {
+    const hidden = await grid(other.id, object);
+    assert.deepEqual(hidden.rows.map(row => row[0].value), ['4']);
+    const restricted = { object, column: 'note', row: hidden.value_rows[0] };
+    await assert.rejects(read(restricted), /조회 권한/);
+    const hiddenFile = path.join(root, 'postgres-hidden-cell.txt');
+    await assert.rejects(save(restricted, hiddenFile), /조회 권한/);
+    assert.equal(fs.existsSync(hiddenFile), false);
+  } finally { await close(other.id); }
+
+  const textPath = path.join(root, 'postgres-native-cell.txt');
+  const binaryPath = path.join(root, 'postgres-native-cell.bin');
+  const emptyPath = path.join(root, 'postgres-empty-cell.bin');
+  assert.equal((await save(text, textPath)).size_bytes, Buffer.byteLength(unicodeCell));
+  assert.deepEqual(fs.readFileSync(textPath), Buffer.from(unicodeCell));
+  assert.equal((await save(binary, binaryPath)).size_bytes, binaryCell.length);
+  assert.deepEqual(fs.readFileSync(binaryPath), binaryCell);
+  assert.equal((await save(empty, emptyPath)).size_bytes, 0);
+  assert.equal(fs.statSync(emptyPath).size, 0);
+  await assert.rejects(save(binary, textPath), /같은 이름/);
+  assert.deepEqual(fs.readFileSync(textPath), Buffer.from(unicodeCell));
+  assert.ok(!fs.readdirSync(root).some(name => name.startsWith('.stackport-postgres-value-')));
+  const audits = (await command('list_audit_events', { before: null })).events.filter(event => event.operation === 'postgres.export.cell');
+  assert.equal(audits.length, 3);
+  assert.ok(audits.every(event => event.affected_count === 1 && event.object_name === null));
+  assert.ok(!JSON.stringify(audits).includes(textPath));
+}
+
 async function verifyGridWrites({ command, open, close, profile, session, findObject }) {
   const object = findObject('edit demo');
   const page = (id, target = object) => command('postgres_page', { id, object: target, rowPage: 0, columnPage: 0 });
@@ -1355,6 +1454,11 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     assert.equal((await apply(id, amount.token, normalized.approval)).actual.value, '9007199254740993.125');
     await assert.rejects(apply(id, amount.token, normalized.approval), /만료/);
     await assert.rejects(begin(id, view.row_stamps[0], 'public note'), /행이 변경/);
+    const staleValue = { object, column: 'public note', row: view.value_rows[0] };
+    await assert.rejects(command('postgres_value_page', { id, target: staleValue, page: 0 }), /행이 변경/);
+    const staleFile = path.join(root, 'postgres-stale-cell.txt');
+    await assert.rejects(command('save_postgres_value', { id, target: staleValue, destination: staleFile }), /행이 변경/);
+    assert.equal(fs.existsSync(staleFile), false);
 
     const now = await page(id);
     const bad = await begin(id, now.row_stamps[0], 'amount');
@@ -1440,7 +1544,7 @@ async function main() {
     await verify(browser, fixture, gateway, jump);
     withoutPreload = await startPostgres(false);
     await verifyStatsWithoutPreload(browser, withoutPreload);
-    console.log('Windows PostgreSQL E2E passed (statement stats, server activity, object search, grid editing, TLS and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (large cells, statement stats, object search, grid editing, TLS and SSH jump recovery).');
   } finally {
     await browser?.close();
     withoutPreload?.close();

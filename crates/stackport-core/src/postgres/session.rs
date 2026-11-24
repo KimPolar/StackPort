@@ -10,11 +10,15 @@ use super::{
     parameters::Value,
     sql, sql_range,
     statement_stats::{self, PostgresStatementStats, PostgresStatementStatsInput},
+    value::{
+        self, PostgresValuePage, PostgresValueRow, PostgresValueSave, PostgresValueTarget,
+        ValueKind,
+    },
     PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
-    quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
-    LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
+    insert_audit, quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
+    AuditRecord, LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
 };
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
@@ -122,6 +126,7 @@ struct Column {
     not_null: bool,
     primary_key_position: Option<i32>,
     editable: bool,
+    value_kind: Option<ValueKind>,
 }
 
 #[derive(Serialize)]
@@ -145,6 +150,7 @@ pub struct PostgresPage {
     source: String,
     parameter_types: Vec<u32>,
     row_stamps: Option<Vec<Option<PostgresRowStamp>>>,
+    value_rows: Option<Vec<PostgresValueRow>>,
     edit_reason: Option<&'static str>,
 }
 
@@ -553,6 +559,80 @@ impl PostgresManager {
         .map_err(|_| "데이터 페이지를 읽는 시간이 초과되었습니다.")?
     }
 
+    pub async fn value_page(
+        &self,
+        id: &str,
+        target: PostgresValueTarget,
+        page: u32,
+    ) -> Result<PostgresValuePage> {
+        let session = self.session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .start()
+                .await
+                .map_err(pg_error)?;
+            let value = value::preview(&tx, &target, page).await?;
+            tx.commit().await.map_err(pg_error)?;
+            Ok(value)
+        })
+        .await
+        .map_err(|_| "셀 값을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn save_value(
+        &self,
+        id: &str,
+        target: PostgresValueTarget,
+        destination: String,
+    ) -> Result<PostgresValueSave> {
+        let session = self.session(id)?;
+        let (file, size_bytes) = timeout(EXPORT_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .start()
+                .await
+                .map_err(pg_error)?;
+            let staged = value::stage(&tx, &target, destination).await?;
+            tx.commit().await.map_err(pg_error)?;
+            Ok::<_, String>(staged)
+        })
+        .await
+        .map_err(|_| "셀 값을 저장하는 시간이 초과되었습니다.")??;
+        let store = self.store.clone();
+        let profile = session.profile.clone();
+        tokio::task::spawn_blocking(move || {
+            file.publish()?;
+            let correlation = Uuid::new_v4().to_string();
+            let audit = AuditRecord {
+                correlation_id: &correlation,
+                operation: "postgres.export.cell",
+                project_id: Some(&profile.project_id),
+                profile_id: Some(&profile.id),
+                environment: Some(&profile.settings.environment),
+                object_name: None,
+                outcome: "succeeded",
+                affected_count: Some(1),
+            };
+            let audit_warning = store
+                .connect()
+                .and_then(|db| insert_audit(&db, audit))
+                .is_err();
+            Ok(PostgresValueSave {
+                size_bytes,
+                audit_warning,
+            })
+        })
+        .await
+        .map_err(|_| "셀 파일 저장 결과를 확인할 수 없습니다.")?
+    }
+
     pub async fn execute_sql(
         &self,
         id: &str,
@@ -857,7 +937,7 @@ async fn browse(
         (None, None)
     };
     let details = tx.query(
-        "SELECT a.attname::text, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, pk.position
+        "SELECT a.attname::text, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, pk.position, a.atttypid::bigint
          FROM pg_catalog.pg_attribute a
          LEFT JOIN LATERAL (
            SELECT k.ordinality::integer AS position FROM pg_catalog.pg_index i
@@ -878,6 +958,7 @@ async fn browse(
                 data_type: field(row, 1)?,
                 not_null: field(row, 2)?,
                 primary_key_position: field(row, 3)?,
+                value_kind: ValueKind::for_type(field(row, 4)?),
             })
         })
         .collect::<Result<_>>()?;
@@ -922,15 +1003,21 @@ async fn browse(
         columns
             .iter()
             .map(|column| {
-                format!(
-                    "pg_catalog.left({table}.{}::pg_catalog.text, {})",
-                    quote_identifier(&column.name),
-                    VALUE_LENGTH + 1
+                let field = format!("{table}.{}", quote_identifier(&column.name));
+                column.value_kind.map_or_else(
+                    || value::grid_text(&field),
+                    |kind| kind.grid_preview(&field),
                 )
             })
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let include_value_rows = columns.iter().any(|column| column.value_kind.is_some())
+        && value::supports_row(&tx, object, kind).await?;
+    if include_value_rows {
+        projection.push_str(", ");
+        projection.push_str(PostgresValueRow::PROJECTION);
+    }
     if let Some(table) = &edit_table {
         projection.push_str(", ");
         projection.push_str(&table.row_projection());
@@ -957,12 +1044,29 @@ async fn browse(
     let parameter_types = statement.params().iter().map(|ty| ty.oid()).collect();
     let has_next = result.len() > ROW_SIZE;
     let rows = preview_rows(&result, columns.len())?;
+    let value_rows = if include_value_rows {
+        Some(
+            result
+                .iter()
+                .take(ROW_SIZE)
+                .map(|row| PostgresValueRow::from_row(row, columns.len()))
+                .collect::<Result<_>>()?,
+        )
+    } else {
+        None
+    };
+    let edit_offset = columns.len()
+        + if include_value_rows {
+            PostgresValueRow::FIELD_COUNT
+        } else {
+            0
+        };
     let row_stamps = if let Some(table) = edit_table {
         Some(
             result
                 .iter()
                 .take(ROW_SIZE)
-                .map(|row| table.stamp(row, columns.len()))
+                .map(|row| table.stamp(row, edit_offset))
                 .collect::<Result<_>>()?,
         )
     } else {
@@ -983,6 +1087,7 @@ async fn browse(
         source: format!("SELECT *{from}"),
         parameter_types,
         row_stamps,
+        value_rows,
         edit_reason,
     })
 }
