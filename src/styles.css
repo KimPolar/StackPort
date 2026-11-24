@@ -136,7 +136,21 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .editor-footer { min-height: 32px; padding: 5px 12px; border-top: 1px solid #f0f3f1; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center; color: #667f73; font-size: 11px; }
 .sql-file-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .sql-file-state { min-width: 0; overflow-wrap: anywhere; }
+.sql-tab-strip { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px 0; background: #f1f6f3; border-bottom: 1px solid #e0e9e4; }
+.sql-tabs { display: flex; gap: 3px; min-width: 0; overflow-x: auto; }
+.sql-tab { flex: 0 0 auto; display: flex; align-items: center; max-width: 220px; color: #526a5f; border: 1px solid transparent; border-radius: 5px 5px 0 0; }
+.sql-tab[data-active="true"] { color: #155e4e; background: #fff; border-color: #dbe5df; border-bottom-color: #fff; }
+.sql-tab [role="tab"] { min-width: 0; min-height: 32px; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: inherit; font-size: 12px; }
+.sql-tab [role="tab"] svg, .sql-tab-dirty { flex-shrink: 0; }
+.sql-tab [role="tab"] span:first-of-type { white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.sql-tab [role="tab"]:focus-visible, .sql-tab-close:focus-visible { outline-offset: -2px; }
+.sql-tab-dirty { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.sql-tab-close { flex-shrink: 0; display: grid; place-items: center; width: 25px; height: 25px; margin-inline-end: 3px; border: 0; border-radius: 4px; background: transparent; color: inherit; }
+.sql-tab-close:hover { background: #e3eee7; }
+.sql-tab-new { flex-shrink: 0; margin-bottom: 4px; white-space: nowrap; }
+.sql-tabs-empty { padding: 18px 12px; margin: 0; color: #526a5f; text-align: center; font-size: 12px; }
 .workspace-exit-body { padding: 0 21px 21px; }
+.workspace-exit-body .dialog-actions { flex-wrap: wrap; }
 .workspace-exit-drafts { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .workspace-exit-drafts li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid #edf1ee; }
 .workspace-exit-drafts li div { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }

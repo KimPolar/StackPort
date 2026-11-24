@@ -50,6 +50,9 @@ async function writeLayout(page, invoke) {
   await projectSelect.selectOption(project.id);
   await page.getByRole('button', { name: new RegExp(profileName) }).click();
   await page.getByLabel('SQL 쿼리').fill(draft);
+  await page.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
+  await page.getByLabel('SQL 쿼리').fill(discardedDraft + ' -- same connection');
+  await page.getByRole('tab', { name: 'SQL 1', exact: true }).click();
   await page.getByRole('button', { name: '화면 분할', exact: true }).click();
   await page.getByText('배치 설정', { exact: true }).click();
   await page.getByRole('button', { name: '2×2 배치', exact: true }).click();
@@ -75,15 +78,15 @@ async function writeLayout(page, invoke) {
   const toClose = () => requestClose(process.env.STACKPORT_TEST_WINDOW_PID);
   const pending = exit.getByRole('list', { name: '미저장 SQL 초안' });
   toClose();
-  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 2개', { exact: true }).waitFor();
+  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 3개', { exact: true }).waitFor();
   await exit.getByText(/열린 터미널 1개/).waitFor();
-  await pending.getByText(secondProfileName, { exact: true }).waitFor();
+  await pending.getByText(`${secondProjectName} · ${secondProfileName}`, { exact: true }).waitFor();
   await exit.getByRole('button', { name: '계속 작업', exact: true }).click();
   await exit.waitFor({ state: 'detached' });
   assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
 
   toClose();
-  await pending.getByRole('button', { name: `${projectName} · ${profileName} SQL 파일로 저장`, exact: true }).click();
+  await pending.getByRole('button', { name: `${projectName} · ${profileName} · SQL 1 SQL 파일로 저장`, exact: true }).click();
   const occupied = path.join(path.dirname(savedFile()), '기존 파일.sql');
   fs.writeFileSync(occupied, 'SELECT 1;');
   const filePath = fileDialog.getByLabel('새 SQL 파일 경로', { exact: true });
@@ -96,8 +99,9 @@ async function writeLayout(page, invoke) {
   await save.click();
   await fileDialog.waitFor({ state: 'detached' });
   assert.equal(fs.readFileSync(savedFile(), 'utf8'), draft);
-  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 1개', { exact: true }).waitFor();
-  await pending.getByText(secondProfileName, { exact: true }).waitFor();
+  await exit.getByRole('status').getByText('저장하지 않은 SQL 초안 2개', { exact: true }).waitFor();
+  await pending.getByText('SQL 2', { exact: true }).waitFor();
+  await pending.getByText(`${secondProjectName} · ${secondProfileName}`, { exact: true }).waitFor();
   const closed = page.waitForEvent('close');
   await exit.getByRole('button', { name: '남은 초안 버리고 종료', exact: true }).click();
   await closed;
@@ -125,7 +129,7 @@ async function readLayout(page, invoke) {
   await page.getByRole('button', { name: 'SQL 파일 열기', exact: true }).click();
   const fileDialog = page.getByRole('dialog', { name: 'SQL 파일 열기', exact: true });
   await fileDialog.getByLabel('SQL 파일 경로', { exact: true }).fill(savedFile());
-  await fileDialog.getByRole('button', { name: '편집기에서 열기', exact: true }).click();
+  await fileDialog.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
   await fileDialog.waitFor({ state: 'detached' });
   assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
   await project.selectOption({ label: secondProjectName });

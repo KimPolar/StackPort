@@ -1,29 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
+import type { SqlDocument } from "./SqlTabs";
 
-export type SqlDocument = { text: string; line_ending: "lf" | "crlf"; bom: boolean };
-export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom: false };
-
-export type SqlDraft = {
-  profileId: string;
-  projectId: string;
-  projectName: string;
-  profileName: string;
-  document: SqlDocument;
-  savedText: string;
-  savedPath: string;
-};
-
-export function isSqlDraftDirty(draft: SqlDraft) {
-  return draft.document.text !== draft.savedText;
-}
-
-export function SqlFileDialog({ mode, target, document, replacesDraft, onClose, onBusy, onDone }: {
+export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone }: {
   mode: "open" | "save";
   target: string;
   document: SqlDocument;
-  replacesDraft: boolean;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
   onDone: (document: SqlDocument, path: string) => void;
@@ -90,13 +73,12 @@ export function SqlFileDialog({ mode, target, document, replacesDraft, onClose, 
         </div>
       </div>
       <p className="form-note">{save ? "선택한 경로에 새 UTF-8 .sql 파일을 저장합니다."
-        : replacesDraft ? "열면 이 연결의 미저장 SQL 초안이 파일 내용으로 바뀝니다."
-          : "선택한 UTF-8 .sql 파일의 내용을 편집기에 표시합니다."}</p>
+        : "선택한 UTF-8 .sql 파일을 새 탭에서 엽니다."}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
         <button type="submit" className="primary" disabled={busy || !path.trim()}>
-          {busy ? "처리 중…" : save ? "새 파일에 저장" : replacesDraft ? "열고 초안 교체" : "편집기에서 열기"}
+          {busy ? "처리 중…" : save ? "새 파일에 저장" : "새 탭에서 열기"}
         </button>
       </div>
     </form>

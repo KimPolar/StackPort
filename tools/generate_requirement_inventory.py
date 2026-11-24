@@ -11,7 +11,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제",
     "SP-UI-002": "도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH 연결 탐색",
-    "SP-UI-003": "Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
+    "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결·선택한 SQLite 연결의 테이블과 뷰 검색",
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
@@ -19,7 +19,7 @@ PARTIAL = {
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
-    "SP-UI-019": "앱 닫기 시 프로젝트·연결별 SQL 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
+    "SP-UI-019": "SQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
@@ -84,7 +84,7 @@ PARTIAL = {
     "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
     "SP-DT-022": "SQLite 단일 셀 트랜잭션·롤백과 저장 값 검증",
     "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
-    "SP-SQ-001": "접을 수 있는 단일 SQL 편집기와 SQLite 객체 탐색 중 유지되는 연결별 메모리 초안",
+    "SP-SQ-001": "접을 수 있는 연결별 다중 SQL 탭, 새 탭에서 파일 열기와 탭별 메모리 초안 및 닫기 확인",
     "SP-SQ-007": "전체 입력 또는 선택 영역의 SQLite 읽기 전용 문장 하나 실행, 선택 영역 실행 계획과 실제 실행 범위 내보내기",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
@@ -176,9 +176,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-UI-004":
                 evidence = "src/WorkspaceLayout.ts; src/WorkspaceSplit.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-019":
-                evidence = "src/WorkspaceExitDialog.tsx; src/main.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/workspace-resume-smoke.cjs"
+                evidence = "src/WorkspaceExitDialog.tsx; src/SqlTabs.tsx; src/main.tsx; src/SftpEditorDialog.tsx; tests/sftp-smoke.cjs; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id == "SP-UI-003":
-                evidence = "src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs"
+                evidence = "src/SqlTabs.tsx; tests/sql-file-smoke.cjs; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
                 evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
             elif requirement_id == "SP-NW-001":
@@ -207,6 +207,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id == "SP-SQ-001":
+                evidence = "src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id in {"SP-SQ-018", "SP-SQ-025"}:
                 evidence = "crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-007":

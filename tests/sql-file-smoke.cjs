@@ -29,6 +29,8 @@ async function main() {
     const dev = page.getByRole('button', { name: /개발 DB DEV/ });
     const prod = page.getByRole('button', { name: /운영 DB PROD/ });
     const editor = page.getByLabel('SQL 쿼리');
+    const sqlTabs = page.getByRole('tablist', { name: 'SQL 문서', exact: true });
+    const initialTab = sqlTabs.getByRole('tab', { name: 'SQL 1', exact: true });
     const open = page.getByRole('button', { name: 'SQL 파일 열기', exact: true });
     const inputDialog = page.getByRole('dialog', { name: 'SQL 파일 열기', exact: true });
     const saveDialog = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
@@ -37,19 +39,25 @@ async function main() {
     await editor.fill("SELECT '기존 초안';");
     await open.click();
     await inputDialog.getByLabel('SQL 파일 경로').fill(invalid);
-    const replace = inputDialog.getByRole('button', { name: '열고 초안 교체', exact: true });
-    await replace.click();
+    const openInTab = inputDialog.getByRole('button', { name: '새 탭에서 열기', exact: true });
+    await openInTab.click();
     await inputDialog.getByRole('alert').getByText(/UTF-8 SQL/).waitFor();
     await inputDialog.getByRole('button', { name: '취소', exact: true }).click();
     assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
 
     await open.click();
     await inputDialog.getByLabel('SQL 파일 경로').fill(source);
-    await replace.click();
+    await openInTab.click();
     await inputDialog.waitFor({ state: 'detached' });
     assert.equal(await editor.inputValue(), "SELECT '한글';\n");
     await page.getByText('아직 조회 결과가 없습니다', { exact: true }).waitFor();
-    await page.getByRole('status').getByText('원본 쿼리.sql', { exact: true }).waitFor();
+    const importedTab = sqlTabs.getByRole('tab', { name: '원본 쿼리.sql', exact: true });
+    assert.equal(await importedTab.getAttribute('aria-selected'), 'true');
+    await importedTab.press('ArrowLeft');
+    assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
+    assert.equal(await initialTab.getAttribute('aria-selected'), 'true');
+    await initialTab.press('ArrowRight');
+    assert.equal(await editor.inputValue(), "SELECT '한글';\n");
     await editor.fill("SELECT '저장할 쿼리';\n");
     await prod.click();
     assert.equal(await editor.inputValue(), '');
@@ -64,7 +72,9 @@ async function main() {
     await destination.fill(copy);
     await save.click();
     await saveDialog.waitFor({ state: 'detached' });
-    await page.getByRole('status').getByText('새 쿼리.sql', { exact: true }).waitFor();
+    const copiedTab = sqlTabs.getByRole('tab', { name: '새 쿼리.sql', exact: true });
+    assert.equal(await copiedTab.getAttribute('aria-selected'), 'true');
+    await page.getByRole('status').getByText('파일과 동일', { exact: true }).waitFor();
     assert.equal(fs.readFileSync(source, 'utf8'), raw);
     assert.equal(fs.readFileSync(copy, 'utf8'), "\uFEFFSELECT '저장할 쿼리';\r\n");
     await page.getByRole('button', { name: '쿼리 실행', exact: true }).click();
@@ -94,8 +104,41 @@ async function main() {
     assert.deepEqual(exported.rows, [['사용자 2']]);
     await editor.press('End');
     await page.getByRole('button', { name: '쿼리 실행', exact: true }).waitFor();
+
+    const pendingClose = page.getByRole('alertdialog', { name: 'SQL 탭 닫기', exact: true });
+    const closingText = await editor.inputValue();
+    await copiedTab.press('Delete');
+    await pendingClose.getByRole('button', { name: '계속 편집', exact: true }).click();
+    assert.equal(await editor.inputValue(), closingText);
+    await sqlTabs.getByRole('button', { name: '새 쿼리.sql 탭 닫기', exact: true }).click();
+    await pendingClose.getByRole('button', { name: '파일로 저장 후 닫기', exact: true }).click();
+    await destination.fill(copy);
+    await save.click();
+    await saveDialog.getByRole('alert').getByText(/같은 이름의 파일/).waitFor();
+    assert.equal(await copiedTab.count(), 1);
+    const recovery = path.join(root, '닫기 전에 저장한 쿼리.sql');
+    await destination.fill(recovery);
+    await save.click();
+    await pendingClose.waitFor({ state: 'detached' });
+    assert.equal(fs.readFileSync(recovery, 'utf8'), '\uFEFF' + closingText.replace(/\n/g, '\r\n'));
+    assert.equal(await copiedTab.count(), 0);
+    assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
+
+    const add = page.getByRole('button', { name: '새 SQL 탭', exact: true });
+    await add.click();
+    await editor.fill("SELECT '버릴 초안';");
+    const extra = sqlTabs.getByRole('tab', { name: 'SQL 3', exact: true });
+    await extra.press('Delete');
+    await pendingClose.getByRole('button', { name: '변경 버리고 닫기', exact: true }).click();
+    assert.equal(await extra.count(), 0);
+    assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
+    await initialTab.press('Delete');
+    await pendingClose.getByRole('button', { name: '변경 버리고 닫기', exact: true }).click();
+    await page.getByText('열린 SQL 탭이 없습니다.', { exact: true }).waitFor();
+    await add.click();
+    assert.equal(await editor.inputValue(), '');
     assert.deepEqual(errors, []);
-    console.log('SQL open, draft protection, copy format, and selection plan, execution and export passed.');
+    console.log('SQL tabs, independent documents, close recovery, selection plan, query and export passed.');
   } finally {
     await browser.close();
   }

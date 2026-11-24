@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { FileDown, X } from "lucide-react";
-import type { SqlDraft } from "./SqlFileDialog";
+import { sqlTabTitle, type SqlDraft } from "./SqlTabs";
 
 export function WorkspaceExitDialog({ drafts, terminals, rdpClients, busy, error, onSave, onClose, onExit }: {
   drafts: SqlDraft[];
@@ -24,9 +24,9 @@ export function WorkspaceExitDialog({ drafts, terminals, rdpClients, busy, error
     <div className="workspace-exit-body" aria-busy={busy}>
       <p className="confirm-copy" role="status">{drafts.length ? `저장하지 않은 SQL 초안 ${drafts.length}개` : "SQL 초안 저장 완료"}</p>
       {drafts.length > 0 && <ul aria-label="미저장 SQL 초안" className="workspace-exit-drafts">
-        {drafts.map(draft => <li key={draft.profileId}>
-          <div><strong>{draft.profileName}</strong><span>{draft.projectName}</span></div>
-          <button type="button" className="secondary small" disabled={busy} aria-label={`${draft.projectName} · ${draft.profileName} SQL 파일로 저장`}
+        {drafts.map(draft => <li key={draft.id}>
+          <div><strong>{sqlTabTitle(draft)}</strong><span>{draft.projectName} · {draft.profileName}</span></div>
+          <button type="button" className="secondary small" disabled={busy} aria-label={`${draft.projectName} · ${draft.profileName} · ${sqlTabTitle(draft)} SQL 파일로 저장`}
             onClick={() => onSave(draft)}><FileDown size={14} aria-hidden /> 저장</button>
         </li>)}
       </ul>}
