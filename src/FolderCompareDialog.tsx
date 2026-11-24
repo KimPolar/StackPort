@@ -16,6 +16,9 @@ type Row = { name: string; local: Entry[]; remote: Entry[]; relation: Relation; 
 type Visible = "all" | "issues" | "local" | "remote";
 export type FolderPair = { id: string; target: string; local: DirectoryLocation; remote: DirectoryLocation };
 type Comparison = { local: Directory; remote: Directory } | { errors: string[] };
+type FileSnapshot = { location: string; size: string | null; modified: number | null };
+type Content = { matches: boolean; local_sha256: string; remote_sha256: string };
+type ContentResult = Content | { error: string };
 
 export async function loadFolderComparison(pair: FolderPair): Promise<Comparison> {
   const [local, remote] = await Promise.allSettled([
@@ -65,6 +68,12 @@ function compareFolders(local: Directory, remote: Directory): Row[] {
     .sort((left, right) => names.compare(left.name, right.name));
 }
 
+function fileSnapshot(entries: Entry[]): FileSnapshot | null {
+  const [entry] = entries;
+  return entries.length === 1 && entry.kind === "file" && !entry.name_is_lossy && entry.location
+    ? { location: entry.location, size: entry.size, modified: entry.modified } : null;
+}
+
 function Metadata({ entries }: { entries: Entry[] }) {
   if (!entries.length) return <td>—</td>;
   if (entries.length > 1) return <td>{numbers.format(entries.length)}개 항목</td>;
@@ -80,6 +89,9 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   const [pending, setPending] = useState(initial);
   const [result, setResult] = useState<Comparison | null>(null);
   const [visible, setVisible] = useState<Visible>("issues");
+  const [content, setContent] = useState(new Map<string, ContentResult>());
+  const [hashing, setHashing] = useState<string | null>(null);
+  const hashPending = useRef(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
     let live = true;
@@ -89,7 +101,33 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
 
   const folders = result && "local" in result ? result : null;
   const rows = useMemo(() => folders ? compareFolders(folders.local, folders.remote) : [], [folders]);
-  const shown = rows.filter(row => visible === "all" || (visible === "issues" ? row.relation !== "same" && row.relation !== "folder" : row.relation === visible));
+  const shown = rows.filter(row => {
+    if (visible === "all") return true;
+    if (visible !== "issues") return row.relation === visible;
+    const checked = content.get(row.name);
+    return (row.relation !== "same" && row.relation !== "folder") || hashing === row.name
+      || (checked !== undefined && ("error" in checked || !checked.matches));
+  });
+
+  async function compareFile(name: string, local: FileSnapshot, remote: FileSnapshot) {
+    if (hashPending.current) return;
+    hashPending.current = true;
+    setHashing(name);
+    setContent(current => {
+      const next = new Map(current);
+      next.delete(name);
+      return next;
+    });
+    try {
+      const result = await invoke<Content>("compare_sftp_file_contents", { id: pair.id, local, remote });
+      setContent(current => new Map(current).set(name, result));
+    } catch (error) {
+      setContent(current => new Map(current).set(name, { error: String(error) }));
+    } finally {
+      hashPending.current = false;
+      setHashing(null);
+    }
+  }
 
   return <dialog ref={dialog} className="dialog files-compare" aria-labelledby="files-compare-title" onClose={onClose}>
     <div className="dialog-heading">
@@ -115,18 +153,39 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
           </select></label>
           <span role="status">{numbers.format(shown.length)} / {numbers.format(rows.length)}개 항목</span>
         </>}
-        <button type="button" className="secondary small" disabled={!result} onClick={() => {
+        <button type="button" className="secondary small" disabled={!result || hashing !== null} onClick={() => {
           setResult(null);
+          setContent(new Map());
           setPending(loadFolderComparison(pair));
         }}><RefreshCw size={14} aria-hidden /> 다시 비교</button>
       </div>
       {folders && shown.length > 0 && <div className="files-compare-results"><table className="files-table" aria-label="폴더 비교 결과">
         <thead><tr><th scope="col">이름</th><th scope="col">비교 결과</th><th scope="col">로컬</th><th scope="col">원격</th></tr></thead>
-        <tbody>{shown.map(row => <tr key={row.name}>
-          <th scope="row">{row.name}</th>
-          <td><strong>{relationLabels[row.relation]}</strong>{row.detail && <div className="files-compare-date">{row.detail}</div>}</td>
-          <Metadata entries={row.local} /><Metadata entries={row.remote} />
-        </tr>)}</tbody>
+        <tbody>{shown.map(row => {
+          const local = fileSnapshot(row.local);
+          const remote = fileSnapshot(row.remote);
+          const checked = content.get(row.name);
+          return <tr key={row.name}>
+            <th scope="row" title={row.name}>{row.name}</th>
+            <td>
+              <strong>{relationLabels[row.relation]}</strong>{row.detail && <div className="files-compare-date">{row.detail}</div>}
+              {local && remote && <div className="files-compare-hash">
+                <button type="button" className="secondary small" disabled={hashing !== null}
+                  aria-label={`${row.name} 내용 비교`} title="SHA-256 · 파일당 16 MiB"
+                  onClick={() => void compareFile(row.name, local, remote)}>내용 비교</button>
+                {hashing === row.name && <span role="status">내용을 읽는 중…</span>}
+                {checked && ("error" in checked ? <p className="form-error" role="alert">{checked.error}</p> : <>
+                  <span role="status">{checked.matches ? "내용 일치" : "내용 다름"}</span>
+                  <details><summary>SHA-256</summary><dl>
+                    <dt>로컬</dt><dd><code>{checked.local_sha256}</code></dd>
+                    <dt>원격</dt><dd><code>{checked.remote_sha256}</code></dd>
+                  </dl></details>
+                </>)}
+              </div>}
+            </td>
+            <Metadata entries={row.local} /><Metadata entries={row.remote} />
+          </tr>;
+        })}</tbody>
       </table></div>}
       {folders && shown.length === 0 && <p className="form-note">이 조건에 해당하는 항목이 없습니다.</p>}
     </div>

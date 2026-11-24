@@ -1,6 +1,7 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
 mod audit;
+mod compare;
 mod copy;
 mod delete;
 mod download;
@@ -11,6 +12,7 @@ mod remote_stage;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
+pub use compare::{ComparedFile, FileContentComparison};
 pub use delete::SftpDeletePreview;
 pub use editor::{SftpEditDocument, SftpEditSave};
 pub use mutation::{SftpEntrySource, SftpMutationReport};

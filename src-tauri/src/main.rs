@@ -5,7 +5,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
-    list_local_directory, local_ports, preview_local_file, BrowseDirectory, EditSession, FilePreview, NetworkDiagnostics, NetworkManager,
+    list_local_directory, local_ports, preview_local_file, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
@@ -797,6 +797,16 @@ async fn browse_local_directory(path: String) -> Result<BrowseDirectory, String>
 }
 
 #[tauri::command]
+async fn compare_sftp_file_contents(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    local: ComparedFile,
+    remote: ComparedFile,
+) -> Result<FileContentComparison, String> {
+    sftp.compare_contents(&id, local, remote).await
+}
+
+#[tauri::command]
 async fn choose_local_browse_directory() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1059,6 +1069,7 @@ fn main() {
             cancel_sftp_transfer,
             close_sftp,
             browse_local_directory,
+            compare_sftp_file_contents,
             choose_local_browse_directory,
             choose_local_text_draft_path,
             choose_sql_document_path,

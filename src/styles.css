@@ -322,6 +322,13 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-results { max-height: 50vh; overflow: auto; }
 .files-compare-results th[scope="row"] { position: static; max-width: 260px; overflow: hidden; text-overflow: ellipsis; background: transparent; }
 .files-compare-date { margin-top: 3px; color: #526a5f; font-size: 11px; font-variant-numeric: tabular-nums; }
+.files-compare-hash { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+.files-compare-hash .form-error, .files-compare-hash details { flex-basis: 100%; }
+.files-compare-hash .form-error { max-width: 290px; margin: 0; white-space: normal; }
+.files-compare-hash details { max-width: 290px; }
+.files-compare-hash summary { cursor: pointer; }
+.files-compare-hash dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; margin: 4px 0 0; }
+.files-compare-hash dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }
