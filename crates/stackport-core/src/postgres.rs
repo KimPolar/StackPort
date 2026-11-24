@@ -1,3 +1,4 @@
+mod catalog;
 mod export;
 mod parameters;
 mod plan;
@@ -6,6 +7,7 @@ mod session;
 mod sql;
 mod sql_range;
 
+pub use catalog::{PostgresStructure, PostgresStructureSection};
 pub use export::PostgresExportOptions;
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};

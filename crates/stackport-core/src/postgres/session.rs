@@ -1,6 +1,7 @@
 use super::{
-    export::EXPORT_TIMEOUT, sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode,
-    PostgresSqlOutcome,
+    catalog::{self, PostgresStructure, PostgresStructureSection},
+    export::EXPORT_TIMEOUT,
+    sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{quote_identifier, Result, SshTunnelManager, Store};
 use native_tls::{Certificate, Protocol, TlsConnector};
@@ -363,6 +364,31 @@ impl PostgresManager {
         }
     }
 
+    pub async fn structure(
+        &self,
+        id: &str,
+        object: i64,
+        section: PostgresStructureSection,
+        page: u32,
+    ) -> Result<PostgresStructure> {
+        let session = self.session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .start()
+                .await
+                .map_err(pg_error)?;
+            let result = catalog::structure(&tx, object, section, page).await?;
+            tx.commit().await.map_err(pg_error)?;
+            Ok(result)
+        })
+        .await
+        .map_err(|_| "PostgreSQL 객체 구조를 읽는 시간이 초과되었습니다.")?
+    }
+
     pub fn export_progress(&self, id: &str, request: &str) -> Result<Option<u64>> {
         let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
         match self.session(id) {
@@ -416,18 +442,7 @@ async fn browse(
         .start()
         .await
         .map_err(pg_error)?;
-    let relation = tx.query_opt(
-        "SELECT n.nspname::text, c.relname::text, c.relkind::text, pg_catalog.has_table_privilege(c.oid, 'SELECT')
-         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-         WHERE c.oid::bigint = $1 AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-         AND pg_catalog.has_schema_privilege(n.oid, 'USAGE') AND c.relkind IN ('r','p','v','m')", &[&object],
-    ).await.map_err(pg_error)?.ok_or("조회할 수 있는 PostgreSQL 객체를 찾을 수 없습니다.")?;
-    if !field::<bool>(&relation, 3)? {
-        return Err("이 객체에 SELECT 권한이 없습니다.".into());
-    }
-    let schema: String = field(&relation, 0)?;
-    let name: String = field(&relation, 1)?;
-    let kind = kind(field::<String>(&relation, 2)?.as_str())?;
+    let catalog::Relation { schema, name, kind } = catalog::relation(&tx, object).await?;
     let details = tx.query(
         "SELECT a.attname::text, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, pk.position
          FROM pg_catalog.pg_attribute a
@@ -547,7 +562,7 @@ fn primary_key_columns(columns: &[Column]) -> Vec<String> {
     keys.into_iter().map(|(_, name)| name).collect()
 }
 
-fn kind(code: &str) -> Result<&'static str> {
+pub(super) fn kind(code: &str) -> Result<&'static str> {
     match code {
         "r" => Ok("table"),
         "p" => Ok("partitioned"),
@@ -561,7 +576,10 @@ fn offset(page: u32, size: usize) -> i64 {
     i64::from(page) * size as i64
 }
 
-fn field<T: for<'a> tokio_postgres::types::FromSql<'a>>(row: &Row, index: usize) -> Result<T> {
+pub(super) fn field<T: for<'a> tokio_postgres::types::FromSql<'a>>(
+    row: &Row,
+    index: usize,
+) -> Result<T> {
     row.try_get(index).map_err(pg_error)
 }
 
@@ -594,7 +612,7 @@ fn connect_error(error: tokio_postgres::Error) -> String {
     }
 }
 
-fn pg_error(error: tokio_postgres::Error) -> String {
+pub(super) fn pg_error(error: tokio_postgres::Error) -> String {
     match error.code().map(|code| code.code()) {
         Some("42501") => "PostgreSQL이 조회 권한을 거부했습니다.".into(),
         Some("57014") => "PostgreSQL 조회가 중단되었거나 제한 시간을 초과했습니다.".into(),

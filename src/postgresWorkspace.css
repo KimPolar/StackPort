@@ -9,6 +9,26 @@
 .postgres-sql .editor-card > .panel-heading, .postgres-plan .panel-heading { min-height: 44px; height: auto; flex-wrap: wrap; gap: 6px; padding: 7px 12px; }
 .postgres-result-views { display: flex; flex-wrap: wrap; gap: 6px; }
 .postgres-result-views [aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
+.postgres-object-views { padding: 8px 10px; border-bottom: 1px solid var(--divider); }
+.postgres-structure > nav { padding: 8px 10px; border-bottom: 1px solid var(--divider); }
+.postgres-structure .table-wrap { max-height: min(56vh, 620px); }
+.postgres-structure :is(td, .postgres-structure-column) { vertical-align: top; }
+.postgres-structure-column { background: transparent; color: var(--text); text-align: start; }
+.postgres-structure-column small { display: block; color: var(--text-muted); font-weight: 400; }
+.postgres-structure-overview, .postgres-structure-list { padding: 10px; }
+.postgres-structure-overview dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; margin: 0; }
+.postgres-structure-overview dl > div { padding: 7px 8px; border-radius: 5px; background: var(--surface-inset); overflow-wrap: anywhere; }
+.postgres-structure-overview dt, .postgres-structure-detail small, .postgres-structure-reference small { color: var(--text-muted); font-size: 11px; }
+.postgres-structure-overview dd { margin: 3px 0 0; font-size: 12px; }
+.postgres-structure-detail { border-bottom: 1px solid var(--divider); }
+.postgres-structure-detail summary, .postgres-column-detail summary { cursor: pointer; padding: 8px 0; }
+.postgres-structure-detail summary small { display: block; overflow-wrap: anywhere; }
+.postgres-structure-detail > div { padding-bottom: 8px; }
+.postgres-structure-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; overflow-wrap: anywhere; }
+.postgres-structure-comment { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.postgres-definition { margin-top: 8px; min-width: 0; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.postgres-definition > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.postgres-definition pre { max-height: 220px; margin: 6px 0 0; padding: 8px; background: var(--surface-inset); font-size: 12px; white-space: pre-wrap; overflow: auto; overflow-wrap: anywhere; }
 .postgres-plan :is(td, th) { vertical-align: top; }
 .postgres-plan tbody th { background: transparent; color: var(--text); text-align: start; }
 .postgres-plan th small { display: block; color: var(--text-muted); font-weight: 400; }

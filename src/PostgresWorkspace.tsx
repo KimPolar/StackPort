@@ -1,9 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
+import { Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
+import { PostgresObjectStructure, type PostgresObjectKind, type PostgresRelationLink } from "./PostgresObjectStructure";
+import { PostgresPager as Pager } from "./PostgresPager";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
 import { PostgresResultExport, type PostgresExportTarget } from "./PostgresResultExport";
 import type { ExportReport } from "./ResultExportDialog";
+import { usePostgresRead as useRead } from "./usePostgresRead";
 import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
@@ -12,7 +15,7 @@ export type PostgresProfileAction = { kind: "create" } | { kind: "edit" | "delet
 type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string; tunnel: string | null };
 type Schema = { id: number; name: string; accessible: boolean };
 type SchemaPage = { schemas: Schema[]; has_next: boolean };
-type ObjectKind = "table" | "partitioned" | "view" | "materialized";
+type ObjectKind = PostgresObjectKind;
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
 type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null }[];
@@ -23,7 +26,9 @@ const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${hos
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const number = new Intl.NumberFormat("ko-KR");
 
-export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfile; editor: PostgresEditorState }) {
+export function PostgresWorkspace({ profile, editor, onFileBusy }: {
+  profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
+}) {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<"catalog" | "sql">("catalog");
   const [dialog, setDialog] = useState(false);
@@ -84,7 +89,7 @@ export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfil
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
       <div hidden={view !== "catalog"}>
-        <PostgresBrowse key={session.id} id={session.id} onOpenSql={(schema, table) => {
+        <PostgresBrowse key={session.id} id={session.id} onFileBusy={onFileBusy} onOpenSql={(schema, table) => {
           editor.add(`SELECT *\nFROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)};`);
           setView("sql");
         }} onExport={object => {
@@ -149,20 +154,8 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
   </dialog>;
 }
 
-function useRead<T>(command: string, args: Record<string, unknown> | null, revision = 0) {
-  const [result, setResult] = useState<{ args: Record<string, unknown>; revision: number; data: T | null; error: string } | null>(null);
-  useEffect(() => {
-    if (!args) return;
-    let live = true;
-    void invoke<T>(command, args).then(data => { if (live) setResult({ args, revision, data, error: "" }); })
-      .catch(reason => { if (live) setResult({ args, revision, data: null, error: String(reason) }); });
-    return () => { live = false; };
-  }, [command, args, revision]);
-  return result?.args === args && result.revision === revision ? { ...result, loading: false } : { data: null, error: "", loading: args !== null };
-}
-
-function PostgresBrowse({ id, onOpenSql, onExport }: {
-  id: string; onOpenSql: (schema: string, name: string) => void; onExport: (page: Page) => void;
+function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
+  id: string; onOpenSql: (schema: string, name: string) => void; onExport: (page: Page) => void; onFileBusy: (busy: boolean) => void;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -173,6 +166,8 @@ function PostgresBrowse({ id, onOpenSql, onExport }: {
   const [rowPage, setRowPage] = useState(0);
   const [columnPage, setColumnPage] = useState(0);
   const [refresh, setRefresh] = useState(0);
+  const [structureOpen, setStructureOpen] = useState(false);
+  const [structureRevision, setStructureRevision] = useState(0);
   const schemaArgs = useMemo(() => ({ id, page: schemaPage }), [id, schemaPage]);
   const objectArgs = useMemo(() => schema ? { id, schema: schema.id, search: query, page: objectPage } : null, [id, schema, query, objectPage]);
   const pageArgs = useMemo(() => object ? { id, object: object.id, rowPage, columnPage } : null, [id, object, rowPage, columnPage]);
@@ -186,6 +181,18 @@ function PostgresBrowse({ id, onOpenSql, onExport }: {
 
   function searchObjects(event: FormEvent) {
     event.preventDefault(); setQuery(search.trim()); setObjectPage(0); setObject(null);
+  }
+
+  function chooseObject(next: DatabaseObject) {
+    if (next.id === object?.id) return;
+    setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(false);
+  }
+
+  function follow(link: PostgresRelationLink) {
+    if (!link.target) return;
+    chooseSchema({ id: link.target.schema_id, name: link.schema, accessible: true });
+    setObject({ id: link.target.id, name: link.name, kind: link.target.kind, readable: true });
+    setRowPage(0); setColumnPage(0); setStructureOpen(true);
   }
 
   return <div className="postgres-layout">
@@ -209,47 +216,48 @@ function PostgresBrowse({ id, onOpenSql, onExport }: {
         {objects.data && <>
           {objects.data.objects.length ? <ul>{objects.data.objects.map(item => <li key={item.id}>
             <button type="button" aria-pressed={object?.id === item.id} disabled={!item.readable} title={item.name}
-              onClick={() => { setObject(item); setRowPage(0); setColumnPage(0); }}><span>{item.name}</span><small>{item.readable ? kindLabels[item.kind] : "SELECT 권한 없음"}</small></button>
+              onClick={() => chooseObject(item)}><span>{item.name}</span><small>{item.readable ? kindLabels[item.kind] : "SELECT 권한 없음"}</small></button>
           </li>)}</ul> : <p className="result-empty">표시할 테이블과 뷰가 없습니다.</p>}
           <Pager label="객체" page={objectPage} next={objects.data.has_next} change={value => { setObjectPage(value); setObject(null); }} />
         </>}
       </>}
     </aside>
-    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={page.loading}>
+    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={!structureOpen && page.loading}>
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
           <button type="button" className="secondary small" onClick={() => onOpenSql(schema.name, object.name)}>SQL로 열기</button>
-          {page.data && <button type="button" className="secondary small" onClick={() => page.data && onExport(page.data)}>결과 내보내기</button>}
-          <button type="button" className="secondary small" disabled={page.loading} onClick={() => setRefresh(value => value + 1)}>다시 조회</button>
+          {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && onExport(page.data)}>결과 내보내기</button>}
+          <button type="button" className="secondary small" disabled={!structureOpen && page.loading}
+            onClick={() => structureOpen ? setStructureRevision(value => value + 1) : setRefresh(value => value + 1)}>다시 조회</button>
         </div></div> :
         <p className="result-empty">스키마와 조회할 테이블 또는 뷰를 선택하세요.</p>}
-      {page.error && <p className="error-banner" role="alert">{page.error}</p>}
-      {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
-      {page.data && <>
-        <p className="form-note postgres-page-note">{kindLabels[page.data.kind]} · {page.data.rows.length}행 · 전체 {page.data.total_columns}열 · {page.data.primary_key_order ? "기본 키 순서" : "고정 정렬 없음"}</p>
-        {page.data.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
-          <table aria-label="PostgreSQL 데이터"><thead><tr>{page.data.columns.map(column => <th key={column.name} scope="col">
-            {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
-          </th>)}</tr></thead>
-            <tbody>{page.data.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>
-              <PostgresValue cell={cell} />
-            </td>)}</tr>)}</tbody></table></div>}
-        {page.data.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
-        <div className="postgres-paging">
-          <Pager label="데이터" page={rowPage} next={page.data.has_next} change={setRowPage} />
-          {page.data.total_columns > 24 && <Pager label="열" page={columnPage} next={(columnPage + 1) * 24 < page.data.total_columns} change={setColumnPage} />}
+      {object && schema && <>
+        <div className="postgres-result-views postgres-object-views" role="group" aria-label="객체 보기">
+          <button type="button" className="secondary small" aria-pressed={!structureOpen} onClick={() => setStructureOpen(false)}>데이터</button>
+          <button type="button" className="secondary small" aria-pressed={structureOpen} onClick={() => setStructureOpen(true)}>구조</button>
         </div>
+        <PostgresObjectStructure key={object.id} id={id} object={object.id} relation={schema.name + "." + object.name} kind={object.kind}
+          visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />
       </>}
+      <div hidden={structureOpen}>
+        {page.error && <p className="error-banner" role="alert">{page.error}</p>}
+        {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
+        {page.data && <>
+          <p className="form-note postgres-page-note">{kindLabels[page.data.kind]} · {page.data.rows.length}행 · 전체 {page.data.total_columns}열 · {page.data.primary_key_order ? "기본 키 순서" : "고정 정렬 없음"}</p>
+          {page.data.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
+            <table aria-label="PostgreSQL 데이터"><thead><tr>{page.data.columns.map(column => <th key={column.name} scope="col">
+              {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
+            </th>)}</tr></thead>
+              <tbody>{page.data.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>
+                <PostgresValue cell={cell} />
+              </td>)}</tr>)}</tbody></table></div>}
+          {page.data.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
+          <div className="postgres-paging">
+            <Pager label="데이터" page={rowPage} next={page.data.has_next} change={setRowPage} />
+            {page.data.total_columns > 24 && <Pager label="열" page={columnPage} next={(columnPage + 1) * 24 < page.data.total_columns} change={setColumnPage} />}
+          </div>
+        </>}
+      </div>
     </section>
-  </div>;
-}
-
-function Pager({ label, page, next, change }: { label: string; page: number; next: boolean; change: (page: number) => void }) {
-  if (!page && !next) return null;
-  return <div className="pagination" role="group" aria-label={`${label} 페이지 이동`}>
-    <span>{label} {page + 1}페이지</span><div>
-      <button type="button" className="icon-button" aria-label={`이전 ${label} 페이지`} disabled={!page} onClick={() => change(page - 1)}><ArrowLeft size={15} aria-hidden /></button>
-      <button type="button" className="icon-button" aria-label={`다음 ${label} 페이지`} disabled={!next} onClick={() => change(page + 1)}><ArrowRight size={15} aria-hidden /></button>
-    </div>
   </div>;
 }

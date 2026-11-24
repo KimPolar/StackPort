@@ -1199,7 +1199,8 @@ function App() {
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
-      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} editor={{
+      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile}
+        onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
         select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
         add: (text = "") => {

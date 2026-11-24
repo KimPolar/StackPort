@@ -83,9 +83,11 @@ PARTIAL = {
     "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
     "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL 스키마와 테이블·뷰의 지연 조회 및 접근 불가 표시",
-    "SP-DB-010": "SQLite 테이블·뷰와 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열과 기본 키 열람",
-    "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
-    "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
+    "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션 열람",
+    "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람, PostgreSQL 뷰 조회 정의와 인덱스·트리거 생성 SQL 및 열·제약조건·파티션의 정의 일부 복사·저장",
+    "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
+    "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기 열람",
+    "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 스키마 내 테이블·뷰 이름 검색",
     "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
@@ -200,6 +202,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-DB-017", "SP-DB-020"}:
+                evidence = "tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:
                 evidence = "crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MG-014", "SP-MG-018"}:
@@ -341,6 +345,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 "SP-DT-006",
             }:
                 evidence += "; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-017", "SP-DB-018", "SP-DB-020", "SP-DB-022"}:
+                evidence += "; crates/stackport-core/src/postgres/catalog.rs; src/PostgresObjectStructure.tsx"
+                if requirement_id in {"SP-DB-014", "SP-DB-018"}:
+                    evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
             if requirement_id in {

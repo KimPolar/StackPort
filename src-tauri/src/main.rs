@@ -14,7 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
-    LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope,
+    LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -823,6 +823,13 @@ async fn postgres_page(postgres: State<'_, PostgresManager>, id: String, object:
 }
 
 #[tauri::command]
+async fn postgres_structure(
+    postgres: State<'_, PostgresManager>, id: String, object: i64, section: PostgresStructureSection, page: u32,
+) -> Result<PostgresStructure, String> {
+    postgres.structure(&id, object, section, page).await
+}
+
+#[tauri::command]
 async fn execute_postgres_sql(
     postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
     bindings: Option<PostgresSqlBindings>,
@@ -1484,6 +1491,7 @@ fn main() {
             postgres_schemas,
             postgres_objects,
             postgres_page,
+            postgres_structure,
             execute_postgres_sql,
             postgres_export_progress,
             cancel_postgres_sql,

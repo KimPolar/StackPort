@@ -53,6 +53,27 @@ async function startPostgres() {
     'GRANT SELECT ON report."quoted table", report.visible TO fixture_reader;',
     'GRANT SELECT ON report.plan_events TO fixture_reader;',
     'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
+    'CREATE TABLE report.meta_parent (parent_id integer, tenant integer, CONSTRAINT meta_parent_pk PRIMARY KEY (parent_id, tenant));',
+    'CREATE TABLE report.meta_child (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer, tenant integer, ' +
+      "status text COLLATE \"C\" DEFAULT '대기', normalized text GENERATED ALWAYS AS (lower(status)) STORED, " +
+      'CONSTRAINT meta_fk FOREIGN KEY (parent_id, tenant) REFERENCES report.meta_parent (parent_id, tenant) DEFERRABLE INITIALLY DEFERRED);',
+    'ALTER TABLE report.meta_child ADD CONSTRAINT tenant_positive CHECK (tenant > 0) NOT VALID;',
+    "COMMENT ON TABLE report.meta_child IS '구조 검증 테이블';",
+    "COMMENT ON COLUMN report.meta_child.status IS '업무 상태';",
+    "CREATE INDEX meta_status_idx ON report.meta_child (lower(status)) WHERE status <> '대기';",
+    'CREATE FUNCTION report.meta_touch() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END; $body$;',
+    'CREATE TRIGGER meta_touch_row BEFORE UPDATE ON report.meta_child FOR EACH ROW EXECUTE FUNCTION report.meta_touch();',
+    'ALTER TABLE report.meta_child DISABLE TRIGGER meta_touch_row;',
+    'ALTER TABLE report.meta_child ENABLE ROW LEVEL SECURITY;',
+    'ALTER TABLE report.meta_child FORCE ROW LEVEL SECURITY;',
+    'CREATE VIEW report.meta_view AS SELECT status AS payload FROM report.meta_child;',
+    'CREATE MATERIALIZED VIEW report.meta_cache AS SELECT count(*) AS tally FROM report.meta_child WITH NO DATA;',
+    "CREATE VIEW report.meta_large AS SELECT '" + '한'.repeat(16_420) + "'::text AS payload;",
+    'CREATE TABLE report.meta_ranges (id integer) PARTITION BY RANGE (id);',
+    'CREATE TABLE report.meta_low PARTITION OF report.meta_ranges FOR VALUES FROM (0) TO (10);',
+    'CREATE TABLE report.meta_high PARTITION OF report.meta_ranges DEFAULT;',
+    'CREATE TABLE report.meta_wide (' + Array.from({ length: 35 }, (_, index) => 'col_' + (index + 1) + ' integer').join(', ') + ');',
+    'GRANT SELECT ON report.meta_parent, report.meta_child, report.meta_view, report.meta_cache, report.meta_large, report.meta_ranges, report.meta_low, report.meta_wide TO fixture_reader;',
     "CREATE DATABASE fixture_latin ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;",
   ].join('\n') + '\n';
   const postgres = path.join(bin, 'postgres.exe');
@@ -169,6 +190,61 @@ async function verify(browser, fixture, gateway) {
   const denied = objects.objects.find(object => object.name === 'denied');
   assert.equal(denied.readable, false);
   await assert.rejects(command('postgres_page', { id: session.id, object: denied.id, rowPage: 0, columnPage: 0 }), /권한/);
+  const findObject = name => objects.objects.find(object => object.name === name).id;
+  const structure = (name, section, page = 0) => command('postgres_structure', { id: session.id, object: findObject(name), section, page });
+  await assert.rejects(structure('denied', 'overview'), /SELECT 권한/);
+  await assert.rejects(command('postgres_structure', { id: session.id, object: 0, section: 'columns', page: 0 }), /객체를 찾을 수/);
+  const childOverview = (await structure('meta_child', 'overview')).overview;
+  assert.equal(childOverview.owner, 'fixture_admin');
+  assert.deepEqual(childOverview.access, ['SELECT']);
+  assert.equal(childOverview.force_row_security, true);
+  assert.equal(childOverview.comment.text, '구조 검증 테이블');
+  assert.equal(childOverview.view_sql, null);
+  const childColumns = (await structure('meta_child', 'columns')).columns;
+  assert.equal(childColumns.find(column => column.name === 'id').identity, 'a');
+  const statusColumn = childColumns.find(column => column.name === 'status');
+  assert.match(statusColumn.expression.text, /대기/);
+  assert.match(statusColumn.collation, /"C"/);
+  assert.equal(statusColumn.comment.text, '업무 상태');
+  const generated = childColumns.find(column => column.name === 'normalized');
+  assert.equal(generated.generated, 's');
+  assert.match(generated.expression.text, /lower\(status\)/);
+  const constraints = (await structure('meta_child', 'constraints')).constraints;
+  const foreign = constraints.find(item => item.name === 'meta_fk');
+  assert.deepEqual(foreign.columns, ['parent_id', 'tenant']);
+  assert.deepEqual(foreign.reference.columns, ['parent_id', 'tenant']);
+  assert.equal(foreign.reference.target.id, findObject('meta_parent'));
+  assert.equal(foreign.deferrable && foreign.initially_deferred, true);
+  assert.equal(constraints.find(item => item.name === 'tenant_positive').validated, false);
+  const indexes = (await structure('meta_child', 'indexes')).indexes;
+  const partial = indexes.find(item => item.name === 'meta_status_idx');
+  assert.equal(partial.partial, true);
+  assert.equal(partial.valid && partial.ready, true);
+  assert.ok(partial.size_bytes > 0);
+  assert.match(partial.definition.text, /CREATE INDEX.*lower\(status\).*WHERE/);
+  const triggers = (await structure('meta_child', 'triggers')).triggers;
+  assert.equal(triggers.length, 1);
+  assert.equal(triggers[0].enabled, 'D');
+  assert.match(triggers[0].definition.text, /BEFORE UPDATE/);
+  const materialized = (await structure('meta_cache', 'overview')).overview;
+  assert.equal(materialized.populated, false);
+  assert.match(materialized.view_sql.text, /count\(\*\)/i);
+  const large = (await structure('meta_large', 'overview')).overview.view_sql;
+  assert.equal(large.truncated, true);
+  assert.equal(large.text.length, 16_384);
+  const partitioned = (await structure('meta_ranges', 'overview')).overview;
+  assert.equal(partitioned.partition_key.text, 'RANGE (id)');
+  const partitions = (await structure('meta_ranges', 'partitions')).partitions;
+  const lowPartition = partitions.find(item => item.name === 'meta_low');
+  assert.match(lowPartition.bound.text, /FOR VALUES FROM.*TO/);
+  assert.equal(lowPartition.target.id, findObject('meta_low'));
+  assert.equal(partitions.find(item => item.name === 'meta_high').target, null);
+  const firstColumns = await structure('meta_wide', 'columns');
+  assert.equal(firstColumns.columns.length, 32);
+  assert.equal(firstColumns.has_next, true);
+  const moreColumns = await structure('meta_wide', 'columns', 1);
+  assert.deepEqual(moreColumns.columns.map(column => column.position), [33, 34, 35]);
+  assert.equal(moreColumns.has_next, false);
   const table = objects.objects.find(object => object.name === 'quoted table');
   const first = await command('postgres_page', { id: session.id, object: table.id, rowPage: 0, columnPage: 0 });
   assert.equal(first.rows[1][1].truncated, true);
@@ -426,6 +502,19 @@ async function verify(browser, fixture, gateway) {
   assert.equal(await data.getByRole('row').count(), 6);
   await page.getByRole('button', { name: '다음 열 페이지' }).click();
   await data.getByText('마지막 열', { exact: true }).first().waitFor();
+  const structurePane = page.getByRole('region', { name: 'PostgreSQL 객체 구조', exact: true });
+  const structureButton = () => page.getByRole('button', { name: '구조', exact: true }).click();
+  const section = name => structurePane.getByRole('navigation', { name: '구조 항목', exact: true })
+    .getByRole('button', { name, exact: true }).click();
+  const detail = title => structurePane.locator('details').filter({
+    has: page.locator('summary').getByText(title, { exact: true }),
+  });
+  const openObject = name => page.getByRole('complementary', { name: 'PostgreSQL 객체 탐색' })
+    .getByRole('button', { name: new RegExp('^' + name + '\\s') }).click();
+  await structureButton();
+  await structurePane.getByText('fixture_admin', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '데이터', exact: true }).click();
+  await data.getByText('마지막 열', { exact: true }).first().waitFor();
   const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
   const tableExport = path.join(root, 'postgres-table.csv');
   await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
@@ -436,6 +525,71 @@ async function verify(browser, fixture, gateway) {
   const exportedTable = fs.readFileSync(tableExport, 'utf8');
   assert.match(exportedTable, /"extra_23"\r\n1,\\N,9007199254740993\.123,/);
   assert.match(exportedTable, /\r\n105,"행 105",/);
+  await openObject('meta_child');
+  await structureButton();
+  await structurePane.getByText('강제 적용', { exact: true }).waitFor();
+  await structurePane.getByText('구조 검증 테이블', { exact: true }).waitFor();
+  await section('열');
+  const columnsGrid = structurePane.getByRole('table', { name: 'PostgreSQL 열 구조' });
+  await columnsGrid.getByText('IDENTITY ALWAYS', { exact: true }).waitFor();
+  await columnsGrid.getByText('STORED 생성 열', { exact: true }).waitFor();
+  await columnsGrid.getByText('status 세부 정보', { exact: true }).click();
+  await columnsGrid.getByText('업무 상태', { exact: true }).waitFor();
+  assert.match(await columnsGrid.getByLabel('기본값 SQL 원문').textContent(), /대기/);
+  await section('인덱스');
+  const partialIndex = detail('meta_status_idx');
+  await partialIndex.locator('summary').click();
+  assert.match(await partialIndex.getByLabel('인덱스 생성 SQL 원문').textContent(), /lower\(status\)/);
+  await section('트리거');
+  const disabledTrigger = detail('meta_touch_row');
+  await disabledTrigger.locator('summary').click();
+  await disabledTrigger.getByText('비활성', { exact: true }).waitFor();
+  assert.match(await disabledTrigger.getByLabel('트리거 생성 SQL 원문').textContent(), /BEFORE UPDATE/);
+  await section('제약조건');
+  const foreignKey = detail('meta_fk');
+  await foreignKey.locator('summary').click();
+  await foreignKey.getByText('report.meta_parent (parent_id, tenant)', { exact: true }).waitFor();
+  await foreignKey.getByRole('button', { name: '참조 객체 열기', exact: true }).click();
+  await page.getByRole('region', { name: 'PostgreSQL 조회 결과', exact: true }).getByText('report.meta_parent', { exact: true }).waitFor();
+  await openObject('meta_ranges');
+  await structureButton();
+  await section('파티션');
+  const deniedPartition = detail('report.meta_high');
+  await deniedPartition.locator('summary').click();
+  await deniedPartition.getByText('직접 조회 권한 없음', { exact: true }).waitFor();
+  const readablePartition = detail('report.meta_low');
+  await readablePartition.locator('summary').click();
+  await readablePartition.getByRole('button', { name: '파티션 구조 열기', exact: true }).click();
+  await structurePane.getByLabel('파티션 범위 원문').waitFor();
+  await openObject('meta_wide');
+  await structureButton();
+  await section('열');
+  await columnsGrid.getByRole('rowheader', { name: /col_32/ }).waitFor();
+  await structurePane.getByRole('button', { name: '다음 열 페이지', exact: true }).click();
+  await columnsGrid.getByRole('rowheader', { name: /col_35/ }).waitFor();
+  await openObject('meta_large');
+  await structureButton();
+  await structurePane.getByText('정의의 처음 16,384자까지 표시합니다.', { exact: true }).waitFor();
+  assert.equal(await structurePane.getByRole('button', { name: '정의 파일 저장' }).count(), 0);
+  await openObject('meta_view');
+  await structureButton();
+  const definitionText = await structurePane.getByLabel('뷰 조회 정의 원문').textContent();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: text => {
+      window.stackPortTestCopied = text;
+      return Promise.resolve();
+    } });
+  });
+  await structurePane.getByRole('button', { name: 'SQL 복사', exact: true }).click();
+  await structurePane.getByText('정의 SQL을 복사했습니다.', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.stackPortTestCopied), definitionText);
+  await page.evaluate(() => { delete navigator.clipboard.writeText; delete window.stackPortTestCopied; });
+  await structurePane.getByRole('button', { name: '정의 파일 저장', exact: true }).click();
+  const viewDdlPath = path.join(root, 'postgres-view-definition.sql');
+  await page.getByLabel('새 SQL 파일 경로', { exact: true }).fill(viewDdlPath);
+  await page.getByRole('button', { name: '새 파일에 저장', exact: true }).click();
+  await structurePane.getByText(/SQL 파일 저장 완료/).waitFor();
+  assert.equal(fs.readFileSync(viewDdlPath, 'utf8'), definitionText);
   await page.getByLabel('PostgreSQL 객체 검색').fill('visible');
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await page.getByRole('button', { name: /visible 뷰/ }).click();
@@ -603,7 +757,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (TLS, full CSV/JSON exports, typed bindings, cancellation, file collisions and SSH forwarding).');
+    console.log('Windows PostgreSQL E2E passed (catalog structure, definitions, foreign keys, partitions, SQL, TLS and exports).');
   } finally {
     await browser?.close();
     gateway?.close();
