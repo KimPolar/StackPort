@@ -1,10 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
-import { findEditorMatches, firstAtOrAfter, revealEditorMatch } from "./editorSearch";
+import { findEditorMatches, firstAtOrAfter, replaceEditorMatches, revealEditorMatch } from "./editorSearch";
 
 const lineHeight = 21;
 const formatNumber = new Intl.NumberFormat("ko-KR");
 const searchLimit = 512;
+const replaceGrowthLimit = 16 * 1024 * 1024;
 
 type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "wrap"> & {
   editorRef: RefObject<HTMLTextAreaElement | null>;
@@ -18,8 +19,15 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [replacement, setReplacement] = useState("");
+  const [replaceReport, setReplaceReport] = useState<{ error: boolean; text: string } | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const replacementInput = useRef<HTMLInputElement>(null);
   const findId = `${props.id}-find`;
+  const replaceId = `${props.id}-replace`;
+  const editable = !props.readOnly && !props.disabled;
+  const showingReplace = replaceOpen && editable;
   const lineStarts = useMemo(() => {
     const starts = [0];
     for (let index = value.indexOf("\n"); index !== -1; index = value.indexOf("\n", index + 1)) {
@@ -55,19 +63,28 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
     return firstAtOrAfter(lineStarts, position + 1) - 1;
   }
 
-  function openFind() {
+  function openFind(showReplace = false) {
+    const editor = editorRef.current;
+    const selected = editor && value.slice(editor.selectionStart, editor.selectionEnd);
+    const seed = selected && selected.length <= searchLimit && !selected.includes("\n") ? selected : "";
     if (!findOpen) {
-      const editor = editorRef.current;
-      const selected = editor && value.slice(editor.selectionStart, editor.selectionEnd);
-      if (selected && selected.length <= searchLimit && !selected.includes("\n")) setQuery(selected);
+      setQuery(seed);
       setFindOpen(true);
     }
-    requestAnimationFrame(() => { searchInput.current?.focus(); searchInput.current?.select(); });
+    if (showReplace && editable) setReplaceOpen(true);
+    requestAnimationFrame(() => {
+      const field = showReplace && editable && (findOpen ? query : seed) ? replacementInput : searchInput;
+      field.current?.focus();
+      field.current?.select();
+    });
   }
 
   function closeFind() {
     setFindOpen(false);
     setQuery("");
+    setReplaceOpen(false);
+    setReplacement("");
+    setReplaceReport(null);
     editorRef.current?.focus({ preventScroll: true });
   }
 
@@ -84,6 +101,42 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
     revealEditorMatch(editor, line, lineStarts[line], start, query.length, lineHeight);
     syncCaret(editor);
     syncViewport(editor);
+  }
+
+  function replaceMatches(all: boolean) {
+    const editor = editorRef.current;
+    if (!editor || editor.readOnly || editor.disabled || !matches.length) return;
+    const position = editor.selectionStart;
+    const boundary = firstAtOrAfter(matches, position);
+    const before = matches[boundary - 1];
+    const current = before !== undefined && before + query.length > position ? boundary - 1 : boundary % matches.length;
+    const start = matches[all ? 0 : current];
+    const end = matches[all ? matches.length - 1 : current] + query.length;
+    const count = all ? matches.length : 1;
+    const length = value.length + count * (replacement.length - query.length);
+    if (length > Math.max(value.length, replaceGrowthLimit)) {
+      setReplaceReport({ error: true, text: "바꾼 내용이 편집기에서 처리할 수 있는 크기를 초과합니다." });
+      return;
+    }
+    const original = value.slice(start, end);
+    const { text, changes } = all ? replaceEditorMatches(original, query, replacement, matchCase) : {
+      text: replacement, changes: original === replacement ? 0 : 1,
+    };
+    if (!changes) {
+      setReplaceReport({ error: false, text: "변경할 내용이 없습니다." });
+      return;
+    }
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(start, end);
+    // Use WebView2's native editing history for both a single edit and a bulk edit.
+    const applied = text.length ? document.execCommand("insertText", false, text) : document.execCommand("delete");
+    if (!applied) {
+      setReplaceReport({ error: true, text: "편집기에 바꾼 내용을 적용할 수 없습니다." });
+      return;
+    }
+    syncCaret(editor);
+    syncViewport(editor);
+    setReplaceReport({ error: false, text: `${formatNumber.format(changes)}개 위치를 바꿨습니다.` });
   }
 
   const caret = Math.min(selection.backward ? selection.start : selection.end, value.length);
@@ -103,9 +156,10 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
 
   return <div className="code-editor" style={style} onKeyDown={event => {
     if (event.nativeEvent.isComposing || event.defaultPrevented) return;
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && (key === "f" || key === "h")) {
       event.preventDefault();
-      openFind();
+      openFind(key === "h");
     } else if (findOpen && event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -118,14 +172,14 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
     {findOpen && <div id={findId} role="group" aria-label="편집기 찾기" className="code-find">
       <input ref={searchInput} type="search" aria-label="찾을 텍스트" placeholder="찾을 텍스트"
         maxLength={searchLimit} spellCheck={false} autoComplete="off" value={query}
-        onChange={event => setQuery(event.target.value)} onKeyDown={event => {
+        onChange={event => { setQuery(event.target.value); setReplaceReport(null); }} onKeyDown={event => {
           if (event.key === "Enter" && !event.nativeEvent.isComposing) {
             event.preventDefault();
             moveMatch(event.shiftKey);
           }
         }} />
       <label className="code-find-case"><input type="checkbox" checked={matchCase}
-        onChange={event => setMatchCase(event.target.checked)} /> 대소문자 구분</label>
+        onChange={event => { setMatchCase(event.target.checked); setReplaceReport(null); }} /> 대소문자 구분</label>
       {query && <output className="code-find-count">{matches.length === 0 ? "일치 항목 없음"
         : matchSelected ? `${formatNumber.format(matchIndex + 1)} / ${formatNumber.format(matches.length)}`
           : `${formatNumber.format(matches.length)}개 일치`}</output>}
@@ -134,8 +188,28 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
           disabled={!matches.length} onClick={() => moveMatch(true)}><ChevronUp size={15} aria-hidden /></button>
         <button type="button" className="icon-button" aria-label="다음 일치 항목" title="F3"
           disabled={!matches.length} onClick={() => moveMatch(false)}><ChevronDown size={15} aria-hidden /></button>
+        {editable && <button type="button" className="secondary small" aria-label="바꾸기 옵션" title="Ctrl+H"
+          aria-expanded={showingReplace} aria-controls={replaceId} onClick={() => {
+            if (showingReplace) setReplaceOpen(false);
+            else openFind(true);
+          }}>바꾸기</button>}
         <button type="button" className="icon-button" aria-label="찾기 닫기" onClick={closeFind}><X size={15} aria-hidden /></button>
       </div>
+      {showingReplace && <div id={replaceId} className="code-replace" role="group" aria-label="편집기 바꾸기">
+        <input ref={replacementInput} type="text" aria-label="바꿀 내용" placeholder="바꿀 내용"
+          maxLength={searchLimit} spellCheck={false} autoComplete="off" value={replacement}
+          onChange={event => { setReplacement(event.target.value); setReplaceReport(null); }}
+          onKeyDown={event => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              replaceMatches(false);
+            }
+          }} />
+        <button type="button" className="secondary small" disabled={!matches.length} onClick={() => replaceMatches(false)}>한 건 바꾸기</button>
+        <button type="button" className="secondary small" disabled={!matches.length} onClick={() => replaceMatches(true)}>모두 바꾸기</button>
+        {replaceReport && <span className={replaceReport.error ? "form-error" : "code-replace-report"}
+          role={replaceReport.error ? "alert" : "status"}>{replaceReport.text}</span>}
+      </div>}
     </div>}
     <div className="code-editor-input">
       <div className="code-gutter" aria-hidden="true">
@@ -149,7 +223,7 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
         </div>
       </div>
       <textarea {...props} ref={editorRef} wrap="off" value={value}
-        onChange={event => { syncCaret(event.currentTarget); onChange?.(event); }}
+        onChange={event => { syncCaret(event.currentTarget); setReplaceReport(null); onChange?.(event); }}
         onSelect={event => { syncCaret(event.currentTarget); onSelect?.(event); }}
         onFocus={event => { syncCaret(event.currentTarget); onFocus?.(event); }}
         onScroll={event => { syncViewport(event.currentTarget); onScroll?.(event); }} />
@@ -158,7 +232,7 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
       {footer}
       <div className="code-editor-nav">
         <button type="button" className="secondary small" aria-expanded={findOpen} aria-controls={findId} title="Ctrl+F"
-          onClick={findOpen ? closeFind : openFind}><Search size={14} aria-hidden /> 찾기</button>
+          onClick={findOpen ? closeFind : () => openFind()}><Search size={14} aria-hidden /> 찾기</button>
         <span className="code-position">{formatNumber.format(activeLine)}줄 · {formatNumber.format(column)}열</span>
       </div>
     </div>

@@ -912,6 +912,15 @@ async function verifyEditor(page, remote, uploads, local) {
   await search.press('Enter');
   await dialog.getByText('1 / 1', { exact: true }).waitFor();
   assert.equal(await text.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), 'alpha');
+  await text.press('Control+h');
+  const replace = dialog.getByRole('group', { name: '편집기 바꾸기', exact: true });
+  await replace.getByRole('textbox', { name: '바꿀 내용', exact: true }).fill('edited-alpha');
+  await replace.getByRole('button', { name: '한 건 바꾸기', exact: true }).click();
+  await replace.getByRole('status').getByText('1개 위치를 바꿨습니다.', { exact: true }).waitFor();
+  assert.equal(await text.inputValue(), 'edited-alpha\nstart\n');
+  assert.deepEqual(uploads.files.get(filePath).data, original);
+  await text.press('Control+z');
+  assert.equal(await text.inputValue(), 'alpha\nstart\n');
   await text.press('Escape');
   await search.waitFor({ state: 'detached' });
   assert.equal(await text.inputValue(), 'alpha\nstart\n');
@@ -984,6 +993,10 @@ async function verifyEditor(page, remote, uploads, local) {
   }
 
   await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await text.press('Control+h');
+  await search.waitFor();
+  assert.equal(await dialog.getByRole('button', { name: '바꾸기 옵션', exact: true }).count(), 0);
+  await search.press('Escape');
   await dialog.getByRole('button', { name: '계속 편집', exact: true }).click();
   assert.equal(await text.inputValue(), draft);
 

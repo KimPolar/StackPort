@@ -17,11 +17,24 @@ export function findEditorMatches(value: string, query: string, matchCase: boole
       matches.push(start);
     }
   } else {
-    const syntax = ".*+?^$\\{}()|[]";
-    const literal = Array.from(query, character => syntax.includes(character) ? "\\" + character : character).join("");
-    for (const match of value.matchAll(new RegExp(literal, "giu"))) matches.push(match.index);
+    for (const match of value.matchAll(caseInsensitiveLiteral(query))) matches.push(match.index);
   }
   return matches;
+}
+
+function caseInsensitiveLiteral(query: string) {
+  const syntax = ".*+?^$\\{}()|[]";
+  const literal = Array.from(query, character => syntax.includes(character) ? "\\" + character : character).join("");
+  return new RegExp(literal, "giu");
+}
+
+export function replaceEditorMatches(value: string, query: string, replacement: string, matchCase: boolean) {
+  let changes = 0;
+  const text = value.replaceAll(matchCase ? query : caseInsensitiveLiteral(query), found => {
+    if (found !== replacement) changes++;
+    return replacement;
+  });
+  return { text, changes };
 }
 
 export function revealEditorMatch(editor: HTMLTextAreaElement, line: number, lineStart: number, start: number, length: number, lineHeight: number) {
