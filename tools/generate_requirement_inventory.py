@@ -78,7 +78,7 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집, Redis 단독 서버 읽기 전용 어댑터",
+    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집, Redis 단독 서버 키 탐색·타입별 편집",
     "SP-DB-004": "PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
     "SP-DB-005": "PostgreSQL TLS 인증서 검증과 점프 호스트를 지원하는 로컬 SSH 터널 경유",
     "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
@@ -164,7 +164,7 @@ PARTIAL = {
     "SP-BK-017": "PostgreSQL 백업의 로컬 파일 저장 경로와 복원할 서버·새 DB를 각각 표시하고 복원 시 CREATEDB 권한 확인",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
     "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
-    "SP-NS-011": "String·Hash·List·Set·Sorted Set·Stream의 읽기 전용 값 탐색과 바이너리 HEX 표시",
+    "SP-NS-011": "String 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가와 UTF-8·HEX 미리보기",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, 지원 키 타입의 읽기 명령 선택과 미지원 타입 표시",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
@@ -176,15 +176,15 @@ PARTIAL = {
     "SP-SEC-003": "SFTP 원격 삭제 시 연결·경로·영향과 PROD 확인, SQLite 운영 환경 셀 변경의 미리보기와 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·SQLite 및 PostgreSQL 내보내기·셀 편집, SFTP 파일 작업, SSH 연결 정의와 키 신뢰·교체 이력 기록",
-    "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
+    "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, Redis 키 편집의 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
+    "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경, Redis PROD 키 편집, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
-    "SP-AT-018": "실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN·여섯 타입과 바이너리 값 열람, 연결 단절 검증",
+    "SP-AT-018": "실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL·충돌·결과 미확인 검증",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
@@ -454,5 +454,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-DB-001"}:
                 evidence += "; src/RedisProfileDialog.tsx; crates/stackport-core/tests/redis_profiles.rs; tests/redis-smoke.cjs"
+            if requirement_id in {"SP-NS-011", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
+                evidence += "; crates/stackport-core/src/redis/edit.rs; src/RedisEditDialog.tsx"
+                if requirement_id in {"SP-SEC-011", "SP-SEC-015"}:
+                    evidence += "; tests/redis-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

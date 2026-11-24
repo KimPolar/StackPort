@@ -958,8 +958,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "sqlite-cell-update-prod-confirmed"
         }
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
-        "redis.key.edit" if record.environment == Some("PROD") => "redis-key-edit-prod-reviewed-transaction",
-        "redis.key.edit" => "redis-key-edit-reviewed-transaction",
+        "redis.key.edit" | "redis.key.edit.unconfirmed" if record.environment == Some("PROD") => "redis-key-edit-prod-reviewed-transaction",
+        "redis.key.edit" | "redis.key.edit.unconfirmed" => "redis-key-edit-reviewed-transaction",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",

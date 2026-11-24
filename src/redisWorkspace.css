@@ -10,6 +10,7 @@
 .redis-layout .panel-heading { gap: 8px; }
 .redis-layout .panel-heading h2 { min-width: 0; margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .redis-layout .panel-heading > span { color: var(--text-muted); font-size: 12px; }
+.redis-detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .redis-search { display: grid; grid-template-columns: minmax(0, 1fr) minmax(86px, auto) auto; align-items: end; gap: 8px; padding: 10px; }
 .redis-search .field { min-width: 0; margin: 0; }
 .redis-key-list { list-style: none; padding: 0 10px; margin: 0; overflow: auto; max-height: 38vh; }
@@ -29,3 +30,10 @@
 .redis-values th, .redis-values td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); }
 .redis-values td { vertical-align: top; }
 .redis-values td code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.redis-edit-permission { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
+.redis-edit-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
+.redis-edit-bytes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(85px, auto); gap: 8px; align-items: start; }
+.redis-edit-bytes textarea { resize: vertical; min-width: 0; }
+.redis-edit-stream-field { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.redis-edit-dialog .redis-values { max-height: 33vh; }
+.redis-edit-dialog .confirm-copy { overflow-wrap: anywhere; }

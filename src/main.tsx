@@ -1437,7 +1437,8 @@ function App() {
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
     {redisProfile && <div hidden={historyOpen}>
-      <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile} />
+      <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile}
+        onBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
@@ -2023,6 +2024,8 @@ const auditOperationNames: Record<string, string> = {
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
   "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
+  "redis.key.edit": "Redis 키 편집",
+  "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.edit.row": "PostgreSQL 행 변경",
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",

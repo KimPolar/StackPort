@@ -315,15 +315,20 @@ impl Mutation {
             ),
             RedisEditInput::Set { member } => Self::Set(member.decode()?),
             RedisEditInput::Zset { member, score } => {
-                let score = score
-                    .trim()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|score| score.is_finite())
-                    .ok_or(Failure::Server(
-                        "Sorted Set 점수는 유한한 숫자로 입력하세요.",
-                    ))?;
-                Self::Zset(member.decode()?, score.to_string())
+                let score = score.trim();
+                let score = match score.to_ascii_lowercase().as_str() {
+                    "inf" | "+inf" => "+inf".to_owned(),
+                    "-inf" => "-inf".to_owned(),
+                    _ => score
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|score| score.is_finite())
+                        .ok_or(Failure::Server(
+                            "Sorted Set 점수는 숫자 또는 +inf, -inf로 입력하세요.",
+                        ))?
+                        .to_string(),
+                };
+                Self::Zset(member.decode()?, score)
             }
             RedisEditInput::Stream { fields } => {
                 if fields.is_empty() || fields.len() > MAX_STREAM_FIELDS {

@@ -189,10 +189,12 @@ impl RedisManager {
         let result = self
             .run(id, &session, |state| Box::pin(state.apply(token)))
             .await;
-        let outcome = match &result {
-            Ok(report) if matches!(report.status, RedisEditStatus::Applied) => "succeeded",
-            Err(message) if message == UPDATE_UNKNOWN => "unknown",
-            _ => "failed",
+        let (operation, outcome) = match &result {
+            Ok(report) if matches!(report.status, RedisEditStatus::Applied) => {
+                ("redis.key.edit", "succeeded")
+            }
+            Err(message) if message == UPDATE_UNKNOWN => ("redis.key.edit.unconfirmed", "started"),
+            _ => ("redis.key.edit", "failed"),
         };
         let store = self.store.clone();
         let profile = session.profile.clone();
@@ -203,7 +205,7 @@ impl RedisManager {
                         &db,
                         AuditRecord {
                             correlation_id: &token.to_string(),
-                            operation: "redis.key.edit",
+                            operation,
                             project_id: Some(&profile.project_id),
                             profile_id: Some(&profile.id),
                             environment: Some(&profile.settings.environment),
