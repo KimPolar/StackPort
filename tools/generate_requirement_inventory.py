@@ -15,7 +15,7 @@ PARTIAL = {
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결(SQLite·SSH·PostgreSQL)·선택한 SQLite 연결의 테이블과 뷰 검색",
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
-    "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
+    "SP-UI-008": "Windows 상단·단축키에서 SSH·RDP·PostgreSQL 주소와 SQLite 파일 경로 판별, 현재 프로젝트 저장 연결 재사용, 새 대상 양식 채우기와 SSH 등록",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
@@ -345,7 +345,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-SEC-004":
                 evidence = "crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; crates/stackport-core/src/rdp.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs; tests/rdp-smoke.cjs"
-            elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-SEC-008", "SP-AT-001"}:
+            elif requirement_id == "SP-UI-008":
+                evidence = "src/quickConnect.ts; src/QuickConnectDialog.tsx; src/main.tsx; src/TerminalWorkspace.tsx; src/RdpWorkspace.tsx; src/PostgresProfileDialog.tsx; tests/quick-connect.test.mjs; tests/desktop-smoke.cjs; tests/postgres-smoke.cjs"
+            elif requirement_id in {"SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-SEC-008", "SP-AT-001"}:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-TM-005":
                 evidence = "crates/stackport-core/tests/terminal_output.rs; tests/terminal-smoke.cjs; src/TerminalOutputDialog.tsx; src/TerminalWorkspace.tsx"

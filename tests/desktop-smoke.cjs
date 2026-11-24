@@ -38,6 +38,77 @@ async function main() {
   await page.getByLabel('SQLite 파일 경로').fill(database);
   await page.getByRole('button', { name: '저장' }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  const quickButton = page.getByRole('button', { name: '빠른 연결', exact: true });
+  const quick = page.getByRole('dialog', { name: '빠른 연결', exact: true });
+  const address = quick.getByLabel('연결 주소');
+  async function quickAddress(value) {
+    await quickButton.click();
+    await address.fill(value);
+  }
+  await quickButton.click();
+  await page.keyboard.press('Escape');
+  await quick.waitFor({ state: 'detached' });
+  assert.equal(await quickButton.evaluate(button => document.activeElement === button), true);
+  await page.keyboard.press('Control+Shift+Q');
+  await address.waitFor();
+  assert.equal(await address.evaluate(input => document.activeElement === input), true);
+  await address.fill('postgres://user:discard-me@127.0.0.1/db');
+  await address.press('Enter');
+  await quick.getByRole('alert').getByText(/암호/).waitFor();
+  assert.equal(await address.getAttribute('aria-invalid'), 'true');
+  await address.fill(database);
+  await quick.getByRole('button', { name: '테스트 DB DEV', exact: true }).waitFor();
+  await address.press('Enter');
+  await quick.waitFor({ state: 'detached' });
+
+  await quickAddress(path.join(path.dirname(database), 'new-connection.sqlite'));
+  await quick.getByRole('button', { name: 'SQLite 연결 등록', exact: true }).click();
+  const sqliteDraft = page.getByRole('dialog', { name: 'SQLite 연결 추가', exact: true });
+  assert.equal(await sqliteDraft.getByLabel('SQLite 파일 경로').inputValue(), path.join(path.dirname(database), 'new-connection.sqlite'));
+  await sqliteDraft.getByRole('button', { name: '취소', exact: true }).click();
+  await quickAddress('postgresql://fixture_reader@[::1]:6432/reporting');
+  await quick.getByRole('button', { name: 'PostgreSQL 연결 등록', exact: true }).click();
+  const postgresDraft = page.getByRole('dialog', { name: 'PostgreSQL 연결 추가', exact: true });
+  assert.equal(await postgresDraft.getByLabel('호스트 이름 또는 IP').inputValue(), '::1');
+  assert.equal(await postgresDraft.getByLabel('데이터베이스 이름').inputValue(), 'reporting');
+  assert.equal(await postgresDraft.getByLabel('사용자 이름').inputValue(), 'fixture_reader');
+  assert.equal(await postgresDraft.getByLabel('포트').inputValue(), '6432');
+  await postgresDraft.getByRole('button', { name: '취소', exact: true }).click();
+
+  const sshAddress = 'ssh://operator@127.0.0.1:2222';
+  await quickAddress(sshAddress);
+  await quick.getByRole('button', { name: 'SSH 연결 준비', exact: true }).click();
+  const sshOpen = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  assert.equal(await sshOpen.getByLabel('호스트 또는 IP').inputValue(), '127.0.0.1');
+  assert.equal(await sshOpen.getByLabel('사용자 이름').inputValue(), 'operator');
+  assert.equal(await sshOpen.getByLabel('포트').inputValue(), '2222');
+  await sshOpen.getByRole('button', { name: '취소', exact: true }).click();
+  await quickAddress(sshAddress);
+  await quick.getByRole('button', { name: 'SSH 연결 등록', exact: true }).click();
+  const sshDraft = page.getByRole('dialog', { name: 'SSH 연결 추가', exact: true });
+  assert.equal(await sshDraft.getByLabel('호스트 또는 IP').inputValue(), '127.0.0.1');
+  await sshDraft.getByLabel('연결 이름').fill('빠른 연결 검증');
+  await sshDraft.getByLabel('환경').selectOption('PROD');
+  await sshDraft.getByRole('button', { name: '저장', exact: true }).click();
+  const quickSshRow = page.getByRole('button', { name: 'SSH 빠른 연결 검증 연결', exact: true });
+  await quickSshRow.waitFor();
+  await quickAddress('127.0.0.1:2222');
+  await quick.getByRole('button', { name: '빠른 연결 검증 PROD', exact: true }).click();
+  assert.equal(await sshOpen.getByLabel('호스트 또는 IP').isDisabled(), true);
+  await sshOpen.getByText('PROD', { exact: true }).waitFor();
+  await sshOpen.getByRole('button', { name: '취소', exact: true }).click();
+  await page.getByRole('button', { name: '빠른 연결 검증 SSH 연결 삭제', exact: true }).click();
+  await page.getByRole('dialog', { name: 'SSH 연결 삭제', exact: true }).getByRole('button', { name: '삭제', exact: true }).click();
+  await quickSshRow.waitFor({ state: 'detached' });
+
+  await quickAddress('rdp://operator@127.0.0.1:3390');
+  await quick.getByRole('button', { name: '원격 화면에서 열기', exact: true }).click();
+  const rdp = page.getByRole('region', { name: '원격 화면 도구' });
+  await rdp.getByRole('heading', { name: '원격 데스크톱 (RDP)', exact: true }).waitFor();
+  assert.equal(await rdp.getByLabel('대상 호스트 또는 IP').inputValue(), '127.0.0.1');
+  assert.equal(await rdp.getByLabel('포트').inputValue(), '3390');
+  assert.equal(await rdp.getByLabel('사용자 이름 (선택)').inputValue(), 'operator');
+
   const tools = page.getByRole('navigation', { name: '작업 도구' });
   const databaseTool = tools.getByRole('button', { name: '데이터베이스', exact: true });
   const networkTool = tools.getByRole('button', { name: '네트워크', exact: true });

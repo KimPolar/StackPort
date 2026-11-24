@@ -25,7 +25,7 @@ import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
 export type PostgresProfile = { id: string; project_id: string; revision: number; settings: PostgresSettings };
-export type PostgresProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: PostgresProfile };
+export type PostgresProfileAction = { kind: "create"; initial?: Partial<PostgresSettings> } | { kind: "edit" | "delete"; profile: PostgresProfile };
 type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string;
   tunnel: string | null; tunnel_id: string | null; grid_edit: boolean };
 type Disconnect = "closed" | "tunnel_stopped" | "tunneled_connection_closed";

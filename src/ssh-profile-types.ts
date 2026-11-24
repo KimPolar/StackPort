@@ -1,3 +1,5 @@
+import type { NetworkAddress } from "./quickConnect";
+
 export type SshProfile = {
   id: string;
   project_id: string;
@@ -9,4 +11,4 @@ export type SshProfile = {
   revision: number;
 };
 
-export type SshOpenRequest = { profile: SshProfile; sequence: number };
+export type SshOpenRequest = ({ profile: SshProfile } | { target: NetworkAddress }) & { sequence: number };

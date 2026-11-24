@@ -5,7 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
   Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
+  Pencil, Plug, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
@@ -29,6 +29,8 @@ import {
 import { ResultExportDialog, type ExportReport, type ExportSource } from "./ResultExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
+import { QuickConnectDialog } from "./QuickConnectDialog";
+import { matchesNetworkAddress, type NetworkAddress, type QuickTarget } from "./quickConnect";
 import { CodeTextarea } from "./CodeTextarea";
 import { sqlAliasRenameTarget, sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlAliasRenameTarget, type SqlCompletionCatalog, type SqlDefinitionReference, type SqlReferenceRange } from "./sqlCompletion";
 import { SqlDiagnostics } from "./SqlDiagnostics";
@@ -149,6 +151,8 @@ function App() {
   const nextSplit = useRef(0);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [quickConnectOpen, setQuickConnectOpen] = useState(false);
+  const [rdpTarget, setRdpTarget] = useState<NetworkAddress | null>(null);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [terminalTabCount, setTerminalTabCount] = useState(0);
   const [rdpClientCount, setRdpClientCount] = useState(0);
@@ -168,7 +172,7 @@ function App() {
   const [postgresAction, setPostgresAction] = useState<PostgresProfileAction | null>(null);
   const postgresProfile = postgresProfiles.find(item => item.id === postgresId && item.project_id === projectId);
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
-  const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile } | null>(null);
+  const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
@@ -266,6 +270,7 @@ function App() {
     setSshTunnelCount(count);
   }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
+  const consumeRdpTarget = useCallback(() => { setRdpTarget(null); }, []);
   const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
   const setGridEditExitGuard = useCallback((guard: GridEditExitGuard | null) => { gridEditExitGuard.current = guard; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
@@ -358,15 +363,18 @@ function App() {
   }, [initializeResume]);
 
   useEffect(() => {
-    function openCommandPalette(event: globalThis.KeyboardEvent) {
+    function openWorkspaceDialog(event: globalThis.KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
-        || event.key.toLowerCase() !== "p" || document.querySelector("dialog[open]")) return;
+        || document.querySelector("dialog[open]")) return;
+      const key = event.key.toLowerCase();
+      if (key !== "p" && !(desktop && key === "q")) return;
       event.preventDefault();
       event.stopPropagation();
-      setPaletteOpen(true);
+      if (key === "q") setQuickConnectOpen(true);
+      else setPaletteOpen(true);
     }
-    window.addEventListener("keydown", openCommandPalette, true);
-    return () => window.removeEventListener("keydown", openCommandPalette, true);
+    window.addEventListener("keydown", openWorkspaceDialog, true);
+    return () => window.removeEventListener("keydown", openWorkspaceDialog, true);
   }, []);
 
   useEffect(() => {
@@ -1045,6 +1053,47 @@ function App() {
     showTool("terminal");
   }
 
+  function quickConnectMatches(target: QuickTarget) {
+    function match(id: string, name: string, environment: string, open: () => void) {
+      return { id, name, environment, open: () => { setQuickConnectOpen(false); open(); } };
+    }
+    switch (target.kind) {
+      case "ssh":
+        return sshProfiles.filter(item => item.project_id === projectId && matchesNetworkAddress(target, item))
+          .map(item => match(item.id, item.name, item.environment, () => openSavedSsh(item)));
+      case "postgres":
+        return postgresProfiles.filter(item => item.project_id === projectId && matchesNetworkAddress(target, item.settings)
+          && (!target.database || target.database === item.settings.database))
+          .map(item => match(item.id, item.settings.name, item.settings.environment, () => selectPostgresProfile(item.id)));
+      case "sqlite":
+        return profiles.filter(item => item.project_id === projectId && displayPath(item.path) === target.path)
+          .map(item => match(item.id, item.name, item.environment, () => selectSqliteProfile(item.id)));
+      case "rdp":
+        return [];
+    }
+  }
+
+  function openQuickTarget(target: QuickTarget, saveSsh: boolean) {
+    setQuickConnectOpen(false);
+    if (target.kind === "ssh") {
+      if (saveSsh) setSshProfileDialog({ mode: "create", initial: target });
+      else {
+        setSshOpenRequest({ target, sequence: ++sshRequestSequence.current });
+        showTool("terminal");
+      }
+    } else if (target.kind === "rdp") {
+      setRdpTarget(target);
+      showTool("rdp");
+    } else if (target.kind === "postgres") {
+      const { host, port, username, database } = target;
+      setPostgresAction({ kind: "create", initial: { host, port, username, database, name: (database || host).slice(0, 80) } });
+    } else {
+      openModal("profile");
+      setName(target.name);
+      setPath(target.path);
+    }
+  }
+
   function showHistory() {
     showTool("workspace");
     setHistoryOpen(true);
@@ -1068,6 +1117,7 @@ function App() {
     });
     if (desktop) {
       commands.push(
+        { id: "open:quick-connect", title: "빠른 연결", group: "작업", keywords: "quick connect 주소 ssh rdp postgres sqlite", Icon: Plug, run: () => setQuickConnectOpen(true) },
         { id: "open:history", title: "작업 기록", group: "작업", keywords: "audit history", Icon: History, run: showHistory },
         { id: "toggle:split", title: layout.kind === "split" ? "화면 분할 해제" : "화면 분할", group: "작업", keywords: "split pane", Icon: PanelsTopLeft, run: toggleSplit },
         { id: "create:project", title: "새 프로젝트", group: "작업", Icon: Plus, run: () => openModal("project") },
@@ -1585,7 +1635,9 @@ function App() {
       <NetworkWorkspace projectId={projectId} profiles={sshProfiles} visible={toolVisible("network")}
         tunnelViewRequest={tunnelViewRequest} onTunnelCountChange={updateTunnelCount} />
     </div>,
-    rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
+    rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body">
+      <RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} target={rdpTarget} onTargetHandled={consumeRdpTarget} />
+    </div>,
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
       <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard}
         onRequestExit={requestAppClose} terminalDirectory={terminalDirectory} />
@@ -1601,6 +1653,8 @@ function App() {
           <span className="workspace-context" title={project?.name}><FolderOpen size={14} aria-hidden /><span>{project?.name ?? "프로젝트 없음"}</span></span>
         </div>
         <div className="top-right">
+          {desktop && <button className="history-button quick-connect-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+Q Meta+Shift+Q"
+            title="빠른 연결 (Ctrl+Shift+Q)" onClick={() => setQuickConnectOpen(true)}><Plug size={15} aria-hidden /> 빠른 연결</button>}
           <button className="history-button palette-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+P Meta+Shift+P"
             title="명령 팔레트 (Ctrl+Shift+P)" onClick={() => setPaletteOpen(true)}><Search size={15} aria-hidden /> 명령 팔레트 <kbd aria-hidden>Ctrl+Shift+P</kbd></button>
           <button className="history-button" disabled={!desktop} onClick={() => { if (toolVisible("workspace") && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={toolVisible("workspace") && historyOpen}><History size={15} /> 작업 기록</button>
@@ -1681,6 +1735,8 @@ function App() {
     </div>
     {paletteOpen && <CommandPalette commands={workspaceCommands()} recent={recentCommands}
       onClose={() => setPaletteOpen(false)} onRun={runWorkspaceCommand} />}
+    {quickConnectOpen && <QuickConnectDialog project={project?.name} findSaved={quickConnectMatches} onProceed={openQuickTarget}
+      onCreateProject={() => { setQuickConnectOpen(false); openModal("project"); }} onClose={() => setQuickConnectOpen(false)} />}
     {appearanceOpen && <Dialog title="화면 설정" onClose={() => setAppearanceOpen(false)} busy={false}>
       <div className="appearance-settings">
         <label className="field">테마<select value={theme} onChange={event => {
@@ -1817,17 +1873,20 @@ function App() {
         void executeQuery({ ...parameterRequest.target, parameters }, 0, parameterRequest.scope);
       }} />
     </Dialog>}
-    {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
+    {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} initial={sshProfileDialog.initial}
+      projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
     {postgresAction && project && <PostgresProfileDialog action={postgresAction} projectId={project.id} onClose={() => setPostgresAction(null)} onSaved={savePostgresProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
 
-function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mode: "create" | "edit" | "delete"; profile?: SshProfile; projectId: string; onClose: () => void; onChanged: () => void }) {
-  const [name, setName] = useState(profile?.name ?? "");
-  const [host, setHost] = useState(profile?.host ?? "");
-  const [port, setPort] = useState(String(profile?.port ?? 22));
-  const [username, setUsername] = useState(profile?.username ?? "");
+function SshProfileDialog({ mode, profile, initial, projectId, onClose, onChanged }: {
+  mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress; projectId: string; onClose: () => void; onChanged: () => void;
+}) {
+  const [name, setName] = useState(profile?.name ?? initial?.host.slice(0, 80) ?? "");
+  const [host, setHost] = useState(profile?.host ?? initial?.host ?? "");
+  const [port, setPort] = useState(String(profile?.port ?? initial?.port ?? 22));
+  const [username, setUsername] = useState(profile?.username ?? initial?.username ?? "");
   const [environment, setEnvironment] = useState<SshProfile["environment"]>(profile?.environment ?? "DEV");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

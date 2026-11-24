@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Monitor, Plug } from "lucide-react";
+import type { NetworkAddress } from "./quickConnect";
 
 type Display = "window" | "fullscreen" | "multiple_monitors";
 type Availability = { available: boolean; reason: string | null };
 type Client = { id: string; address: string; display: Display; process_id: number; admin: boolean };
 const displayNames = { window: "창", fullscreen: "전체 화면", multiple_monitors: "다중 모니터" };
 
-export function RdpWorkspace({ desktop, onCountChange }: { desktop: boolean; onCountChange: (count: number) => void }) {
+export function RdpWorkspace({ desktop, onCountChange, target, onTargetHandled }: {
+  desktop: boolean; onCountChange: (count: number) => void;
+  target: NetworkAddress | null; onTargetHandled: () => void;
+}) {
   const [availability, setAvailability] = useState<Availability | null>(null);
   const [host, setHost] = useState("");
   const [port, setPort] = useState("3389");
@@ -30,6 +34,21 @@ export function RdpWorkspace({ desktop, onCountChange }: { desktop: boolean; onC
   const [error, setError] = useState("");
   const active = useRef(false);
   const snapshot = useRef(0);
+
+  useEffect(() => {
+    if (target) {
+      setHost(target.host);
+      setPort(String(target.port));
+      setUsername(target.username);
+      setDomain("");
+      setAdmin(false);
+      setClipboard(false);
+      setPrinters(false);
+      setSmartCards(false);
+      setDrives("");
+      onTargetHandled();
+    }
+  }, [target, onTargetHandled]);
 
   useEffect(() => {
     if (!desktop) return;

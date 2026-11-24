@@ -112,7 +112,7 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
   useEffect(() => {
     if (!request) return;
     sshRequestGeneration.current++;
-    setSshDialog({ profile: request.profile });
+    setSshDialog("profile" in request ? { profile: request.profile } : { profile: null, target: request.target });
     onRequestHandled();
   }, [request, onRequestHandled]);
 

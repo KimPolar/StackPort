@@ -14,7 +14,7 @@ export function PostgresProfileDialog({ action, projectId, onClose, onSaved }: {
   const dialog = useRef<HTMLDialogElement>(null);
   const title = useId();
   const caInput = useId();
-  const [values, setValues] = useState(action.kind === "create" ? initial : action.profile.settings);
+  const [values, setValues] = useState(action.kind === "create" ? { ...initial, ...action.initial } : action.profile.settings);
   const [port, setPort] = useState(String(values.port));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
