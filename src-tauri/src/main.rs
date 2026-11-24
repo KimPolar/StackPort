@@ -3,7 +3,7 @@
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
-    RestorePreview, RestoreReport, SqlParameterValue,
+    RestorePreview, RestoreReport, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
 };
@@ -348,6 +348,18 @@ async fn list_ssh_trust_events(
     worker(move || ssh.history(before)).await
 }
 
+fn select_ssh_authentication(
+    authentication: Option<SshAuthentication>,
+    identity_path: Option<String>,
+) -> Result<SshAuthentication, String> {
+    match (authentication, identity_path) {
+        (Some(_), Some(_)) => Err("SSH 인증 방식을 하나만 선택하세요.".into()),
+        (Some(authentication), None) => Ok(authentication),
+        (None, Some(path)) => Ok(SshAuthentication::KeyFile { path }),
+        (None, None) => Ok(SshAuthentication::Automatic),
+    }
+}
+
 #[tauri::command]
 async fn open_ssh_terminal(
     ssh: State<'_, Arc<SshManager>>,
@@ -358,14 +370,13 @@ async fn open_ssh_terminal(
     rows: u16,
     cols: u16,
     identity_path: Option<String>,
+    authentication: Option<SshAuthentication>,
 ) -> Result<TerminalInfo, String> {
     let ssh = Arc::clone(ssh.inner());
     let terminals = Arc::clone(terminals.inner());
-    worker(move || match identity_path {
-        Some(identity) => {
-            ssh.open_with_identity(&terminals, &host, port, &username, rows, cols, &identity)
-        }
-        None => ssh.open(&terminals, &host, port, &username, rows, cols),
+    worker(move || {
+        let authentication = select_ssh_authentication(authentication, identity_path)?;
+        ssh.open_with_authentication(&terminals, &host, port, &username, rows, cols, authentication)
     })
     .await
 }
@@ -380,6 +391,7 @@ async fn open_saved_ssh_terminal(
     rows: u16,
     cols: u16,
     identity_path: Option<String>,
+    authentication: Option<SshAuthentication>,
 ) -> Result<TerminalInfo, String> {
     let store = store.inner().clone();
     let ssh = Arc::clone(ssh.inner());
@@ -392,25 +404,16 @@ async fn open_saved_ssh_terminal(
         if current.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
-        let mut terminal = match identity_path {
-            Some(identity) => ssh.open_with_identity(
-                &terminals,
-                &current.host,
-                current.port,
-                &current.username,
-                rows,
-                cols,
-                &identity,
-            ),
-            None => ssh.open(
-                &terminals,
-                &current.host,
-                current.port,
-                &current.username,
-                rows,
-                cols,
-            ),
-        }?;
+        let authentication = select_ssh_authentication(authentication, identity_path)?;
+        let mut terminal = ssh.open_with_authentication(
+            &terminals,
+            &current.host,
+            current.port,
+            &current.username,
+            rows,
+            cols,
+            authentication,
+        )?;
         terminal.environment = Some(current.environment);
         Ok(terminal)
     })

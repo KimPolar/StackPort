@@ -7,7 +7,7 @@ use base64::{
 };
 use portable_pty::CommandBuilder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -26,6 +26,22 @@ const TRUST_APPLICATION_ID: i64 = 0x5350484b; // "SPHK"
 const PROBE_LIFETIME: Duration = Duration::from_secs(300);
 const SCAN_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SCAN_BYTES: u64 = 65536;
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SshAuthentication {
+    Automatic,
+    KeyFile { path: String },
+    Password,
+    KeyboardInteractive,
+}
+
+enum OpenSshAuthentication<'a> {
+    Automatic,
+    KeyFile(&'a str),
+    Password,
+    KeyboardInteractive,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SshKeyInfo {
@@ -208,7 +224,15 @@ impl SshManager {
         rows: u16,
         cols: u16,
     ) -> Result<TerminalInfo> {
-        self.open_internal(terminals, host, port, username, rows, cols, None)
+        self.open_internal(
+            terminals,
+            host,
+            port,
+            username,
+            rows,
+            cols,
+            OpenSshAuthentication::Automatic,
+        )
     }
 
     /// Select one identity for this session without storing its path or passphrase.
@@ -223,7 +247,36 @@ impl SshManager {
         identity_path: &str,
     ) -> Result<TerminalInfo> {
         let identity = identity_file(identity_path)?;
-        self.open_internal(terminals, host, port, username, rows, cols, Some(&identity))
+        self.open_internal(
+            terminals,
+            host,
+            port,
+            username,
+            rows,
+            cols,
+            OpenSshAuthentication::KeyFile(&identity),
+        )
+    }
+
+    pub fn open_with_authentication(
+        &self,
+        terminals: &TerminalManager,
+        host: &str,
+        port: u16,
+        username: &str,
+        rows: u16,
+        cols: u16,
+        authentication: SshAuthentication,
+    ) -> Result<TerminalInfo> {
+        let method = match authentication {
+            SshAuthentication::Automatic => OpenSshAuthentication::Automatic,
+            SshAuthentication::Password => OpenSshAuthentication::Password,
+            SshAuthentication::KeyboardInteractive => OpenSshAuthentication::KeyboardInteractive,
+            SshAuthentication::KeyFile { path } => {
+                return self.open_with_identity(terminals, host, port, username, rows, cols, &path);
+            }
+        };
+        self.open_internal(terminals, host, port, username, rows, cols, method)
     }
 
     fn open_internal(
@@ -234,7 +287,7 @@ impl SshManager {
         username: &str,
         rows: u16,
         cols: u16,
-        identity: Option<&str>,
+        authentication: OpenSshAuthentication<'_>,
     ) -> Result<TerminalInfo> {
         let host = normalize_host(host)?;
         validate_port(port)?;
@@ -249,7 +302,7 @@ impl SshManager {
             &username,
             &key.algorithm,
             known_hosts.as_ref(),
-            identity,
+            authentication,
         )?;
         let address = if host.contains(':') {
             format!("[{host}]")
@@ -648,7 +701,7 @@ fn ssh_command(
     username: &str,
     algorithm: &str,
     known_hosts: &Path,
-    identity: Option<&str>,
+    authentication: OpenSshAuthentication<'_>,
 ) -> Result<CommandBuilder> {
     let program = system_ssh_program("ssh.exe")?;
     let path = known_hosts
@@ -669,6 +722,12 @@ fn ssh_command(
     };
     let mut command = CommandBuilder::new(program);
     command.args(["-F", "none", "-tt"]);
+    let preferred = match authentication {
+        OpenSshAuthentication::Automatic => "publickey,keyboard-interactive,password",
+        OpenSshAuthentication::KeyFile(_) => "publickey",
+        OpenSshAuthentication::Password => "password",
+        OpenSshAuthentication::KeyboardInteractive => "keyboard-interactive",
+    };
     for option in [
         "StrictHostKeyChecking=yes".to_owned(),
         format!("UserKnownHostsFile=\"{path}\""),
@@ -686,18 +745,13 @@ fn ssh_command(
         "BatchMode=no".into(),
         "NumberOfPasswordPrompts=1".into(),
         "ConnectTimeout=10".into(),
-        if identity.is_some() {
-            "PreferredAuthentications=publickey"
-        } else {
-            "PreferredAuthentications=publickey,keyboard-interactive,password"
-        }
-        .into(),
+        format!("PreferredAuthentications={preferred}"),
         format!("HostKeyAlgorithms={algorithms}"),
     ] {
         command.arg("-o");
         command.arg(option);
     }
-    if let Some(identity) = identity {
+    if let OpenSshAuthentication::KeyFile(identity) = authentication {
         // `none` prevents OpenSSH from falling back to default identity files if
         // the selected file disappears before the child process starts.
         command.args([
@@ -982,7 +1036,15 @@ mod tests {
     #[test]
     fn ssh_uses_only_the_verified_key_and_disables_user_configuration() {
         let path = Path::new("C:\\temporary folder\\known_hosts");
-        let command = ssh_command("example.com", 2222, "alice", "ssh-ed25519", path, None).unwrap();
+        let command = ssh_command(
+            "example.com",
+            2222,
+            "alice",
+            "ssh-ed25519",
+            path,
+            OpenSshAuthentication::Automatic,
+        )
+        .unwrap();
         let args: Vec<_> = command
             .get_argv()
             .iter()
@@ -1012,7 +1074,7 @@ mod tests {
             "alice",
             "ssh-ed25519",
             Path::new("C:\\known_hosts"),
-            Some(&selected),
+            OpenSshAuthentication::KeyFile(&selected),
         )
         .unwrap();
         let args: Vec<_> = command

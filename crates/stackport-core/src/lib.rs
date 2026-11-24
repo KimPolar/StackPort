@@ -15,7 +15,7 @@ pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
 pub use table_query::TableQuery;
 mod ssh;
-pub use ssh::{SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
+pub use ssh::{SshAuthentication, SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
 pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;

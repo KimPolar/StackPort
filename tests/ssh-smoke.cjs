@@ -9,6 +9,9 @@ const path = require('path');
 const root = process.env.STACKPORT_TEST_ROOT;
 if (!root || !path.isAbsolute(root)) throw new Error('Set STACKPORT_TEST_ROOT to the isolated test directory.');
 const password = 'stackport-test-password';
+const challengePassword = 'stackport-challenge-secret';
+const challengeCode = '295810';
+const location = 'test-zone';
 
 function hostKey() {
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'pkcs1', format: 'pem' } });
@@ -16,8 +19,8 @@ function hostKey() {
   return { privateKey, fingerprint: `SHA256:${createHash('sha256').update(publicKey).digest('base64').replace(/=+$/, '')}` };
 }
 
-async function startServer(key, port = 0) {
-  const stats = { connections: 0, authentications: 0, passwordAttempts: 0, sessions: 0, clients: new Set() };
+async function startServer(key, port = 0, interactive = false) {
+  const stats = { connections: 0, authentications: 0, passwordAttempts: 0, challengeAttempts: 0, sessions: 0, clients: new Set() };
   const server = new Server({ hostKeys: [key.privateKey] }, client => {
     stats.connections++; stats.clients.add(client);
     client.on('error', () => {});
@@ -26,7 +29,24 @@ async function startServer(key, port = 0) {
       stats.authentications++;
       if (ctx.method === 'password') stats.passwordAttempts++;
       if (ctx.method === 'password' && ctx.username === 'stackport' && ctx.password === password) ctx.accept();
-      else ctx.reject(['password']);
+      else if (interactive && ctx.method === 'keyboard-interactive' && ctx.username === 'stackport') {
+        stats.challengeAttempts++;
+        ctx.prompt([
+          { prompt: 'Access phrase: ', echo: false },
+          { prompt: 'Location label: ', echo: true },
+        ], 'StackPort test login', 'Synthetic MFA instructions', responses => {
+          if (!Array.isArray(responses)) return;
+          if (responses[0] !== challengePassword || responses[1] !== location) {
+            ctx.reject(['keyboard-interactive', 'password']);
+            return;
+          }
+          ctx.prompt({ prompt: 'Verification code: ', echo: false }, codes => {
+            if (!Array.isArray(codes)) return;
+            if (codes[0] === challengeCode) ctx.accept();
+            else ctx.reject(['keyboard-interactive', 'password']);
+          });
+        });
+      } else ctx.reject(interactive ? ['keyboard-interactive', 'password'] : ['password']);
     });
     client.on('ready', () => client.on('session', accept => {
       const session = accept();
@@ -297,10 +317,64 @@ async function main() {
   await page.getByText('호스트 키 신뢰', { exact: true }).waitFor();
   const historyText = await page.locator('.ssh-history').innerText();
   if (!historyText.includes('127.0.0.1') || historyText.includes(password) || historyText.includes('wrong-password')) throw new Error('SSH trust history did not protect credentials.');
+
+  await stopServer(instance);
+  instance = await startServer(changedKey, instance.port, true);
+  await page.getByRole('button', { name: '터미널', exact: true }).click();
+  const loginDialog = page.getByRole('dialog');
+  async function startInteractive(tabNumber) {
+    await openDialog(page, instance.port);
+    await loginDialog.getByText(changedKey.fingerprint, { exact: true }).waitFor();
+    await page.getByLabel('SSH 인증 방식').selectOption('keyboard_interactive');
+    await page.getByRole('button', { name: '연결', exact: true }).click();
+    await page.getByRole('tab', { name: new RegExp(`SSH ${tabNumber} ·`) }).waitFor();
+    await waitForRows(page, 'Synthetic MFA instructions');
+  }
+  async function answer(prompt, value) {
+    await waitForRows(page, prompt);
+    await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+    await page.keyboard.type(value);
+    await page.keyboard.press('Enter');
+  }
+  async function closeInteractive(tabNumber) {
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: new RegExp(`SSH ${tabNumber} .*터미널 닫기`) }).click();
+    await page.getByRole('tab', { name: new RegExp(`SSH ${tabNumber} ·`) }).waitFor({ state: 'detached' });
+  }
+
+  await startInteractive(8);
+  await answer('Access phrase:', challengePassword);
+  await answer('Location label:', location);
+  await answer('Verification code:', challengeCode);
+  await waitForRows(page, 'STACKPORT_REMOTE_READY');
+  const challengeOutput = await page.locator('[role=tabpanel]:visible .xterm-rows').innerText();
+  if (challengeOutput.includes(challengePassword) || challengeOutput.includes(challengeCode) || !challengeOutput.includes(location)) throw new Error('SSH did not honor the prompt echo settings.');
+  await closeInteractive(8);
+
+  await startInteractive(9);
+  await answer('Access phrase:', 'wrong-challenge-phrase');
+  await answer('Location label:', location);
+  await page.getByRole('status').getByText(/종료 코드: 255/).waitFor();
+  if (instance.stats.challengeAttempts !== 2 || instance.stats.passwordAttempts !== 0 || instance.stats.sessions !== 1) throw new Error('SSH repeated or fell back after an interactive failure.');
+  await closeInteractive(9);
+
+  await openDialog(page, instance.port);
+  await loginDialog.getByText(changedKey.fingerprint, { exact: true }).waitFor();
+  await page.getByLabel('SSH 인증 방식').selectOption('password');
+  await page.getByRole('button', { name: '연결', exact: true }).click();
+  await page.getByRole('tab', { name: /SSH 10 ·/ }).waitFor();
+  await answer('password:', password);
+  await waitForRows(page, 'STACKPORT_REMOTE_READY');
+  if (instance.stats.passwordAttempts !== 1 || instance.stats.challengeAttempts !== 2) throw new Error('Password-only mode tried the interactive method.');
+  await closeInteractive(10);
+  for (const file of [trustFile, path.join(root, 'workspace', 'workspace.sqlite')]) {
+    const bytes = fs.readFileSync(file);
+    if ([challengePassword, challengeCode].some(secret => bytes.includes(Buffer.from(secret)))) throw new Error('Interactive SSH answers were saved.');
+  }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   await stopServer(instance);
   await browser.close();
-  console.log('DNS/TCP diagnosis, SSH fingerprint confirmation, pinned login, saved PROD profiles, stale revisions, key rotation, and changed-key rejection passed.');
+  console.log('DNS/TCP diagnosis, SSH host-key verification, saved PROD profiles, password login, and multi-round keyboard-interactive login passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

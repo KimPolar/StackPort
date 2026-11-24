@@ -78,7 +78,7 @@ async function main() {
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
-  await page.getByLabel('SSH 인증 방식').selectOption('key');
+  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
   await page.getByLabel('SSH 키 파일 경로').fill(identityPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByText(fingerprint, { exact: true }).waitFor();
@@ -101,7 +101,7 @@ async function main() {
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
-  await page.getByLabel('SSH 인증 방식').selectOption('key');
+  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
   await page.getByLabel('SSH 키 파일 경로').fill(wrongPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByText(fingerprint, { exact: true }).waitFor();
@@ -125,7 +125,7 @@ async function main() {
   await page.getByRole('dialog').locator('select').selectOption('PROD');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 저장된 운영 서버 연결' }).click();
-  await page.getByLabel('SSH 인증 방식').selectOption('key');
+  await page.getByLabel('SSH 인증 방식').selectOption('key_file');
   await page.getByLabel('SSH 키 파일 경로').fill(identityPath);
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
