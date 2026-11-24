@@ -68,6 +68,8 @@ cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo
 
 메타데이터는 기본적으로 OS의 앱 데이터 디렉터리에 있는 `workspace.sqlite`에 저장됩니다. 별도의 위치를 사용하려면 실행 전에 `STACKPORT_DATA_DIR` 환경 변수를 지정할 수 있습니다. 스키마 1~3의 작업 공간은 스키마 4로 이관하기 전에 같은 폴더에 무결성을 확인한 백업을 남깁니다. 스키마 4를 지원하는 앱에서 이관된 작업 공간을 열 수 있습니다. 연결 정의와 작업 기록이 포함된 폴더와 백업의 접근 권한은 사용자가 관리해야 합니다. 비밀번호나 개인키를 저장하는 기능은 없습니다.
 
+Windows EXE를 **휴대형 작업 공간**으로 사용하려면 쓰기 가능한 폴더에 놓고 `StackPort-Windows-x64.exe --portable`로 실행하거나, 같은 폴더에 빈 `StackPort.portable` 파일을 만든 뒤 EXE를 실행하세요. 작업 공간, SSH 호스트 키 기록 및 기본 WebView 프로필은 EXE 옆 `StackPort-data` 폴더를 사용합니다. 앱 상단에 모드와 빌드 버전이 표시됩니다. WebView2 Runtime이 필요하며, 휴대형 실행에서도 자동 업데이트와 플러그인 설치는 제공하지 않습니다. 기존 작업 공간을 자동으로 가져오지 않습니다.
+
 ```powershell
 cargo test --manifest-path crates/stackport-core/Cargo.toml
 npm run build

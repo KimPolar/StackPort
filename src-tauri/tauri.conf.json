@@ -9,6 +9,7 @@
   },
   "app": {
     "windows": [{
+      "create": false,
       "title": "StackPort",
       "width": 1440,
       "height": 900,

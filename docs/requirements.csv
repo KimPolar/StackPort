@@ -365,7 +365,7 @@ SP-ST-007,확장 API,도구·DB 드라이버·형식 파서·인증 제공자·�
 SP-ST-008,확장 보안,"확장 서명/체크섬, 명시적 권한, 최소 API 노출, 비신뢰 코드 격리·삭제.",not_started,,
 SP-ST-009,도구 관리,"추가 명령 도구 설치·업데이트·롤백·삭제, 기존 로컬 설치 도구 연동.",not_started,,
 SP-ST-010,외부 실행기,"텍스트 에디터, DB 클라이언트, 셸, SSH/rsync 명령, 브라우저 링크의 사용자 지정 연결.",not_started,,
-SP-ST-011,포터블 구성,"앱 실행 위치 기준 설정 또는 OS 표준 앱 데이터 폴더 선택, 데이터 이동 마법사.",not_started,,
+SP-ST-011,포터블 구성,"앱 실행 위치 기준 설정 또는 OS 표준 앱 데이터 폴더 선택, 데이터 이동 마법사.",partial,"Windows EXE 옆 휴대형 저장 폴더, OS 표준 및 지정 데이터 경로 선택",src-tauri/src/data_location.rs; src-tauri/tauri.conf.json; tests/portable-smoke.cjs
 SP-ST-012,프로필 브랜딩,조직 로고·시작 메시지·앱 표시 이름·초기 도구/세션 설정(배포 정책 범위).,not_started,,
 SP-ST-013,기능 제어,조직/개인 설정으로 불필요한 도구·서비스·개발 기능 숨김 또는 비활성화.,not_started,,
 SP-ST-014,환경 복구,"환경 설정 초기화, 안전 모드, 손상된 플러그인 비활성, 데이터 폴더 백업.",not_started,,

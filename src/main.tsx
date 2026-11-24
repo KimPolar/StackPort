@@ -19,6 +19,7 @@ import { NetworkWorkspace } from "./NetworkWorkspace";
 import "./styles.css";
 
 type Project = { id: string; name: string };
+type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portable"; data_directory: string };
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
 type DatabaseObject = { name: string; kind: string; ddl: string | null };
 type ColumnInfo = { position: number; name: string; declared_type: string; not_null: boolean; default_value: string | null; primary_key_position: number; hidden: number };
@@ -63,6 +64,7 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 
 function App() {
   const [page, setPage] = useState<"workspace" | "terminal" | "network">("workspace");
+  const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
@@ -140,6 +142,15 @@ function App() {
   useEffect(() => {
     if (desktop) reloadProjects().catch(e => setError(errorText(e)));
   }, [reloadProjects]);
+
+  useEffect(() => {
+    if (!desktop) return;
+    let live = true;
+    call<RuntimeInfo>("get_runtime_info").then(info => { if (live) setRuntime(info); }).catch(e => {
+      if (live) setError(errorText(e));
+    });
+    return () => { live = false; };
+  }, []);
 
   useEffect(() => {
     let live = true;
@@ -388,7 +399,10 @@ function App() {
     <div className="workspace">
       <header className="topbar">
         <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{{ workspace: "워크스페이스", terminal: "터미널", network: "네트워크" }[page]}</span></div>
-        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
+        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
+          <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span /> {runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간"}</span>
+          {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
+        </div>
       </header>
       <div className="body-layout" hidden={page !== "workspace"}>
         <aside className="explorer" aria-label="작업 공간 탐색기">

@@ -1,5 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod data_location;
+use data_location::{DataLocation, DataMode, RuntimeInfo};
+
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
@@ -24,6 +27,11 @@ where
 async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> {
     let store = store.inner().clone();
     worker(move || store.list_projects()).await
+}
+
+#[tauri::command]
+fn get_runtime_info(location: State<'_, DataLocation>) -> RuntimeInfo {
+    location.info()
 }
 
 #[tauri::command]
@@ -596,27 +604,30 @@ async fn choose_sqlite_restore_destination() -> Result<Option<String>, String> {
 }
 
 fn main() {
-    tauri::Builder::default()
+    let run = tauri::Builder::default()
         .setup(|app| {
-            let directory = match std::env::var_os("STACKPORT_DATA_DIR") {
-                Some(path) => std::path::PathBuf::from(path),
-                None => app.path().app_data_dir()?,
-            };
-            let directory = if directory.is_absolute() {
-                directory
-            } else {
-                std::env::current_dir()?.join(directory)
-            };
-            let path = directory.join("workspace.sqlite");
+            let location = DataLocation::resolve(|| app.path().app_data_dir().map_err(std::io::Error::other))?;
+            let config = app.config().app.windows.first()
+                .ok_or_else(|| std::io::Error::other("StackPort 창 설정이 없습니다."))?;
+            let mut window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+            if location.mode == DataMode::Portable {
+                let webview = location.directory.join("webview");
+                std::fs::create_dir_all(&webview)?;
+                window = window.data_directory(webview);
+            }
+            let path = location.directory.join("workspace.sqlite");
             let store = Store::open(path).map_err(std::io::Error::other)?;
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
-            app.manage(Arc::new(SshManager::new(directory)));
+            app.manage(Arc::new(SshManager::new(location.directory.clone())));
             app.manage(Arc::new(NetworkManager::default()));
+            app.manage(location);
+            window.build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             list_projects,
+            get_runtime_info,
             list_local_ports,
             run_route_diagnostic,
             list_archived_projects,
@@ -672,6 +683,13 @@ fn main() {
             choose_sqlite_restore_destination,
             restore_sqlite
         ])
-        .run(tauri::generate_context!())
-        .expect("StackPort 실행 실패");
+        .run(tauri::generate_context!());
+    if let Err(error) = run {
+        eprintln!("StackPort 실행 실패: {error}");
+        let _ = rfd::MessageDialog::new().set_title("StackPort 실행 실패")
+            .set_description(error.to_string())
+            .set_level(rfd::MessageLevel::Error)
+            .show();
+        std::process::exit(1);
+    }
 }
