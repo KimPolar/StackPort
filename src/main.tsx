@@ -11,6 +11,7 @@ import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
+import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -22,8 +23,8 @@ type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from
 type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
-type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "cancelled" | "timed_out" };
-type QueryTarget = { kind: "sql"; sql: string } | { kind: "table"; request: TableQuery };
+type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
+type QueryTarget = { kind: "sql"; sql: string; parameters?: SqlParameterValue[] } | { kind: "table"; request: TableQuery };
 type ActiveQuery = { token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
@@ -73,6 +74,7 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ sql: string; parameters: SqlParameter[] } | null>(null);
   const [result, setResult] = useState<QueryPage | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [name, setName] = useState("");
@@ -149,6 +151,7 @@ function App() {
     abandonQuery();
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
+    setParameterRequest(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
@@ -257,19 +260,25 @@ function App() {
     activeQuery.current = task;
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
     const sameQuery = target === executedQuery
-      || (target.kind === "sql" && executedQuery?.kind === "sql" && target.sql === executedQuery.sql);
-    if (!sameQuery) setResult(null);
+      || (target.kind === "sql" && !target.parameters && executedQuery?.kind === "sql" && !executedQuery.parameters && target.sql === executedQuery.sql);
+    if (!sameQuery) {
+      setResult(null);
+      setExecutedQuery(null);
+    }
     try {
       task.token = await call<string>("prepare_query");
       if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
       const args = { token: task.token, profileId, page };
       const response = target.kind === "sql"
-        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql })
+        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters })
         : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
           setResult(response.result); setExecutedQuery(target);
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
+        } else if (response.status === "parameters_required" && target.kind === "sql") {
+          if (!task.cancelRequested) setParameterRequest({ sql: target.sql, parameters: response.parameters });
+          else setQueryNotice("쿼리 실행을 중단했습니다.");
         } else if (response.status === "cancelled") {
           setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
         } else {
@@ -443,6 +452,12 @@ function App() {
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
+    {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
+      <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
+        setParameterRequest(null);
+        void executeQuery({ kind: "sql", sql: parameterRequest.sql, parameters });
+      }} />
+    </Dialog>}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;

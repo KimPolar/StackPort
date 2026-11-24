@@ -187,7 +187,7 @@ SP-SQ-006,서식 도구,"SQL 포맷/축약, 대소문자·들여쓰기·줄바�
 SP-SQ-007,실행 범위,"전체/현재 문장/선택 영역/배치 실행, 세미콜론 및 프로시저 블록의 방언별 구분.",partial,단일 읽기 전용 SQL 실행,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
 SP-SQ-008,결과 탭,"여러 결과 집합, 메시지·서버 통계·영향받은 행·실행 시간·에러 위치 분리.",not_started,,
 SP-SQ-009,실행 취소,"실행 중 쿼리의 취소·타임아웃, 서버 측 취소 성공 여부와 트랜잭션 상태 제시.",partial,"SQLite 조회 중단과 시간 초과, 완료 여부 표시",crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-SQ-010,파라미터 쿼리,"바인딩 변수·타입·값·기본값, 시크릿 변수 처리, 저장된 파라미터 세트.",not_started,,
+SP-SQ-010,파라미터 쿼리,"바인딩 변수·타입·값·기본값, 시크릿 변수 처리, 저장된 파라미터 세트.",partial,"SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src-tauri/
 SP-SQ-011,트랜잭션 관리,"자동 커밋 전환, BEGIN/COMMIT/ROLLBACK, 저장점, 열린 트랜잭션 경고.",not_started,,
 SP-SQ-012,쿼리 빌더,테이블 드래그·관계선·JOIN·WHERE·GROUP BY·HAVING·ORDER BY·LIMIT를 GUI로 구성.,not_started,,
 SP-SQ-013,결과 고정,여러 쿼리 결과를 탭에 고정하고 변경 결과 비교/재실행.,not_started,,
@@ -415,7 +415,7 @@ SP-AT-007,로컬 셸/직렬,Windows 터미널 프로세스·직렬 입출력·�
 SP-AT-008,RDP/VNC,인증·화면 렌더링·키보드·마우스·클립보드가 지원 기능표대로 동작,not_started,,
 SP-AT-009,X11,SSH 경유 X11 GUI 애플리케이션이 로컬 X 화면에 출력되고 세션 종료 시 리소스 반환,not_started,,
 SP-AT-010,데이터 그리드 편집,PK 기반 다중 셀 수정·적용·취소·오류/트랜잭션·동시 수정 충돌 검증,partial,SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-AT-011,SQL 실행·취소,다중 결과 집합/파라미터/실행 계획을 표시하고 쿼리 취소 실제 상태 구분,not_started,,
+SP-AT-011,SQL 실행·취소,다중 결과 집합/파라미터/실행 계획을 표시하고 쿼리 취소 실제 상태 구분,partial,SQLite 바인딩 쿼리와 페이지 이동·취소·시간 초과 확인,crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src-tauri/
 SP-AT-012,이종 DB 이관,"100% 데이터형 보존 가능한 컬럼은 값 일치, 지원 불가 컬럼은 손실 경고와 보고서",not_started,,
 SP-AT-013,구조 동기화,DDL diff→예상 변경→승인→적용→재비교에서 변경 계획과 실제 결과 일치,not_started,,
 SP-AT-014,데이터 동기화,조건부 추가/수정/삭제·충돌 정책·샘플 미리보기·건수 검증이 정확히 동작,not_started,,

@@ -9,7 +9,7 @@ pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSessi
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod query;
-pub use query::QueryOutcome;
+pub use query::{QueryOutcome, SqlParameterValue};
 mod restore;
 pub use restore::{RestorePreview, RestoreReport};
 mod table_query;

@@ -88,6 +88,25 @@ async function main() {
   await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
   await page.getByText('필터 및 정렬', { exact: true }).click();
 
+  await page.getByLabel('SQL 쿼리').fill('SELECT name FROM people WHERE id >= :first AND :key = :key ORDER BY id');
+  await page.getByRole('button', { name: '쿼리 실행' }).click();
+  await page.getByRole('heading', { name: 'SQL 매개변수' }).waitFor();
+  await page.getByLabel(':first 형식').selectOption('integer');
+  await page.getByLabel(':first 값', { exact: true }).fill('9223372036854775808');
+  const parameterSecret = "synthetic' filter %_";
+  await page.getByLabel(':key 값 숨기기').check();
+  const secretField = page.getByLabel(':key 값', { exact: true });
+  if (await secretField.getAttribute('type') !== 'password') throw new Error('SQL parameter mask did not apply.');
+  await secretField.fill(parameterSecret);
+  await page.getByRole('button', { name: '매개변수로 실행' }).click();
+  await page.getByRole('alert').getByText(/64비트 정수 범위/).waitFor();
+  if (await secretField.inputValue() !== parameterSecret) throw new Error('Correctable input was lost after validation failure.');
+  await page.getByLabel(':first 값', { exact: true }).fill('2');
+  await page.getByRole('button', { name: '매개변수로 실행' }).click();
+  await resultRows.first().getByText('사용자 2', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '다음 페이지' }).click();
+  await resultRows.first().getByText('사용자 102', { exact: true }).waitFor();
+
   await page.getByLabel('SQL 쿼리').fill('DELETE FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('alert').getByText('이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.').waitFor();
@@ -196,7 +215,7 @@ async function main() {
   await page.getByText('실패', { exact: true }).first().waitFor();
   await page.getByText('완료', { exact: true }).first().waitFor();
   const history = await page.locator('.audit-panel').innerText();
-  if ([database, backupPath, restoredPath, backupSha, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
+  if ([database, backupPath, restoredPath, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);

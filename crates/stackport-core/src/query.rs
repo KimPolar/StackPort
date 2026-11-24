@@ -4,8 +4,8 @@ use super::{
     db_error, display_value, open_schema_db, open_user_db, set_read_authorizer, QueryPage, Result,
     Store, TableQuery, PAGE_SIZE,
 };
-use rusqlite::{params_from_iter, Connection, InterruptHandle};
-use serde::Serialize;
+use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::Path,
@@ -19,6 +19,8 @@ use uuid::Uuid;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const PREPARE_LIFETIME: Duration = Duration::from_secs(60);
+const MAX_PARAMETERS: usize = 32;
+const MAX_PARAMETER_BYTES: usize = 16 * 1024;
 const RUNNING: u8 = 0;
 const CANCELLED: u8 = 1;
 const TIMED_OUT: u8 = 2;
@@ -27,8 +29,63 @@ const TIMED_OUT: u8 = 2;
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum QueryOutcome {
     Completed { result: QueryPage },
+    ParametersRequired { parameters: Vec<SqlParameter> },
     Cancelled,
     TimedOut,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SqlParameter {
+    pub index: usize,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SqlParameterValue {
+    Null,
+    Text(String),
+    Integer(String),
+    Real(String),
+    Blob(String),
+}
+
+impl SqlParameterValue {
+    fn sqlite_value(&self) -> Result<Value> {
+        match self {
+            Self::Null => Ok(Value::Null),
+            Self::Text(text) if text.len() <= MAX_PARAMETER_BYTES => Ok(Value::Text(text.clone())),
+            Self::Text(_) => Err("텍스트 값은 16 KiB까지 입력할 수 있습니다.".into()),
+            Self::Integer(text) => text
+                .trim()
+                .parse::<i64>()
+                .map(Value::Integer)
+                .map_err(|_| "64비트 정수를 입력하세요.".into()),
+            Self::Real(text) => text
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .map(Value::Real)
+                .ok_or_else(|| "유한한 실수를 입력하세요.".into()),
+            Self::Blob(text) => {
+                let text = text.trim();
+                if text.len() > MAX_PARAMETER_BYTES
+                    || text.len() % 2 != 0
+                    || !text.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    return Err("BLOB은 최대 16 KiB의 짝수 자리 16진수로 입력하세요.".into());
+                }
+                let mut bytes = Vec::with_capacity(text.len() / 2);
+                for index in (0..text.len()).step_by(2) {
+                    let value = u8::from_str_radix(&text[index..index + 2], 16)
+                        .map_err(|_| "BLOB에 16진수를 입력하세요.")?;
+                    bytes.push(value);
+                }
+                Ok(Value::Blob(bytes))
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -170,11 +227,12 @@ impl QueryManager {
 enum QueryFailure {
     Cancelled,
     TimedOut,
+    ParametersRequired(Vec<SqlParameter>),
     Error(String),
 }
 
 enum QuerySource<'a> {
-    Sql(&'a str),
+    Sql(&'a str, Option<&'a [SqlParameterValue]>),
     Object(&'a TableQuery),
 }
 
@@ -198,7 +256,18 @@ impl Store {
         sql: &str,
         page: u32,
     ) -> Result<QueryOutcome> {
-        self.execute_prepared(token, profile_id, QuerySource::Sql(sql), page)
+        self.query_prepared_with_parameters(token, profile_id, sql, page, None)
+    }
+
+    pub fn query_prepared_with_parameters(
+        &self,
+        token: &str,
+        profile_id: &str,
+        sql: &str,
+        page: u32,
+        parameters: Option<&[SqlParameterValue]>,
+    ) -> Result<QueryOutcome> {
+        self.execute_prepared(token, profile_id, QuerySource::Sql(sql, parameters), page)
     }
 
     pub fn query_object_prepared(
@@ -223,6 +292,9 @@ impl Store {
             Ok(result) => Ok(QueryOutcome::Completed { result }),
             Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
             Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
+            Err(QueryFailure::ParametersRequired(parameters)) => {
+                Ok(QueryOutcome::ParametersRequired { parameters })
+            }
             Err(QueryFailure::Error(error)) => Err(error),
         }
     }
@@ -231,7 +303,7 @@ impl Store {
     pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {
         match self.query_inner(
             profile_id,
-            QuerySource::Sql(sql),
+            QuerySource::Sql(sql, None),
             page,
             &Arc::new(QueryControl::default()),
             QUERY_TIMEOUT,
@@ -239,6 +311,9 @@ impl Store {
             Ok(result) => Ok(result),
             Err(QueryFailure::Cancelled) => Err("쿼리가 중단되었습니다.".into()),
             Err(QueryFailure::TimedOut) => Err("쿼리 실행 시간이 초과되어 중단되었습니다.".into()),
+            Err(QueryFailure::ParametersRequired(_)) => {
+                Err("쿼리 매개변수 값을 입력하세요.".into())
+            }
             Err(QueryFailure::Error(error)) => Err(error),
         }
     }
@@ -257,7 +332,7 @@ impl Store {
         control.check()?;
         let path = Path::new(&profile.path);
         let db = match source {
-            QuerySource::Sql(_) => open_user_db(path),
+            QuerySource::Sql(_, _) => open_user_db(path),
             QuerySource::Object(_) => open_schema_db(path),
         }
         .map_err(QueryFailure::Error)?;
@@ -285,7 +360,7 @@ impl Store {
         let offset = i64::from(page) * PAGE_SIZE as i64;
         let page_clause = format!("LIMIT {} OFFSET {offset}", PAGE_SIZE + 1);
         let (bounded_sql, values, show_sql) = match source {
-            QuerySource::Sql(sql) => {
+            QuerySource::Sql(sql, parameters) => {
                 let sql = sql.trim().trim_end_matches(';').trim_end();
                 if sql.is_empty() {
                     return Err(QueryFailure::Error("조회할 SQL을 입력하세요.".into()));
@@ -297,14 +372,42 @@ impl Store {
                         "이 연결에서는 결과를 반환하는 읽기 전용 쿼리만 실행할 수 있습니다.".into(),
                     ));
                 }
-                if original.parameter_count() != 0 {
+                let count = original.parameter_count();
+                if count > MAX_PARAMETERS {
                     return Err(QueryFailure::Error(
-                        "쿼리 매개변수는 아직 지원하지 않습니다.".into(),
+                        "쿼리 매개변수는 최대 32개까지 사용할 수 있습니다.".into(),
                     ));
                 }
+                control.check()?;
+                let values = match parameters {
+                    None if count > 0 => {
+                        let slots = (1..=count)
+                            .map(|index| SqlParameter {
+                                index,
+                                name: original.parameter_name(index).map(str::to_owned),
+                            })
+                            .collect();
+                        return Err(QueryFailure::ParametersRequired(slots));
+                    }
+                    Some(values) if values.len() == count => values
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            value.sqlite_value().map_err(|reason| {
+                                QueryFailure::Error(format!("매개변수 {}: {reason}", index + 1))
+                            })
+                        })
+                        .collect::<std::result::Result<_, _>>()?,
+                    Some(_) => {
+                        return Err(QueryFailure::Error(
+                            "쿼리의 매개변수 개수와 입력 값 개수가 다릅니다.".into(),
+                        ))
+                    }
+                    None => Vec::new(),
+                };
                 (
                     format!("SELECT * FROM (\n{sql}\n) {page_clause}"),
-                    Vec::new(),
+                    values,
                     false,
                 )
             }
@@ -328,7 +431,7 @@ impl Store {
         }
         if stmt.parameter_count() != values.len() {
             return Err(QueryFailure::Error(
-                "쿼리 매개변수는 아직 지원하지 않습니다.".into(),
+                "페이지를 구성하는 동안 쿼리 매개변수가 변경되었습니다.".into(),
             ));
         }
         let columns = stmt
@@ -385,7 +488,7 @@ mod tests {
         let control = Arc::new(QueryControl::default());
         let result = store.query_inner(
             &profile.id,
-            QuerySource::Sql("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers"),
+            QuerySource::Sql("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers", None),
             0,
             &control,
             Duration::from_millis(5),

@@ -2,7 +2,8 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome, RestorePreview, RestoreReport,
+    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
+    RestorePreview, RestoreReport, SqlParameterValue,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
 };
@@ -188,9 +189,13 @@ async fn run_query(
     profile_id: String,
     sql: String,
     page: u32,
+    parameters: Option<Vec<SqlParameterValue>>,
 ) -> Result<QueryOutcome, String> {
     let store = store.inner().clone();
-    worker(move || store.query_prepared(&token, &profile_id, &sql, page)).await
+    worker(move || {
+        store.query_prepared_with_parameters(&token, &profile_id, &sql, page, parameters.as_deref())
+    })
+    .await
 }
 
 #[tauri::command]
