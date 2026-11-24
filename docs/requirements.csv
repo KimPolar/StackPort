@@ -67,10 +67,10 @@ SP-TM-021,빠른 팝업 터미널,"단축키로 표시/숨김, 항상 위 선택
 SP-TM-022,검색 및 강조,"사용자 정의 정규식 강조 규칙, 링크 자동 인식, 오류/경고 표시 설정.",not_started,,
 SP-TM-023,전송 통합,터미널과 파일 관리자의 현재 원격 경로 연동(지원 셸/서버에 한정).,not_started,,
 SP-TM-024,세션 녹화,입력 이벤트와 출력 로그를 분리 저장하며 암호·민감 입력의 기록 제외 설정.,not_started,,
-SP-RG-001,RDP,Windows 원격 화면의 새 연결·다중 세션·전체 화면·창 모드·다중 모니터·해상도·색 깊이.,not_started,,
-SP-RG-002,RDP 인증,"사용자/도메인, NLA/CredSSP 및 서버 인증서 검증, 관리 콘솔 세션(`/admin`) 옵션.",not_started,,
-SP-RG-003,RDP 리디렉션,"클립보드, 드라이브, 프린터, 스마트카드, 지원 디바이스 및 단축키 전달 정책.",not_started,,
-SP-RG-004,RDP 조작,"화면 크기 재조정, 그래픽 품질/대역폭 옵션, 재연결, 특수 키 전송, 입력 잠금.",not_started,,
+SP-RG-001,RDP,Windows 원격 화면의 새 연결·다중 세션·전체 화면·창 모드·다중 모니터·해상도·색 깊이.,partial,"Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
+SP-RG-002,RDP 인증,"사용자/도메인, NLA/CredSSP 및 서버 인증서 검증, 관리 콘솔 세션(`/admin`) 옵션.",partial,"사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
+SP-RG-003,RDP 리디렉션,"클립보드, 드라이브, 프린터, 스마트카드, 지원 디바이스 및 단축키 전달 정책.",partial,RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
+SP-RG-004,RDP 조작,"화면 크기 재조정, 그래픽 품질/대역폭 옵션, 재연결, 특수 키 전송, 입력 잠금.",partial,RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-RG-005,VNC,"RFB 호환 서버 연결, 지원되는 보안 방식 선택, 화면·키보드·마우스 제어.",not_started,,
 SP-RG-006,VNC 옵션,"보기 전용, 화면 배율/해상도, 클립보드, 커서, 인코딩·색 품질·재연결.",not_started,,
 SP-RG-007,X11 서버,"Windows에서 로컬 X11 디스플레이 제공, 창 단위/단일 창 모드, 디스플레이 번호·모니터 선택.",not_started,,
@@ -84,7 +84,7 @@ SP-RG-014,화면 캡처,권한이 허용된 원격 화면 스크린샷 및 파�
 SP-RG-015,직렬 접속,"COM/TTY 포트 열거, 장치 표시, baud/data bits/parity/stop bits/flow control 설정.",not_started,,
 SP-RG-016,직렬 터미널,"HEX/텍스트 보기, CR/LF 변환, 바이트 송수신, 로그, 재연결.",not_started,,
 SP-RG-017,장비 연결 충돌,포트 사용 중·장치 제거·권한 부족·드라이버 오류를 구분해서 표시.,not_started,,
-SP-RG-018,프로토콜별 기능 가용성,OS·하드웨어·권한·라이선스에 따라 미지원 기능을 숨기지 말고 이유를 표시.,not_started,,
+SP-RG-018,프로토콜별 기능 가용성,OS·하드웨어·권한·라이선스에 따라 미지원 기능을 숨기지 말고 이유를 표시.,partial,Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-FL-001,자동 파일 탐색,SSH 접속 직후 허용된 SFTP/SCP 브라우저를 같은 프로젝트에 자동 표시(설정 가능).,not_started,,
 SP-FL-002,이중 패널 탐색,"로컬·원격·원격 간 디렉터리 트리, 파일 목록, 경로 이동, 탭, 새로고침.",not_started,,
 SP-FL-003,파일 작업,"생성, 읽기, 이름 변경, 이동, 복사, 삭제, 폴더 생성, 다중 선택, 드래그앤드롭.",not_started,,
@@ -376,7 +376,7 @@ SP-ST-018,국제화,"한국어/영어 UI, 다국어 문자 입력·출력, IME �
 SP-SEC-001,기본 거부,"명시적으로 허용하지 않은 호스트 접근, 로컬 서버 공개, 외부 API 송신, 확장 실행을 기본 차단.",not_started,,
 SP-SEC-002,최소 권한,읽기/쓰기/관리 권한과 자격 증명·네트워크·파일 접근을 기능별로 제한.,not_started,,
 SP-SEC-003,고위험 작업,"데이터 삭제/복원/스키마 변경, 동시 원격 명령, 원격 키 삭제 시 환경·대상·예상 영향 확인.",partial,SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-SEC-004,세션 보안,호스트 키·TLS 인증서 경고를 무음 우회하지 않으며 예외는 범위·만료·감사 기록.,partial,"SSH 호스트 키 지문 확인·고정과 변경 차단, 신뢰·교체 이력, 웹 상태 확인의 TLS 인증서 검증",crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs
+SP-SEC-004,세션 보안,호스트 키·TLS 인증서 경고를 무음 우회하지 않으며 예외는 범위·만료·감사 기록.,partial,"SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; crates/stackport-core/src/rdp.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs; tests/rdp-smoke.cjs
 SP-SEC-005,전송 암호화,보안 프로토콜을 우선 제안; Telnet/Rlogin/FTP/XDMCP 등 평문 사용 시 위험 배너.,not_started,,
 SP-SEC-006,비밀값 보호,"암호·토큰·키를 OS 보안 저장소/암호화 보관함에 보관, 사용 후 가능한 범위에서 메모리 정리.",not_started,,
 SP-SEC-007,UI 보안,"WebView 콘텐츠 보안 정책(CSP), 교차 컨텍스트 브리지 권한 최소화, HTML/SQL/셸 문자열 적절한 이스케이프.",partial,Tauri 콘텐츠 보안 정책,crates/stackport-core/tests/workspace.rs; src/; src-tauri/

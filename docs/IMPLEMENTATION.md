@@ -30,6 +30,10 @@ HTTPS는 Schannel로 서버 인증서를 검증하고 TLS 1.2 이상을 사용�
 
 네트워크 화면의 로컬 포트 목록은 [Windows IP Helper TCP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable)와 [UDP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedudptable) 테이블을 읽습니다. IPv4·IPv6의 로컬 주소·포트·PID, TCP 원격 주소와 연결 상태, UDP 바인딩을 표시합니다. 프로세스 조회 권한이 있으면 실행 파일 이름을 표시하고 파일 경로는 반환하지 않습니다. 소켓과 프로세스는 조회 사이에 바뀔 수 있습니다. 일부 테이블이 실패하면 읽은 목록과 원인을 함께 표시합니다. 조회는 수동 새로고침을 지원하며 연결 시도나 트래픽 전송을 수행하지 않습니다.
 
+원격 화면의 RDP는 Windows 시스템 디렉터리의 `mstsc.exe`로 연결을 엽니다. 호스트 또는 IP와 포트, 사용자 이름·도메인, 창·전체 화면·다중 모니터, 창 해상도와 색 깊이를 지정합니다. 인증은 Windows 창에서 처리하며 연결 설정은 서버 인증 실패 시 연결 거부, CredSSP 활성화, 자격 증명 프롬프트를 요청합니다. 관리 콘솔은 선택 시 `/admin`을 전달합니다. 클립보드·프린터·스마트카드·드라이브 공유는 기본으로 끄고, 필요한 리소스와 드라이브 문자만 선택합니다. 창 크기 변경, 자동 재연결, Windows 단축키 전달은 Windows 클라이언트 및 서버 정책 범위에서 동작합니다. [Windows 원격 데스크톱 명령](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/mstsc) · [RDP 연결 속성](https://learn.microsoft.com/en-us/azure/virtual-desktop/rdp-properties)
+
+StackPort는 실행한 Windows RDP 클라이언트와 각 클라이언트의 임시 연결 설정을 추적합니다. 프로세스 목록은 Windows 창의 실행 상태를 표시합니다. 연결 끊기와 정상 앱 종료는 실행한 클라이언트만 정리하며, 원격 세션의 로그아웃은 Windows 서버에서 처리합니다. 작업 공간의 임시 `.rdp` 파일에는 연결 대상·사용자 이름·도메인·설정이 들어가며, 앱이 강제 종료되면 남을 수 있습니다. Windows와 서버가 자체 인증 정책과 원격 화면을 관리합니다.
+
 선택한 SSH 연결은 자격 증명과 호스트 키 신뢰 기록 없이 JSON 파일로 교환할 수 있습니다. 내보내기는 선택 시점 이후 정의가 변경되면 중단하며 기존 파일을 덮어쓰지 않습니다. 가져오기는 파일을 검증하고 선택한 항목만 새 ID로 원자적으로 추가합니다. 미리보기 이후 파일이 변경되면 재확인이 필요하고 같은 이름의 기존 연결은 수정하지 않습니다. 가져오기와 내보내기는 작업 기록에 남기되 파일 경로와 연결 값은 기록하지 않습니다.
 
 로컬 메타데이터는 SQLite 트랜잭션, 외래 키, 스키마 버전을 사용합니다. 버전 1~3에서 4로 이관하기 전 원본과 같은 폴더에 SQLite 스냅샷을 생성하고 무결성과 버전을 검사합니다. 이관 실패 시 원본 트랜잭션을 롤백하고 백업을 보존합니다. 지원하지 않는 버전이나 비어 있지 않은 미버전 파일은 변경하지 않고 거절합니다. 백업을 통한 자동 복구는 아직 구현하지 않았습니다. SSH 연결 정의의 동시 수정은 감지하여 거절하며 자동 병합하지 않습니다. 프로젝트 삭제는 연결 정의도 삭제하지만 원본 DB 파일과 열린 SSH 세션은 건드리지 않습니다. 자격 증명 모델과 보안 저장소는 아직 없습니다.
@@ -83,6 +87,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/result_export.rs`에서 여러 페이지 분량의 결과, 필터·정렬·매개변수 보존, CSV 인코딩과 JSON 타입 보존, 취소·오류 시 정리와 감사 기록의 값 제외를 검사합니다.
 - `crates/stackport-core/tests/ports.rs`, `crates/stackport-core/tests/network.rs`, `tests/ports-smoke.cjs`: Windows에서 직접 연 루프백 소켓으로 포트 주소·상태·PID·프로세스, 필터·새로고침, DNS·TCP, Ping과 경로 추적을 검사합니다.
 - `crates/stackport-core/tests/web_check.rs`, `tests/ports-smoke.cjs`에서 HTTP 헤더와 상태 코드, 반복 간격, IPv6, 리디렉션과 쿠키 차단을 검사합니다. 임시 자체 서명 인증서와 키 파일을 `STACKPORT_TEST_TLS_CERT`, `STACKPORT_TEST_TLS_KEY`로 지정하면 인증서 거부를 추가로 검사합니다. 신뢰된 HTTPS URL을 `STACKPORT_TEST_HTTPS_URL`로 지정하면 실서버의 TLS 버전과 암호 모음도 검사합니다.
+- `crates/stackport-core/src/rdp.rs` 단위 테스트와 `tests/rdp-smoke.cjs`에서 연결 파일의 유효성, Windows `mstsc.exe` 실행, 독립 클라이언트 두 개, 개별 연결 끊기와 앱 종료 시 정리를 검사합니다. RDP 서버의 실제 로그인·화면 렌더링과 주변 장치 전달은 Windows 원격 호스트로 별도 검증해야 합니다.
 - `tests/portable-smoke.cjs`: 새 폴더에 복사한 Windows EXE에서 지정 모드, 버전 표시, 데이터 파일과 휴대형 WebView2 프로필 위치를 확인합니다.
 - `crates/stackport-core/tests/workspace_copy.rs`: Windows에서 WAL이 있는 작업 공간의 복사, 선택한 신뢰 저장소, 체크섬, 기존 대상 거절 및 실패 시 대상 폴더 부재를 확인합니다.
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.

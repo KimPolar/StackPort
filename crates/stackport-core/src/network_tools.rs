@@ -60,7 +60,7 @@ pub(crate) fn run(target: &str, tool: RouteTool, family: RouteFamily) -> Result<
             Duration::from_secs(24),
         ),
     };
-    let system = system_directory()?;
+    let system = crate::windows_system::system_directory()?;
     let mut command = Command::new(system.join(name));
     command.args(args);
     match family {
@@ -113,18 +113,6 @@ pub(crate) fn run(target: &str, tool: RouteTool, family: RouteFamily) -> Result<
         errors: decode(&errors),
         truncated: output_truncated || error_truncated,
     })
-}
-
-#[cfg(windows)]
-fn system_directory() -> Result<std::path::PathBuf> {
-    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-    use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-    let mut buffer = vec![0u16; 32768];
-    let length = unsafe { GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) } as usize;
-    if length == 0 || length >= buffer.len() {
-        return Err("Windows 시스템 폴더를 찾을 수 없습니다.".into());
-    }
-    Ok(OsString::from_wide(&buffer[..length]).into())
 }
 
 #[cfg(windows)]

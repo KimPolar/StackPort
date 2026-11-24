@@ -21,6 +21,8 @@ mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;
 pub use query::{QueryOutcome, SqlParameterValue};
+mod rdp;
+pub use rdp::{RdpAvailability, RdpManager, RdpRequest, RdpSession};
 mod restore;
 pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
@@ -37,6 +39,8 @@ mod terminal_output;
 pub use terminal_output::{save_terminal_output, TerminalOutputFormat};
 mod workspace_copy;
 pub use workspace_copy::{WorkspaceCopyPreview, WorkspaceCopyReport};
+#[cfg(windows)]
+mod windows_system;
 
 use rusqlite::{
     backup::{Backup, StepResult},

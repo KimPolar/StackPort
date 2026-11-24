@@ -6,6 +6,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
+    RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
@@ -13,7 +14,7 @@ use stackport_core::{
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
 };
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Manager, RunEvent, State};
 
 async fn worker<T, F>(operation: F) -> Result<T, String>
 where
@@ -60,6 +61,30 @@ async fn copy_workspace(
 #[tauri::command]
 async fn list_local_ports() -> Result<PortSnapshot, String> {
     worker(local_ports).await
+}
+
+#[tauri::command]
+async fn rdp_availability(rdp: State<'_, Arc<RdpManager>>) -> Result<RdpAvailability, String> {
+    let rdp = Arc::clone(rdp.inner());
+    worker(move || Ok(rdp.availability())).await
+}
+
+#[tauri::command]
+async fn open_rdp(rdp: State<'_, Arc<RdpManager>>, request: RdpRequest) -> Result<RdpSession, String> {
+    let rdp = Arc::clone(rdp.inner());
+    worker(move || rdp.open(&request)).await
+}
+
+#[tauri::command]
+async fn list_rdp_clients(rdp: State<'_, Arc<RdpManager>>) -> Result<Vec<RdpSession>, String> {
+    let rdp = Arc::clone(rdp.inner());
+    worker(move || rdp.list()).await
+}
+
+#[tauri::command]
+async fn disconnect_rdp(rdp: State<'_, Arc<RdpManager>>, id: String) -> Result<(), String> {
+    let rdp = Arc::clone(rdp.inner());
+    worker(move || rdp.disconnect(&id)).await
 }
 
 #[tauri::command]
@@ -676,6 +701,7 @@ fn main() {
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
             app.manage(Arc::new(NetworkManager::default()));
+            app.manage(Arc::new(RdpManager::new(location.directory.clone())));
             app.manage(location);
             window.build()?;
             Ok(())
@@ -686,6 +712,10 @@ fn main() {
             preview_workspace_copy,
             copy_workspace,
             list_local_ports,
+            rdp_availability,
+            open_rdp,
+            list_rdp_clients,
+            disconnect_rdp,
             run_route_diagnostic,
             run_web_diagnostic,
             export_terminal_output,
@@ -743,13 +773,20 @@ fn main() {
             choose_sqlite_restore_destination,
             restore_sqlite
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = run {
-        eprintln!("StackPort 실행 실패: {error}");
-        let _ = rfd::MessageDialog::new().set_title("StackPort 실행 실패")
-            .set_description(error.to_string())
-            .set_level(rfd::MessageLevel::Error)
-            .show();
-        std::process::exit(1);
+        .build(tauri::generate_context!());
+    match run {
+        Ok(app) => app.run(|handle, event| {
+            if matches!(event, RunEvent::Exit) {
+                handle.state::<Arc<RdpManager>>().shutdown();
+            }
+        }),
+        Err(error) => {
+            eprintln!("StackPort 실행 실패: {error}");
+            let _ = rfd::MessageDialog::new().set_title("StackPort 실행 실패")
+                .set_description(error.to_string())
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+            std::process::exit(1);
+        }
     }
 }
