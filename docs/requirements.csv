@@ -96,7 +96,7 @@ SP-FL-008,충돌 정책,"덮어쓰기/건너뛰기/이름 변경/날짜·크기 
 SP-FL-009,파일 속성,"크기, 시간, 유형, 소유자/그룹/Unix 권한, 심볼릭 링크, 숨김 파일 표시.",partial,"로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-010,원격 권한 변경,chmod/chown 등 서버가 지원하는 수정 기능과 실패 사유 표시.,not_started,,
 SP-FL-011,파일 미리보기,텍스트·이미지·바이너리 HEX·웹 문서·JSON·XML·CSV의 안전한 보기.,partial,"로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/
-SP-FL-012,통합 에디터,"문법 강조, 인코딩, 줄바꿈, 검색·치환, 줄 번호, 코드 접기, 대용량 읽기 전용 모드.",partial,"최대 512 KiB SFTP UTF-8 편집기, BOM·LF/CRLF 유지, Ctrl+S와 미저장 변경 확인 및 로컬 초안 보관",crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx
+SP-FL-012,통합 에디터,"문법 강조, 인코딩, 줄바꿈, 검색·치환, 줄 번호, 코드 접기, 대용량 읽기 전용 모드.",partial,"최대 512 KiB SFTP UTF-8 편집기, 줄 번호와 커서 위치, BOM·LF/CRLF 유지, 미저장 변경 확인 및 로컬 초안 보관",src/CodeTextarea.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs
 SP-FL-013,원격 즉시 편집,파일 열기→임시 복사→편집→안전한 저장→원격 업로드; 충돌 시 원본 보존.,partial,"SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx
 SP-FL-014,외부 편집기,"사용자가 지정한 로컬 편집기 연동, 변경 감시 후 재업로드 확인.",not_started,,
 SP-FL-015,파일 비교,"두 파일의 텍스트·바이너리·해시 비교, 차이 시각화, 병합 결과 별도 저장.",not_started,,
@@ -178,7 +178,7 @@ SP-DT-021,충돌 감지,편집 시작 이후 서버 원본이 변했으면 낙�
 SP-DT-022,트랜잭션 적용,여러 셀 수정의 적용 범위·자동 커밋·명시적 COMMIT/ROLLBACK 상태를 표시.,partial,SQLite 단일 셀 트랜잭션·롤백과 저장 값 검증,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DT-023,마스킹 보기,"개인 정보 열은 권한과 설정에 따라 표시값 마스킹, 복사·내보내기에도 동일 정책 적용.",not_started,,
 SP-DT-024,오류 복구,"행 단위 성공/실패, 제약·자료형·권한·데드락 충돌 이유와 재시도 범위를 제시.",partial,SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-SQ-001,SQL 편집기,"다중 파일/탭, 자동 저장, 코드 접기, 줄 번호, SQL 방언별 구문 강조.",partial,"접을 수 있는 연결별 다중 SQL 탭, 새 탭에서 파일 열기와 탭별 메모리 초안 및 닫기 확인",src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs
+SP-SQ-001,SQL 편집기,"다중 파일/탭, 자동 저장, 코드 접기, 줄 번호, SQL 방언별 구문 강조.",partial,"접을 수 있는 연결별 다중 SQL 탭과 줄 번호·커서 위치, 새 탭에서 파일 열기와 탭별 메모리 초안 및 닫기 확인",src/CodeTextarea.tsx; src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs
 SP-SQ-002,코드 완성,"스키마·테이블·컬럼·키워드·함수·별칭 자동 완성, 접근 권한을 반영한 후보 제시.",not_started,,
 SP-SQ-003,실시간 진단,"파서 기반 구문 오류, 존재하지 않는 객체, 타입 오류 가능성, 오류 위치·설명 표시.",not_started,,
 SP-SQ-004,코드 인텔리전스,"호버 설명, 사용 위치 찾기, 정의로 이동, 객체 생성 DDL로 이동.",not_started,,

@@ -904,6 +904,12 @@ async function verifyEditor(page, remote, uploads, local) {
   await text.waitFor();
   assert.equal(await text.inputValue(), 'alpha\nstart\n');
   await dialog.getByText(/UTF-8 BOM · CRLF/).waitFor();
+  const multiline = [...Array.from({ length: 199 }, () => 'fixture line'), '한😀'].join('\n');
+  await text.fill(multiline);
+  await text.press('Control+End');
+  await dialog.getByText('200줄 · 3열', { exact: true }).waitFor();
+  await dialog.locator('.code-gutter-lines > [data-active="true"]').getByText('200', { exact: true }).waitFor();
+  assert.ok(await dialog.locator('.code-gutter-lines > div').count() < 30);
   await text.fill('alpha\nsaved\n');
   await confirmation.fill('prod');
   assert.equal(await save.isDisabled(), true);

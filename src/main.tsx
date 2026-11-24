@@ -21,6 +21,7 @@ import {
 import { ResultExportDialog, type ExportReport, type ExportSource } from "./ResultExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
+import { CodeTextarea } from "./CodeTextarea";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -815,6 +816,16 @@ function App() {
 
   if (!startupLoaded) return <main className="empty-state" role="status">작업 공간을 불러오는 중…</main>;
 
+  const sqlEditorFooter = <>
+    <div className="sql-file-actions">
+      <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
+      <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+    </div>
+    {sqlDraft && <span className="sql-file-state" role="status" title={sqlDraft.savedPath || undefined}>
+      {isSqlDraftDirty(sqlDraft) ? "저장하지 않은 변경" : sqlDraft.savedPath ? "파일과 동일" : "Ctrl + Enter 실행"}
+    </span>}
+  </>;
+
   const databasePane = <div id="workspace-pane-workspace" className="main-content">
     {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
       <strong>SQLite 복원 완료 · 검증 통과</strong>
@@ -860,7 +871,8 @@ function App() {
             aria-labelledby={sqlTabButtonId(draft.id)} hidden={draft.id !== sqlTabs.activeId}>
             {draft.id === sqlTabs.activeId && <>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label>
-              <textarea id="sql-editor" ref={sqlEditor} spellCheck={false} value={sql} onChange={event => changeSql(event.target.value)}
+              <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql}
+                footer={sqlEditorFooter} onChange={event => changeSql(event.target.value)}
                 onSelect={event => {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;
                   setSqlSelection(start === end ? null : { start, end });
@@ -878,16 +890,10 @@ function App() {
                 }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
             </>}
           </div>)}
-          {!sqlDraft && <p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p>}
-          <div className="editor-footer">
-            <div className="sql-file-actions">
-              <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
-              <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
-            </div>
-            {sqlDraft && <span className="sql-file-state" role="status" title={sqlDraft.savedPath || undefined}>
-              {isSqlDraftDirty(sqlDraft) ? "저장하지 않은 변경" : sqlDraft.savedPath ? "파일과 동일" : "Ctrl + Enter 실행"}
-            </span>}
-          </div>
+          {!sqlDraft && <>
+            <p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p>
+            <div className="editor-footer">{sqlEditorFooter}</div>
+          </>}
         </div>
       </div>
       {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}

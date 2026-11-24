@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
+import { CodeTextarea } from "./CodeTextarea";
 import { SftpTransferStatus, useSftpTransfer } from "./SftpTransferStatus";
 import type { TransferResult } from "./SftpTransferDialog";
 
@@ -36,6 +37,7 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const form = useRef<HTMLFormElement>(null);
+  const editor = useRef<HTMLTextAreaElement>(null);
   const [result, setResult] = useState<Awaited<SftpEditorSelection["result"]> | null>(null);
   const [text, setText] = useState("");
   const [saveAs, setSaveAs] = useState(false);
@@ -189,9 +191,12 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
       {!result && <p className="form-note" role="status">원격 파일을 읽는 중…</p>}
       {result && "error" in result && <p role="alert" className="form-error">{result.error}</p>}
       {doc && <>
-        <label className="field">파일 내용<textarea className="sftp-editor-text" value={text} spellCheck={false} readOnly={editingLocked}
-          onChange={event => setText(event.target.value)} /></label>
-        <p className="form-note">UTF-8{doc.bom && " BOM"} · {doc.line_ending.toUpperCase()} · {numbers.format(bytes)} B</p>
+        <div className="field sftp-code-field">
+          <label htmlFor="sftp-editor-text">파일 내용</label>
+          <CodeTextarea editorRef={editor} id="sftp-editor-text" className="sftp-editor-text" value={text}
+            spellCheck={false} readOnly={editingLocked} onChange={event => setText(event.target.value)}
+            footer={<span>UTF-8{doc.bom && " BOM"} · {doc.line_ending.toUpperCase()} · {numbers.format(bytes)} B</span>} />
+        </div>
         {!draftMode && <>
           {oversized && <p role="alert" className="form-error">파일이 512 KiB를 초과했습니다.</p>}
           {doc.replace_supported ? <label className="field">저장 위치

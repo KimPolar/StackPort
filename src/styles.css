@@ -135,6 +135,15 @@ h1, h2, p { margin-top: 0; }
 textarea { display: block; width: 100%; resize: vertical; min-height: 154px; border: 0; padding: 21px; color: #29463b; background: #fff; font-family: Consolas, "Cascadia Code", monospace; font-size: 13px; line-height: 1.7; }
 textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1; }
 .editor-footer { min-height: 32px; padding: 5px 12px; border-top: 1px solid #f0f3f1; display: flex; flex-wrap: wrap; gap: 6px 12px; justify-content: space-between; align-items: center; color: #667f73; font-size: 11px; }
+.code-editor { --code-padding: 12px; min-width: 0; }
+.code-editor-input { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+.code-editor-input textarea { min-width: 0; padding: var(--code-padding); line-height: var(--code-line-height); white-space: pre; overflow: auto; }
+.code-gutter { position: relative; width: calc(var(--code-gutter-digits) * 1ch + 20px); border-inline-end: 1px solid #e7eee9; background: #f7faf8; color: #526a5f; font: 12px/var(--code-line-height) Consolas, monospace; font-variant-numeric: tabular-nums; text-align: end; user-select: none; }
+.code-gutter-window { position: absolute; inset: 0 0 auto; overflow: hidden; }
+.code-gutter-lines { padding-top: var(--code-padding); }
+.code-gutter-lines > div { padding-inline: 6px; }
+.code-gutter-lines > [data-active="true"] { color: #155e4e; background: #eaf4ee; font-weight: 700; }
+.code-position { margin-inline-start: auto; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sql-file-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .sql-file-state { min-width: 0; overflow-wrap: anywhere; }
 .sql-tab-strip { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px 0; background: #f1f6f3; border-bottom: 1px solid #e0e9e4; }
@@ -279,7 +288,9 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }
-.sftp-editor-text { min-height: 220px; max-height: 48vh; resize: vertical; padding: 10px; border: 1px solid #dce7df; border-radius: 5px; color: #30473b; font: 13px/1.55 Consolas, monospace; }
+.sftp-code-field .code-editor { border: 1px solid #dce7df; border-radius: 5px; overflow: hidden; }
+.sftp-code-field .editor-footer { font-weight: 400; }
+.sftp-editor-text { min-height: 220px; max-height: 48vh; }
 .sftp-editor .dialog-actions { flex-wrap: wrap; }
 .sftp-editor .form-note { overflow-wrap: anywhere; }
 .dialog.files-preview { width: min(760px, calc(100vw - 32px)); }

@@ -36,6 +36,21 @@ async function main() {
     const saveDialog = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
 
     await dev.click();
+    const lineTest = [...Array.from({ length: 179 }, (_, index) => `-- fixture line ${index + 1}`), '한😀'].join('\n');
+    await editor.fill(lineTest);
+    await editor.press('Control+End');
+    await page.getByText('180줄 · 3열', { exact: true }).waitFor();
+    const gutter = page.locator('.code-gutter-lines > div');
+    await page.locator('.code-gutter-lines > [data-active="true"]').getByText('180', { exact: true }).waitFor();
+    assert.ok(await gutter.count() < 25);
+    assert.ok(await editor.evaluate(node => node.scrollTop) > 0);
+    await editor.press('Control+Home');
+    await page.getByText('1줄 · 1열', { exact: true }).waitFor();
+    await page.locator('.code-gutter-lines > [data-active="true"]').getByText('1', { exact: true }).waitFor();
+    await editor.fill('x'.repeat(2048));
+    await editor.press('End');
+    await page.getByText('1줄 · 2,049열', { exact: true }).waitFor();
+    assert.ok(await editor.evaluate(node => node.scrollLeft) > 0);
     await editor.fill("SELECT '기존 초안';");
     await open.click();
     await inputDialog.getByLabel('SQL 파일 경로').fill(invalid);
