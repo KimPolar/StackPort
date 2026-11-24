@@ -22,8 +22,11 @@ import { ResultExportDialog, type ExportReport, type ExportSource } from "./Resu
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { CodeTextarea } from "./CodeTextarea";
-import { sqlCompletionContext, sqlCompletionSuggestions, type SqlCompletionCatalog } from "./sqlCompletion";
+import { sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlCompletionCatalog, type SqlDefinitionReference } from "./sqlCompletion";
 import { SqlDiagnostics } from "./SqlDiagnostics";
+import { SqlDefinitionDialog, type SqlDefinitionResult } from "./SqlDefinitionDialog";
+import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
+import { revealEditorRange } from "./editorSearch";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -42,11 +45,6 @@ import "./styles.css";
 type Project = { id: string; name: string };
 type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portable"; data_directory: string };
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
-type DatabaseObject = { name: string; kind: string; ddl: string | null };
-type ColumnInfo = { position: number; name: string; declared_type: string; not_null: boolean; default_value: string | null; primary_key_position: number; hidden: number };
-type IndexInfo = { name: string; unique: boolean; origin: string; partial: boolean; columns: { position: number; name: string | null; descending: boolean; collation: string | null }[] };
-type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from_column: string; to_column: string | null; on_update: string; on_delete: string };
-type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
 type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
@@ -56,6 +54,7 @@ type QueryResult = { profileId: string; page: QueryPage; target: QueryTarget };
 type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: QueryPlan } | null };
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
+type SqlDefinitionRequest = { profileId: string; tabId: string; source: string; result: Promise<SqlDefinitionResult> };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -122,6 +121,7 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sqlTabSets, setSqlTabSets] = useState<Record<string, SqlTabSet>>({});
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
+  const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
   const [closingSqlTab, setClosingSqlTab] = useState<SqlDraft | null>(null);
   const [exitPrompt, setExitPrompt] = useState(false);
   const [exitClosing, setExitClosing] = useState(false);
@@ -408,6 +408,37 @@ function App() {
     const catalog = await call<SqlCompletionCatalog>("sql_completion_catalog", { profileId, prefix: context.prefix, sources });
     if (objectGeneration.current !== generation) return null;
     return { start: context.start, end: context.end, items: sqlCompletionSuggestions(context, catalog) };
+  }
+
+  async function readSqlDefinition(reference: SqlDefinitionReference, targetProfile: string): Promise<SqlDefinitionResult> {
+    const { column } = reference;
+    let candidates = reference.sources;
+    if (column && candidates.length > 1) {
+      const sources = [...new Set(candidates.map(source => source.name))];
+      if (sources.length > 12) return { error: "테이블 이름이나 별칭을 붙여 확인할 열을 지정하세요." };
+      const catalog = await call<SqlCompletionCatalog>("sql_completion_catalog", { profileId: targetProfile, prefix: column, sources });
+      const owners = new Set(catalog.columns.filter(item => item.names.some(name => sqliteNameKey(name) === sqliteNameKey(column)))
+        .map(item => sqliteNameKey(item.relation)));
+      candidates = candidates.filter(candidate => owners.has(sqliteNameKey(candidate.name)));
+    }
+    if (candidates.length > 1) return { error: "여러 테이블이 이 이름을 사용합니다. 테이블 이름이나 별칭을 붙여 확인할 열을 지정하세요." };
+    const target = candidates[0];
+    if (!target) return { error: "현재 문장에서 이 열의 테이블을 찾을 수 없습니다." };
+    const details = await call<ObjectDetails>("describe_object", { profileId: targetProfile, name: target.name });
+    const matching = column && details.columns.find(item => item.hidden !== 1 && sqliteNameKey(item.name) === sqliteNameKey(column));
+    if (column && !matching) return { error: "현재 테이블 또는 뷰에서 이 열을 찾을 수 없습니다." };
+    return { details, column: matching ? matching.name : null, uses: target.uses };
+  }
+
+  function openSqlDefinition() {
+    const editor = sqlEditor.current;
+    if (!editor || !sqlDraft || !profile) return;
+    const source = editor.value;
+    const caret = editor.selectionDirection === "backward" ? editor.selectionStart : editor.selectionEnd;
+    const reference = sqlDefinitionReference(source, caret);
+    const result = reference ? readSqlDefinition(reference, profile.id).catch(error => ({ error: errorText(error) }))
+      : Promise.resolve({ error: "현재 문장의 테이블, 별칭 또는 열 이름에 커서를 두세요." });
+    setDefinition({ profileId: profile.id, tabId: sqlDraft.id, source, result });
   }
 
   function editSqlTabs(target: SqlTarget, edit: (group: SqlTabSet) => SqlTabSet) {
@@ -834,6 +865,7 @@ function App() {
     <div className="sql-file-actions">
       <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+      {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
     </div>
     {sqlDraft && <span className="sql-file-state" role="status" title={sqlDraft.savedPath || undefined}>
       {isSqlDraftDirty(sqlDraft) ? "저장하지 않은 변경" : sqlDraft.savedPath ? "파일과 동일" : "Ctrl + Enter 실행"}
@@ -891,7 +923,13 @@ function App() {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;
                   setSqlSelection(start === end ? null : { start, end });
                 }} onKeyDown={event => {
-                  if (!(event.ctrlKey || event.metaKey) || event.nativeEvent.isComposing) return;
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === "F12" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                    event.preventDefault();
+                    if (sql.trim()) openSqlDefinition();
+                    return;
+                  }
+                  if (!(event.ctrlKey || event.metaKey)) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     const { selectionStart, selectionEnd } = event.currentTarget;
@@ -1070,6 +1108,11 @@ function App() {
       document={sqlFileAction.mode === "save" ? sqlFileAction.draft.document : emptySqlDocument}
       onClose={() => setSqlFileAction(null)} onBusy={busy => { sqlFileBusy.current = busy; }}
       onDone={(document, path) => finishSqlFile(sqlFileAction, document, path)} />}
+    {definition && definition.profileId === profile?.id && definition.tabId === sqlDraft?.id && <SqlDefinitionDialog
+      source={definition.source} result={definition.result} onClose={() => setDefinition(null)} onReveal={range => {
+        const editor = sqlEditor.current;
+        if (editor?.value === definition.source) revealEditorRange(editor, range.start, range.end);
+      }} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
@@ -1278,20 +1321,6 @@ function SshTrustHistory() {
     </li>)}</ul> : <p className="audit-empty">아직 신뢰한 호스트 키가 없습니다.</p>}
     <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
   </div>;
-}
-
-function SchemaDetails({ object, details, loading, error }: { object: DatabaseObject; details: ObjectDetails | null; loading: boolean; error: string }) {
-  return <details className="schema-card"><summary><span><Table2 size={15} /> <strong>{object.name}</strong> 구조</span><span className="subtle">{loading ? "불러오는 중…" : details ? `열 ${details.columns.length} · 인덱스 ${details.indexes.length} · 외래 키 ${details.foreign_keys.length}` : "상세 보기"}</span></summary>
-    <div className="schema-content" aria-busy={loading}>
-      {error && <p className="form-error" role="alert">구조를 불러오지 못했습니다: {error}</p>}
-      {details && <><p className="form-note">조회 시점의 구조입니다. 지원되는 테이블은 행에서 단일 셀 변경을 미리보고 승인할 수 있습니다.</p>
-        <h2>열</h2><div className="table-wrap"><table aria-label={`${object.name} 열 구조`}><thead><tr><th scope="col">이름</th><th scope="col">형식</th><th scope="col">NULL 허용</th><th scope="col">기본값</th><th scope="col">키 / 특성</th></tr></thead><tbody>{details.columns.map(column => <tr key={column.position}><td>{column.name}</td><td>{column.declared_type || "지정 없음"}</td><td>{column.not_null ? "아니요" : "명시 안 됨"}</td><td>{column.default_value ?? "없음"}</td><td>{column.primary_key_position ? `PK ${column.primary_key_position}` : column.hidden === 2 ? "가상 생성 열" : column.hidden === 3 ? "저장 생성 열" : column.hidden ? "숨김 열" : "—"}</td></tr>)}</tbody></table></div>
-        <h2>인덱스</h2>{details.indexes.length ? <ul className="schema-list">{details.indexes.map(index => <li key={index.name}><strong>{index.name}</strong><span>{index.unique ? "UNIQUE · " : ""}{index.partial ? "부분 인덱스 · " : ""}{index.columns.map(column => `${column.name ?? "(표현식)"}${column.descending ? " DESC" : ""}${column.collation ? ` COLLATE ${column.collation}` : ""}`).join(", ")}</span></li>)}</ul> : <p className="form-note">인덱스가 없습니다.</p>}
-        <h2>외래 키</h2>{details.foreign_keys.length ? <ul className="schema-list">{details.foreign_keys.map(key => <li key={`${key.id}-${key.sequence}`}><strong>{key.from_column} → {key.target_table}.{key.to_column ?? "(기본 키)"}</strong><span>그룹 {key.id} · 순서 {key.sequence + 1} · 삭제 {key.on_delete} · 수정 {key.on_update}</span></li>)}</ul> : <p className="form-note">외래 키가 없습니다.</p>}
-        <h2>생성 SQL</h2><pre className="schema-ddl">{details.object.ddl ?? "생성 SQL을 사용할 수 없습니다."}</pre>
-      </>}
-    </div>
-  </details>;
 }
 
 function ObjectGroup({ name, items, selected, onSelect }: { name: string; items: DatabaseObject[]; selected?: string; onSelect: (object: DatabaseObject) => void }) {

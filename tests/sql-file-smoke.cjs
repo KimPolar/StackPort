@@ -44,6 +44,7 @@ async function main() {
     await dev.click();
     await verifySqlCompletion(page, editor, dev);
     await verifySqlDiagnostics(page, editor, dev);
+    await verifySqlDefinition(page, editor, dev);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
     await editor.fill(colored);
     const syntax = page.locator('.code-highlight-lines');
@@ -400,6 +401,44 @@ async function verifySqlDiagnostics(page, editor, dev) {
   await page.getByRole('button', { name: /격리 DB DEV/ }).click();
   await editor.fill('SELECT value FROM source;');
   await region.getByText('1개 문장 검사 · 문제 0개', { exact: true }).waitFor();
+  await dev.click();
+}
+
+async function verifySqlDefinition(page, editor, dev) {
+  const dialog = page.getByRole('dialog', { name: 'SQL 정의', exact: true });
+  const locate = async (input, fragment) => {
+    await editor.fill(input);
+    const position = input.indexOf(fragment) + 1;
+    await editor.evaluate((node, offset) => node.setSelectionRange(offset, offset), position);
+  };
+  const close = () => dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  const query = "SELECT '한😀 p.name', p.name FROM main.PEOPLE AS p WHERE p.name <> 'p.name';";
+  await locate(query, 'name FROM');
+  await editor.press('F12');
+  await dialog.getByText('people · name', { exact: true }).waitFor();
+  const columns = dialog.getByRole('table', { name: 'people 열 구조', exact: true });
+  await columns.locator('tr[aria-current="true"]').getByRole('cell', { name: 'name', exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '생성 SQL로 이동', exact: true }).click();
+  const ddl = dialog.getByLabel('생성 SQL', { exact: true });
+  assert.match(await ddl.textContent(), /CREATE TABLE people/);
+  assert.equal(await ddl.evaluate(element => element === document.activeElement), true);
+  await dialog.getByText('현재 문장의 참조 위치 2개', { exact: true }).click();
+  await dialog.getByRole('button', { name: /줄.*열 name$/ }).last().click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await editor.evaluate(node => node.selectionStart), query.indexOf('name <>'));
+  assert.equal(await editor.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), 'name');
+  assert.equal(await editor.inputValue(), query);
+
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  await locate('SELECT * FROM "WEB VIEW";', 'WEB VIEW');
+  await page.getByRole('button', { name: '정의 보기', exact: true }).click();
+  await dialog.getByText('web view', { exact: true }).waitFor();
+  assert.match(await ddl.textContent(), /CREATE VIEW "web view"/);
+  await close();
+  await locate('SELECT value FROM source s JOIN "web view" v ON s.value = v.value;', 'value FROM');
+  await editor.press('F12');
+  await dialog.getByRole('alert').getByText(/여러 테이블이 이 이름을 사용합니다/).waitFor();
+  await close();
   await dev.click();
 }
 

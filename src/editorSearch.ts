@@ -62,3 +62,12 @@ export function revealEditorMatch(editor: HTMLTextAreaElement, line: number, lin
     editor.scrollLeft = Math.max(0, left - 16);
   }
 }
+
+export function revealEditorRange(editor: HTMLTextAreaElement, start: number, end: number) {
+  editor.focus({ preventScroll: true });
+  editor.setSelectionRange(start, end);
+  const before = editor.value.slice(0, start);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const line = before.split("\n").length - 1;
+  revealEditorMatch(editor, line, lineStart, start, end - start, parseFloat(getComputedStyle(editor).lineHeight));
+}

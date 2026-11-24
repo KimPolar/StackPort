@@ -669,6 +669,7 @@ impl Store {
 
     fn describe_object_on(db: &Connection, name: &str) -> Result<ObjectDetails> {
         let object = Self::read_object(db, name)?;
+        let name = object.name.as_str();
         let columns = Self::object_columns(db, name)?;
 
         let mut statement = db
@@ -735,7 +736,7 @@ impl Store {
 
     fn read_object(db: &Connection, name: &str) -> Result<DatabaseObject> {
         db.query_row(
-            "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
+            "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 COLLATE NOCASE AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
             [name],
             |row| Ok(DatabaseObject { name: row.get(0)?, kind: row.get(1)?, ddl: row.get(2)? }),
         ).optional().map_err(db_error)?.ok_or_else(|| "테이블 또는 뷰를 찾을 수 없습니다.".into())

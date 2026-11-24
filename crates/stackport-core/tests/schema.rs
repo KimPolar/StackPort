@@ -42,7 +42,8 @@ fn reports_columns_composite_keys_indexes_foreign_keys_and_ddl() {
     );
     assert_eq!(parent.columns[0].primary_key_position, 1);
     assert_eq!(parent.columns[1].primary_key_position, 2);
-    let child = store.describe_object(&profile.id, "odd\"name").unwrap();
+    let child = store.describe_object(&profile.id, "ODD\"NAME").unwrap();
+    assert_eq!(child.object.name, "odd\"name");
     assert!(child.object.ddl.as_ref().unwrap().contains("CREATE TABLE"));
     assert_eq!(child.columns.len(), 3);
     assert!(child.columns[0].not_null);

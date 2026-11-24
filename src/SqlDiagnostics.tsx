@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { revealEditorMatch } from "./editorSearch";
+import { revealEditorRange } from "./editorSearch";
 
 const labels = { syntax: "문법 오류", object: "객체 참조 오류", type: "타입 오류", policy: "읽기 전용 정책", sqlite: "SQLite 오류" };
 type Issue = { kind: keyof typeof labels; message: string; start: number; end: number; line: number; column: number; precise: boolean };
@@ -46,10 +46,7 @@ export function SqlDiagnostics({ profileId, sql, enabled, editorRef }: {
   function reveal(issue: Issue) {
     const editor = editorRef.current;
     if (!editor || editor.value !== sql) return;
-    editor.focus({ preventScroll: true });
-    editor.setSelectionRange(issue.start, issue.end);
-    const lineStart = sql.lastIndexOf("\n", issue.start - 1) + 1;
-    revealEditorMatch(editor, issue.line - 1, lineStart, issue.start, issue.end - issue.start, parseFloat(getComputedStyle(editor).lineHeight));
+    revealEditorRange(editor, issue.start, issue.end);
   }
 
   return <section className="sql-diagnostics" aria-label="SQL 실시간 진단">
