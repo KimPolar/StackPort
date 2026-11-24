@@ -8,7 +8,7 @@
 mod row;
 pub use row::{
     InsertColumn, RowChange, RowChangeField, RowChangePreview, RowChangeResult, RowChangeSession,
-    RowChangeValue, RowInsertField,
+    RowChangeValue, RowInsertField, RowPastePreview, RowPasteResult,
 };
 
 use super::quote_identifier as quote;

@@ -181,7 +181,7 @@ async function main() {
   assert.equal(await layoutDialog.getByLabel('amount 소수 자릿수').inputValue(), '2');
   await layoutDialog.getByRole('button', { name: '취소', exact: true }).click();
   await layoutDialog.waitFor({ state: 'detached' });
-  mutateFixture(`CREATE TABLE row_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL,
+  mutateFixture(`CREATE TABLE row_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE ON CONFLICT REPLACE,
     empty_text TEXT DEFAULT 'default text', optional TEXT DEFAULT 'default optional', amount INTEGER DEFAULT 7,
     created TEXT DEFAULT (date('2026-01-02')))`);
   await refreshObjects.click();
@@ -232,6 +232,46 @@ async function main() {
   await page.getByRole('status').getByText('행 1개 삭제 완료', { exact: true }).waitFor();
   await page.getByText('조회된 행이 없습니다.', { exact: true }).waitFor();
   assert.equal(scalar('SELECT count(*) FROM row_actions'), '0');
+
+  const pasteRows = page.getByRole('button', { name: '행 붙여넣기', exact: true });
+  const pasteDialog = page.getByRole('dialog', { name: 'SQLite 행 붙여넣기', exact: true });
+  const pasteText = pasteDialog.getByLabel('붙여넣을 범위', { exact: true });
+  const mapPaste = pasteDialog.getByRole('button', { name: '열 매핑', exact: true });
+  const previewPaste = pasteDialog.getByRole('button', { name: '붙여넣기 미리보기', exact: true });
+  const applyPaste = pasteDialog.getByRole('button', { name: '붙여넣기 적용', exact: true });
+  await pasteRows.click();
+  await pasteText.fill('이름\tempty_text\toptional\tamount\r\n"탭\t포함"\t\t\t9007199254740993\r\n다음 행\t\t\t0\r\n');
+  await pasteDialog.getByLabel('첫 행에 열 이름이 있음').check();
+  await mapPaste.click();
+  await pasteDialog.getByLabel('원본 열 1 대상', { exact: true }).selectOption('column:label');
+  await pasteDialog.getByLabel('원본 열 3 빈 셀', { exact: true }).selectOption('null');
+  await page.keyboard.press('Escape');
+  await pasteDialog.getByText('적용하지 않은 붙여넣기가 있습니다.', { exact: true }).waitFor();
+  await pasteDialog.getByRole('button', { name: '계속 편집', exact: true }).click();
+  await previewPaste.click();
+  const pasteTable = pasteDialog.getByRole('table', { name: '붙여넣기 미리보기', exact: true });
+  await pasteTable.getByText('9007199254740993', { exact: true }).waitFor();
+  await pasteTable.getByText('(빈 문자열)', { exact: true }).first().waitFor();
+  await pasteTable.getByText('NULL', { exact: true }).first().waitFor();
+  assert.equal(scalar('SELECT count(*) FROM row_actions'), '0');
+  await applyPaste.click();
+  await pasteDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 2개 붙여넣기 완료', { exact: true }).waitFor();
+  await gridTable.getByText('다음 행', { exact: true }).waitFor();
+  assert.equal(scalar("SELECT label || '|' || length(empty_text) || '|' || (optional IS NULL) || '|' || amount || '|' || created FROM row_actions ORDER BY id LIMIT 1"),
+    '탭\t포함|0|1|9007199254740993|2026-01-02');
+  await pasteRows.click();
+  await pasteText.fill('롤백할 행\n다음 행');
+  await mapPaste.click();
+  await previewPaste.click();
+  await pasteTable.getByText('롤백할 행', { exact: true }).waitFor();
+  await applyPaste.click();
+  await pasteDialog.getByRole('alert').getByText(/2행.*전체를 롤백/).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM row_actions'), '2');
+  assert.equal(scalar("SELECT count(*) FROM row_actions WHERE label='롤백할 행'"), '0');
+  await pasteDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await pasteDialog.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await pasteDialog.waitFor({ state: 'detached' });
 
   mutateFixture(`CREATE TABLE multi_edit (id INTEGER PRIMARY KEY, label TEXT NOT NULL, amount INTEGER NOT NULL,
     CHECK ((label='원래' AND amount=3) OR (label='함께' AND amount=8)))`);

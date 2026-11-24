@@ -108,6 +108,33 @@ const CSV_ROWS = 100;
 const CSV_COLUMNS = 32;
 
 function parseCsv(source: string): StructuredPreview {
+  const parsed = parseDelimitedText(source, ",", CSV_ROWS, CSV_COLUMNS);
+  return parsed ? { kind: "csv", ...parsed } : { error: "CSV 따옴표 또는 구분자 형식이 올바르지 않아 원문을 표시합니다." };
+}
+
+export const clipboardPasteLimits = { rows: 100, columns: 64, bytes: 256 * 1024 };
+
+export function parseClipboardRows(source: string, header: boolean) {
+  if (source.length > clipboardPasteLimits.bytes || new TextEncoder().encode(source).length > clipboardPasteLimits.bytes) {
+    return { error: "붙여넣을 값의 전체 크기를 256 KiB 이하로 줄이세요." };
+  }
+  if (source.includes("\0")) return { error: "NUL 문자가 들어 있는 셀을 제거하세요." };
+  const { rows: maximum, columns: width } = clipboardPasteLimits;
+  const parsed = parseDelimitedText(source.replace(/^\uFEFF/, ""), "\t", maximum + Number(header), width);
+  if (!parsed) return { error: "따옴표로 묶인 셀의 시작과 끝을 확인하세요." };
+  if (parsed.rowCount <= Number(header)) return { error: "붙여넣을 데이터 행을 입력하세요." };
+  if (parsed.rowCount > maximum + Number(header) || parsed.columnCount > width) {
+    return { error: `붙여넣을 범위를 1~${maximum}행, 1~${width}열로 선택하세요.` };
+  }
+  const headers = header ? parsed.rows[0] : null;
+  const rows = header ? parsed.rows.slice(1) : parsed.rows;
+  const columnCount = (headers ?? rows[0]).length;
+  const mismatch = rows.findIndex(row => row.length !== columnCount);
+  if (mismatch !== -1) return { error: `붙여넣기 ${mismatch + 1}행의 열 수가 다릅니다. 사각형 범위를 복사하세요.` };
+  return { headers, rows, columnCount };
+}
+
+function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: number, maxColumns: number) {
   const rows: string[][] = [];
   let row: string[] = [];
   let value = "";
@@ -115,10 +142,9 @@ function parseCsv(source: string): StructuredPreview {
   let columns = 0;
   let columnCount = 0;
   let rowCount = 0;
-  const invalid = { error: "CSV 따옴표 또는 구분자 형식이 올바르지 않아 원문을 표시합니다." };
 
   function field() {
-    if (rowCount < CSV_ROWS && columns < CSV_COLUMNS) row.push(value);
+    if (rowCount < maxRows && columns < maxColumns) row.push(value);
     columns++;
     value = "";
     state = "start";
@@ -126,7 +152,7 @@ function parseCsv(source: string): StructuredPreview {
 
   function record() {
     field();
-    if (rowCount < CSV_ROWS) rows.push(row);
+    if (rowCount < maxRows) rows.push(row);
     row = [];
     rowCount++;
     columnCount = Math.max(columns, columnCount);
@@ -139,22 +165,22 @@ function parseCsv(source: string): StructuredPreview {
       if (char !== '"') value += char;
       else if (source[i + 1] === '"') { value += char; i++; }
       else state = "closed";
-    } else if (char === ",") {
+    } else if (char === delimiter) {
       field();
     } else if (char === "\r" || char === "\n") {
       if (char === "\r" && source[i + 1] === "\n") i++;
       record();
     } else if (state === "closed") {
-      return invalid;
+      return null;
     } else if (char === '"') {
-      if (state !== "start") return invalid;
+      if (state !== "start") return null;
       state = "quoted";
     } else {
       state = "plain";
       value += char;
     }
   }
-  if (state === "quoted") return invalid;
+  if (state === "quoted") return null;
   if (state !== "start" || columns) record();
-  return { kind: "csv", rows, rowCount, columnCount };
+  return { rows, rowCount, columnCount };
 }

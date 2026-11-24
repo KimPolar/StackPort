@@ -9,7 +9,7 @@ pub use result_export::{CsvOptions, ExportQuery, ExportReport};
 pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
 pub use edit::{EditCellChange, EditField, EditInput, EditKey, EditPreview, EditResult, EditRowPreview, EditRowResult, EditSession, SavedEditCell};
-pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField};
+pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult};
 pub use postgres::{PostgresRowChange, PostgresRowChangeOutcome};
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
@@ -934,10 +934,10 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
-        "sqlite.row.insert" | "sqlite.row.delete" if record.environment == Some("PROD") => {
+        "sqlite.row.insert" | "sqlite.row.delete" | "sqlite.row.paste" if record.environment == Some("PROD") => {
             "sqlite-row-change-prod-confirmed"
         }
-        "sqlite.row.insert" | "sqlite.row.delete" => "sqlite-row-change-confirmed",
+        "sqlite.row.insert" | "sqlite.row.delete" | "sqlite.row.paste" => "sqlite-row-change-confirmed",
         "postgres.row.insert" | "postgres.row.delete" if record.environment == Some("PROD") => {
             "postgres-row-change-prod-confirmed"
         }

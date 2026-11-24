@@ -215,6 +215,8 @@ SQLite 행 편집은 5분 동안 한 행의 최대 16개 열에 입력한 값을
 
 지원되는 SQLite 테이블의 그리드에서는 기본 키가 있는 일반 테이블을 대상으로 한 행을 추가하거나 삭제할 수 있습니다. 추가 미리보기는 명시적 NULL, 빈 문자열, 숫자와 생략한 열을 구분합니다. 적용 시 SQLite가 생략한 열의 기본값과 자동 기본 키를 계산하고, 그리드에서 저장된 행을 펼쳐 확인할 수 있습니다. 키 충돌은 다른 행을 대체하지 않고 중단합니다. 삭제 미리보기는 기본 키로 현재 행을 다시 읽고 적용 트랜잭션에서 전체 행을 재검증합니다. 삭제 시 연쇄 수정이 가능한 외래 키, 대상 테이블의 트리거와 생성 열은 지원 범위에서 제외합니다. `PROD`는 `PROD` 입력을 요구하고, 감사 기록에는 대상 테이블과 성공 여부·영향 행 수를 남깁니다. [SQLite INSERT](https://sqlite.org/lang_insert.html) [SQLite ROWID와 기본 키](https://sqlite.org/lang_createtable.html#rowid)
 
+**행 붙여넣기**에서 탭으로 구분된 범위를 최대 100행·64열·256 KiB까지 추가할 수 있습니다. 첫 행의 제목이나 입력 순서로 대상 열을 제안합니다. 사용자가 대상 열, 문자열·정수·실수 형식, 빈 셀의 빈 문자열·NULL·DB 기본값을 지정합니다. 큰 정수는 문자열로 전달해 64비트 정수로 검증하며, 따옴표로 묶인 셀 안의 탭과 줄바꿈도 유지합니다. 미리보기에는 매핑한 입력값과 생략한 열을 표시합니다. SQLite는 적용 시 열의 형식에 따라 값을 저장하고 기본값과 자동 키를 계산합니다. 한 트랜잭션에서 새 행을 추가하며 제약조건 위반 시 전체를 롤백합니다. 운영 환경에서는 `PROD` 확인을 요구합니다. [SQLite INSERT](https://sqlite.org/lang_insert.html)
+
 테이블·뷰의 열, 복합 기본 키, 생성 열, 인덱스, 외래 키 및 생성 SQL을 확인할 수 있습니다. 구조 조회는 별도의 읽기 전용 연결에서 허용 목록에 있는 메타데이터 PRAGMA만 실행하며 객체 이름은 바인딩합니다. 일반 SQL 입력에는 이 권한을 부여하지 않습니다. 표시한 구조는 조회 시점의 값입니다.
 
 SQLite 백업은 온라인 백업 API를 사용해 WAL을 포함한 일관된 스냅샷을 대상 폴더의 임시 파일에 만듭니다. 독립 파일로 전환한 뒤 `integrity_check`를 통과하면 동기화하고 기존 파일을 교체하지 않는 방식으로 저장합니다. 실패 시 최종 경로에 불완전한 파일을 게시하지 않습니다. 백업은 암호화되지 않으며 무결성 검사는 사용자가 별도 환경에서 수행하는 복원 테스트와 구분합니다.
@@ -258,6 +260,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
 - `crates/stackport-core/tests/restore.rs`: 백업 복원 후 객체·행 수·체크섬 검증, 미리보기 이후 백업 변경, 기존 대상·저널 충돌과 작업 기록의 민감 정보 제외를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에서 그리드 필터·정렬·페이지 이동, 조회 중단·재조회, 한 행의 다중 셀 초안·미리보기·적용·롤백, 행 추가·삭제와 동시 수정 차단, 운영 환경 확인, 별도 파일 복원 후 원본 보존·재조회 및 작업 기록을 검사합니다.
+- `tests/structured-preview.test.mjs`, `crates/stackport-core/tests/edit.rs`, `tests/desktop-smoke.cjs`: 탭 구분 입력의 따옴표·빈 셀·범위를 확인하고, SQLite의 제목 매핑, 큰 정수 보존과 중복 오류 시 전체 붙여넣기 롤백을 검사합니다.
 - `tests/appearance-smoke.cjs`: 격리된 Windows 앱에서 테마와 창 모양 전환, SQLite 목록 밀도 및 집중 모드, 분할 위치·탐색기 상태·SQL 초안·터미널 세션 유지, 재시작 후 설정 복원을 검사합니다. 첫 프로세스에서 `STACKPORT_THEME_PHASE=write`로 실행하고, 같은 WebView2 프로필을 사용해 앱을 다시 띄운 뒤 `STACKPORT_THEME_PHASE=read`로 실행합니다.
 - `tests/desktop-smoke.cjs`와 `tests/terminal-smoke.cjs`에서 도구의 키보드 전환, 다른 도구에서 탐색기 접기·펼치기와 SQLite 객체 열기, 전환 뒤 열린 터미널 유지 및 개수 표시를 확인합니다.
 - `crates/stackport-core/tests/workspace_resume.rs` 및 `tests/workspace-resume-smoke.cjs`에서 배치 저장 충돌, 손상 시 이전 설정 복원, 보관된 프로젝트 제외, 새 Windows 프로세스에서 프로젝트·프로필·4분할 복원과 수동 연결 정책을 검사합니다. Windows 테스트는 `STACKPORT_RESUME_PHASE=write`로 먼저 실행한 뒤, 같은 `STACKPORT_DATA_DIR`과 새 WebView2 프로필로 앱을 시작해 `STACKPORT_RESUME_PHASE=read`로 실행합니다. 쓰기 단계는 격리된 앱의 `STACKPORT_TEST_WINDOW_PID`가 필요합니다.

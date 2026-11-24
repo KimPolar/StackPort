@@ -1,6 +1,20 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { formatStructuredPreview, structuredFormat } from "../src/structuredFilePreview.ts";
+import { formatStructuredPreview, parseClipboardRows, structuredFormat } from "../src/structuredFilePreview.ts";
+
+test("parses tab-separated clipboard ranges with headers, blanks and quoted cells", () => {
+  const source = '\uFEFFname\tnote\tcount\r\n"한\t글"\t"두\r\n줄 ""인용"""\t9007199254740993\r\n둘째\t\t0\r\n';
+  assert.deepEqual(parseClipboardRows(source, true), {
+    headers: ["name", "note", "count"], columnCount: 3,
+    rows: [["한\t글", '두\r\n줄 "인용"', "9007199254740993"], ["둘째", "", "0"]],
+  });
+  assert.deepEqual(parseClipboardRows('""\n\n', false), { headers: null, columnCount: 1, rows: [[""], [""]] });
+  assert.match(parseClipboardRows("a\tb\nshort", false).error, /2행/);
+  assert.match(parseClipboardRows('"unfinished', false).error, /따옴표/);
+  assert.match(parseClipboardRows("heads\n", true).error, /데이터 행/);
+  assert.match(parseClipboardRows("row\n".repeat(101), false).error, /100행/);
+  assert.match(parseClipboardRows("한".repeat(100_000), false).error, /256 KiB/);
+});
 
 test("recognizes extensions and formats JSON without rounding values or dropping keys", () => {
   assert.equal(structuredFormat("한글.JSON"), "json");

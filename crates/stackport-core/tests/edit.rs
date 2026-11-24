@@ -37,6 +37,152 @@ fn input(kind: &str, value: &str) -> EditInput {
 }
 
 #[test]
+fn clipboard_rows_are_previewed_and_applied_atomically() {
+    let (dir, store, profile) = setup("PROD");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute_batch("CREATE TABLE pasted (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE ON CONFLICT REPLACE,
+        note TEXT DEFAULT 'server default', amount INTEGER NOT NULL DEFAULT 7);
+        INSERT INTO pasted(label) VALUES ('occupied');").unwrap();
+    let begin = || {
+        store
+            .begin_row_change(&profile, "pasted", RowChange::Paste)
+            .unwrap()
+    };
+    let fields = |label, note: Option<(&str, &str)>, amount: Option<&str>| {
+        let mut fields = vec![RowInsertField {
+            column: "label".into(),
+            input: input("text", label),
+        }];
+        if let Some((kind, value)) = note {
+            fields.push(RowInsertField {
+                column: "note".into(),
+                input: input(kind, value),
+            });
+        }
+        if let Some(value) = amount {
+            fields.push(RowInsertField {
+                column: "amount".into(),
+                input: input("integer", value),
+            });
+        }
+        fields
+    };
+    let columns = || vec!["label".into(), "note".into(), "amount".into()];
+    let count = || {
+        db.query_row("SELECT count(*) FROM pasted", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap()
+    };
+    let conflicting = begin();
+    let proposed = store
+        .preview_row_paste(
+            &conflicting.token,
+            columns(),
+            vec![fields("first", None, None), fields("occupied", None, None)],
+        )
+        .unwrap();
+    assert_eq!(count(), 1);
+    assert!(store
+        .apply_row_change(&conflicting.token, &proposed.approval, "PROD")
+        .is_err());
+    assert!(store
+        .apply_row_paste(&conflicting.token, &proposed.approval, "prod")
+        .is_err());
+    let error = store
+        .apply_row_paste(&conflicting.token, &proposed.approval, "PROD")
+        .err()
+        .unwrap();
+    assert!(error.contains("2행") && error.contains("롤백"), "{error}");
+    assert_eq!(count(), 1);
+    assert_eq!(
+        db.query_row("SELECT id FROM pasted WHERE label='occupied'", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+
+    let session = begin();
+    let rows = || {
+        vec![
+            fields("abc", Some(("null", "")), Some("9007199254740993")),
+            fields("def", Some(("text", "")), None),
+            fields("ghi", None, Some("0")),
+        ]
+    };
+    let previous = store
+        .preview_row_paste(&session.token, columns(), rows())
+        .unwrap();
+    assert_eq!(
+        previous.rows[0][2].as_ref().unwrap().display,
+        "9007199254740993"
+    );
+    assert!(previous.rows[1][2].is_none());
+    assert!(store
+        .preview_row_paste(&session.token, vec!["label".into(), "label".into()], rows())
+        .is_err());
+    assert!(store
+        .apply_row_paste(&session.token, &previous.approval, "PROD")
+        .is_err());
+    let approved = store
+        .preview_row_paste(&session.token, columns(), rows())
+        .unwrap();
+    assert_eq!(
+        store
+            .apply_row_paste(&session.token, &approved.approval, "PROD")
+            .unwrap()
+            .rows,
+        3
+    );
+    assert!(store
+        .apply_row_paste(&session.token, &approved.approval, "PROD")
+        .is_err());
+    assert_eq!(count(), 4);
+    let stored = |label| {
+        db.query_row(
+            "SELECT note, amount FROM pasted WHERE label=?1",
+            [label],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap()
+    };
+    assert_eq!(stored("abc"), (None, 9007199254740993));
+    assert_eq!(stored("def"), (Some(String::new()), 7));
+    assert_eq!(stored("ghi"), (Some("server default".into()), 0));
+    let events = store.list_audit_events(None).unwrap().events;
+    assert!(events
+        .iter()
+        .any(|event| event.operation == "sqlite.row.paste"
+            && event.outcome == "succeeded"
+            && event.affected_count == Some(3)
+            && event.policy == "sqlite-row-change-prod-confirmed"));
+}
+
+#[test]
+fn clipboard_batch_rolls_back_on_a_deferred_constraint_at_commit() {
+    let (dir, store, profile) = setup("DEV");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY);
+        INSERT INTO parent VALUES(1);
+        CREATE TABLE incoming (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL
+            REFERENCES parent(id) DEFERRABLE INITIALLY DEFERRED);",
+    )
+    .unwrap();
+    let session = store.begin_row_change(&profile, "incoming", RowChange::Paste).unwrap();
+    let rows = ["1", "9"].into_iter().map(|parent| vec![RowInsertField {
+        column: "parent_id".into(),
+        input: input("integer", parent),
+    }]).collect();
+    let proposal = store.preview_row_paste(&session.token, vec!["parent_id".into()], rows).unwrap();
+    let error = store.apply_row_paste(&session.token, &proposal.approval, "").err().unwrap();
+    assert!(error.contains("전체 변경을 롤백"), "{error}");
+    let remaining: i64 = db.query_row("SELECT count(*) FROM incoming", [], |row| row.get(0)).unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[test]
 fn several_cells_share_one_approved_update_and_rollback_together() {
     let (dir, store, profile) = setup("PROD");
     let db = Connection::open(dir.path().join("data.sqlite")).unwrap();

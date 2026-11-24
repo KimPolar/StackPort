@@ -8,15 +8,22 @@ use super::{
 use crate::db_error;
 use rusqlite::{params_from_iter, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
 use zeroize::Zeroize;
 
 const EXPIRED: &str = "행 작업이 만료되었습니다. 테이블을 다시 조회하세요.";
+const PASTE_ROWS: usize = 100;
+const PASTE_COLUMNS: usize = 64;
+const PASTE_BYTES: usize = 256 * 1024;
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RowChange {
     Insert,
+    Paste,
     Delete { keys: Vec<EditKey> },
 }
 
@@ -76,8 +83,30 @@ pub struct RowChangeResult {
     pub audit_warning: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct RowPastePreview {
+    pub approval: String,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Option<Cell>>>,
+}
+
+#[derive(Serialize)]
+pub struct RowPasteResult {
+    pub rows: usize,
+    pub audit_warning: Option<String>,
+}
+
 #[derive(Default)]
 struct Values(Vec<(String, Value)>);
+
+impl Values {
+    fn cell(&self, name: &str) -> Option<Cell> {
+        self.0
+            .iter()
+            .find(|(column, _)| column == name)
+            .map(|(_, value)| display_value(ValueRef::from(value)))
+    }
+}
 
 impl Drop for Values {
     fn drop(&mut self) {
@@ -89,6 +118,7 @@ impl Drop for Values {
 
 enum Action {
     Insert(Values),
+    Paste(Vec<Values>),
     Delete { keys: Values, fingerprint: [u8; 32] },
 }
 
@@ -146,6 +176,7 @@ impl Store {
                 insert_columns(&details),
                 None,
             ),
+            RowChange::Paste => (Action::Paste(Vec::new()), insert_columns(&details), None),
             RowChange::Delete { keys } => {
                 ensure_delete_scope(&db, table)?;
                 let keys = Values(validate_keys(&details, &keys)?);
@@ -204,45 +235,23 @@ impl Store {
         let db = open_schema_db(Path::new(&plan.profile.path))?;
         plan.check_target(self, &db)?;
         let columns = insert_columns(&editable_table(&db, &plan.table)?);
-        let mut inputs = HashMap::with_capacity(fields.len());
-        for field in fields {
-            if inputs.insert(field.column, field.input).is_some() {
-                return Err("같은 열에 값을 두 번 입력했습니다.".into());
-            }
-        }
-
-        let mut values = Values::default();
-        let mut preview = Vec::with_capacity(columns.len());
-        for column in columns {
-            if let Some(input) = inputs.remove(&column.name) {
-                let value = parse_input(input)?;
-                if !column.nullable && matches!(value, Value::Null) {
-                    return Err(format!("{} 열에 NULL을 입력할 수 없습니다.", column.name));
-                }
-                let rendered = display_value(ValueRef::from(&value));
-                if rendered.truncated {
-                    return Err(format!(
-                        "{} 열의 전체 값을 미리 볼 수 있도록 길이를 줄이세요.",
-                        column.name
-                    ));
-                }
-                preview.push(explicit(column.name.clone(), rendered));
-                values.0.push((column.name, value));
-            } else if column.required {
-                return Err(format!("{} 열의 값을 입력하세요.", column.name));
-            } else {
-                preview.push(RowChangeField {
+        let values = prepare_insert(&columns, fields)?;
+        let preview = columns
+            .into_iter()
+            .map(|column| {
+                let value = values.cell(&column.name);
+                RowChangeField {
                     name: column.name,
-                    value: RowChangeValue::Default {
-                        expression: column.default_value,
-                        auto_key: column.auto_key,
+                    value: match value {
+                        Some(cell) => RowChangeValue::Explicit { cell },
+                        None => RowChangeValue::Default {
+                            expression: column.default_value,
+                            auto_key: column.auto_key,
+                        },
                     },
-                });
-            }
-        }
-        if !inputs.is_empty() {
-            return Err("테이블에 없는 열이 포함되었습니다. 다시 조회하세요.".into());
-        }
+                }
+            })
+            .collect();
         let approval = Uuid::new_v4().to_string();
         plan.approval = Some(approval.clone());
         plan.action = Action::Insert(values);
@@ -252,16 +261,116 @@ impl Store {
         })
     }
 
+    pub fn preview_row_paste(
+        &self,
+        token: &str,
+        columns: Vec<String>,
+        rows: Vec<Vec<RowInsertField>>,
+    ) -> Result<RowPastePreview> {
+        let mut state = self.edits.lock()?;
+        let plan = active_plan(&mut state.rows, token)?;
+        if !matches!(plan.action, Action::Paste(_)) {
+            return Err("붙여넣기 작업을 다시 여세요.".into());
+        }
+        plan.approval = None;
+        plan.action = Action::Paste(Vec::new());
+        if rows.is_empty()
+            || rows.len() > PASTE_ROWS
+            || columns.is_empty()
+            || columns.len() > PASTE_COLUMNS
+        {
+            return Err(format!(
+                "붙여넣을 범위를 1~{PASTE_ROWS}행, 1~{PASTE_COLUMNS}열로 선택하세요."
+            ));
+        }
+        if rows
+            .iter()
+            .flatten()
+            .map(|field| field.input.value.len())
+            .sum::<usize>()
+            > PASTE_BYTES
+        {
+            return Err("붙여넣을 값의 전체 크기를 256 KiB 이하로 줄이세요.".into());
+        }
+        let db = open_schema_db(Path::new(&plan.profile.path))?;
+        plan.check_target(self, &db)?;
+        let table_columns = insert_columns(&editable_table(&db, &plan.table)?);
+        let names: HashSet<_> = columns.iter().map(String::as_str).collect();
+        if names.len() != columns.len() {
+            return Err("같은 대상 열을 두 번 선택했습니다.".into());
+        }
+        if columns
+            .iter()
+            .any(|name| !table_columns.iter().any(|column| column.name == *name))
+        {
+            return Err("테이블에 없는 열이 포함되었습니다. 다시 조회하세요.".into());
+        }
+        let mut prepared = Vec::with_capacity(rows.len());
+        let mut previews = Vec::with_capacity(rows.len());
+        for (index, fields) in rows.into_iter().enumerate() {
+            if fields
+                .iter()
+                .any(|field| !names.contains(field.column.as_str()))
+            {
+                return Err(format!(
+                    "붙여넣기 {}행에 매핑되지 않은 열이 있습니다.",
+                    index + 1
+                ));
+            }
+            let values = prepare_insert(&table_columns, fields)
+                .map_err(|error| format!("붙여넣기 {}행 · {error}", index + 1))?;
+            previews.push(columns.iter().map(|name| values.cell(name)).collect());
+            prepared.push(values);
+        }
+        let approval = Uuid::new_v4().to_string();
+        plan.approval = Some(approval.clone());
+        plan.action = Action::Paste(prepared);
+        Ok(RowPastePreview {
+            approval,
+            columns,
+            rows: previews,
+        })
+    }
+
     pub fn apply_row_change(
         &self,
         token: &str,
         approval: &str,
         confirmation: &str,
     ) -> Result<RowChangeResult> {
+        let (applied, audit_warning) = self.apply_row_plan(token, approval, confirmation, false)?;
+        Ok(RowChangeResult {
+            fields: applied.fields,
+            audit_warning,
+        })
+    }
+
+    pub fn apply_row_paste(
+        &self,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+    ) -> Result<RowPasteResult> {
+        let (applied, audit_warning) = self.apply_row_plan(token, approval, confirmation, true)?;
+        Ok(RowPasteResult {
+            rows: applied.count,
+            audit_warning,
+        })
+    }
+
+    fn apply_row_plan(
+        &self,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+        paste: bool,
+    ) -> Result<(Applied, Option<String>)> {
         let plan = {
             let mut state = self.edits.lock()?;
             let plan = active_plan(&mut state.rows, token)?;
-            if plan.approval.as_deref() != Some(approval) {
+            if plan.approval.as_deref() != Some(approval)
+                || matches!(plan.action, Action::Paste(_)) != paste
+            {
                 return Err("현재 행 작업을 다시 미리보세요.".into());
             }
             if plan.profile.environment == "PROD" && confirmation != "PROD" {
@@ -272,6 +381,7 @@ impl Store {
         verify_profile(self, &plan.profile)?;
         let operation = match plan.action {
             Action::Insert(_) => "sqlite.row.insert",
+            Action::Paste(_) => "sqlite.row.paste",
             Action::Delete { .. } => "sqlite.row.delete",
         };
         let correlation_id = Uuid::new_v4().to_string();
@@ -292,16 +402,22 @@ impl Store {
         } else {
             "failed"
         };
-        let recorded = self
-            .connect()
-            .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
+        let recorded = self.connect().and_then(|db| {
+            insert_audit(
+                &db,
+                audit(
+                    outcome,
+                    result.as_ref().ok().map(|applied| applied.count as i64),
+                ),
+            )
+        });
         match (result, recorded) {
-            (Ok(fields), audit) => Ok(RowChangeResult {
-                fields,
-                audit_warning: audit
+            (Ok(applied), audit) => Ok((
+                applied,
+                audit
                     .err()
                     .map(|_| "행 작업은 저장됐지만 완료 감사 기록을 저장하지 못했습니다.".into()),
-            }),
+            )),
             (Err(error), Ok(())) => Err(error),
             (Err(error), Err(_)) => Err(format!("{error} 완료 감사 기록도 저장하지 못했습니다.")),
         }
@@ -321,6 +437,38 @@ fn active_plan<'a>(plans: &'a mut HashMap<String, Plan>, token: &str) -> Result<
         plans.remove(token);
     }
     Ok(plans.get_mut(token).ok_or(EXPIRED)?)
+}
+
+fn prepare_insert(columns: &[InsertColumn], fields: Vec<RowInsertField>) -> Result<Values> {
+    let mut inputs = HashMap::with_capacity(fields.len());
+    for field in fields {
+        if inputs.insert(field.column, field.input).is_some() {
+            return Err("같은 열에 값을 두 번 입력했습니다.".into());
+        }
+    }
+    let mut values = Values::default();
+    for column in columns {
+        if let Some(input) = inputs.remove(&column.name) {
+            let value =
+                parse_input(input).map_err(|error| format!("{} 열 · {error}", column.name))?;
+            if !column.nullable && matches!(value, Value::Null) {
+                return Err(format!("{} 열에 NULL을 입력할 수 없습니다.", column.name));
+            }
+            if display_value(ValueRef::from(&value)).truncated {
+                return Err(format!(
+                    "{} 열의 전체 값을 미리 볼 수 있도록 길이를 줄이세요.",
+                    column.name
+                ));
+            }
+            values.0.push((column.name.clone(), value));
+        } else if column.required {
+            return Err(format!("{} 열의 값을 입력하세요.", column.name));
+        }
+    }
+    if !inputs.is_empty() {
+        return Err("테이블에 없는 열이 포함되었습니다. 다시 조회하세요.".into());
+    }
+    Ok(values)
 }
 
 fn insert_columns(details: &ObjectDetails) -> Vec<InsertColumn> {
@@ -363,7 +511,12 @@ fn ensure_delete_scope(db: &Connection, table: &str) -> Result<()> {
     Ok(())
 }
 
-fn apply(store: &Store, plan: &Plan) -> Result<Vec<RowChangeField>> {
+struct Applied {
+    count: usize,
+    fields: Vec<RowChangeField>,
+}
+
+fn apply(store: &Store, plan: &Plan) -> Result<Applied> {
     ensure_identity(&plan.identity, &plan.profile.path)?;
     let mut db = open_edit_db(&plan.profile.path)?;
     let tx = db
@@ -373,7 +526,24 @@ fn apply(store: &Store, plan: &Plan) -> Result<Vec<RowChangeField>> {
     let details = editable_table(&tx, &plan.table)?;
     let before = tx.total_changes();
     let result = match &plan.action {
-        Action::Insert(values) => execute_insert(&tx, &details, &values.0)?,
+        Action::Insert(values) => Applied {
+            count: 1,
+            fields: execute_insert(&tx, &details, &values.0, true)?,
+        },
+        Action::Paste(rows) => {
+            for (index, values) in rows.iter().enumerate() {
+                execute_insert(&tx, &details, &values.0, false).map_err(|error| {
+                    format!(
+                        "붙여넣기 {}행 저장에 실패해 전체를 롤백했습니다. {error}",
+                        index + 1
+                    )
+                })?;
+            }
+            Applied {
+                count: rows.len(),
+                fields: Vec::new(),
+            }
+        }
         Action::Delete { keys, fingerprint } => {
             ensure_delete_scope(&tx, &plan.table)?;
             let snapshot = read_row(&tx, &plan.table, &keys.0, &[])?;
@@ -391,16 +561,22 @@ fn apply(store: &Store, plan: &Plan) -> Result<Vec<RowChangeField>> {
             {
                 return Err("삭제 대상이 한 행이 아니어서 롤백했습니다.".into());
             }
-            Vec::new()
+            Applied {
+                count: 1,
+                fields: Vec::new(),
+            }
         }
     };
-    if tx.total_changes() != before + 1 {
-        return Err("한 행 외에 변경된 데이터가 있어 롤백했습니다.".into());
+    if tx.total_changes() != before + result.count as u64 {
+        return Err("예정된 행 외에 변경된 데이터가 있어 롤백했습니다.".into());
     }
     plan.check_target(store, &tx)?;
     tx.commit().map_err(|error| {
         if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
-            return db_error(error);
+            return format!(
+                "제약조건 위반으로 전체 변경을 롤백했습니다. {}",
+                db_error(error)
+            );
         }
         format!(
             "커밋 결과를 확정하지 못했습니다. 재시도 전에 원본을 다시 조회하세요: {}",
@@ -414,11 +590,26 @@ fn execute_insert(
     tx: &Transaction<'_>,
     details: &ObjectDetails,
     values: &[(String, Value)],
+    capture_row: bool,
 ) -> Result<Vec<RowChangeField>> {
     let table = quote(&details.object.name);
+    let returned: Vec<_> = details
+        .columns
+        .iter()
+        .filter(|column| capture_row || column.primary_key_position > 0)
+        .collect();
+    let projection = if capture_row {
+        "*".into()
+    } else {
+        returned
+            .iter()
+            .map(|column| quote(&column.name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     // Override schema-level REPLACE/IGNORE so an INSERT cannot delete another row or silently do nothing.
     let sql = if values.is_empty() {
-        format!("INSERT OR ABORT INTO main.{table} DEFAULT VALUES RETURNING *")
+        format!("INSERT OR ABORT INTO main.{table} DEFAULT VALUES RETURNING {projection}")
     } else {
         let columns = values
             .iter()
@@ -426,9 +617,11 @@ fn execute_insert(
             .collect::<Vec<_>>()
             .join(", ");
         let slots = vec!["?"; values.len()].join(", ");
-        format!("INSERT OR ABORT INTO main.{table} ({columns}) VALUES ({slots}) RETURNING *")
+        format!(
+            "INSERT OR ABORT INTO main.{table} ({columns}) VALUES ({slots}) RETURNING {projection}"
+        )
     };
-    let mut statement = tx.prepare(&sql).map_err(db_error)?;
+    let mut statement = tx.prepare_cached(&sql).map_err(db_error)?;
     let mut rows = statement
         .query(params_from_iter(values.iter().map(|(_, value)| value)))
         .map_err(db_error)?;
@@ -436,8 +629,8 @@ fn execute_insert(
         .next()
         .map_err(db_error)?
         .ok_or("추가한 행을 확인하지 못했습니다.")?;
-    let mut result = Vec::with_capacity(details.columns.len());
-    for (index, column) in details.columns.iter().enumerate() {
+    let mut result = Vec::with_capacity(if capture_row { returned.len() } else { 0 });
+    for (index, column) in returned.into_iter().enumerate() {
         let value = row.get_ref(index).map_err(db_error)?;
         let rendered = display_value(value);
         if column.primary_key_position > 0
@@ -447,7 +640,9 @@ fn execute_insert(
         {
             return Err("추가한 행의 기본 키를 확인할 수 없어 롤백했습니다.".into());
         }
-        result.push(explicit(column.name.clone(), rendered));
+        if capture_row {
+            result.push(explicit(column.name.clone(), rendered));
+        }
     }
     if rows.next().map_err(db_error)?.is_some() {
         return Err("추가 결과가 한 행이 아니어서 롤백했습니다.".into());

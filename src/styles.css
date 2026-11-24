@@ -772,5 +772,15 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .sqlite-edit-comparison { margin-top: 10px; }
 .sqlite-edit-comparison .edit-current { margin: 4px 0; }
 .sqlite-edit-report { margin-bottom: 12px; }
+.sqlite-paste-dialog { width: min(820px, calc(100vw - 32px)); }
+.sqlite-paste-dialog textarea { white-space: pre; resize: vertical; tab-size: 4; }
+.paste-header { display: flex; align-items: center; gap: 8px; width: fit-content; }
+.sqlite-paste-mappings { display: grid; gap: 8px; margin-block: 12px; }
+.sqlite-paste-mappings fieldset { display: flex; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 5px; }
+.sqlite-paste-mappings legend { padding-inline: 4px; overflow-wrap: anywhere; }
+.sqlite-paste-mappings .field { flex: 1 1 150px; min-width: 0; margin: 0; }
+.paste-sample { flex-basis: 100%; color: var(--text-muted); margin: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sqlite-paste-preview { max-height: 42vh; margin-block: 12px; }
+.sqlite-paste-preview td { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
 .app-shell[data-density="compact"] .terminal-tab [role="tab"] { min-height: 28px; padding-block: 4px; }
 .app-shell[data-density="compact"] .terminal-screen { padding: 8px; }

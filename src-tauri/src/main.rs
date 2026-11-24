@@ -10,7 +10,7 @@ use stackport_core::{
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport, SchemaSyncPreview, SchemaSyncReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
-    RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField,
+    RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
@@ -547,6 +547,18 @@ async fn preview_row_insert(store: State<'_, Store>, token: String, fields: Vec<
 async fn apply_row_change(store: State<'_, Store>, token: String, approval: String, confirmation: String) -> Result<RowChangeResult, String> {
     let store = store.inner().clone();
     worker(move || store.apply_row_change(&token, &approval, &confirmation)).await
+}
+
+#[tauri::command]
+async fn preview_row_paste(store: State<'_, Store>, token: String, columns: Vec<String>, rows: Vec<Vec<RowInsertField>>) -> Result<RowPastePreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_row_paste(&token, columns, rows)).await
+}
+
+#[tauri::command]
+async fn apply_row_paste(store: State<'_, Store>, token: String, approval: String, confirmation: String) -> Result<RowPasteResult, String> {
+    let store = store.inner().clone();
+    worker(move || store.apply_row_paste(&token, &approval, &confirmation)).await
 }
 
 #[tauri::command]
@@ -1637,6 +1649,8 @@ fn main() {
             begin_row_change,
             preview_row_insert,
             apply_row_change,
+            preview_row_paste,
+            apply_row_paste,
             cancel_row_change,
             open_terminal,
             read_terminal,
