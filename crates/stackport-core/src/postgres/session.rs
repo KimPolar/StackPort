@@ -124,6 +124,15 @@ pub struct PostgresObjectPage {
     has_next: bool,
 }
 
+#[derive(Serialize)]
+pub struct PostgresCatalogObject {
+    id: i64,
+    schema_id: i64,
+    schema: String,
+    name: String,
+    kind: &'static str,
+}
+
 #[derive(Clone, Serialize)]
 struct Column {
     name: String,
@@ -512,6 +521,35 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "PostgreSQL 객체 검색 시간이 초과되었습니다.")?
+    }
+
+    pub async fn resolve_catalog_object(
+        &self, id: &str, profile_id: &str, schema: &str, name: &str,
+    ) -> Result<PostgresCatalogObject> {
+        if [schema, name].iter().any(|part| part.is_empty() || part.len() > 16 * 1024 || part.contains('\0')) {
+            return Err("PostgreSQL 스키마와 객체 이름을 확인하세요.".into());
+        }
+        let session = self.session(id)?;
+        if session.profile.id != profile_id || self.store.postgres_profile(profile_id)?.revision != session.profile.revision {
+            return Err("현재 PostgreSQL 연결을 다시 확인하세요.".into());
+        }
+        timeout(QUERY_TIMEOUT, async {
+            let client = session.client.lock().await;
+            let row = client.query_opt(
+                "SELECT c.oid::bigint, n.oid::bigint, n.nspname::text, c.relname::text, c.relkind::text
+                 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                 WHERE n.nspname::text COLLATE pg_catalog.\"C\" = $1 AND c.relname::text COLLATE pg_catalog.\"C\" = $2
+                   AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+                   AND c.relkind IN ('r','p','v','m')
+                   AND pg_catalog.has_schema_privilege(n.oid, 'USAGE')
+                   AND pg_catalog.has_table_privilege(c.oid, 'SELECT')",
+                &[&schema, &name],
+            ).await.map_err(pg_error)?.ok_or("PostgreSQL 객체를 찾을 수 없거나 조회 권한이 없습니다.")?;
+            Ok(PostgresCatalogObject {
+                id: field(&row, 0)?, schema_id: field(&row, 1)?, schema: field(&row, 2)?,
+                name: field(&row, 3)?, kind: kind(field::<String>(&row, 4)?.as_str())?,
+            })
+        }).await.map_err(|_| "PostgreSQL 객체를 확인하는 시간이 초과되었습니다.")?
     }
 
     pub async fn server_activity(

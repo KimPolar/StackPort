@@ -138,7 +138,8 @@ pub(super) async fn objects(
     Ok(PostgresSearchPage { hits, has_next })
 }
 
-const NAME: &str = "SELECT c.relname::text, 'overview'::text, 0, 0::bigint";
+const NAME: &str = "SELECT c.relname::text, 'overview'::text, 0, 0::bigint
+    UNION ALL SELECT c.nspname::text || '.' || c.relname::text, 'overview'::text, 1, 0::bigint";
 const COLUMN: &str = "SELECT a.attname::text, 'columns'::text, 0, a.attnum::bigint
     FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped";
 const COMMENT: &str = "SELECT pg_catalog.obj_description(c.oid, 'pg_class'), 'overview', 0, 0::bigint

@@ -45,7 +45,7 @@ import type { ResultComparisonSource } from "./SqlResultComparison";
 import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
-import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction } from "./PostgresWorkspace";
+import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction, type PostgresConnection } from "./PostgresWorkspace";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -55,7 +55,7 @@ import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
 import { WorkspaceExplorer, type ExplorerProjectAction, type ExplorerSshAction } from "./WorkspaceExplorer";
 import { WorkspaceStatus, type QueryActivity } from "./WorkspaceStatus";
-import { useWorkspaceFavorites } from "./workspaceFavorites";
+import { useWorkspaceFavorites, type FavoriteScope, type PostgresFavorite } from "./workspaceFavorites";
 import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
 import {
   editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
@@ -160,7 +160,7 @@ function App() {
   const [terminalTabCount, setTerminalTabCount] = useState(0);
   const [rdpClientCount, setRdpClientCount] = useState(0);
   const [sshTunnelCount, setSshTunnelCount] = useState(0);
-  const [postgresConnected, setPostgresConnected] = useState(false);
+  const [postgresConnection, setPostgresConnection] = useState<PostgresConnection | null>(null);
   const [postgresActivity, setPostgresActivity] = useState<QueryActivity>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
@@ -172,6 +172,10 @@ function App() {
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const favorites = useWorkspaceFavorites(projectId, desktop);
+  const [favoriteScope, setFavoriteScope] = useState<FavoriteScope>("personal");
+  const [postgresObjectRequest, setPostgresObjectRequest] = useState<PostgresFavorite | null>(null);
+  const finishPostgresObject = useCallback((request: PostgresFavorite) =>
+    setPostgresObjectRequest(current => current === request ? null : current), []);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [postgresProfiles, setPostgresProfiles] = useState<PostgresProfile[]>([]);
   const [postgresId, setPostgresId] = useState("");
@@ -397,7 +401,7 @@ function App() {
     let live = true;
     resetActiveQuery();
     objectGeneration.current++;
-    setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null);
+    setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null); setPostgresObjectRequest(null);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -1065,6 +1069,7 @@ function App() {
 
   function selectSqliteProfile(id: string) {
     setFavoriteObject(null);
+    setPostgresObjectRequest(null);
     setPostgresId("");
     setProfileId(id);
     showTool("workspace");
@@ -1072,9 +1077,15 @@ function App() {
 
   function selectPostgresProfile(id: string) {
     setFavoriteObject(null);
+    setPostgresObjectRequest(null);
     setPostgresId(id);
     setHistoryOpen(false);
     showTool("workspace");
+  }
+
+  function openPostgresObject(target: PostgresFavorite) {
+    selectPostgresProfile(target.profile_id);
+    setPostgresObjectRequest({ ...target });
   }
 
   function savePostgresProfile(saved: PostgresProfile | null) {
@@ -1083,6 +1094,7 @@ function App() {
     setPostgresProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (postgresAction.kind === "create" && saved) selectPostgresProfile(saved.id);
+    if (previous === postgresId) setPostgresObjectRequest(null);
     if (!saved && previous) {
       removeSqlConnections(new Set([previous]));
       if (previous === postgresId) setPostgresId("");
@@ -1390,7 +1402,9 @@ function App() {
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
-        onOpenTunnels={openTunnels} onConnectionChange={setPostgresConnected} onQueryActivity={setPostgresActivity}
+        onOpenTunnels={openTunnels} onConnectionChange={setPostgresConnection} onQueryActivity={setPostgresActivity}
+        objectRequest={postgresObjectRequest?.profile_id === postgresProfile.id ? postgresObjectRequest : null}
+        onObjectHandled={finishPostgresObject} favorites={favorites} favoriteScope={favoriteScope}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
         select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
@@ -1736,11 +1750,13 @@ function App() {
       </div>}
       <div className="body-layout">
         <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects} favorites={favorites}
+          favoriteScope={favoriteScope} onFavoriteScope={setFavoriteScope}
           onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction}
           sqlite={{ profiles, loadedId: profileId, active: !postgresProfile, objects, selected: postgresProfile ? undefined : selectedObject?.name,
             loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
             add: () => openModal("profile"), restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
-          postgres={{ profiles: postgresProfiles, activeId: postgresId, open: selectPostgresProfile, action: setPostgresAction }}
+          postgres={{ profiles: postgresProfiles, activeId: postgresId, connection: postgresConnection,
+            open: selectPostgresProfile, openObject: openPostgresObject, action: setPostgresAction }}
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
@@ -1749,7 +1765,7 @@ function App() {
         dataPath={runtime ? displayPath(runtime.data_directory) : undefined}
         terminalTabs={terminalTabCount} rdpWindows={rdpClientCount} tunnels={sshTunnelCount}
         sqlite={cancelling ? "cancelling" : querying ? "running" : null}
-        postgres={{ connected: postgresConnected, query: postgresActivity }}
+        postgres={{ connected: postgresConnection !== null, query: postgresActivity }}
         openTerminal={() => showTool("terminal")} openRdp={() => showTool("rdp")} openTunnels={openTunnels} openPostgres={() => showTool("workspace")} />
     </div>
     {paletteOpen && <CommandPalette commands={workspaceCommands()} recent={recentCommands}

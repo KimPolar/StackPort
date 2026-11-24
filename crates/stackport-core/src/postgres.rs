@@ -28,7 +28,7 @@ pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{PostgresProfile, PostgresProfileInput};
 pub use search::{PostgresSearchInput, PostgresSearchPage};
 pub use session::{
-    PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
+    PostgresCatalogObject, PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
     PostgresSchemaPage, PostgresSessionInfo,
 };
 pub use sql::{PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome};

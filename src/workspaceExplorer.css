@@ -158,6 +158,16 @@ button.explorer-group-title:hover { background: var(--surface-hover); color: var
 .explorer-favorite-scopes button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-accent); font-weight: 700; }
 .explorer-favorite-error { padding: 5px; color: var(--danger-text); font-size: 11px; }
 .explorer-favorite-error p { margin: 0 0 5px; overflow-wrap: anywhere; }
+.explorer-postgres-search { width: 100%; justify-content: flex-start; margin-bottom: 7px; text-align: left; }
+.explorer-postgres-search svg { flex-shrink: 0; }
+.explorer-postgres-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-postgres-results .group-title { margin: 3px 0; }
+.explorer-postgres-results .pagination { padding: 5px 0; }
+.explorer-postgres-object { min-height: 36px; }
+.explorer-postgres-object > span { display: grid; min-width: 0; gap: 2px; }
+.explorer-postgres-object :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer-postgres-object strong { color: var(--text); font-weight: 600; }
+.explorer-postgres-object small { color: var(--text-muted); font-size: 10px; }
 .object-list { margin: 4px 0 5px 11px; padding-left: 7px; border-left: 1px solid var(--border); }
 .object-toolbar, .group-title { color: var(--text-muted); font-size: 11px; font-weight: 600; }
 .object-toolbar { padding-left: 4px; }

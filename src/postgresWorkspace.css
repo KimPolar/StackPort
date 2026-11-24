@@ -10,6 +10,9 @@
 .postgres-result-views { display: flex; flex-wrap: wrap; gap: 6px; }
 .postgres-result-views [aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
 .postgres-object-views { padding: 8px 10px; border-bottom: 1px solid var(--divider); }
+.postgres-pin-object[aria-pressed="true"] { color: var(--warning-text); }
+.postgres-pin-object[aria-pressed="true"] svg { fill: currentColor; }
+.postgres-pin-object[aria-disabled="true"] { cursor: wait; opacity: .6; }
 .postgres-structure > nav { padding: 8px 10px; border-bottom: 1px solid var(--divider); }
 .postgres-structure .table-wrap { max-height: min(56vh, 620px); }
 .postgres-structure :is(td, .postgres-structure-column) { vertical-align: top; }

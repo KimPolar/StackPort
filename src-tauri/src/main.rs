@@ -30,7 +30,7 @@ use stackport_core::{
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
     WorkspaceResumeRecord, WorkspaceResumeWrite,
-    FavoriteScope, FavoriteTarget, WorkspaceFavorite,
+    FavoriteScope, FavoriteTarget, WorkspaceFavorite, PostgresCatalogObject,
 };
 use std::sync::Arc;
 use tauri::{ipc::Channel, Manager, RunEvent, State};
@@ -70,8 +70,15 @@ async fn list_workspace_favorites(store: State<'_, Store>, project_id: String) -
 
 #[tauri::command]
 async fn set_workspace_favorite(
-    store: State<'_, Store>, project_id: String, scope: FavoriteScope, target: FavoriteTarget, present: bool,
+    store: State<'_, Store>, postgres: State<'_, PostgresManager>, project_id: String,
+    scope: FavoriteScope, target: FavoriteTarget, present: bool, session_id: Option<String>,
 ) -> Result<(), String> {
+    if present {
+        if let FavoriteTarget::PostgresObject { profile_id, schema_name, object_name } = &target {
+            let session = session_id.as_deref().ok_or("PostgreSQL에 연결한 뒤 객체를 고정하세요.")?;
+            postgres.resolve_catalog_object(session, profile_id, schema_name, object_name).await?;
+        }
+    }
     let store = store.inner().clone();
     worker(move || store.set_workspace_favorite(&project_id, scope, &target, present)).await
 }
@@ -964,6 +971,13 @@ async fn search_postgres_objects(postgres: State<'_, PostgresManager>, id: Strin
 }
 
 #[tauri::command]
+async fn resolve_postgres_catalog_object(
+    postgres: State<'_, PostgresManager>, id: String, profile_id: String, schema: String, name: String,
+) -> Result<PostgresCatalogObject, String> {
+    postgres.resolve_catalog_object(&id, &profile_id, &schema, &name).await
+}
+
+#[tauri::command]
 async fn postgres_page(
     postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32,
     query: Option<TableQueryClauses>,
@@ -1813,6 +1827,7 @@ fn main() {
             postgres_schemas,
             postgres_objects,
             search_postgres_objects,
+            resolve_postgres_catalog_object,
             postgres_page,
             postgres_value_page,
             postgres_value_representation,

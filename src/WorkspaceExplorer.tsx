@@ -4,11 +4,15 @@ import {
   Pencil, Plus, RefreshCw, RotateCcw, Search, Star, Table2, TerminalSquare, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import type { DatabaseObject } from "./SqlSchemaDetails";
-import type { PostgresProfile, PostgresProfileAction } from "./PostgresWorkspace";
+import type { PostgresProfile, PostgresProfileAction, PostgresConnection } from "./PostgresWorkspace";
+import type { PostgresSearchPage } from "./PostgresSearchDialog";
+import { postgresObjectLabels } from "./PostgresObjectStructure";
+import { PostgresPager } from "./PostgresPager";
+import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
 import { networkAddressText } from "./quickConnect";
 import { matchesWorkspaceSearch, workspaceSearchTerms } from "./workspaceSearch";
-import { favoriteKey, type FavoriteScope, type FavoriteTarget, type WorkspaceFavorites } from "./workspaceFavorites";
+import { favoriteKey, favoriteScopeNames as scopeNames, type FavoriteScope, type FavoriteTarget, type PostgresFavorite, type WorkspaceFavorites } from "./workspaceFavorites";
 import "./workspaceExplorer.css";
 
 type Project = { id: string; name: string };
@@ -22,13 +26,18 @@ type ExplorerProps = {
   projectId: string;
   projects: Project[];
   favorites: WorkspaceFavorites;
+  favoriteScope: FavoriteScope;
+  onFavoriteScope: (scope: FavoriteScope) => void;
   sqlite: {
     profiles: SqliteProfile[]; loadedId: string; active: boolean; objects: DatabaseObject[];
     selected: string | undefined; loading: boolean; displayPath: (path: string) => string;
     open: (id: string) => void; openObject: (item: DatabaseObject) => void; openPinnedObject: (id: string, name: string) => void; refresh: () => void;
     add: () => void; restore: () => void;
   };
-  postgres: { profiles: PostgresProfile[]; activeId: string; open: (id: string) => void; action: (action: PostgresProfileAction) => void };
+  postgres: {
+    profiles: PostgresProfile[]; activeId: string; connection: PostgresConnection | null;
+    open: (id: string) => void; openObject: (object: PostgresFavorite) => void; action: (action: PostgresProfileAction) => void;
+  };
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
@@ -103,12 +112,11 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
   </div>;
 }
 
-const scopeNames: Record<FavoriteScope, string> = { personal: "개인", project: "프로젝트" };
-
-export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, sqlite, postgres, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
+export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
+  sqlite, postgres, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
-  const [favoriteScope, setFavoriteScope] = useState<FavoriteScope>("personal");
+  const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const scopeButtons = useRef<HTMLDivElement>(null);
@@ -116,10 +124,17 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   const terms = useMemo(() => workspaceSearchTerms(query), [query]);
   const filtering = terms.length > 0;
 
-  useEffect(() => { setQuery(""); setMenuOpen(false); }, [projectId]);
+  useEffect(() => { setQuery(""); setMenuOpen(false); setRemoteSearch(null); }, [projectId]);
 
   const sqliteProfiles = sqlite.profiles.filter(item => item.project_id === projectId);
   const postgresProfiles = postgres.profiles.filter(item => item.project_id === projectId);
+  const pg = postgres.connection;
+  const activePostgres = pg && postgresProfiles.find(item => item.id === postgres.activeId && item.id === pg.profileId && item.revision === pg.revision);
+  const term = query.trim();
+  const submitted = activePostgres && remoteSearch?.id === pg?.id && remoteSearch?.term === term ? remoteSearch : null;
+  const remoteArgs = useMemo(() => submitted && ({ id: submitted.id,
+    input: { schema: null, kind: null, field: "name", term: submitted.term, page: submitted.page } }), [submitted]);
+  const pgSearch = usePostgresRead<PostgresSearchPage>("search_postgres_objects", remoteArgs);
   const sshProfiles = ssh.profiles.filter(item => item.project_id === projectId);
   const loaded = sqliteProfiles.find(item => item.id === sqlite.loadedId);
   const sqliteFields = (item: SqliteProfile) => [item.name, item.environment, sqlite.displayPath(item.path), "SQLite 데이터베이스"];
@@ -131,6 +146,8 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     ? sqliteProfiles.filter(item => item === loaded || sqliteMatches.includes(item)) : sqliteMatches;
   const postgresMatches = postgresProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "PostgreSQL 데이터베이스"));
+  const visiblePostgres = submitted && activePostgres && !postgresMatches.includes(activePostgres)
+    ? postgresProfiles.filter(item => item === activePostgres || postgresMatches.includes(item)) : postgresMatches;
   const sshMatches = sshProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.name, item.host, item.port, item.environment, "SSH 서버"));
   const connections = sqliteMatches.length + postgresMatches.length + sshMatches.length;
@@ -142,8 +159,11 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       return profile && { name: profile.name, detail: `SSH · ${networkAddressText(profile)}`, environment: profile.environment,
         Icon: TerminalSquare, open: () => ssh.open(profile) };
     }
-    if (target.kind === "postgres") {
+    if (target.kind === "postgres" || target.kind === "postgres_object") {
       const profile = postgresProfiles.find(item => item.id === target.profile_id);
+      if (target.kind === "postgres_object") return profile && { name: `${target.schema_name}.${target.object_name}`,
+        detail: `PostgreSQL · ${profile.settings.name}`, environment: profile.settings.environment,
+        Icon: Table2, open: () => postgres.openObject(target) };
       return profile && { name: profile.settings.name, detail: `PostgreSQL · ${networkAddressText(profile.settings)} / ${profile.settings.database}`, environment: profile.settings.environment,
         Icon: Database, open: () => postgres.open(profile.id) };
     }
@@ -162,14 +182,15 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       ? [{ ...item, ...entry, id: `${item.scope}:${favoriteKey(item.target)}` }] : [];
   });
 
-  function favoriteButton(target: FavoriteTarget, name: string) {
+  function favoriteButton(target: FavoriteTarget, name: string, sessionId?: string) {
     const current = pinned.has(favoriteKey(target));
     return desktop && <ExplorerButton Icon={Star} label={`${name} ${scopeNames[favoriteScope]} 즐겨찾기`} pressed={current}
-      disabled={!favorites.ready} busy={favorites.busy} onClick={() => void favorites.change(favoriteScope, target, !current)} />;
+      disabled={!favorites.ready} busy={favorites.busy} onClick={() => void favorites.change(favoriteScope, target, !current, sessionId)} />;
   }
 
   function clearSearch() {
     setQuery("");
+    setRemoteSearch(null);
     input.current?.focus();
   }
 
@@ -208,7 +229,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       </div>
       {project && <div className="object-search explorer-search" role="search" aria-label="프로젝트 탐색기 필터">
         <Search size={15} aria-hidden />
-        <input ref={input} type="search" aria-label="탐색기 검색" value={query} onChange={event => setQuery(event.target.value)}
+        <input ref={input} type="search" aria-label="탐색기 검색" value={query} onChange={event => { setQuery(event.target.value); setRemoteSearch(null); }}
           placeholder="연결, 주소, 테이블 찾기" autoComplete="off" spellCheck={false}
           onKeyDown={event => {
             if (event.key !== "Escape" || !query || event.nativeEvent.isComposing) return;
@@ -221,8 +242,13 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       {!project ? <p className="sidebar-empty">프로젝트를 선택하거나 새 프로젝트를 만드세요.</p> : <>
         {filtering && <p className="explorer-search-status" role="status">
           {connections || objects.length || visibleFavorites.length ? `연결 ${connections}개 · 객체 ${objects.length}개${visibleFavorites.length ? ` · 즐겨찾기 ${visibleFavorites.length}개` : ""}` :
-            sqlite.loading && loaded ? "SQLite 객체를 불러오는 중…" : "일치하는 연결이나 객체가 없습니다."}
+            sqlite.loading && loaded ? "SQLite 객체를 불러오는 중…" : submitted ? "로컬 탐색기 결과 0개" : "일치하는 연결이나 객체가 없습니다."}
         </p>}
+        {filtering && activePostgres && pg && <button type="button" className="secondary small explorer-postgres-search"
+          aria-label={`PostgreSQL ${activePostgres.settings.name}에서 객체 검색`} title={activePostgres.settings.database}
+          onClick={() => setRemoteSearch({ id: pg.id, term, page: 0 })}>
+          <Database size={14} aria-hidden /><span>{activePostgres.settings.name}에서 검색</span>
+        </button>}
         {favorites.error && <div className="explorer-favorite-error">
           <p role="alert">{favorites.error}</p>
           <button type="button" className="secondary small" onClick={() => void favorites.refresh()}>즐겨찾기 다시 읽기</button>
@@ -230,7 +256,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         {desktop && <ExplorerGroup id="explorer-favorites" name="즐겨찾기" unit="즐겨찾기" Icon={Star}
           count={visibleFavorites.length} filtering={filtering} actions={<div ref={scopeButtons} className="explorer-favorite-scopes" role="group" aria-label="즐겨찾기 범위">
             {(Object.entries(scopeNames) as [FavoriteScope, string][]).map(([scope, label]) =>
-              <button type="button" key={scope} aria-pressed={scope === favoriteScope} onClick={() => setFavoriteScope(scope)}>{label}</button>)}
+              <button type="button" key={scope} aria-pressed={scope === favoriteScope} onClick={() => onFavoriteScope(scope)}>{label}</button>)}
           </div>}>
           {!visibleFavorites.length && <p className="sidebar-empty">
             {favorites.ready ? "연결이나 객체의 별을 눌러 추가하세요." : "즐겨찾기를 불러오는 중…"}
@@ -270,16 +296,39 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
             </div>}
           </div>)}
         </ExplorerGroup>
-        <ExplorerGroup id="explorer-postgres" name="PostgreSQL" Icon={Database} count={postgresMatches.length} filtering={filtering}
+        <ExplorerGroup id="explorer-postgres" name="PostgreSQL" Icon={Database} count={visiblePostgres.length} filtering={filtering}
           actions={<ExplorerButton label="PostgreSQL 연결 추가" Icon={Plus} onClick={() => postgres.action({ kind: "create" })} />}>
-          {!postgresMatches.length && <p className="sidebar-empty">저장된 PostgreSQL 연결이 없습니다.</p>}
-          {postgresMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
+          {!visiblePostgres.length && <p className="sidebar-empty">저장된 PostgreSQL 연결이 없습니다.</p>}
+          {visiblePostgres.map(item => <div key={item.id}><ExplorerProfile name={item.settings.name} environment={item.settings.environment}
             detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} label={`PostgreSQL ${item.settings.name} 열기`}
             Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
             {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
             <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
             <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
-          </ExplorerProfile>)}
+          </ExplorerProfile>
+            {item === activePostgres && submitted && <div className="object-list explorer-postgres-results" role="group" aria-label="PostgreSQL 서버 검색 결과">
+              {pgSearch.loading && <p className="sidebar-empty" role="status">PostgreSQL 객체를 검색하는 중…</p>}
+              {pgSearch.error && <p className="sidebar-empty" role="alert">{pgSearch.error}</p>}
+              {pgSearch.data && <>
+                {pgSearch.data.hits.length ? <p className="group-title">객체 {pgSearch.data.hits.length}개</p> :
+                  <p className="sidebar-empty" role="status">일치하는 PostgreSQL 객체가 없습니다.</p>}
+                {pgSearch.data.hits.map(hit => {
+                  const target: PostgresFavorite = { kind: "postgres_object", profile_id: item.id, schema_name: hit.schema, object_name: hit.name };
+                  const qualified = `${hit.schema}.${hit.name}`;
+                  return <div className="explorer-object" key={hit.id}>
+                    <button type="button" className="object-row explorer-postgres-object" title={qualified}
+                      aria-label={`PostgreSQL 객체 ${qualified} 열기`} onClick={() => postgres.openObject(target)}>
+                      <Table2 size={13} aria-hidden />
+                      <span><strong>{hit.name}</strong><small>{hit.schema} · {postgresObjectLabels[hit.kind]}</small></span>
+                    </button>
+                    {favoriteButton(target, `검색 결과 ${qualified}`, submitted.id)}
+                  </div>;
+                })}
+                <PostgresPager label="PostgreSQL 객체" page={submitted.page} next={pgSearch.data.has_next}
+                  change={page => setRemoteSearch({ ...submitted, page })} />
+              </>}
+            </div>}
+          </div>)}
         </ExplorerGroup>
         <ExplorerGroup id="explorer-ssh" name="SSH" Icon={TerminalSquare} count={sshMatches.length} filtering={filtering} actions={<>
           <ExplorerButton label="SSH 연결 가져오기" Icon={FileUp} onClick={() => ssh.action("import")} />

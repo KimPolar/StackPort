@@ -59,6 +59,11 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
     let pg = FavoriteTarget::Postgres {
         profile_id: postgres.id.clone(),
     };
+    let pg_objects = ["first", "second"].map(|schema_name| FavoriteTarget::PostgresObject {
+        profile_id: postgres.id.clone(),
+        schema_name: schema_name.into(),
+        object_name: "daily".into(),
+    });
     let host = FavoriteTarget::Ssh {
         profile_id: ssh.id.clone(),
     };
@@ -83,7 +88,7 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
             .set_workspace_favorite(&project.id, personal, target, true)
             .unwrap();
     }
-    for target in [&table, &view, &pg, &host] {
+    for target in [&table, &view, &pg, &host, &pg_objects[0], &pg_objects[1]] {
         store
             .set_workspace_favorite(&project.id, shared, target, true)
             .unwrap();
@@ -109,7 +114,7 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
 
     let store = Store::open(&metadata).unwrap();
     let original = store.list_workspace_favorites(&project.id).unwrap();
-    assert_eq!(original.len(), 6);
+    assert_eq!(original.len(), 8);
     assert_eq!(
         original
             .iter()
@@ -124,7 +129,7 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
     let copied = store.list_workspace_favorites(&copy.id).unwrap();
     assert!(copied.iter().all(|item| item.scope == shared));
     let copied_targets: Vec<_> = copied.into_iter().map(|item| item.target).collect();
-    assert_eq!(copied_targets.len(), 4);
+    assert_eq!(copied_targets.len(), 6);
     for name in ["data", "report"] {
         assert!(copied_targets.contains(&FavoriteTarget::SqliteObject {
             profile_id: sqlite_copy.id.clone(),
@@ -134,6 +139,13 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
     assert!(copied_targets.contains(&FavoriteTarget::Postgres {
         profile_id: pg_copy.id.clone()
     }));
+    for schema_name in ["first", "second"] {
+        assert!(copied_targets.contains(&FavoriteTarget::PostgresObject {
+            profile_id: pg_copy.id.clone(),
+            schema_name: schema_name.into(),
+            object_name: "daily".into(),
+        }));
+    }
     assert!(copied_targets.contains(&FavoriteTarget::Ssh {
         profile_id: ssh_copy.id.clone()
     }));
@@ -144,12 +156,12 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
         .unwrap();
     assert_eq!(
         store.list_workspace_favorites(&project.id).unwrap().len(),
-        5
+        7
     );
     store.delete_profile(&sqlite.id).unwrap();
     assert_eq!(
         store.list_workspace_favorites(&project.id).unwrap().len(),
-        2
+        4
     );
     store
         .delete_postgres_profile(&postgres.id, postgres.revision)
@@ -159,7 +171,70 @@ fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
         .list_workspace_favorites(&project.id)
         .unwrap()
         .is_empty());
-    assert_eq!(store.list_workspace_favorites(&copy.id).unwrap().len(), 4);
+    assert_eq!(store.list_workspace_favorites(&copy.id).unwrap().len(), 6);
+}
+
+#[test]
+fn version_twelve_favorites_keep_their_scope_and_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let metadata = directory.path().join("workspace.sqlite");
+    let data = directory.path().join("data.sqlite");
+    Connection::open(&data)
+        .unwrap()
+        .execute_batch("CREATE VIEW report AS SELECT 42 AS value;")
+        .unwrap();
+    let store = Store::open(&metadata).unwrap();
+    let project = store.create_project("existing").unwrap();
+    let profile = store
+        .create_sqlite_profile(&project.id, "data", data.to_str().unwrap(), "DEV")
+        .unwrap();
+    let target = FavoriteTarget::SqliteObject {
+        profile_id: profile.id,
+        object_name: "report".into(),
+    };
+    store
+        .set_workspace_favorite(&project.id, FavoriteScope::Project, &target, true)
+        .unwrap();
+    drop(store);
+    let db = Connection::open(&metadata).unwrap();
+    db.execute_batch(
+        "CREATE TABLE favorites_before_upgrade AS
+           SELECT project_id, scope, kind, sqlite_id, postgres_id, ssh_id, object_name
+           FROM workspace_favorites ORDER BY rowid;
+         DROP TABLE workspace_favorites;
+         ALTER TABLE favorites_before_upgrade RENAME TO workspace_favorites;
+         CREATE INDEX workspace_favorite_sqlite_ref ON workspace_favorites(sqlite_id);
+         CREATE INDEX workspace_favorite_postgres_ref ON workspace_favorites(postgres_id);
+         CREATE INDEX workspace_favorite_ssh_ref ON workspace_favorites(ssh_id);
+         PRAGMA user_version=12;",
+    )
+    .unwrap();
+    drop(db);
+
+    let migrated = Store::open(&metadata).unwrap();
+    let saved = migrated.list_workspace_favorites(&project.id).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].scope, FavoriteScope::Project);
+    assert_eq!(saved[0].target, target);
+    let backup = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().contains(".v12-"))
+        .unwrap();
+    let backup = Connection::open(backup).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value(None, "integrity_check", |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert_eq!(
+        backup
+            .query_row("SELECT object_name FROM workspace_favorites", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        "report"
+    );
 }
 
 #[test]

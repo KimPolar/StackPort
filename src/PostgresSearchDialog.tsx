@@ -8,7 +8,7 @@ type SearchField = "name" | "column" | "comment" | "definition";
 type SearchInput = { schema: number | null; kind: PostgresObjectKind | null; field: SearchField; term: string; page: number };
 export type PostgresSearchHit = { id: number; schema_id: number; schema: string; name: string;
   kind: PostgresObjectKind; section: PostgresStructureSection; excerpt: string };
-type SearchPage = { hits: PostgresSearchHit[]; has_next: boolean };
+export type PostgresSearchPage = { hits: PostgresSearchHit[]; has_next: boolean };
 
 export function PostgresSearchDialog({ id, database, schema, onClose, onOpen }: {
   id: string; database: string; schema: { id: number; name: string } | null;
@@ -20,7 +20,7 @@ export function PostgresSearchDialog({ id, database, schema, onClose, onOpen }: 
   const [term, setTerm] = useState("");
   const [input, setInput] = useState<SearchInput | null>(null);
   const args = useMemo(() => input ? { id, input } : null, [id, input]);
-  const results = usePostgresRead<SearchPage>("search_postgres_objects", args);
+  const results = usePostgresRead<PostgresSearchPage>("search_postgres_objects", args);
 
   function submit(event: FormEvent) {
     event.preventDefault();

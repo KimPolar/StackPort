@@ -291,6 +291,11 @@ async function verify(browser, fixture, gateway, jump) {
   await form.waitFor({ state: 'detached' });
   const [profile] = await command('list_postgres_profiles', { projectId: project.id });
   assert.ok(!JSON.stringify(profile).includes(password));
+  const visibleTarget = { kind: 'postgres_object', profile_id: profile.id, schema_name: 'report', object_name: 'visible' };
+  const pinObject = (target, sessionId) => command('set_workspace_favorite', {
+    projectId: project.id, scope: 'project', target, present: true, sessionId,
+  });
+  await assert.rejects(pinObject(visibleTarget, null), /연결한 뒤/);
   await page.getByRole('button', { name: '빠른 연결', exact: true }).click();
   await quickConnect.getByLabel('연결 주소').fill(postgresAddress);
   await quickConnect.getByRole('button', { name: 'PG 검증 PROD', exact: true }).click();
@@ -320,6 +325,13 @@ async function verify(browser, fixture, gateway, jump) {
   await assert.rejects(open(wrongCa), /TLS/);
   await assert.rejects(open(wrongHost), /TLS/);
   const session = await open();
+  const resolve = (schema, name, profileId = profile.id) => command('resolve_postgres_catalog_object', {
+    id: session.id, profileId, schema, name,
+  });
+  assert.equal((await resolve('report', 'visible')).kind, 'view');
+  await assert.rejects(resolve('report', 'VISIBLE'), /찾을 수 없거나 조회 권한/);
+  await assert.rejects(resolve('report', 'visible', wrongCa.id), /연결을 다시 확인/);
+  await assert.rejects(pinObject({ ...visibleTarget, schema_name: 'restricted', object_name: 'hidden_object' }, session.id), /조회 권한/);
   const schemas = await command('postgres_schemas', { id: session.id, page: 0 });
   assert.equal(schemas.schemas.find(schema => schema.name === 'restricted').accessible, false);
   assert.ok(!schemas.schemas.some(schema => schema.name === 'pg_catalog'));
@@ -749,6 +761,33 @@ async function verify(browser, fixture, gateway, jump) {
   }
   await connect();
   await page.getByText(/TLS 연결됨 · PostgreSQL/).waitFor();
+  await page.getByRole('button', { name: '네트워크', exact: true }).click();
+  await explorerSearch.fill('report.visible');
+  const serverSearch = explorer.getByRole('button', { name: 'PostgreSQL PG 검증에서 객체 검색', exact: true });
+  const serverResults = explorer.getByRole('group', { name: 'PostgreSQL 서버 검색 결과', exact: true });
+  assert.equal(await serverResults.count(), 0);
+  await serverSearch.click();
+  const visibleHit = serverResults.getByRole('button', { name: 'PostgreSQL 객체 report.visible 열기', exact: true });
+  await visibleHit.waitFor();
+  await serverResults.getByRole('button', { name: '검색 결과 report.visible 프로젝트 즐겨찾기', exact: true }).click();
+  const favoriteVisible = explorer.getByRole('button', { name: '프로젝트 즐겨찾기 report.visible 열기', exact: true });
+  await favoriteVisible.waitFor();
+  await visibleHit.click();
+  await data.getByText('4', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'report.visible 프로젝트 즐겨찾기', exact: true }).getAttribute('aria-pressed'), 'true');
+  await explorerSearch.press('Escape');
+  await disconnect();
+  await postgresConnected.waitFor({ state: 'detached' });
+  await favoriteVisible.click();
+  await connection.waitFor();
+  assert.equal(await connection.getByLabel('운영 환경 확인').inputValue(), '');
+  await connection.getByLabel('PostgreSQL 암호').fill(password);
+  await connection.getByLabel('운영 환경 확인').fill('PROD');
+  await connection.getByRole('button', { name: '연결', exact: true }).click();
+  await connection.waitFor({ state: 'detached' });
+  await data.getByText('4', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'report.visible 프로젝트 즐겨찾기', exact: true }).click();
+  await favoriteVisible.waitFor({ state: 'detached' });
   await connectMonitor();
   await monitorPane.getByText('서버 가동 시간', { exact: true }).waitFor();
   await monitorPane.getByLabel('세션 범위').selectOption('blocked');

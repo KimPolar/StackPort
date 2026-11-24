@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
+import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
@@ -22,10 +22,12 @@ import type { ExportReport } from "./ResultExportDialog";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { usePostgresRead as useRead } from "./usePostgresRead";
 import type { QueryActivity } from "./WorkspaceStatus";
+import { favoriteKey, favoriteScopeNames, type FavoriteScope, type PostgresFavorite, type WorkspaceFavorites } from "./workspaceFavorites";
 import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
 export type PostgresProfile = { id: string; project_id: string; revision: number; settings: PostgresSettings };
+export type PostgresConnection = { id: string; profileId: string; revision: number };
 export type PostgresProfileAction = { kind: "create"; initial?: Partial<PostgresSettings> } | { kind: "edit" | "delete"; profile: PostgresProfile };
 type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string;
   tunnel: string | null; tunnel_id: string | null; grid_edit: boolean };
@@ -61,13 +63,16 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
   return { types, values: values.map(value => ({ kind: "text", value })) };
 }
 
-export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels, onConnectionChange, onQueryActivity }: {
+export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels, onConnectionChange, onQueryActivity,
+  objectRequest, onObjectHandled, favorites, favoriteScope }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
   visible: boolean;
   onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   onOpenTunnels: () => void;
-  onConnectionChange: (connected: boolean) => void;
+  onConnectionChange: (connection: PostgresConnection | null) => void;
   onQueryActivity: (activity: QueryActivity) => void;
+  objectRequest: PostgresFavorite | null; onObjectHandled: (request: PostgresFavorite) => void;
+  favorites: WorkspaceFavorites; favoriteScope: FavoriteScope;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<"catalog" | "sql" | "monitor">("catalog");
@@ -82,12 +87,19 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
   const connectButton = useRef<HTMLButtonElement>(null);
   const { name, host, port, database, environment } = profile.settings;
   const online = session !== null && !loss;
+  const activeId = online ? session.id : null;
 
   useEffect(() => () => { if (active.current) void invoke("close_postgres", { id: active.current }).catch(() => {}); }, []);
   useEffect(() => {
-    onConnectionChange(online);
-    return () => onConnectionChange(false);
-  }, [online, onConnectionChange]);
+    onConnectionChange(activeId ? { id: activeId, profileId: profile.id, revision: profile.revision } : null);
+    return () => onConnectionChange(null);
+  }, [activeId, profile.id, profile.revision, onConnectionChange]);
+
+  useEffect(() => {
+    if (!objectRequest) return;
+    setView("catalog");
+    if (!activeId) setDialog(true);
+  }, [objectRequest, activeId]);
 
   useEffect(() => {
     if (!session || loss) return;
@@ -160,6 +172,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       {online && <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>}
       <div hidden={view !== "catalog"}>
         <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy} onEditExitGuard={onEditExitGuard}
+          objectRequest={objectRequest} onObjectHandled={onObjectHandled} favorites={favorites} favoriteScope={favoriteScope}
           unavailable={loss} onReconnectFocus={() => connectButton.current?.focus()}
           onEditUnknown={() => {
             if (active.current === session.id) {
@@ -180,7 +193,10 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
     {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
-    {dialog && <ConnectDialog profile={profile} preferredRoute={preferredRoute} onOpenTunnels={onOpenTunnels} onClose={() => setDialog(false)} onOpened={connected => {
+    {dialog && <ConnectDialog profile={profile} preferredRoute={preferredRoute} onOpenTunnels={onOpenTunnels} onClose={() => {
+      setDialog(false);
+      if (objectRequest) onObjectHandled(objectRequest);
+    }} onOpened={connected => {
       active.current = connected.id; setSession(connected); setDialog(false); setError(""); setLoss("");
       setPreferredRoute(connected.tunnel_id && connected.tunnel ? { id: connected.tunnel_id, name: connected.tunnel } : null);
     }} />}
@@ -254,13 +270,16 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
   </dialog>;
 }
 
-function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown, onEditExitGuard, unavailable, onReconnectFocus }: {
+function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown, onEditExitGuard, unavailable, onReconnectFocus,
+  objectRequest, onObjectHandled, favorites, favoriteScope }: {
   id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
   onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
   onEditUnknown: () => void;
   onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   unavailable: string;
   onReconnectFocus: () => void;
+  objectRequest: PostgresFavorite | null; onObjectHandled: (request: PostgresFavorite) => void;
+  favorites: WorkspaceFavorites; favoriteScope: FavoriteScope;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -268,6 +287,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  const [navigationError, setNavigationError] = useState("");
   const [object, setObject] = useState<DatabaseObject | null>(null);
   const [rowPage, setRowPage] = useState(0);
   const [columnPage, setColumnPage] = useState(0);
@@ -315,10 +335,15 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
     ? `SELECT *\nFROM ${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` : null);
+  const pinnedObject: PostgresFavorite | null = object?.readable && schema
+    ? { kind: "postgres_object", profile_id: profile.id, schema_name: schema.name, object_name: object.name } : null;
+  const isPinned = pinnedObject && favorites.items.some(item => item.scope === favoriteScope && favoriteKey(item.target) === favoriteKey(pinnedObject));
 
   useEffect(() => { if (page.data) setFilterColumns(page.data.column_names); }, [page.data]);
 
   function selectObject(next: DatabaseObject | null, section?: PostgresStructureSection) {
+    if (objectRequest) onObjectHandled(objectRequest);
+    setNavigationError("");
     setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(Boolean(section));
     setLayoutOpen(false);
     setGridRequested(next !== null && section === undefined);
@@ -332,6 +357,24 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   function chooseSchema(next: Schema | null) {
     setSchema(next); setSearch(""); setQuery(""); setObjectPage(0); selectObject(null);
   }
+
+  const openResolvedObject = useEffectEvent((hit: Pick<PostgresSearchHit, "id" | "schema_id" | "schema" | "name" | "kind">) => {
+    chooseSchema({ id: hit.schema_id, name: hit.schema, accessible: true });
+    selectObject({ id: hit.id, name: hit.name, kind: hit.kind, readable: true });
+    requestAnimationFrame(() => dataPanel.current?.focus());
+  });
+
+  useEffect(() => {
+    if (!objectRequest || unavailable) return;
+    let live = true;
+    setNavigationError("");
+    const { schema_name: schema, object_name: name } = objectRequest;
+    void invoke<Pick<PostgresSearchHit, "id" | "schema_id" | "schema" | "name" | "kind">>("resolve_postgres_catalog_object", { id, profileId: profile.id, schema, name })
+      .then(hit => { if (live) openResolvedObject(hit); })
+      .catch(reason => { if (live) setNavigationError(String(reason)); })
+      .finally(() => { if (live) onObjectHandled(objectRequest); });
+    return () => { live = false; };
+  }, [id, profile.id, objectRequest, unavailable, onObjectHandled]);
 
   function searchObjects(event: FormEvent) {
     event.preventDefault(); setQuery(search.trim()); setObjectPage(0); selectObject(null);
@@ -461,8 +504,10 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         </>}
       </>}
     </aside>
-    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={!structureOpen && page.loading}
+    <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={Boolean(objectRequest) || !structureOpen && page.loading}
       tabIndex={-1} ref={dataPanel}>
+      {objectRequest && <p className="result-empty" role="status">PostgreSQL 객체를 확인하는 중…</p>}
+      {navigationError && <p className="error-banner" role="alert">{navigationError}</p>}
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
           {!structureOpen && Boolean(result?.rows.length) && <GridSelectionButton selection={rowSelection} disabled={page.loading} />}
@@ -492,6 +537,13 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <div className="postgres-result-views postgres-object-views" role="group" aria-label="객체 보기">
           <button type="button" className="secondary small" aria-pressed={!structureOpen} onClick={() => { setStructureOpen(false); setGridRequested(true); }}>데이터</button>
           <button type="button" className="secondary small" aria-pressed={structureOpen} onClick={() => setStructureOpen(true)}>구조</button>
+          {pinnedObject && <button type="button" className="icon-button postgres-pin-object" aria-pressed={Boolean(isPinned)}
+            disabled={!favorites.ready} aria-disabled={favorites.busy || undefined}
+            aria-label={`${schema.name}.${object.name} ${favoriteScopeNames[favoriteScope]} 즐겨찾기`}
+            title={`${favoriteScopeNames[favoriteScope]} 즐겨찾기`}
+            onClick={() => { if (!favorites.busy) void favorites.change(favoriteScope, pinnedObject, !isPinned, id); }}>
+            <Star size={15} aria-hidden />
+          </button>}
         </div>
         {!unavailable && <PostgresObjectStructure key={`${object.id}-${structureStart.version}`} id={id} object={object.id}
           relation={schema.name + "." + object.name} kind={object.kind} initialSection={structureStart.section}
