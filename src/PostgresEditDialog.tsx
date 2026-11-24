@@ -4,26 +4,43 @@ import { Dialog } from "./Dialog";
 import type { PostgresCell } from "./PostgresSqlWorkspace";
 
 export type PostgresRowStamp = { tuple: string; version: string; keys: string[] };
-type EditSession = {
-  token: string; table: string; column: string; data_type: string; keys: [string, string][];
+type EditField = {
+  column: string; data_type: string;
   current: PostgresCell; nullable: boolean; default_sql: string | null;
 };
-type Preview = { approval: string; before: PostgresCell; after: PostgresCell; use_default: boolean };
-type Outcome = { status: "applied"; actual: PostgresCell; audit_warning: boolean } | { status: "unknown" };
+type EditSession = EditField & { token: string; table: string; keys: [string, string][]; columns: string[] };
+type PreviewCell = { column: string; before: PostgresCell; after: PostgresCell; default_sql: string | null };
+type Preview = { approval: string; changes: PreviewCell[] };
+type Outcome = { status: "applied"; affected_cells: number; audit_warning: boolean } | { status: "unknown" };
 type InputKind = "text" | "null" | "default";
+type Draft = { field: EditField; kind: InputKind; value: string };
+type Discard = { after?: () => void };
+export type PostgresEditExitGuard = (after: () => void) => void;
+const maxCells = 16;
 
-export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy, onClose, onApplied, onUnknown }: {
+const fromField = (field: EditField): Draft => ({
+  field, kind: field.current.value === null ? "null" : "text", value: field.current.value ?? "",
+});
+
+function changed({ field, kind, value }: Draft) {
+  if (kind === "default") return true;
+  return (kind === "null" ? null : value) !== field.current.value;
+}
+
+export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy, onClose, onApplied, onUnknown, onExitGuard }: {
   id: string; object: number; stamp: PostgresRowStamp; column: string;
   profile: { name: string; environment: string };
   onBusy: (busy: boolean) => void;
   onClose: () => void;
-  onApplied: (auditWarning: boolean) => void;
+  onApplied: (cells: number, auditWarning: boolean) => void;
   onUnknown: () => void;
+  onExitGuard: (guard: PostgresEditExitGuard | null) => void;
 }) {
   const [session, setSession] = useState<EditSession | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [kind, setKind] = useState<InputKind>("text");
-  const [value, setValue] = useState("");
+  const [drafts, setDrafts] = useState<Draft[]>([]);
+  const [nextColumn, setNextColumn] = useState("");
+  const [discard, setDiscard] = useState<Discard | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -31,7 +48,12 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
   const pending = useRef(false);
   const live = useRef(false);
   const errorId = useId();
+  const productionHelp = useId();
   const production = profile.environment === "PROD";
+  const changes = drafts.filter(changed);
+  const dirty = changes.length > 0;
+  const remaining = session?.columns.filter(name => !drafts.some(draft => draft.field.column === name)) ?? [];
+  const next = remaining.includes(nextColumn) ? nextColumn : remaining[0] ?? "";
 
   useEffect(() => {
     let active = true;
@@ -42,27 +64,69 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
       token = result.token;
       if (!active) { cancel(token); return; }
       setSession(result);
-      setValue(result.current.value ?? "");
+      setDrafts([fromField(result)]);
     }, reason => { if (active) setError(String(reason)); }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; live.current = false; if (token) cancel(token); };
   }, [id, object, stamp, column]);
 
+  useEffect(() => {
+    if (!dirty) return;
+    onExitGuard(after => setDiscard({ after }));
+    return () => onExitGuard(null);
+  }, [dirty, onExitGuard]);
+
+  function requestClose() {
+    if (discard) setDiscard(null);
+    else if (dirty) setDiscard({});
+    else onClose();
+  }
+
+  function discardAndClose() {
+    onExitGuard(null);
+    onClose();
+    discard?.after?.();
+  }
+
+  function update(name: string, patch: Partial<Pick<Draft, "kind" | "value">>) {
+    setError("");
+    setDrafts(values => values.map(draft => draft.field.column === name ? { ...draft, ...patch } : draft));
+  }
+
+  async function addField() {
+    if (pending.current || !session || !next || drafts.length >= maxCells) return;
+    pending.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const field = await invoke<EditField>("open_postgres_edit_field", { id, token: session.token, column: next });
+      if (live.current) setDrafts(values => [...values, fromField(field)]);
+    } catch (reason) {
+      if (live.current) setError(String(reason));
+    } finally {
+      pending.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (pending.current || !session || expired || (preview && production && confirmation !== "PROD")) return;
+    if (pending.current || !session || expired || discard || !dirty ||
+        (preview && production && confirmation !== "PROD")) return;
     pending.current = true;
     setBusy(true);
     setError("");
     if (preview) onBusy(true);
     try {
       if (!preview) {
-        const input = kind === "text" ? { kind, value } : { kind };
-        const result = await invoke<Preview>("preview_postgres_edit", { id, token: session.token, input });
+        const selected = changes.map(({ field, kind, value }) => ({
+          column: field.column, input: kind === "text" ? { kind, value } : { kind },
+        }));
+        const result = await invoke<Preview>("preview_postgres_row_edit", { id, token: session.token, changes: selected });
         if (live.current) setPreview(result);
       } else {
         const result = await invoke<Outcome>("apply_postgres_edit", { id, token: session.token, approval: preview.approval, confirmation });
         if (live.current) {
-          if (result.status === "applied") onApplied(result.audit_warning);
+          if (result.status === "applied") onApplied(result.affected_cells, result.audit_warning);
           else onUnknown();
         }
       }
@@ -75,46 +139,69 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, onBusy,
     }
   }
 
-  const formTitle = session ? `${session.table} · ${session.column}` : column;
-  return <Dialog title="PostgreSQL 셀 편집" onClose={onClose} busy={busy}>
+  return <Dialog title="PostgreSQL 행 편집" onClose={requestClose} busy={busy} interceptEscape>
     <form onSubmit={event => void submit(event)} aria-busy={busy} aria-describedby={error ? errorId : undefined}>
-      <p className="confirm-copy"><strong>{profile.name} · {formTitle}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>
+      <p className="confirm-copy"><strong>{profile.name} · {session?.table ?? column}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>
       {busy && !session && <p className="form-note" role="status">현재 행을 읽는 중…</p>}
-      {session && <>
+      {discard ? <>
+        <p role="alert" className="form-note">적용하지 않은 변경이 있습니다.</p>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" autoFocus onClick={() => setDiscard(null)}>계속 편집</button>
+          <button type="button" className="danger" onClick={discardAndClose}>변경 버리기</button>
+        </div>
+      </> : <>
+        {session && <>
         <p className="form-note">기본 키 {session.keys.map(([name, value]) => `${name} = ${value}`).join(", ")}</p>
-        <p className="form-note">열 타입 {session.data_type} · 편집 가능 시간 5분</p>
-        {!preview && <EditValue label="현재 값" value={session.current.value} />}
+        <p className="form-note">편집 가능 시간 5분 · 최대 16개 열</p>
         {!preview && <>
-          <label className="field">값 입력 방식<select value={kind} disabled={busy}
-            onChange={event => setKind(event.target.value as InputKind)}>
-            <option value="text">값 입력</option>
-            {session.nullable && <option value="null">NULL</option>}
-            {session.default_sql !== null && <option value="default">서버 기본값</option>}
-          </select></label>
-          {kind === "text" && <label className="field">변경할 값<textarea className="edit-value" value={value} disabled={busy}
-            maxLength={8192} onChange={event => setValue(event.target.value)} /></label>}
-          {kind === "default" && <EditValue label="서버 기본값 식" value={session.default_sql} />}
+          {drafts.map(draft => <fieldset key={draft.field.column} className="postgres-edit-field" data-changed={changed(draft)} disabled={busy}>
+            <legend>{draft.field.column} · {draft.field.data_type}{changed(draft) && " · 변경됨"}</legend>
+            <EditValue label="현재 값" value={draft.field.current.value} />
+            <label className="field">값 입력 방식<select value={draft.kind}
+              onChange={event => update(draft.field.column, { kind: event.target.value as InputKind })}>
+              <option value="text">값 입력</option>
+              {draft.field.nullable && <option value="null">NULL</option>}
+              {draft.field.default_sql !== null && <option value="default">서버 기본값</option>}
+            </select></label>
+            {draft.kind === "text" && <label className="field">변경할 값<textarea className="edit-value" value={draft.value}
+              maxLength={8192} onChange={event => update(draft.field.column, { value: event.target.value })} /></label>}
+            {draft.kind === "default" && <EditValue label="서버 기본값 식" value={draft.field.default_sql} />}
+            {drafts.length > 1 && <button type="button" className="secondary small" aria-label={`${draft.field.column} 변경 제거`}
+              onClick={() => { setError(""); setDrafts(values => values.filter(item => item !== draft)); }}>이 열 제거</button>}
+          </fieldset>)}
+          {next && drafts.length < maxCells && <div className="postgres-edit-add">
+            <label className="field">추가할 열<select value={next} disabled={busy} onChange={event => setNextColumn(event.target.value)}>
+              {remaining.map(name => <option key={name} value={name}>{name}</option>)}
+            </select></label>
+            <button type="button" className="secondary" disabled={busy} onClick={() => void addField()}>열 추가</button>
+          </div>}
         </>}
         {preview && <div className="edit-preview">
-          <strong>변경 미리보기 · 1행 / 1열</strong>
-          <EditValue label="이전 값" value={preview.before.value} />
-          <EditValue label={preview.use_default ? "서버 기본값 식" : "변경 값"} value={preview.use_default ? session.default_sql : preview.after.value} />
-          {preview.use_default && <p className="form-note">실제 기본값은 적용할 때 서버에서 계산합니다.</p>}
+          <strong>변경 미리보기 · 1행 / {preview.changes.length}열</strong>
+          {preview.changes.map(change => <section className="postgres-edit-comparison" key={change.column} aria-label={`${change.column} 변경 비교`}>
+            <strong>{change.column}</strong>
+            <EditValue label="이전 값" value={change.before.value} />
+            <EditValue label={change.default_sql === null ? "변경 값" : "서버 기본값 식"}
+              value={change.default_sql ?? change.after.value} />
+          </section>)}
+          {preview.changes.some(change => change.default_sql !== null) && <p className="form-note">실제 기본값은 적용할 때 서버에서 계산합니다.</p>}
+          <p className="form-note">표시된 변경을 한 트랜잭션에서 적용합니다.</p>
         </div>}
         {preview && production && !expired && <label className="field">운영 환경 확인<input value={confirmation} disabled={busy}
-          autoComplete="off" required pattern="PROD" aria-describedby="postgres-edit-prod-help"
+          autoComplete="off" required pattern="PROD" aria-describedby={productionHelp}
           onChange={event => setConfirmation(event.target.value)} /></label>}
-        {preview && production && !expired && <p id="postgres-edit-prod-help" className="form-note">적용하려면 PROD를 입력하세요.</p>}
+        {preview && production && !expired && <p id={productionHelp} className="form-note">적용하려면 PROD를 입력하세요.</p>}
+        </>}
+        {error && <p id={errorId} className="form-error" role="alert">{error}{expired && " 창을 닫은 뒤 행을 다시 조회하세요."}</p>}
+        <div className="dialog-actions">
+          <button type="button" className="secondary" disabled={busy} onClick={requestClose}>닫기</button>
+          {preview && !expired && <button type="button" className="secondary" disabled={busy}
+            onClick={() => { setPreview(null); setConfirmation(""); setError(""); }}>다시 편집</button>}
+          {session && !expired && <button type="submit" className={preview ? "danger" : "primary"} disabled={busy || !dirty}>
+            {busy ? "처리 중…" : preview ? "변경 적용" : "변경 미리보기"}
+          </button>}
+        </div>
       </>}
-      {error && <p id={errorId} className="form-error" role="alert">{error}{expired && " 창을 닫은 뒤 행을 다시 조회하세요."}</p>}
-      <div className="dialog-actions">
-        <button type="button" className="secondary" disabled={busy} onClick={onClose}>닫기</button>
-        {preview && !expired && <button type="button" className="secondary" disabled={busy}
-          onClick={() => { setPreview(null); setConfirmation(""); setError(""); }}>다시 편집</button>}
-        {session && !expired && <button type="submit" className={preview ? "danger" : "primary"} disabled={busy}>
-          {busy ? "처리 중…" : preview ? "변경 적용" : "변경 미리보기"}
-        </button>}
-      </div>
     </form>
   </Dialog>;
 }

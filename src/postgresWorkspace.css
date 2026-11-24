@@ -59,6 +59,13 @@
 .postgres-editable-cell { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .postgres-editable-cell .icon-button { flex: 0 0 auto; opacity: .65; }
 .postgres-editable-cell .icon-button:hover, .postgres-editable-cell .icon-button:focus-visible { opacity: 1; }
+.postgres-edit-field { min-width: 0; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.postgres-edit-field[data-changed="true"] { border-color: var(--focus); }
+.postgres-edit-field legend { padding: 0 5px; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.postgres-edit-add { display: flex; align-items: flex-end; gap: 6px; margin: 12px 0; }
+.postgres-edit-add .field { min-width: 0; flex: 1; margin: 0; }
+.postgres-edit-comparison { margin-top: 10px; }
+.postgres-edit-comparison .edit-current { margin: 4px 0; }
 .postgres-paging { display: flex; flex-wrap: wrap; }
 .postgres-paging .pagination { flex: 1 1 150px; }
 .postgres-null { color: var(--text-muted); font-style: italic; }

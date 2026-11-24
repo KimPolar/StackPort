@@ -58,7 +58,8 @@ async function startPostgres() {
     'GRANT SELECT ON report.plan_events TO fixture_reader;',
     'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
     'CREATE TABLE report."edit demo" ("tenant key" integer, "row key" uuid, "public note" text DEFAULT \'기본값\', ' +
-      'amount numeric(30,3) NOT NULL CHECK(amount >= 0), "unique note" text UNIQUE, PRIMARY KEY ("tenant key", "row key"));',
+      'amount numeric(30,3) NOT NULL CHECK(amount >= 0), "unique note" text UNIQUE, PRIMARY KEY ("tenant key", "row key"), ' +
+      'CHECK ("public note" IS DISTINCT FROM \'조합\' OR amount = 8.000));',
     "INSERT INTO report.\"edit demo\" VALUES (1, '9a048887-22a5-4c98-bbc1-7ceee4ee725d', '초기값', 9007199254740993.123, 'unique-a'), " +
       "(2, '9a048887-22a5-4c98-bbc1-7ceee4ee725d', '다른 행', 2, 'unique-b');",
     'ALTER TABLE report."edit demo" ENABLE ROW LEVEL SECURITY;',
@@ -852,7 +853,7 @@ async function verify(browser, fixture, gateway) {
   await page.getByText('그리드 편집 허용', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'report', exact: true }).click();
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
-  const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 셀 편집', exact: true });
+  const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });
   const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });
   assert.equal(await data.getByRole('button', { name: '1행 tenant key 편집', exact: true }).count(), 0);
   await editNote.click();
@@ -873,6 +874,41 @@ async function verify(browser, fixture, gateway) {
   await cellEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
   await cellEditor.waitFor({ state: 'detached' });
   await data.getByText('기본값', { exact: true }).waitFor();
+  await editNote.click();
+  await cellEditor.getByLabel('추가할 열').selectOption('amount');
+  await cellEditor.getByRole('button', { name: '열 추가', exact: true }).click();
+  const noteDraft = cellEditor.getByRole('group', { name: /^public note / });
+  const amountDraft = cellEditor.getByRole('group', { name: /^amount / });
+  await noteDraft.getByLabel('변경할 값').fill('화면 다중 수정');
+  await amountDraft.getByLabel('변경할 값').fill('25.125');
+  await noteDraft.getByText(/변경됨/).waitFor();
+  assert.equal(await page.evaluate(() => {
+    const probe = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(probe);
+    return probe.defaultPrevented;
+  }), true);
+  await page.keyboard.press('Escape');
+  await cellEditor.getByText('적용하지 않은 변경이 있습니다.', { exact: true }).waitFor();
+  await cellEditor.getByRole('button', { name: '계속 편집', exact: true }).click();
+  await cellEditor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await cellEditor.getByText('변경 미리보기 · 1행 / 2열', { exact: true }).waitFor();
+  await cellEditor.getByRole('region', { name: 'public note 변경 비교', exact: true }).getByText('화면 다중 수정').waitFor();
+  await cellEditor.getByRole('region', { name: 'amount 변경 비교', exact: true }).getByText('25.125').waitFor();
+  await cellEditor.getByRole('button', { name: '다시 편집', exact: true }).click();
+  assert.equal(await amountDraft.getByLabel('변경할 값').inputValue(), '25.125');
+  await cellEditor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await cellEditor.getByLabel('운영 환경 확인').fill('PROD');
+  await cellEditor.getByRole('button', { name: '변경 적용', exact: true }).click();
+  await cellEditor.waitFor({ state: 'detached' });
+  await page.getByText('2개 셀 변경 완료', { exact: true }).waitFor();
+  await data.getByText('화면 다중 수정', { exact: true }).waitFor();
+  await data.getByText('25.125', { exact: true }).waitFor();
+  await editNote.click();
+  await cellEditor.getByLabel('변경할 값').fill('버릴 초안');
+  await cellEditor.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await cellEditor.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await cellEditor.waitFor({ state: 'detached' });
+  await data.getByText('화면 다중 수정', { exact: true }).waitFor();
   await disconnect();
 
   const ssh = await command('create_ssh_profile', { projectId: project.id, input: {
@@ -995,6 +1031,30 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     assert.equal(discarded.after.value, '');
     await command('cancel_postgres_edit', { id, token: cancelled.token });
     await assert.rejects(apply(id, cancelled.token, discarded.approval), /만료/);
+    const openField = (token, column) => command('open_postgres_edit_field', { id, token, column });
+    const staged = (token, changes) => command('preview_postgres_row_edit', { id, token, changes });
+    const change = (column, value) => ({ column, input: input(value) });
+    const batch = await begin(id, latest.row_stamps[0], 'public note');
+    assert.deepEqual(batch.columns, ['public note', 'amount']);
+    await assert.rejects(openField(batch.token, 'unique note'), /편집할 수 없습니다/);
+    await assert.rejects(staged(batch.token, [change('amount', '8')]), /열을 다시 열어/);
+    assert.equal((await openField(batch.token, 'amount')).current.value, '9007199254740993.125');
+    await assert.rejects(staged(batch.token, [change('amount', '8'), change('amount', '9')]), /같은 열/);
+    const badBatch = await staged(batch.token, [change('public note', '저장되면 안 되는 값'), change('amount', '-1')]);
+    assert.equal(badBatch.changes.length, 2);
+    await assert.rejects(apply(id, batch.token, badBatch.approval), /23514/);
+    assert.deepEqual((await page(peer.id)).rows[0].slice(2, 4).map(cell => cell.value),
+      ['동시 변경', '9007199254740993.125']);
+    const fresh = await page(id);
+    const all = await begin(id, fresh.row_stamps[0], 'public note');
+    await openField(all.token, 'amount');
+    const onlyChanged = await staged(all.token, [change('public note', '동시 변경'), change('amount', '8')]);
+    assert.deepEqual(onlyChanged.changes.map(cell => cell.column), ['amount']);
+    const combined = await staged(all.token, [change('public note', '조합'), change('amount', '8')]);
+    assert.deepEqual(combined.changes.map(cell => [cell.column, cell.after.value]), [['public note', '조합'], ['amount', '8.000']]);
+    await assert.rejects(apply(id, all.token, onlyChanged.approval), /다시 미리/);
+    assert.equal((await apply(id, all.token, combined.approval)).affected_cells, 2);
+    assert.deepEqual((await page(peer.id)).rows[0].slice(2, 4).map(cell => cell.value), ['조합', '8.000']);
     const raw = await command('execute_postgres_sql', {
       id, request: randomUUID(), source: 'UPDATE report."edit demo" SET amount = 0 RETURNING amount', scope: { kind: 'document' },
     });
@@ -1005,6 +1065,9 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     assert.ok(edits.some(event => event.outcome === 'failed'));
     assert.equal(edits.filter(event => event.outcome === 'started').length, 5);
     assert.doesNotMatch(JSON.stringify(edits), /9a048887|fixture-secret|동시 변경|권한 밖/);
+    const rows = history.events.filter(event => event.operation === 'postgres.edit.row');
+    assert.deepEqual(rows.map(event => event.outcome).sort(), ['failed', 'started', 'started', 'succeeded']);
+    assert.equal(rows.find(event => event.outcome === 'succeeded').affected_count, 1);
   } finally {
     await close(writer.id);
     await close(peer.id);
@@ -1019,7 +1082,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (guarded cell editing, filters, exports, catalog structure, SQL and TLS).');
+    console.log('Windows PostgreSQL E2E passed (atomic row editing, rollback, conflicts, filters, exports, SQL and TLS).');
   } finally {
     await browser?.close();
     gateway?.close();

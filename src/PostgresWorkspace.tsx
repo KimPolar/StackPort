@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Database, FileCode2, Pencil, Plug, ShieldCheck, X } from "lucide-react";
-import { PostgresEditDialog, type PostgresRowStamp } from "./PostgresEditDialog";
+import { PostgresEditDialog, type PostgresEditExitGuard, type PostgresRowStamp } from "./PostgresEditDialog";
 import { PostgresObjectStructure, type PostgresObjectKind, type PostgresRelationLink } from "./PostgresObjectStructure";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
@@ -40,8 +40,9 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
   return { types, values: values.map(value => ({ kind: "text", value })) };
 }
 
-export function PostgresWorkspace({ profile, editor, onFileBusy }: {
+export function PostgresWorkspace({ profile, editor, onFileBusy, onEditExitGuard }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
+  onEditExitGuard: (guard: PostgresEditExitGuard | null) => void;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<"catalog" | "sql">("catalog");
@@ -103,7 +104,7 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
       <div hidden={view !== "catalog"}>
-        <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy}
+        <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy} onEditExitGuard={onEditExitGuard}
           onEditUnknown={() => closedByQuery(session.id, "PostgreSQL 커밋 결과를 확인할 수 없습니다. 다시 연결해 현재 행을 확인하세요.")}
           onOpenSql={source => {
             editor.add(source + ";");
@@ -169,10 +170,11 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
   </dialog>;
 }
 
-function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown }: {
+function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown, onEditExitGuard }: {
   id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
   onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
   onEditUnknown: () => void;
+  onEditExitGuard: (guard: PostgresEditExitGuard | null) => void;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -330,8 +332,9 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         </>}
       </div>
       {edit && <PostgresEditDialog id={id} object={edit.object} stamp={edit.stamp} column={edit.column} profile={profile.settings}
-        onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onApplied={warning => {
-          setEditNotice(warning ? "셀 변경 완료 · 작업 기록을 저장할 수 없습니다." : "셀 변경 완료");
+        onBusy={onFileBusy} onClose={() => closeEdit()} onUnknown={onEditUnknown} onExitGuard={onEditExitGuard} onApplied={(cells, warning) => {
+          const result = cells === 1 ? "셀 변경 완료" : `${cells}개 셀 변경 완료`;
+          setEditNotice(warning ? result + " · 작업 기록을 저장할 수 없습니다." : result);
           closeEdit(true);
         }} />}
     </section>

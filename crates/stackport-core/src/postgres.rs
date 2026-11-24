@@ -10,8 +10,8 @@ mod sql_range;
 
 pub use catalog::{PostgresStructure, PostgresStructureSection};
 pub use edit::{
-    PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession,
-    PostgresRowStamp,
+    PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
+    PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
 };
 pub use export::PostgresExportOptions;
 pub use parameters::PostgresSqlBindings;

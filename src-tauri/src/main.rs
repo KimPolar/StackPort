@@ -15,7 +15,7 @@ use stackport_core::{
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
-    PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowStamp,
+    PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -848,6 +848,20 @@ async fn preview_postgres_edit(
 }
 
 #[tauri::command]
+async fn open_postgres_edit_field(
+    postgres: State<'_, PostgresManager>, id: String, token: String, column: String,
+) -> Result<PostgresEditField, String> {
+    postgres.open_edit_field(&id, &token, &column).await
+}
+
+#[tauri::command]
+async fn preview_postgres_row_edit(
+    postgres: State<'_, PostgresManager>, id: String, token: String, changes: Vec<PostgresCellChange>,
+) -> Result<PostgresRowEditPreview, String> {
+    postgres.preview_row_edit(&id, &token, changes).await
+}
+
+#[tauri::command]
 async fn apply_postgres_edit(
     postgres: State<'_, PostgresManager>, id: String, token: String, approval: String, confirmation: String,
 ) -> Result<PostgresEditOutcome, String> {
@@ -1542,6 +1556,8 @@ fn main() {
             postgres_structure,
             begin_postgres_edit,
             preview_postgres_edit,
+            open_postgres_edit_field,
+            preview_postgres_row_edit,
             apply_postgres_edit,
             cancel_postgres_edit,
             execute_postgres_sql,

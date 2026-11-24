@@ -19,7 +19,7 @@ mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 pub use postgres::{PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
-pub use postgres::{PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowStamp};
+pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;

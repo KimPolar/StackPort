@@ -37,6 +37,7 @@ import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction } from "./PostgresWorkspace";
+import type { PostgresEditExitGuard } from "./PostgresEditDialog";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -240,6 +241,7 @@ function App() {
   const exitPromptOpen = useRef(exitPrompt);
   exitPromptOpen.current = exitPrompt;
   const sftpExitGuard = useRef<(() => void) | null>(null);
+  const postgresEditExitGuard = useRef<PostgresEditExitGuard | null>(null);
   const localFileBusy = useRef(false);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
@@ -256,6 +258,7 @@ function App() {
   }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
   const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
+  const setPostgresEditExitGuard = useCallback((guard: PostgresEditExitGuard | null) => { postgresEditExitGuard.current = guard; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef(sqlTabSets);
@@ -415,7 +418,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (localFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || tunnelCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
+      if (!closeApproved.current && (localFileBusy.current || postgresEditExitGuard.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || tunnelCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -443,8 +446,12 @@ function App() {
     });
   }, [flushResume]);
 
-  const requestAppClose = useCallback(() => {
+  const requestAppClose: () => void = useCallback(() => {
     if (closeApproved.current || closePending.current || localFileBusy.current || exitPromptOpen.current) return;
+    if (postgresEditExitGuard.current) {
+      postgresEditExitGuard.current(requestAppClose);
+      return;
+    }
     if (sftpExitGuard.current) {
       sftpExitGuard.current();
       return;
@@ -1199,7 +1206,7 @@ function App() {
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
-      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile}
+      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setPostgresEditExitGuard}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
         select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
@@ -1691,6 +1698,7 @@ const auditOperationNames: Record<string, string> = {
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
+  "postgres.edit.row": "PostgreSQL 행 변경",
   "postgres.export.csv": "PostgreSQL CSV 내보내기", "postgres.export.json": "PostgreSQL JSON 내보내기",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",

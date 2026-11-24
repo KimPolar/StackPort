@@ -1,8 +1,8 @@
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
     edit::{
-        self, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession,
-        PostgresRowStamp,
+        self, PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
+        PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     },
     export::EXPORT_TIMEOUT,
     parameters::Value,
@@ -452,6 +452,49 @@ impl PostgresManager {
         token: &str,
         input: PostgresEditInput,
     ) -> Result<PostgresEditPreview> {
+        self.preview_changes(id, token, |plan| {
+            vec![PostgresCellChange {
+                column: plan.first_column(),
+                input,
+            }]
+        })
+        .await?
+        .single()
+    }
+
+    pub async fn open_edit_field(
+        &self,
+        id: &str,
+        token: &str,
+        column: &str,
+    ) -> Result<PostgresEditField> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.edit.lock().await;
+        let token = edit_token(token)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let plan = checked_edit(&mut pending, token)?;
+            edit::open_field(&mut client, plan, column).await
+        })
+        .await
+        .map_err(|_| "편집할 열을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn preview_row_edit(
+        &self,
+        id: &str,
+        token: &str,
+        changes: Vec<PostgresCellChange>,
+    ) -> Result<PostgresRowEditPreview> {
+        self.preview_changes(id, token, |_| changes).await
+    }
+
+    async fn preview_changes(
+        &self,
+        id: &str,
+        token: &str,
+        inputs: impl FnOnce(&edit::Plan) -> Vec<PostgresCellChange>,
+    ) -> Result<PostgresRowEditPreview> {
         let session = self.edit_session(id)?;
         let mut pending = session.edit.lock().await;
         let plan = checked_edit(&mut pending, edit_token(token)?)?;
@@ -461,7 +504,8 @@ impl PostgresManager {
             if plan.created.elapsed() >= edit::LIFETIME {
                 return Err(edit::EXPIRED.into());
             }
-            edit::preview(&mut client, plan, input).await
+            let changes = inputs(plan);
+            edit::preview(&mut client, plan, changes).await
         })
         .await
         .map_err(|_| "변경 미리보기 시간이 초과되었습니다.")?
