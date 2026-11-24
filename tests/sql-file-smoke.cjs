@@ -45,6 +45,7 @@ async function main() {
     await verifySqlCompletion(page, editor, dev);
     await verifySqlDiagnostics(page, editor, dev);
     await verifySqlDefinition(page, editor, dev);
+    await verifySqlHover(page, editor, dev);
     await verifySqlFormatting(page, editor);
     await verifySqlAliasRename(page, editor);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
@@ -537,6 +538,82 @@ async function verifySqlAliasRename(page, editor) {
   assert.equal(await editor.inputValue(), implicit);
   await dialog.getByRole('button', { name: '취소', exact: true }).click();
   await dialog.waitFor({ state: 'detached' });
+}
+
+async function verifySqlHover(page, editor, dev) {
+  const popup = page.getByRole('region', { name: 'SQL 객체 정보', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'SQL 정의', exact: true });
+  const lines = page.locator('.code-highlight-lines > div');
+  async function pointAt(lineText, fragment) {
+    const row = lines.filter({ hasText: lineText }).first();
+    await row.waitFor({ state: 'attached' });
+    return row.evaluate((row, fragment) => {
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node; (node = walker.nextNode());) {
+        const index = node.textContent.indexOf(fragment);
+        if (index < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, index);
+        range.setEnd(node, index + fragment.length);
+        const bounds = range.getBoundingClientRect();
+        return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+      }
+      throw new Error('Could not find text to hover: ' + fragment);
+    }, fragment);
+  }
+
+  const source = "\tSELECT '한😀 p.name', p.name FROM people p;\n-- p.name";
+  await editor.fill(source);
+  await editor.press('Control+Home');
+  let point = await pointAt('FROM people p', 'p.name ');
+  await page.mouse.move(point.x, point.y);
+  await popup.getByText('people · name', { exact: true }).waitFor();
+  await popup.getByText('TEXT', { exact: true }).waitFor();
+  assert.equal(await editor.evaluate(node => node.selectionStart), 0);
+
+  point = await pointAt('-- p.name', 'p.name');
+  await page.mouse.move(point.x, point.y);
+  await popup.waitFor({ state: 'hidden' });
+  await page.waitForTimeout(400);
+  assert.equal(await popup.count(), 0);
+
+  point = await pointAt('FROM people p', 'p.name ');
+  await page.mouse.move(point.x, point.y);
+  await popup.getByText('people · name', { exact: true }).waitFor();
+  await editor.press('Escape');
+  await popup.waitFor({ state: 'hidden' });
+  assert.equal(await editor.inputValue(), source);
+
+  await page.emulateMedia({ forcedColors: 'active' });
+  point = await pointAt('FROM people p', 'p.name ');
+  await page.mouse.move(5, 5);
+  await page.mouse.move(point.x, point.y);
+  await popup.getByText('people · name', { exact: true }).waitFor();
+  const detailButton = popup.getByRole('button', { name: '정의 보기', exact: true });
+  await detailButton.focus();
+  await page.mouse.move(5, 5);
+  assert.equal(await detailButton.evaluate(node => document.activeElement === node), true);
+  await detailButton.press('Escape');
+  await popup.waitFor({ state: 'hidden' });
+  assert.equal(await editor.evaluate(node => document.activeElement === node), true);
+  await page.emulateMedia({ forcedColors: 'none' });
+
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  const finalLine = "\tSELECT '한😀 " + 'g'.repeat(230) + "', w.value FROM \"web view\" w;";
+  await editor.fill(['-- first', ...Array(90).fill('-- filler'), finalLine].join('\n'));
+  await editor.press('Control+End');
+  point = await pointAt('FROM "web view"', 'value');
+  await page.mouse.move(point.x, point.y);
+  await popup.getByText('web view · value', { exact: true }).waitFor();
+  point = await pointAt('FROM "web view"', '"web view"');
+  await page.mouse.move(point.x, point.y);
+  await popup.getByText('main · 뷰 · 열 1개', { exact: true }).waitFor();
+  await popup.getByRole('button', { name: '정의 보기', exact: true }).click();
+  await dialog.getByText('web view', { exact: true }).waitFor();
+  assert.match(await dialog.getByLabel('생성 SQL', { exact: true }).textContent(), /CREATE VIEW "web view"/);
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await popup.waitFor({ state: 'hidden' });
+  await dev.click();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

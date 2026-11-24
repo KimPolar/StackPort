@@ -94,7 +94,7 @@ PARTIAL = {
     "SP-SQ-001": "연결별 다중 SQL 탭과 SQLite 구문 강조, 줄 번호·커서 위치 및 일반 텍스트 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
     "SP-SQ-003": "현재 SQLite 연결에서 SQL 준비 단계의 문법·객체 참조·타입·준비 오류 및 읽기 전용 정책 표시, 문서 UTF-16 범위로 이동",
-    "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정의를 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
+    "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정보를 호버와 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
     "SP-SQ-007": "전체 입력·선택 영역·커서 위치의 SQLite 읽기 전용 문장 실행, 구분자·문자열·주석·트리거 경계와 실제 실행 범위 내보내기",
@@ -243,7 +243,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-SQ-003":
                 evidence = "crates/stackport-core/src/sql_diagnostics.rs; crates/stackport-core/src/sql_statement.rs; src/SqlDiagnostics.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-004":
-                evidence = "src/sqlCompletion.ts; src/SqlDefinitionDialog.tsx; src/SqlSchemaDetails.tsx; crates/stackport-core/tests/schema.rs; tests/sql-completion.test.mjs; tests/sql-file-smoke.cjs"
+                evidence = "src/editorHover.tsx; src/sqlCompletion.ts; src/SqlDefinitionDialog.tsx; src/SqlSchemaDetails.tsx; crates/stackport-core/tests/schema.rs; tests/sql-completion.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-005":
                 evidence = "src/sqlCompletion.ts; src/SqlAliasRenameDialog.tsx; crates/stackport-core/src/sql_refactor.rs; src/sqlFormatting.ts; tests/sql-completion.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-006":

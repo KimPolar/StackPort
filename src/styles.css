@@ -152,8 +152,12 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .code-highlight [data-syntax="property"], .code-highlight [data-syntax="identifier"] { color: #146151; }
 .code-highlight [data-syntax="parameter"] { color: #83570c; }
 .code-highlight [data-syntax="comment"] { color: #566960; }
+.editor-hover { position: fixed; z-index: 8; display: grid; justify-items: start; gap: 5px; width: max-content; max-width: min(300px, calc(100vw - 16px)); padding: 9px 11px; border: 1px solid #d2e3db; border-radius: 6px; background: #fbfdfb; color: #29463b; box-shadow: 0 4px 14px #172b2426; font-size: 12px; }
+.editor-hover > :is(strong, span) { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.editor-hover > span { color: #526a5f; }
+.editor-hover > button { margin-top: 2px; }
 @media (forced-colors: active) {
-  .code-highlight { display: none; }
+  .code-highlight { visibility: hidden; }
   .code-editor-surface[data-highlight="true"] textarea { color: CanvasText; background: Canvas; caret-color: CanvasText; }
 }
 .code-gutter { position: relative; width: calc(var(--code-gutter-digits) * 1ch + 20px); border-inline-end: 1px solid #e7eee9; background: #f7faf8; color: #526a5f; font: 12px/var(--code-line-height) Consolas, monospace; font-variant-numeric: tabular-nums; text-align: end; user-select: none; }

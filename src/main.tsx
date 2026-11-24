@@ -29,6 +29,7 @@ import { SqlFormatDialog } from "./SqlFormatDialog";
 import { SqlAliasRenameDialog } from "./SqlAliasRenameDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
+import type { EditorHoverInfo } from "./editorHover";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -446,6 +447,33 @@ function App() {
     const result = reference ? readSqlDefinition(reference, profile.id).catch(error => ({ error: errorText(error) }))
       : Promise.resolve({ error: "현재 문장의 테이블, 별칭 또는 열 이름에 커서를 두세요." });
     setDefinition({ profileId: profile.id, tabId: sqlDraft.id, source, result });
+  }
+
+  async function inspectSql(source: string, position: number): Promise<EditorHoverInfo | null> {
+    if (!profile || !sqlDraft) return null;
+    const reference = sqlDefinitionReference(source, position);
+    if (!reference) return null;
+    const generation = objectGeneration.current;
+    const snapshot = { profileId: profile.id, tabId: sqlDraft.id, source };
+    const answer = await readSqlDefinition(reference, profile.id);
+    if ("error" in answer || objectGeneration.current !== generation) return null;
+    const { details, column } = answer;
+    const field = column && details.columns.find(item => item.name === column);
+    const kind = details.object.kind === "view" ? "뷰" : "테이블";
+    const detail = field ? [
+      field.declared_type || "형식 지정 없음", field.not_null && "NOT NULL",
+      !!field.primary_key_position && `PK ${field.primary_key_position}`,
+      field.hidden === 2 ? "가상 생성 열" : field.hidden === 3 ? "저장 생성 열" : null,
+    ].filter(Boolean).join(" · ") : `main · ${kind} · 열 ${details.columns.length}개`;
+    return {
+      heading: column ? `${details.object.name} · ${column}` : details.object.name,
+      detail,
+      openDefinition: () => {
+        if (objectGeneration.current === generation && sqlEditor.current?.value === source) {
+          setDefinition({ ...snapshot, result: Promise.resolve(answer) });
+        }
+      },
+    };
   }
 
   function openSqlFormat() {
@@ -959,6 +987,7 @@ function App() {
             {draft.id === sqlTabs.activeId && <>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label>
               <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql} language="sqlite" complete={completeSql}
+                inspect={inspectSql} inspectContext={`${profileId}:${draft.id}`}
                 footer={sqlEditorFooter} onChange={event => changeSql(event.target.value)}
                 onSelect={event => {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;

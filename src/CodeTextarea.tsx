@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Re
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { findEditorMatches, firstAtOrAfter, replaceEditorMatches, revealEditorMatch } from "./editorSearch";
 import { editorSyntaxLine, editorSyntaxTokens, type EditorLanguage } from "./editorSyntax";
+import { sqliteSymbolAtPoint, useEditorHover, type EditorHoverProvider } from "./editorHover";
 import { useEditorCompletion, type EditorCompletionProvider } from "./useEditorCompletion";
 
 const lineHeight = 21;
@@ -15,9 +16,11 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "wrap">
   footer: ReactNode;
   language?: EditorLanguage;
   complete?: EditorCompletionProvider;
+  inspect?: EditorHoverProvider;
+  inspectContext?: string;
 };
 
-export function CodeTextarea({ editorRef, value, footer, language, complete, onChange, onSelect, onFocus, onScroll,
+export function CodeTextarea({ editorRef, value, footer, language, complete, inspect, inspectContext, onChange, onSelect, onFocus, onScroll,
   onCompositionStart, onCompositionEnd, onKeyDown, onBlur, ...props }: Props) {
   const [selection, setSelection] = useState({ start: 0, end: 0, backward: false });
   const [viewport, setViewport] = useState({ top: 0, left: 0, height: 0, width: 0 });
@@ -30,10 +33,12 @@ export function CodeTextarea({ editorRef, value, footer, language, complete, onC
   const [replaceReport, setReplaceReport] = useState<{ error: boolean; text: string } | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const replacementInput = useRef<HTMLInputElement>(null);
+  const highlightLines = useRef<HTMLDivElement>(null);
   const findId = `${props.id}-find`;
   const replaceId = `${props.id}-replace`;
   const completionId = `${props.id}-completions`;
   const completion = useEditorCompletion(editorRef, complete);
+  const hover = useEditorHover(value, inspectContext, editorRef, inspect);
   const completionItemId = completion.items.length ? `${completionId}-${completion.selected}` : undefined;
   const editable = !props.readOnly && !props.disabled;
   const showingReplace = replaceOpen && editable;
@@ -247,26 +252,44 @@ export function CodeTextarea({ editorRef, value, footer, language, complete, onC
       </div>
       <div className="code-editor-surface" data-highlight={showHighlight}>
         {showHighlight && <div className="code-highlight" aria-hidden="true" style={{ height: viewport.height, width: viewport.width }}>
-          <div className="code-highlight-lines" style={{ transform: `translate(${-viewport.left}px, ${shift}px)` }}>{highlightedLines}</div>
+          <div ref={highlightLines} className="code-highlight-lines" style={{ transform: `translate(${-viewport.left}px, ${shift}px)` }}>{highlightedLines}</div>
         </div>}
         <textarea {...props} ref={editorRef} wrap="off" value={value}
           aria-autocomplete={complete ? "list" : props["aria-autocomplete"]}
           aria-controls={completion.items.length ? completionId : props["aria-controls"]}
           aria-activedescendant={completionItemId ?? props["aria-activedescendant"]}
           onChange={event => {
+            hover.close();
             syncCaret(event.currentTarget); syncViewport(event.currentTarget); setReplaceReport(null);
             completion.handleInput(event.currentTarget, event.nativeEvent as InputEvent);
             onChange?.(event);
           }}
           onSelect={event => { syncCaret(event.currentTarget); completion.handleSelection(event.currentTarget); onSelect?.(event); }}
           onFocus={event => { syncCaret(event.currentTarget); onFocus?.(event); }}
-          onBlur={event => { completion.close(); onBlur?.(event); }}
-          onKeyDown={event => { completion.handleKey(event); if (!event.defaultPrevented) onKeyDown?.(event); }}
+          onBlur={event => { completion.close(); hover.leave(); onBlur?.(event); }}
+          onKeyDown={event => {
+            const dismiss = hover.open && event.key === "Escape";
+            hover.close();
+            if (dismiss) { event.preventDefault(); event.stopPropagation(); return; }
+            completion.handleKey(event);
+            if (!event.defaultPrevented) onKeyDown?.(event);
+          }}
+          onPointerMove={event => {
+            props.onPointerMove?.(event);
+            if (!inspect || !showHighlight || composing || completion.status !== "closed" || event.buttons || event.pointerType !== "mouse") return;
+            const point = { x: event.clientX, y: event.clientY };
+            const editor = event.currentTarget;
+            hover.move(point, () => highlightLines.current && editor.value === value
+              ? sqliteSymbolAtPoint(highlightLines.current, value, lineStarts, first, point) : null);
+          }}
+          onPointerDown={event => { hover.close(); props.onPointerDown?.(event); }}
+          onPointerLeave={event => { hover.leave(); props.onPointerLeave?.(event); }}
           onScroll={event => { syncViewport(event.currentTarget); onScroll?.(event); }}
-          onCompositionStart={event => { setComposing(true); completion.close(); onCompositionStart?.(event); }}
+          onCompositionStart={event => { setComposing(true); completion.close(); hover.close(); onCompositionStart?.(event); }}
           onCompositionEnd={event => { setComposing(false); onCompositionEnd?.(event); }} />
       </div>
     </div>
+    {hover.popup}
     {completion.status !== "closed" && <div className="code-completion">
       {completion.items.length ? <ul id={completionId} role="listbox" aria-label="SQL 자동완성 후보">
         {completion.items.map((item, index) => <li key={item.insert} id={`${completionId}-${index}`} role="option"
