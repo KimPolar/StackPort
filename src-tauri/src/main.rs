@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use stackport_core::{
-    AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
+    AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
     RestorePreview, RestoreReport, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
@@ -214,6 +214,23 @@ async fn run_object_query(
 ) -> Result<QueryOutcome, String> {
     let store = store.inner().clone();
     worker(move || store.query_object_prepared(&token, &profile_id, &request, page)).await
+}
+
+#[tauri::command]
+async fn export_sqlite_csv(
+    store: State<'_, Store>,
+    token: String,
+    profile_id: String,
+    query: CsvQuery,
+    options: CsvOptions,
+) -> Result<QueryOutcome, String> {
+    let store = store.inner().clone();
+    worker(move || store.export_csv_prepared(&token, &profile_id, &query, &options)).await
+}
+
+#[tauri::command]
+fn csv_export_progress(store: State<'_, Store>, token: String) -> Result<Option<u64>, String> {
+    store.csv_export_progress(&token)
 }
 
 #[tauri::command]
@@ -484,6 +501,17 @@ async fn choose_backup_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_csv_directory() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("CSV를 저장할 폴더 선택")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn backup_sqlite(
     store: State<'_, Store>,
     profile_id: String,
@@ -569,6 +597,8 @@ fn main() {
             cancel_query,
             run_query,
             run_object_query,
+            export_sqlite_csv,
+            csv_export_progress,
             begin_cell_edit,
             preview_cell_edit,
             apply_cell_edit,
@@ -590,6 +620,7 @@ fn main() {
             choose_ssh_identity_file,
             choose_ssh_profile_export_directory,
             choose_backup_directory,
+            choose_csv_directory,
             backup_sqlite,
             preview_sqlite_restore,
             choose_sqlite_restore_destination,

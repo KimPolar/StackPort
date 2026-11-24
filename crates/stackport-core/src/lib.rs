@@ -4,6 +4,8 @@
 //! queries use read-only connections and an SQLite authorizer. Controlled cell
 //! updates use a separate previewed, audited transaction.
 
+mod csv_export;
+pub use csv_export::{CsvOptions, CsvQuery, CsvReport};
 mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 mod network;
@@ -739,6 +741,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
     let policy = match record.operation {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
+        "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

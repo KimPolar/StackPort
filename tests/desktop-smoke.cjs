@@ -77,6 +77,16 @@ async function main() {
   await resultRows.first().getByText('사용자 5', { exact: true }).waitFor();
   await resultRows.nth(3).getByText('사용자 204', { exact: true }).waitFor();
   await page.getByText('61개 행', { exact: true }).waitFor();
+  const filteredCsv = path.join(path.dirname(database), 'filtered-results.csv');
+  await page.getByRole('button', { name: 'CSV 내보내기' }).click();
+  const csvDialog = page.getByRole('dialog', { name: 'CSV 내보내기' });
+  await csvDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
+  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await page.getByRole('status').getByText('CSV 내보내기 완료').waitFor();
+  const csvLines = fs.readFileSync(filteredCsv, 'utf8').trimEnd().split('\r\n');
+  if (csvLines.length !== 162 || csvLines[1] !== '205,"사용자 205",\\N' || csvLines.at(-1) !== '90,"사용자 90","테스트"') {
+    throw new Error('CSV did not export all applied rows in the expected order.');
+  }
   await page.getByRole('button', { name: '101행 편집', exact: true }).click();
   await page.getByLabel('변경할 열').selectOption('name');
   await page.getByLabel('변경할 값').fill('필터에서 수정');
@@ -106,6 +116,19 @@ async function main() {
   await resultRows.first().getByText('사용자 2', { exact: true }).waitFor();
   await page.getByRole('button', { name: '다음 페이지' }).click();
   await resultRows.first().getByText('사용자 102', { exact: true }).waitFor();
+  const sqlCsv = path.join(path.dirname(database), 'bound-results.csv');
+  await page.getByRole('button', { name: 'CSV 내보내기' }).click();
+  await csvDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
+  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await csvDialog.getByRole('alert').getByText(/이미 있습니다/).waitFor();
+  await csvDialog.getByLabel('새 CSV 파일 경로').fill(sqlCsv);
+  await csvDialog.getByLabel('열 이름 포함').uncheck();
+  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await page.getByRole('status').getByText('CSV 내보내기 완료').waitFor();
+  const sqlCsvLines = fs.readFileSync(sqlCsv, 'utf8').trimEnd().split('\r\n');
+  if (sqlCsvLines.length !== 204 || sqlCsvLines[0] !== '"사용자 2"' || sqlCsvLines.at(-1) !== '"사용자 205"') {
+    throw new Error('CSV lost the bound input or included a disabled header.');
+  }
 
   await page.getByRole('button', { name: '실행 계획', exact: true }).click();
   await page.getByLabel(':first 형식').selectOption('integer');
@@ -233,15 +256,16 @@ async function main() {
   await page.getByRole('heading', { name: '작업 기록' }).waitFor();
   await page.getByText('SQLite 백업', { exact: true }).first().waitFor();
   await page.getByText('SQLite 복원', { exact: true }).first().waitFor();
+  await page.getByText('SQLite CSV 내보내기', { exact: true }).first().waitFor();
   await page.getByText('SQLite 셀 변경', { exact: true }).first().waitFor();
   await page.getByText('실패', { exact: true }).first().waitFor();
   await page.getByText('완료', { exact: true }).first().waitFor();
   const history = await page.locator('.audit-panel').innerText();
-  if ([database, backupPath, restoredPath, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
+  if ([database, backupPath, restoredPath, filteredCsv, sqlCsv, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, query cancellation, editing, PROD confirmation, backup, verified restore, and audit passed.');
+  console.log('SQLite browsing, query cancellation, editing, CSV export, backup, verified restore, and audit passed.');
   await browser.close();
 }
 

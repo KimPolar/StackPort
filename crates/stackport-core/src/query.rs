@@ -1,8 +1,9 @@
 //! Cancellable, bounded read-only SQLite queries.
 
 use super::{
-    db_error, display_value, open_schema_db, open_user_db, set_read_authorizer, QueryPage, Result,
-    Store, TableQuery, PAGE_SIZE,
+    csv_export::CsvFile, db_error, display_value, insert_audit, open_schema_db, open_user_db,
+    set_read_authorizer, AuditRecord, CsvOptions, CsvQuery, CsvReport, QueryPage, Result, Store,
+    TableQuery, PAGE_SIZE,
 };
 use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle};
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -18,6 +19,7 @@ use std::{
 use uuid::Uuid;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
 const PREPARE_LIFETIME: Duration = Duration::from_secs(60);
 const MAX_PARAMETERS: usize = 32;
 const MAX_PARAMETER_BYTES: usize = 16 * 1024;
@@ -25,12 +27,14 @@ const MAX_PLAN_STEPS: usize = 200;
 const RUNNING: u8 = 0;
 const CANCELLED: u8 = 1;
 const TIMED_OUT: u8 = 2;
+const PUBLISHING: u8 = 3;
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum QueryOutcome {
     Completed { result: QueryPage },
     Plan { plan: QueryPlan },
+    Exported { report: CsvReport },
     ParametersRequired { parameters: Vec<SqlParameter> },
     Cancelled,
     TimedOut,
@@ -53,6 +57,7 @@ struct PlanStep {
 enum QueryOutput {
     Rows(QueryPage),
     Plan(QueryPlan),
+    Export(CsvReport),
 }
 
 #[derive(Debug, Serialize)]
@@ -113,14 +118,19 @@ impl SqlParameterValue {
 struct QueryControl {
     reason: AtomicU8,
     interrupt: Mutex<Option<InterruptHandle>>,
+    exported_rows: AtomicU64,
 }
 
 impl QueryControl {
-    fn cancel(&self) -> Result<()> {
+    fn cancel(&self) -> Result<bool> {
         // The first interruption wins, so a later cancel cannot disguise a timeout.
-        let _ =
-            self.reason
-                .compare_exchange(RUNNING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst);
+        if self
+            .reason
+            .compare_exchange(RUNNING, CANCELLED, Ordering::SeqCst, Ordering::SeqCst)
+            == Err(PUBLISHING)
+        {
+            return Ok(false);
+        }
         if let Some(handle) = self
             .interrupt
             .lock()
@@ -129,7 +139,7 @@ impl QueryControl {
         {
             handle.interrupt();
         }
-        Ok(())
+        Ok(true)
     }
 
     fn attach(&self, db: &Connection) -> std::result::Result<(), QueryFailure> {
@@ -147,6 +157,28 @@ impl QueryControl {
             CANCELLED => Err(QueryFailure::Cancelled),
             TIMED_OUT => Err(QueryFailure::TimedOut),
             _ => Ok(()),
+        }
+    }
+
+    fn check_deadline(&self, deadline: Instant) -> std::result::Result<(), QueryFailure> {
+        if Instant::now() >= deadline {
+            let _ = self.reason.compare_exchange(
+                RUNNING,
+                TIMED_OUT,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            );
+        }
+        self.check()
+    }
+
+    fn publishing(&self) -> std::result::Result<(), QueryFailure> {
+        match self
+            .reason
+            .compare_exchange(RUNNING, PUBLISHING, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => Ok(()),
+            Err(_) => self.check(),
         }
     }
 
@@ -237,11 +269,20 @@ impl QueryManager {
             .get(token)
             .map(|entry| Arc::clone(&entry.control));
         if let Some(control) = control {
-            control.cancel()?;
-            Ok(true)
+            control.cancel()
         } else {
             Ok(false)
         }
+    }
+
+    fn read_export_progress(&self, token: &str) -> Result<Option<u64>> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| "내보내기 상태를 사용할 수 없습니다.")?;
+        Ok(entries
+            .get(token)
+            .map(|entry| entry.control.exported_rows.load(Ordering::Relaxed)))
     }
 }
 
@@ -261,6 +302,25 @@ enum QuerySource<'a> {
     Object(&'a TableQuery),
 }
 
+enum QueryDelivery<'a> {
+    Page(u32),
+    Csv(&'a CsvOptions),
+}
+
+fn query_outcome(result: std::result::Result<QueryOutput, QueryFailure>) -> Result<QueryOutcome> {
+    match result {
+        Ok(QueryOutput::Rows(result)) => Ok(QueryOutcome::Completed { result }),
+        Ok(QueryOutput::Plan(plan)) => Ok(QueryOutcome::Plan { plan }),
+        Ok(QueryOutput::Export(report)) => Ok(QueryOutcome::Exported { report }),
+        Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
+        Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
+        Err(QueryFailure::ParametersRequired(parameters)) => {
+            Ok(QueryOutcome::ParametersRequired { parameters })
+        }
+        Err(QueryFailure::Error(error)) => Err(error),
+    }
+}
+
 impl Store {
     /// Prepare a one-use request before execution so cancellation cannot race
     /// ahead of registration. No SQL or database data is held by the manager.
@@ -272,6 +332,81 @@ impl Store {
     /// read was stopped or had already completed.
     pub fn cancel_query(&self, token: &str) -> Result<bool> {
         self.queries.cancel(token)
+    }
+
+    pub fn csv_export_progress(&self, token: &str) -> Result<Option<u64>> {
+        self.queries.read_export_progress(token)
+    }
+
+    pub fn export_csv_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        query: &CsvQuery,
+        options: &CsvOptions,
+    ) -> Result<QueryOutcome> {
+        let guard = self.queries.claim(token)?;
+        if let Err(reason) = guard.control.check() {
+            return query_outcome(Err(reason));
+        }
+        let profile = self.profile(profile_id)?;
+        let correlation_id = Uuid::new_v4().to_string();
+        let audit = |outcome, affected_count| AuditRecord {
+            correlation_id: &correlation_id,
+            operation: "sqlite.export.csv",
+            project_id: Some(&profile.project_id),
+            profile_id: Some(&profile.id),
+            environment: Some(&profile.environment),
+            object_name: None,
+            outcome,
+            affected_count,
+        };
+        insert_audit(&self.connect()?, audit("started", None))?;
+        let source = match query {
+            CsvQuery::Sql { sql, parameters } => QuerySource::Sql {
+                sql,
+                parameters: parameters.as_deref(),
+                explain: false,
+            },
+            CsvQuery::Table { request } => QuerySource::Object(request),
+        };
+        let mut result = self.query_inner(
+            profile_id,
+            source,
+            QueryDelivery::Csv(options),
+            &guard.control,
+            EXPORT_TIMEOUT,
+        );
+        if matches!(result, Err(QueryFailure::ParametersRequired(_))) {
+            result = Err(QueryFailure::Error(
+                "먼저 매개변수 값을 입력하고 쿼리를 실행하세요.".into(),
+            ));
+        }
+        let (outcome, count) = match &result {
+            Ok(QueryOutput::Export(report)) => ("succeeded", i64::try_from(report.rows).ok()),
+            _ => ("failed", None),
+        };
+        if self
+            .connect()
+            .and_then(|db| insert_audit(&db, audit(outcome, count)))
+            .is_err()
+        {
+            match &mut result {
+                Ok(QueryOutput::Export(report)) => {
+                    report.audit_warning =
+                        Some("파일을 저장했지만 완료 작업 기록을 저장하지 못했습니다.".into())
+                }
+                Err(QueryFailure::Error(error)) => {
+                    error.push_str(" 완료 작업 기록도 저장하지 못했습니다.")
+                }
+                _ => {
+                    return Err(
+                        "CSV 파일을 저장하지 않았으며 완료 작업 기록도 저장하지 못했습니다.".into(),
+                    )
+                }
+            }
+        }
+        query_outcome(result)
     }
 
     pub fn query_prepared(
@@ -341,16 +476,13 @@ impl Store {
         page: u32,
     ) -> Result<QueryOutcome> {
         let guard = self.queries.claim(token)?;
-        match self.query_inner(profile_id, source, page, &guard.control, QUERY_TIMEOUT) {
-            Ok(QueryOutput::Rows(result)) => Ok(QueryOutcome::Completed { result }),
-            Ok(QueryOutput::Plan(plan)) => Ok(QueryOutcome::Plan { plan }),
-            Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
-            Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
-            Err(QueryFailure::ParametersRequired(parameters)) => {
-                Ok(QueryOutcome::ParametersRequired { parameters })
-            }
-            Err(QueryFailure::Error(error)) => Err(error),
-        }
+        query_outcome(self.query_inner(
+            profile_id,
+            source,
+            QueryDelivery::Page(page),
+            &guard.control,
+            QUERY_TIMEOUT,
+        ))
     }
 
     /// Read-only query helper for callers which do not need cancellation.
@@ -362,12 +494,12 @@ impl Store {
                 parameters: None,
                 explain: false,
             },
-            page,
+            QueryDelivery::Page(page),
             &Arc::new(QueryControl::default()),
             QUERY_TIMEOUT,
         ) {
             Ok(QueryOutput::Rows(result)) => Ok(result),
-            Ok(QueryOutput::Plan(_)) => Err("조회가 실행 계획을 반환했습니다.".into()),
+            Ok(_) => Err("조회 결과를 받을 수 없습니다.".into()),
             Err(QueryFailure::Cancelled) => Err("쿼리가 중단되었습니다.".into()),
             Err(QueryFailure::TimedOut) => Err("쿼리 실행 시간이 초과되어 중단되었습니다.".into()),
             Err(QueryFailure::ParametersRequired(_)) => {
@@ -381,11 +513,11 @@ impl Store {
         &self,
         profile_id: &str,
         source: QuerySource<'_>,
-        page: u32,
+        delivery: QueryDelivery<'_>,
         control: &Arc<QueryControl>,
         timeout: Duration,
     ) -> std::result::Result<QueryOutput, QueryFailure> {
-        let started = Instant::now();
+        let deadline = Instant::now() + timeout;
         control.check()?;
         let profile = self.profile(profile_id).map_err(QueryFailure::Error)?;
         control.check()?;
@@ -399,25 +531,19 @@ impl Store {
         let progress = Arc::clone(control);
         db.progress_handler(
             1_000,
-            Some(move || {
-                if progress.reason.load(Ordering::SeqCst) != RUNNING {
-                    return true;
-                }
-                if started.elapsed() >= timeout {
-                    let _ = progress.reason.compare_exchange(
-                        RUNNING,
-                        TIMED_OUT,
-                        Ordering::SeqCst,
-                        Ordering::SeqCst,
-                    );
-                    return true;
-                }
-                false
-            }),
+            Some(move || progress.check_deadline(deadline).is_err()),
         );
-        control.check()?;
-        let offset = i64::from(page) * PAGE_SIZE as i64;
-        let page_clause = format!("LIMIT {} OFFSET {offset}", PAGE_SIZE + 1);
+        control.check_deadline(deadline)?;
+        let page = match delivery {
+            QueryDelivery::Page(page) => Some(page),
+            QueryDelivery::Csv(_) => None,
+        };
+        let page_clause = page
+            .map(|index| {
+                let offset = i64::from(index) * PAGE_SIZE as i64;
+                format!("\nLIMIT {} OFFSET {offset}", PAGE_SIZE + 1)
+            })
+            .unwrap_or_default();
         let (bounded_sql, values, show_sql, explain) = match source {
             QuerySource::Sql {
                 sql,
@@ -470,7 +596,7 @@ impl Store {
                 };
                 let prefix = if explain { "EXPLAIN QUERY PLAN " } else { "" };
                 (
-                    format!("{prefix}SELECT * FROM (\n{sql}\n) {page_clause}"),
+                    format!("{prefix}SELECT * FROM (\n{sql}\n){page_clause}"),
                     values,
                     false,
                     explain,
@@ -482,7 +608,7 @@ impl Store {
                 let (sql, values) = generated.map_err(QueryFailure::Error)?;
                 // Schema PRAGMAs are only needed for the fixed metadata queries.
                 set_read_authorizer(&db, false);
-                (format!("{sql}\n{page_clause}"), values, true, false)
+                (format!("{sql}{page_clause}"), values, true, false)
             }
         };
         control.check()?;
@@ -499,7 +625,7 @@ impl Store {
                 "페이지를 구성하는 동안 쿼리 매개변수가 변경되었습니다.".into(),
             ));
         }
-        let columns = stmt
+        let columns: Vec<String> = stmt
             .column_names()
             .iter()
             .map(|s| (*s).to_owned())
@@ -509,6 +635,27 @@ impl Store {
             .map_err(|e| control.sqlite_error(e))?;
         if explain {
             return read_plan(&mut cursor, control).map(QueryOutput::Plan);
+        }
+        if let QueryDelivery::Csv(options) = delivery {
+            let mut file = CsvFile::create(options).map_err(QueryFailure::Error)?;
+            if options.include_header {
+                file.write_header(&columns).map_err(QueryFailure::Error)?;
+            }
+            let mut rows = 0;
+            while let Some(row) = cursor.next().map_err(|error| control.sqlite_error(error))? {
+                control.check_deadline(deadline)?;
+                file.write_row(row).map_err(QueryFailure::Error)?;
+                rows += 1;
+                control.exported_rows.store(rows, Ordering::Relaxed);
+            }
+            control.check_deadline(deadline)?;
+            let ready = file.finish().map_err(QueryFailure::Error)?;
+            control.check_deadline(deadline)?;
+            control.publishing()?;
+            return ready
+                .publish(rows)
+                .map(QueryOutput::Export)
+                .map_err(QueryFailure::Error);
         }
         let mut rows = Vec::with_capacity(PAGE_SIZE + 1);
         while let Some(row) = cursor.next().map_err(|e| control.sqlite_error(e))? {
@@ -529,7 +676,7 @@ impl Store {
         Ok(QueryOutput::Rows(QueryPage {
             columns,
             rows,
-            page,
+            page: page.unwrap_or_default(),
             has_more,
             generated_sql: show_sql.then_some(bounded_sql),
         }))
@@ -594,7 +741,7 @@ mod tests {
                 parameters: None,
                 explain: false,
             },
-            0,
+            QueryDelivery::Page(0),
             &control,
             Duration::from_millis(5),
         );

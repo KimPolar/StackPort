@@ -13,6 +13,7 @@ import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQ
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
+import { CsvExportDialog, type CsvReport, type CsvSource } from "./CsvExportDialog";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -76,6 +77,8 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
+  const [csvRequest, setCsvRequest] = useState<{ profile: Profile; query: CsvSource } | null>(null);
+  const [csvReport, setCsvReport] = useState<CsvReport | null>(null);
   const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[] } | null>(null);
   const [queryPlan, setQueryPlan] = useState<{ sql: string; plan: QueryPlan } | null>(null);
   const [result, setResult] = useState<QueryPage | null>(null);
@@ -156,6 +159,7 @@ function App() {
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
     setParameterRequest(null);
     setQueryPlan(null);
+    setCsvReport(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
@@ -424,6 +428,12 @@ function App() {
               <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
             </div>
             {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
+            {csvReport && <div className="success-banner" role="status">
+              <strong>CSV 내보내기 완료</strong>
+              <span>{displayPath(csvReport.path)} · {csvReport.rows.toLocaleString("ko-KR")}행 · {csvReport.size_bytes.toLocaleString("ko-KR")} bytes</span>
+              {csvReport.protected_fields > 0 && <span>수식처럼 보이는 텍스트 {csvReport.protected_fields.toLocaleString("ko-KR")}개를 보호했습니다.</span>}
+              {csvReport.audit_warning && <strong className="audit-warning">{csvReport.audit_warning}</strong>}
+            </div>}
             {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
             <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying
               ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
@@ -438,7 +448,16 @@ function App() {
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
             {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
             {queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
-            <div className="results-card"><div className="panel-heading"><div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div><span className="subtle">페이지당 최대 100개 행</span></div>
+            <div className="results-card"><div className="panel-heading">
+              <div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
+              <div className="results-actions">
+                <span className="subtle">페이지당 최대 100개 행</span>
+                {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
+                  setCsvReport(null);
+                  setCsvRequest({ profile, query: executedQuery });
+                }}><FileDown size={14} /> CSV 내보내기</button>}
+              </div>
+            </div>
               {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
               {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
                 <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
@@ -467,6 +486,7 @@ function App() {
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
+    {csvRequest && <CsvExportDialog profile={csvRequest.profile} query={csvRequest.query} onClose={() => setCsvRequest(null)} onExported={report => { setCsvReport(report); setCsvRequest(null); }} />}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
         setParameterRequest(null);
@@ -521,6 +541,7 @@ const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.restore": "SQLite 복원",
+  "sqlite.export.csv": "SQLite CSV 내보내기",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
 };
