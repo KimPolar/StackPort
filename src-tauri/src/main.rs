@@ -9,7 +9,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
-    WorkspaceCopyPreview, WorkspaceCopyReport,
+    WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -70,6 +70,17 @@ async fn run_route_diagnostic(
 ) -> Result<RouteDiagnostic, String> {
     let network = Arc::clone(network.inner());
     worker(move || network.probe_route(&target, tool, family)).await
+}
+
+#[tauri::command]
+async fn run_web_diagnostic(
+    network: State<'_, Arc<NetworkManager>>,
+    address: String,
+    method: WebMethod,
+    samples: u8,
+) -> Result<WebDiagnostic, String> {
+    let network = Arc::clone(network.inner());
+    worker(move || network.probe_web(&address, method, samples)).await
 }
 
 #[tauri::command]
@@ -666,6 +677,7 @@ fn main() {
             copy_workspace,
             list_local_ports,
             run_route_diagnostic,
+            run_web_diagnostic,
             list_archived_projects,
             archive_project,
             unarchive_project,

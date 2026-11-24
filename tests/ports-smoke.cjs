@@ -1,6 +1,9 @@
 /* Uses only synthetic loopback sockets in an isolated Windows app. */
 const net = require('net');
 const dgram = require('dgram');
+const fs = require('node:fs');
+const http = require('node:http');
+const https = require('node:https');
 const { once } = require('events');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 
@@ -80,13 +83,79 @@ async function main() {
   await run.click();
   await route.getByText(/종료 코드 0/).waitFor();
   if (!(await route.locator('pre').first().innerText()).includes('127.0.0.1')) throw new Error('IPv4 route output was not displayed.');
+  await verifyWebDiagnostics(page);
   if (errors.length) throw new Error(errors.join('\n'));
   await browser.close();
   client.destroy();
   accepted?.destroy();
   tcp.close();
   tcp6.close();
-  console.log('Local TCP and UDP ports, filtering, refresh, DNS/TCP, IPv6 ping and IPv4 route tracing passed.');
+  console.log('Local TCP and UDP ports, DNS/TCP, ping, route tracing, and HTTP status samples passed.');
+}
+
+async function verifyWebDiagnostics(page) {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push([request.method, request.url, request.headers.cookie]);
+    if (requests.length === 1) {
+      response.writeHead(302, { Location: '/redirect', 'Set-Cookie': 'private=synthetic', 'X-Health': 'test-header' });
+    } else {
+      response.writeHead(503);
+    }
+    response.end();
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const tool = page.getByLabel('진단 유형');
+  const address = page.getByLabel('대상 URL');
+  const run = page.getByRole('button', { name: '진단 실행', exact: true });
+  const result = page.getByRole('region', { name: '웹 상태 확인 결과' });
+  try {
+    await tool.selectOption('web');
+    await address.fill(`http://127.0.0.1:${server.address().port}/health?source=desktop`);
+    await page.getByLabel('요청 메서드').selectOption('GET');
+    await page.getByLabel('요청 횟수').selectOption('2');
+    await run.click();
+    await result.getByRole('status').getByText('응답 2/2회 · HTTP 2xx 0회').waitFor();
+    await result.getByText('HTTP 302', { exact: true }).click();
+    await result.getByText('test-header', { exact: true }).waitFor();
+    await result.getByText('[숨김]', { exact: true }).waitFor();
+    await result.getByText('HTTP 503', { exact: true }).waitFor();
+    if (requests.length !== 2 || requests.some(([method, url, cookie]) => method !== 'GET' || url !== '/health?source=desktop' || cookie !== undefined)) {
+      throw new Error('Web check contacted another URL or sent a cookie.');
+    }
+    if ((await result.textContent()).includes('private=synthetic')) throw new Error('Sensitive response header was exposed.');
+  } finally {
+    server.close();
+  }
+
+  if (process.env.STACKPORT_TEST_TLS_CERT && process.env.STACKPORT_TEST_TLS_KEY) {
+    let served = false;
+    const untrusted = https.createServer({
+      cert: fs.readFileSync(process.env.STACKPORT_TEST_TLS_CERT),
+      key: fs.readFileSync(process.env.STACKPORT_TEST_TLS_KEY),
+    }, () => { served = true; });
+    untrusted.listen(0, '127.0.0.1');
+    await once(untrusted, 'listening');
+    try {
+      await address.fill(`https://127.0.0.1:${untrusted.address().port}/`);
+      await page.getByLabel('요청 횟수').selectOption('1');
+      await run.click();
+      await result.getByText('HTTPS 인증서 검증 실패', { exact: true }).waitFor();
+      if (served) throw new Error('App sent an HTTP request to the untrusted server.');
+      console.log('Untrusted loopback TLS certificate was rejected.');
+    } finally {
+      untrusted.close();
+    }
+  }
+  if (process.env.STACKPORT_TEST_HTTPS_URL) {
+    await address.fill(process.env.STACKPORT_TEST_HTTPS_URL);
+    await page.getByLabel('요청 메서드').selectOption('HEAD');
+    await page.getByLabel('요청 횟수').selectOption('1');
+    await run.click();
+    await result.getByText(/TLS 1\.[23] · 인증서 검증 통과 · TLS_/).waitFor();
+    console.log('Trusted HTTPS handshake returned its protocol and cipher suite.');
+  }
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

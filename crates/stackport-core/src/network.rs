@@ -1,6 +1,9 @@
 //! Explicit, bounded DNS and TCP diagnostics without authentication.
 
-use crate::{network_tools, ssh, Result, RouteDiagnostic, RouteFamily, RouteTool};
+use crate::{
+    network_tools, ssh, web_check, Result, RouteDiagnostic, RouteFamily, RouteTool, WebDiagnostic,
+    WebMethod,
+};
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -106,6 +109,16 @@ fn elapsed_ms(start: Instant) -> u64 {
 }
 
 impl NetworkManager {
+    pub fn probe_web(&self, address: &str, method: WebMethod, samples: u8) -> Result<WebDiagnostic> {
+        let target = web_check::parse_address(address)?;
+        if !(1..=5).contains(&samples) {
+            return Err("요청 횟수는 1회부터 5회까지 선택하세요.".into());
+        }
+        let _probe = reserve(&self.active, MAX_PROBES)
+            .ok_or("동시에 실행할 수 있는 연결 진단 수를 초과했습니다.")?;
+        web_check::run(target, method, samples)
+    }
+
     pub fn probe_route(
         &self,
         target: &str,

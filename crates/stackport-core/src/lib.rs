@@ -13,6 +13,8 @@ mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod network_tools;
 pub use network_tools::{RouteDiagnostic, RouteFamily, RouteTool};
+mod web_check;
+pub use web_check::{WebDiagnostic, WebMethod, WebResponse, WebSample};
 mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod project_lifecycle;

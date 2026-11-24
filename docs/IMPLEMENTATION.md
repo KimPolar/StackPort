@@ -22,6 +22,10 @@ SSH 연결 화면과 네트워크 도구의 DNS·TCP 진단은 DNS 결과와 TCP
 
 네트워크 도구는 사용자가 지정한 단일 대상에 Windows [Ping](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ping)과 [tracert](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tracert)를 실행합니다. 자동·IPv4·IPv6를 선택할 수 있습니다. Ping은 요청 4회와 전체 12초, 경로 추적은 역방향 조회를 끄고 최대 12홉과 전체 24초를 적용합니다. 종료 코드·경과 시간과 운영체제 출력을 표시하며 각 출력 스트림의 처음 16 KiB만 보관합니다. ICMP 결과는 서비스 인증이나 애플리케이션의 가용성을 검증하지 않습니다.
 
+웹 상태 확인은 입력한 HTTP/HTTPS URL에 WinHTTP로 HEAD 또는 GET 요청을 보냅니다. 같은 URL을 1~5회 순차 측정하며, 다음 요청은 이전 요청이 끝난 뒤 1초 후에 시작합니다. 매번 새 세션으로 시작하고 응답 수, 2xx 수, 헤더까지 걸린 시간, HTTP 상태 코드와 헤더를 표시합니다. 연결 단계별 시간 제한과 응답 헤더 16 KiB 한도를 적용합니다. 프록시 자동 검색, 리디렉션, 쿠키 처리와 자동 인증을 끕니다. GET 요청도 본문은 읽지 않으며 쿠키와 인증 관련 응답 헤더 값은 화면에서 가립니다. URL에 사용자 정보나 `#` 조각이 있으면 요청을 거부합니다. [WinHTTP 옵션](https://learn.microsoft.com/en-us/windows/win32/winhttp/option-flags)
+
+HTTPS는 Schannel로 서버 인증서를 검증하고 TLS 1.2 이상을 사용합니다. 검증 실패는 요청 결과에 표시합니다. Windows가 연결 세부 정보를 제공하면 협상한 TLS 버전, 암호 모음과 키 강도를 표시합니다. 이전 Windows에서는 키 강도만 표시될 수 있습니다. 결과는 현재 진단 화면에만 유지합니다. [WinHTTP TLS 연결 정보](https://learn.microsoft.com/en-us/windows/win32/api/winhttp/ns-winhttp-winhttp_security_info)
+
 네트워크 화면의 로컬 포트 목록은 [Windows IP Helper TCP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable)와 [UDP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedudptable) 테이블을 읽습니다. IPv4·IPv6의 로컬 주소·포트·PID, TCP 원격 주소와 연결 상태, UDP 바인딩을 표시합니다. 프로세스 조회 권한이 있으면 실행 파일 이름을 표시하고 파일 경로는 반환하지 않습니다. 소켓과 프로세스는 조회 사이에 바뀔 수 있습니다. 일부 테이블이 실패하면 읽은 목록과 원인을 함께 표시합니다. 조회는 수동 새로고침을 지원하며 연결 시도나 트래픽 전송을 수행하지 않습니다.
 
 선택한 SSH 연결은 자격 증명과 호스트 키 신뢰 기록 없이 JSON 파일로 교환할 수 있습니다. 내보내기는 선택 시점 이후 정의가 변경되면 중단하며 기존 파일을 덮어쓰지 않습니다. 가져오기는 파일을 검증하고 선택한 항목만 새 ID로 원자적으로 추가합니다. 미리보기 이후 파일이 변경되면 재확인이 필요하고 같은 이름의 기존 연결은 수정하지 않습니다. 가져오기와 내보내기는 작업 기록에 남기되 파일 경로와 연결 값은 기록하지 않습니다.
@@ -76,6 +80,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/table_query.rs`: 실제 SQLite 파일에서 바인딩 값, 스키마 확인, NULL과 다중 열 정렬, 날짜 범위, 페이지 이동을 검사합니다.
 - `crates/stackport-core/tests/result_export.rs`에서 여러 페이지 분량의 결과, 필터·정렬·매개변수 보존, CSV 인코딩과 JSON 타입 보존, 취소·오류 시 정리와 감사 기록의 값 제외를 검사합니다.
 - `crates/stackport-core/tests/ports.rs`, `crates/stackport-core/tests/network.rs`, `tests/ports-smoke.cjs`: Windows에서 직접 연 루프백 소켓으로 포트 주소·상태·PID·프로세스, 필터·새로고침, DNS·TCP, Ping과 경로 추적을 검사합니다.
+- `crates/stackport-core/tests/web_check.rs`, `tests/ports-smoke.cjs`에서 HTTP 헤더와 상태 코드, 반복 간격, IPv6, 리디렉션과 쿠키 차단을 검사합니다. 임시 자체 서명 인증서와 키 파일을 `STACKPORT_TEST_TLS_CERT`, `STACKPORT_TEST_TLS_KEY`로 지정하면 인증서 거부를 추가로 검사합니다. 신뢰된 HTTPS URL을 `STACKPORT_TEST_HTTPS_URL`로 지정하면 실서버의 TLS 버전과 암호 모음도 검사합니다.
 - `tests/portable-smoke.cjs`: 새 폴더에 복사한 Windows EXE에서 지정 모드, 버전 표시, 데이터 파일과 휴대형 WebView2 프로필 위치를 확인합니다.
 - `crates/stackport-core/tests/workspace_copy.rs`: Windows에서 WAL이 있는 작업 공간의 복사, 선택한 신뢰 저장소, 체크섬, 기존 대상 거절 및 실패 시 대상 폴더 부재를 확인합니다.
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
