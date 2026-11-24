@@ -34,6 +34,8 @@ SSH 연결 화면과 네트워크 도구의 DNS·TCP 진단은 DNS 결과와 TCP
 
 Windows에서 EXE 인자 `--portable` 또는 EXE 옆 파일 `StackPort.portable`을 사용하면 메타데이터 및 SSH 호스트 키 저장소를 인접한 `StackPort-data`에 두고, 앱이 요청하는 WebView2 프로필도 그 안에 둡니다. 디렉터리 쓰기 권한과 WebView2 Runtime이 필요합니다. `STACKPORT_DATA_DIR`을 설정하면 표시 파일보다 우선하며, 명시적 인자와 동시에 제공하면 시작 오류를 표시합니다. 지정 경로와 표준 모드에서는 WebView2의 기본 동작을 유지합니다. OS·관리자 WebView 정책이 적용될 수 있습니다. 앱 상단에 Rust 빌드에 포함된 버전과 선택한 데이터 모드를 표시합니다. 기존 사용자 파일의 자동 이동, 서명 검증 업데이트, 플러그인 또는 자격 증명 저장은 제공하지 않습니다.
 
+**데이터 복사**는 원본 경로, 새 폴더와 대상 파일을 미리 보여줍니다. `workspace.sqlite`와 선택한 `ssh-trust.sqlite`를 SQLite 온라인 백업으로 각각 복사하고 무결성과 SHA-256을 확인합니다. 대상과 같은 부모 아래에 임시 폴더를 만든 뒤 [Windows MoveFileW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefilew)로 새 폴더에 게시합니다. 기존 폴더는 덮어쓰지 않습니다. DB 두 개의 스냅샷 시점은 다를 수 있으므로, 다른 앱에서 동시에 변경하지 않는 동안 복사하면 일관된 구성을 얻을 수 있습니다. 연결이 참조하는 원본 파일, WebView 데이터, 외부 자격 증명 및 메모리 초안은 복사 대상에서 제외합니다. 현재 실행은 원본 작업 공간을 계속 사용하며 다음 실행에서 경로를 선택할 수 있습니다. 원본 작업 기록에는 복사 결과와 파일 수만 남기며 경로·체크섬은 기록하지 않습니다.
+
 프로젝트·연결 정의 변경은 메타데이터와 감사 이벤트를 같은 트랜잭션에 저장합니다. SQLite 백업·복원·CSV 내보내기와 셀 변경은 시작과 완료·실패를 별도 이벤트로 기록합니다. 작업이 성공한 뒤 완료 기록이 실패하면 작업 성공과 기록 실패를 함께 표시합니다. 이벤트에는 ID, UTC 시각, 로컬 사용자 표시, 작업 종류, 대상 ID, 환경, 결과, 정책과 영향 개수를 저장하며 SQL, 행 값, 파일 경로와 자격 증명은 저장하지 않습니다. 개별 OS 사용자 식별, 변조 방지와 보존 기간 설정은 아직 없습니다. 앱이 작업 완료와 기록 저장 사이에 비정상 종료되면 시작 이벤트만 남을 수 있습니다.
 
 SQLite SQL 조회는 기존 파일을 읽기 전용으로 열고 `query_only`와 SQLite authorizer를 함께 사용합니다. 임의 SQL의 첨부·PRAGMA·쓰기와 확장 로딩은 거부합니다. 요청별 연결은 작업 종료 시 닫힙니다. 중단 요청은 해당 SQLite 연결에 인터럽트를 보내며 실행 결과로 중단·시간 초과·완료를 구분합니다. 10초 제한은 SQLite 진행 콜백에서 확인하므로 긴 단일 연산·파일 I/O·잠금 대기 중에는 실제 중단이 지연될 수 있습니다. SQL과 원본 행은 로그에 기록하지 않으며 초안은 현재 프로세스의 메모리에만 둡니다. 결과는 한 번에 최대 100행을 반환하고 추가 행 존재 여부를 별도로 표시합니다. OFFSET 페이지는 조회 중 원본이 바뀌거나 순서가 불안정하면 중복·누락될 수 있습니다.
@@ -72,6 +74,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/csv_export.rs`: 여러 페이지 분량의 결과, 필터·정렬·매개변수 보존, CSV 인코딩, 취소·오류 시 정리와 감사 기록의 값 제외를 검사합니다.
 - `crates/stackport-core/tests/ports.rs`, `crates/stackport-core/tests/network.rs`, `tests/ports-smoke.cjs`: Windows에서 직접 연 루프백 소켓으로 포트 주소·상태·PID·프로세스, 필터·새로고침, DNS·TCP, Ping과 경로 추적을 검사합니다.
 - `tests/portable-smoke.cjs`: 새 폴더에 복사한 Windows EXE에서 지정 모드, 버전 표시, 데이터 파일과 휴대형 WebView2 프로필 위치를 확인합니다.
+- `crates/stackport-core/tests/workspace_copy.rs`: Windows에서 WAL이 있는 작업 공간의 복사, 선택한 신뢰 저장소, 체크섬, 기존 대상 거절 및 실패 시 대상 폴더 부재를 확인합니다.
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
 - `crates/stackport-core/tests/restore.rs`: 백업 복원 후 객체·행 수·체크섬 검증, 미리보기 이후 백업 변경, 기존 대상·저널 충돌과 작업 기록의 민감 정보 제외를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에서 그리드 필터·정렬·페이지 이동, 조회 중단·재조회, 단일 셀 편집, 운영 환경 확인, 별도 파일 복원 후 원본 보존·재조회 및 작업 기록을 검사합니다.

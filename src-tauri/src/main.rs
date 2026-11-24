@@ -9,6 +9,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
+    WorkspaceCopyPreview, WorkspaceCopyReport,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -32,6 +33,27 @@ async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> 
 #[tauri::command]
 fn get_runtime_info(location: State<'_, DataLocation>) -> RuntimeInfo {
     location.info()
+}
+
+#[tauri::command]
+async fn preview_workspace_copy(
+    store: State<'_, Store>,
+    destination: String,
+    include_trust: bool,
+) -> Result<WorkspaceCopyPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_workspace_copy(&destination, include_trust)).await
+}
+
+#[tauri::command]
+async fn copy_workspace(
+    store: State<'_, Store>,
+    destination: String,
+    include_trust: bool,
+    reviewed_trust: bool,
+) -> Result<WorkspaceCopyReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.copy_workspace(&destination, include_trust, reviewed_trust)).await
 }
 
 #[tauri::command]
@@ -628,6 +650,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             get_runtime_info,
+            preview_workspace_copy,
+            copy_workspace,
             list_local_ports,
             run_route_diagnostic,
             list_archived_projects,

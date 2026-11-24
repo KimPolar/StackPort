@@ -30,6 +30,8 @@ mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
+mod workspace_copy;
+pub use workspace_copy::{WorkspaceCopyPreview, WorkspaceCopyReport};
 
 use rusqlite::{
     backup::{Backup, StepResult},
@@ -762,6 +764,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "project.duplicate" => "local-project-metadata-only",
+        "workspace.copy" => "local-verified-copy-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

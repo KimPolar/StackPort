@@ -16,6 +16,7 @@ import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { CsvExportDialog, type CsvReport, type CsvSource } from "./CsvExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { NetworkWorkspace } from "./NetworkWorkspace";
+import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -65,6 +66,7 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 function App() {
   const [page, setPage] = useState<"workspace" | "terminal" | "network">("workspace");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
@@ -413,7 +415,10 @@ function App() {
             {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select><ChevronDown size={15} /></div>
           {project && <div className="project-actions"><button onClick={() => openModal("rename")}>이름 변경</button><button onClick={() => openModal("duplicateProject")}>복제</button><button onClick={() => openModal("archiveProject")}>보관</button><button onClick={() => openModal("deleteProject")}>삭제</button></div>}
-          <div className="project-actions"><button disabled={!desktop} onClick={() => setArchivedProjectsOpen(true)}><Archive size={13} /> 보관된 프로젝트</button></div>
+          <div className="project-actions">
+            <button disabled={!desktop} onClick={() => setArchivedProjectsOpen(true)}><Archive size={13} /> 보관된 프로젝트</button>
+            <button disabled={!desktop} onClick={() => setWorkspaceCopyOpen(true)}><FileDown size={13} /> 데이터 복사</button>
+          </div>
           <div className="section-heading"><span>데이터베이스</span><div>
             <button className="icon-button" onClick={() => { setRestoreOpen(true); setHistoryOpen(false); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
@@ -517,6 +522,7 @@ function App() {
       setArchivedProjectsOpen(false);
       void reloadProjects(id).catch(error => setError(errorText(error)));
     }} />}
+    {workspaceCopyOpen && <WorkspaceCopyDialog displayPath={displayPath} onClose={() => setWorkspaceCopyOpen(false)} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {csvRequest && <CsvExportDialog profile={csvRequest.profile} query={csvRequest.query} onClose={() => setCsvRequest(null)} onExported={report => { setCsvReport(report); setCsvRequest(null); }} />}
@@ -573,6 +579,7 @@ function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mo
 const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
+  "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.restore": "SQLite 복원",
   "sqlite.export.csv": "SQLite CSV 내보내기",

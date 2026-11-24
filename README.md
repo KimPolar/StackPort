@@ -70,6 +70,8 @@ cargo build --release --features custom-protocol --manifest-path src-tauri/Cargo
 
 Windows EXE를 **휴대형 작업 공간**으로 사용하려면 쓰기 가능한 폴더에 놓고 `StackPort-Windows-x64.exe --portable`로 실행하거나, 같은 폴더에 빈 `StackPort.portable` 파일을 만든 뒤 EXE를 실행하세요. 작업 공간, SSH 호스트 키 기록 및 기본 WebView 프로필은 EXE 옆 `StackPort-data` 폴더를 사용합니다. 앱 상단에 모드와 빌드 버전이 표시됩니다. WebView2 Runtime이 필요하며, 휴대형 실행에서도 자동 업데이트와 플러그인 설치는 제공하지 않습니다. 기존 작업 공간을 자동으로 가져오지 않습니다.
 
+기존 작업 공간을 옮길 때는 탐색기의 **데이터 복사**에서 새 폴더를 선택하고 복사할 파일을 확인하세요. 검증된 복사본은 다음 실행에서 `STACKPORT_DATA_DIR`로 지정하거나 휴대형 실행의 `StackPort-data` 폴더로 사용할 수 있습니다. 연결이 참조하는 SQLite 원본 파일은 별도로 관리합니다.
+
 ```powershell
 cargo test --manifest-path crates/stackport-core/Cargo.toml
 npm run build

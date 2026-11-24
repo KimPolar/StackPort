@@ -125,6 +125,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .restore-summary dt { color: #617b6d; }
 .restore-summary dd { margin: 0; overflow-wrap: anywhere; }
 .restore-result { margin-top: 20px; overflow-wrap: anywhere; }
+.workspace-copy-files { display: grid; gap: 8px; padding: 0; list-style: none; }
+.workspace-copy-files li { display: grid; gap: 5px; padding: 8px; border: 1px solid #edf1ee; font-size: 12px; overflow-wrap: anywhere; }
 .sql-parameters { display: grid; gap: 6px; max-height: 50vh; overflow: auto; padding: 4px; }
 .sql-parameters fieldset { min-width: 0; border: 1px solid #dce8e0; border-radius: 6px; padding: 8px; }
 .sql-parameters legend { padding: 0 4px; color: #39594b; font-size: 12px; overflow-wrap: anywhere; }

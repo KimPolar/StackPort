@@ -296,9 +296,31 @@ async function main() {
   if (await projectSelector.inputValue() !== copyProject) throw new Error('Reactivation did not restore the original project ID.');
   await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
   await page.getByRole('button', { name: /운영 DB.*PROD/ }).waitFor();
+  const copiedWorkspace = path.join(path.dirname(database), 'copied-workspace');
+  await page.getByRole('button', { name: '데이터 복사', exact: true }).click();
+  const copyDialog = page.getByRole('dialog', { name: '작업 공간 데이터 복사' });
+  await copyDialog.getByLabel('새 데이터 폴더 경로').fill(path.dirname(database));
+  await copyDialog.getByRole('button', { name: '복사 미리보기' }).click();
+  await copyDialog.getByRole('alert').getByText(/이미 있습니다/).waitFor();
+  await copyDialog.getByLabel('새 데이터 폴더 경로').fill(copiedWorkspace);
+  await copyDialog.getByRole('button', { name: '복사 미리보기' }).click();
+  await copyDialog.getByText('workspace.sqlite', { exact: true }).waitFor();
+  if (fs.existsSync(copiedWorkspace)) throw new Error('Preview created the destination directory.');
+  await copyDialog.getByRole('button', { name: '복사 시작', exact: true }).click();
+  await copyDialog.getByRole('status').getByText('작업 공간 복사 완료').waitFor();
+  const backupBytes = fs.readFileSync(path.join(copiedWorkspace, 'workspace.sqlite'));
+  const expectedDigest = createHash('sha256').update(backupBytes).digest('hex');
+  await copyDialog.getByText('SHA-256 ' + expectedDigest, { exact: true }).waitFor();
+  await copyDialog.getByRole('button', { name: '완료', exact: true }).click();
+  const { DatabaseSync } = require('node:sqlite');
+  const copiedMetadata = new DatabaseSync(path.join(copiedWorkspace, 'workspace.sqlite'), { readOnly: true });
+  if (copiedMetadata.prepare('SELECT count(*) AS count FROM projects WHERE id IN (?, ?)').get(sourceProject, copyProject).count !== 2) {
+    throw new Error('Copied workspace lost project definitions.');
+  }
+  copiedMetadata.close();
 
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, and project lifecycle passed.');
+  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, project lifecycle and workspace copy passed.');
   await browser.close();
 }
 
