@@ -6,6 +6,8 @@
 
 React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다. 네트워크·파일 처리와 장시간 SQL은 웹 UI에서 직접 수행하지 않고 별도 작업 스레드로 넘깁니다. 브라우저에는 네이티브 명령이나 임의 TCP 프록시를 제공하지 않습니다. 게이트웨이 인증 및 접근 제어는 아직 구현하지 않았습니다.
 
+**화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
+
 공통 작업 공간의 상단에는 현재 프로젝트와 작업 기록, 도구 전환을 배치합니다. 어느 도구에서든 프로젝트 탐색기를 펼치거나 접을 수 있습니다. 탐색기에서 SQLite 연결·객체를 선택하면 데이터베이스 화면이 열리고, 저장된 SSH 연결을 선택하면 해당 연결 설정과 터미널로 이동합니다. 도구 버튼에 초점이 있을 때 좌우 화살표와 Home·End로 이동하고 Enter로 엽니다. 열려 있는 터미널과 RDP 작업 수는 다른 도구에서도 표시합니다. 원격 파일 화면의 연결 표시는 연결할 때의 프로젝트와 서버를 계속 보여줍니다. [PuTTY의 저장된 세션](https://the.earth.li/~sgtatham/putty/latest/htmldoc/Chapter4.html#config-saving) · [Navicat의 객체 탐색](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html) · [MobaXterm의 세션 관리](https://mobaxterm.mobatek.net/documentation.html)
 
 상단의 **명령 팔레트**나 `Ctrl+Shift+P`로 도구, 활성 프로젝트, 현재 프로젝트의 SQLite·SSH 연결, 선택된 SQLite 연결의 테이블·뷰를 검색합니다. ↑·↓로 결과를 이동하고 Enter로 엽니다. 최근에 실행한 명령 최대 12개는 현재 실행의 메모리에 두고 검색어가 없을 때 먼저 표시합니다. 검색 대상은 이름·유형·환경과 도구 키워드입니다. 파일 경로, 호스트 주소, 자격 증명, SQL 본문, 쿼리 값과 터미널 출력은 검색 대상에 포함하지 않습니다. 저장된 SSH를 선택하면 기존 호스트 키 확인 화면이 열립니다. [WAI-ARIA 콤보 상자](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/) · [모달 대화 상자](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/)
@@ -188,6 +190,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
 - `crates/stackport-core/tests/restore.rs`: 백업 복원 후 객체·행 수·체크섬 검증, 미리보기 이후 백업 변경, 기존 대상·저널 충돌과 작업 기록의 민감 정보 제외를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에서 그리드 필터·정렬·페이지 이동, 조회 중단·재조회, 단일 셀 편집, 운영 환경 확인, 별도 파일 복원 후 원본 보존·재조회 및 작업 기록을 검사합니다.
+- `tests/appearance-smoke.cjs`: 격리된 Windows 앱에서 테마와 창 모양 전환, 터미널 세션 유지, 시스템 테마 변경, 앱 재시작 후 선택 복원을 검사합니다. 첫 프로세스에서 `STACKPORT_THEME_PHASE=write`로 실행하고, 같은 WebView2 프로필을 사용해 앱을 다시 띄운 뒤 `STACKPORT_THEME_PHASE=read`로 실행합니다.
 - `tests/desktop-smoke.cjs`와 `tests/terminal-smoke.cjs`에서 도구의 키보드 전환, 다른 도구에서 탐색기 접기·펼치기와 SQLite 객체 열기, 전환 뒤 열린 터미널 유지 및 개수 표시를 확인합니다.
 - `crates/stackport-core/tests/workspace_resume.rs` 및 `tests/workspace-resume-smoke.cjs`에서 배치 저장 충돌, 손상 시 이전 설정 복원, 보관된 프로젝트 제외, 새 Windows 프로세스에서 프로젝트·프로필·4분할 복원과 수동 연결 정책을 검사합니다. Windows 테스트는 `STACKPORT_RESUME_PHASE=write`로 먼저 실행한 뒤, 같은 `STACKPORT_DATA_DIR`과 새 WebView2 프로필로 앱을 시작해 `STACKPORT_RESUME_PHASE=read`로 실행합니다. 쓰기 단계는 격리된 앱의 `STACKPORT_TEST_WINDOW_PID`가 필요합니다.
 - `tests/terminal-smoke.cjs`: 격리된 Windows 앱에서 PowerShell·CMD와 한글 입력·24비트 색상 출력, 탭별 스크롤백 검색, 비활성 탭의 새 출력 표시와 확인, 탭 전환·키보드 이동, 여러 줄 붙여넣기 거부와 창 종료 확인을 검사합니다. 실제 IME 조합 입력과 스크린 리더 사용성은 별도 검증이 필요합니다.

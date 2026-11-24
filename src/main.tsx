@@ -1,11 +1,11 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
   Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
@@ -47,6 +47,8 @@ import {
   type SplitDirection, type WorkspaceLayout,
 } from "./WorkspaceLayout";
 import { restoreLayout, saveLayout, useWorkspaceResume, type ResumeRecord } from "./WorkspaceResume";
+import { applyColorScheme, readThemePreference, saveThemePreference, subscribeSystemTheme, systemTheme, type ThemePreference } from "./appearance";
+import "./theme.css";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -95,6 +97,8 @@ type EditRequest = { profile: Profile; object: DatabaseObject; keys: EditKey[] }
 type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
+const initialTheme = readThemePreference();
+applyColorScheme(initialTheme === "system" ? systemTheme() : initialTheme);
 const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
 const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").then(module => ({ default: module.SqlResultComparison })));
 const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(module => ({ default: module.SqlTemplateLibrary })));
@@ -122,6 +126,18 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
+  const [theme, setTheme] = useState(initialTheme);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const [themeSaveError, setThemeSaveError] = useState(false);
+  const osTheme = useSyncExternalStore(subscribeSystemTheme, systemTheme);
+  const colorScheme = theme === "system" ? osTheme : theme;
+  useLayoutEffect(() => applyColorScheme(colorScheme), [colorScheme]);
+  useEffect(() => {
+    if (desktop) void getCurrentWindow().setTheme(theme === "system" ? null : theme).catch(error => {
+      console.warn("창 테마를 적용하지 못했습니다.", error);
+    });
+  }, [theme]);
+
   const [layout, setLayout] = useState<WorkspaceLayout>(() => toolPane("workspace"));
   const toolsInLayout = paneTools(layout);
   const page = toolsInLayout[0];
@@ -970,6 +986,10 @@ function App() {
       id: "toggle:explorer", title: explorerOpen ? "탐색기 접기" : "탐색기 펼치기", group: "작업",
       keywords: "explorer sidebar", Icon: explorerOpen ? PanelLeftClose : PanelLeftOpen, run: () => setExplorerOpen(open => !open),
     });
+    commands.push({
+      id: "open:appearance", title: "화면 설정", group: "작업", keywords: "테마 라이트 다크 theme appearance",
+      Icon: Settings, run: () => setAppearanceOpen(true),
+    });
     if (desktop) {
       commands.push(
         { id: "open:history", title: "작업 기록", group: "작업", keywords: "audit history", Icon: History, run: showHistory },
@@ -1293,7 +1313,7 @@ function App() {
     workspace: databasePane,
     terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
-        <TerminalWorkspace visible={toolVisible("terminal")} onCountChange={updateTerminalCount} request={sshOpenRequest}
+        <TerminalWorkspace visible={toolVisible("terminal")} colorScheme={colorScheme} onCountChange={updateTerminalCount} request={sshOpenRequest}
           onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} />
       </React.Suspense>
     </div>,
@@ -1317,6 +1337,7 @@ function App() {
           <button className="history-button palette-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+P Meta+Shift+P"
             title="명령 팔레트 (Ctrl+Shift+P)" onClick={() => setPaletteOpen(true)}><Search size={15} aria-hidden /> 명령 팔레트 <kbd aria-hidden>Ctrl+Shift+P</kbd></button>
           <button className="history-button" disabled={!desktop} onClick={() => { if (toolVisible("workspace") && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={toolVisible("workspace") && historyOpen}><History size={15} /> 작업 기록</button>
+          <button className="history-button" type="button" aria-haspopup="dialog" onClick={() => setAppearanceOpen(true)}><Settings size={15} aria-hidden /> 화면 설정</button>
         </div>
       </header>
       <div className="workspace-toolbar">
@@ -1380,6 +1401,20 @@ function App() {
     </div>
     {paletteOpen && <CommandPalette commands={workspaceCommands()} recent={recentCommands}
       onClose={() => setPaletteOpen(false)} onRun={runWorkspaceCommand} />}
+    {appearanceOpen && <Dialog title="화면 설정" onClose={() => setAppearanceOpen(false)} busy={false}>
+      <div className="appearance-settings">
+        <label className="field">테마<select value={theme} onChange={event => {
+          const preference = event.target.value as ThemePreference;
+          setTheme(preference);
+          setThemeSaveError(!saveThemePreference(preference));
+        }}>
+          <option value="system">시스템 설정 따르기</option>
+          <option value="light">라이트</option>
+          <option value="dark">다크</option>
+        </select></label>
+        {themeSaveError && <p className="form-error" role="alert">설정을 저장할 수 없어 현재 창에만 적용됩니다.</p>}
+      </div>
+    </Dialog>}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
       {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite·SSH 연결 정의와 SQL 템플릿을 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}

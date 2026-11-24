@@ -10,6 +10,7 @@ import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagn
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
 import { TerminalTabDialog } from "./TerminalTabDialog";
 import { terminalDirectoryFromOsc, type TerminalDirectory } from "./terminalDirectory";
+import type { ColorScheme } from "./appearance";
 import "@xterm/xterm/css/xterm.css";
 
 type LocalShell = "powershell" | "cmd";
@@ -33,8 +34,29 @@ const errorText = (error: unknown) => typeof error === "string" ? error : String
 const shellName = (shell: Shell) => shell === "powershell" ? "PowerShell" : shell === "cmd" ? "CMD" : "SSH";
 const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target ? ` · ${tab.target}` : ""}`;
 
-export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled, onDirectoryChange }: {
+const lightAnsi = {
+  black: "#223630", red: "#993e36", green: "#176747", yellow: "#805b13",
+  blue: "#225e9a", magenta: "#7a407c", cyan: "#0f6470", white: "#3f5850",
+  brightBlack: "#536c62", brightRed: "#a9312b", brightGreen: "#155f35", brightYellow: "#855214",
+  brightBlue: "#244e9e", brightMagenta: "#843486", brightCyan: "#087179", brightWhite: "#2d453c",
+};
+
+function terminalTheme(host: HTMLElement) {
+  const styles = getComputedStyle(host);
+  const background = styles.getPropertyValue("--terminal-background").trim();
+  return {
+    background,
+    foreground: styles.getPropertyValue("--terminal-foreground").trim(),
+    cursor: styles.getPropertyValue("--terminal-cursor").trim(),
+    cursorAccent: background,
+    selectionBackground: styles.getPropertyValue("--terminal-selection").trim(),
+    ...(styles.colorScheme === "light" ? lightAnsi : {}),
+  };
+}
+
+export function TerminalWorkspace({ visible, colorScheme, onCountChange, request, onRequestHandled, onDirectoryChange }: {
   visible: boolean;
+  colorScheme: ColorScheme;
   onCountChange: (count: number) => void;
   request: SshOpenRequest | null;
   onRequestHandled: () => void;
@@ -272,7 +294,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
         <button type="button" className="icon-button terminal-tab-menu" aria-label="터미널 탭 관리" aria-haspopup="dialog"
           title="터미널 탭 관리" disabled={!activeTab} onClick={() => setTabDialogOpen(true)}><Ellipsis size={17} aria-hidden /></button>
       </div>
-      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit}
+      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} colorScheme={colorScheme} visible={visible && tab.id === activeId} onExit={reportExit}
         onActivity={reportActivity} onDirectory={reportDirectory} />)}
     </div>}
     {tabDialogOpen && <TerminalTabDialog name={activeTab && tabName(activeTab)} pinned={activeTab?.pinned ?? false}
@@ -293,9 +315,10 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   </section>;
 }
 
-function TerminalPane({ tab, visible, onExit, onActivity, onDirectory }: {
+function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirectory }: {
   tab: Tab;
   visible: boolean;
+  colorScheme: ColorScheme;
   onExit: (id: string, exit: TerminalExit) => void;
   onActivity: (id: string) => void;
   onDirectory: (id: string, directory: string | null) => void;
@@ -329,6 +352,12 @@ function TerminalPane({ tab, visible, onExit, onActivity, onDirectory }: {
   }, [visible]);
 
   useEffect(() => {
+    if (container.current && terminal.current) {
+      terminal.current.options.theme = terminalTheme(container.current);
+    }
+  }, [colorScheme]);
+
+  useEffect(() => {
     if (!visible) return;
     function handleShortcut(event: globalThis.KeyboardEvent) {
       if (!document.querySelector("dialog[open]") && event.ctrlKey && event.shiftKey && !event.altKey && event.key.toLowerCase() === "f") {
@@ -353,7 +382,7 @@ function TerminalPane({ tab, visible, onExit, onActivity, onDirectory }: {
       const emulator = new Terminal({
         cursorBlink: false, fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 14,
         scrollback: 10000,
-        theme: { background: "#172523", foreground: "#e4f1e9", cursor: "#a4e5c7", selectionBackground: "#477763" },
+        theme: terminalTheme(host),
       });
       const addon = new FitAddon();
       const search = new SearchAddon();

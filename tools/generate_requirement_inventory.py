@@ -20,6 +20,7 @@ PARTIAL = {
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "SQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
+    "SP-UI-015": "작업 공간과 대화상자·편집기·터미널의 라이트·다크·시스템 테마, 탐색기 펼치기·접기",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
@@ -123,6 +124,7 @@ PARTIAL = {
     "SP-ST-006": "프로젝트와 연결 정의, 작업 공간 배치 저장 및 손상된 배치의 이전 스냅샷 복원",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
+    "SP-ST-001": "화면 설정과 명령 팔레트에서 라이트·다크·시스템 테마 선택, 재시작 뒤 선택 유지",
     "SP-ST-014": "Windows 작업 공간과 선택한 SSH 신뢰 파일을 검증하여 새 폴더에 백업",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
@@ -189,6 +191,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-012", "SP-ST-006", "SP-ST-017"}:
                 evidence = "crates/stackport-core/src/workspace_resume.rs; crates/stackport-core/tests/workspace_resume.rs; tests/workspace-resume-smoke.cjs; src/WorkspaceResume.ts; src/main.tsx"
+            elif requirement_id in {"SP-UI-015", "SP-ST-001"}:
+                evidence = "src/appearance.ts; src/theme.css; src/main.tsx; src/TerminalWorkspace.tsx; tests/appearance-smoke.cjs"
             elif requirement_id in {"SP-UI-006", "SP-UI-007", "SP-UI-016"}:
                 evidence = "src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-004":
