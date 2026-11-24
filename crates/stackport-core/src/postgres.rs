@@ -30,4 +30,4 @@ pub use session::{
 pub use sql::{PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome};
 pub use sql_range::PostgresSqlScope;
 pub use statement_stats::{PostgresStatementStats, PostgresStatementStatsInput};
-pub use value::{PostgresValuePage, PostgresValueSave, PostgresValueTarget};
+pub use value::{PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget};

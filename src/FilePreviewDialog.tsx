@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
-import { formatStructuredPreview, structuredFormat, type StructuredPreview, type XmlPart } from "./structuredFilePreview";
+import { formatStructuredPreview, structuredFormat } from "./structuredFilePreview";
+import { StructuredPreviewView } from "./StructuredPreviewView";
 
 export type FilePreview = { total_bytes: string; shown_bytes: number } & (
   | { kind: "text" | "hex"; value: string }
@@ -13,43 +14,6 @@ export type PreviewSelection = {
 };
 const numbers = new Intl.NumberFormat("ko-KR");
 const viewLabels = { json: "JSON 들여쓰기", xml: "XML 구조", csv: "CSV 표" };
-
-function XmlPreviewPart({ node, root = false }: { node: XmlPart; root?: boolean }) {
-  if (node.kind !== "element") {
-    const value = node.kind === "comment" ? `<!--${node.value}-->` : node.kind === "cdata" ? `<![CDATA[${node.value}]]>` : node.value;
-    return <li><code className="xml-part-text">{value}</code></li>;
-  }
-  if (!node.attributes.length && !node.children.length) return <li><code>{`<${node.name} />`}</code></li>;
-  return <li><details open={root || undefined}>
-    <summary><code>{`<${node.name}>`}</code></summary>
-    {!!node.attributes.length && <dl className="xml-attributes">{node.attributes.map(([name, value]) => <div key={name}>
-      <dt><code>{name}</code></dt><dd><code>{value}</code></dd>
-    </div>)}</dl>}
-    {!!node.children.length && <ul>{node.children.map((child, index) => <XmlPreviewPart key={index} node={child} />)}</ul>}
-  </details></li>;
-}
-
-function FormattedPreview({ preview }: { preview: Exclude<StructuredPreview, { error: string }> }) {
-  if (preview.kind === "json") return <pre className="files-preview-content" aria-label="JSON 들여쓰기" tabIndex={0}>{preview.text}</pre>;
-  if (preview.kind === "xml") return <div className="files-preview-content xml-preview" role="region" aria-label="XML 구조" tabIndex={0}>
-    <ul><XmlPreviewPart node={preview.root} root /></ul>
-  </div>;
-  const { rows, rowCount, columnCount } = preview;
-  const columns = Array.from({ length: rows.reduce((width, row) => Math.max(width, row.length), 0) }, (_, index) => index);
-  return <>
-    <p className="form-note">{numbers.format(rowCount)}행 · {numbers.format(columnCount)}열
-      {(rows.length < rowCount || columns.length < columnCount) && <> · 앞 {numbers.format(rows.length)}행 × {numbers.format(columns.length)}열 표시</>}</p>
-    <div className="csv-preview" role="region" aria-label="CSV 스크롤 영역" tabIndex={0}>
-      <table className="files-table" aria-label="CSV 표">
-        <thead><tr><th scope="col">행</th>{columns.map(column => <th key={column} scope="col">열 {numbers.format(column + 1)}</th>)}</tr></thead>
-        <tbody>{rows.map((row, index) => <tr key={index}>
-          <th scope="row">{numbers.format(index + 1)}</th>
-          {columns.map(column => <td key={column}>{row[column]}</td>)}
-        </tr>)}</tbody>
-      </table>
-    </div>
-  </>;
-}
 
 export function FilePreviewDialog({ selection, onClose }: { selection: PreviewSelection; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -97,7 +61,7 @@ export function FilePreviewDialog({ selection, onClose }: { selection: PreviewSe
         {preview.kind === "png" ? (
           imageError ? <p role="alert" className="form-error">PNG 이미지를 표시할 수 없습니다.</p>
             : <img className="files-preview-image" src={`data:image/png;base64,${preview.base64}`} alt={selection.name} onError={() => setImageError(true)} />
-        ) : formattedView && !showSource ? <FormattedPreview preview={formattedView} /> : preview.value ? (
+        ) : formattedView && !showSource ? <StructuredPreviewView preview={formattedView} /> : preview.value ? (
           <pre className="files-preview-content" aria-label={format} tabIndex={0}>{preview.value}</pre>
         ) : <p className="form-note">빈 파일입니다.</p>}
       </>}

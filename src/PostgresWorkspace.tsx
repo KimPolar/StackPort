@@ -6,7 +6,7 @@ import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type Postg
   type PostgresStructureSection } from "./PostgresObjectStructure";
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
 import { PostgresServerMonitor } from "./PostgresServerMonitor";
-import { PostgresValueDialog, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
+import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
@@ -27,7 +27,7 @@ type SchemaPage = { schemas: Schema[]; has_next: boolean };
 type ObjectKind = PostgresObjectKind;
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
-type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null; editable: boolean; value_kind: "binary" | "text" | null }[];
+type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null; editable: boolean; value_kind: "binary" | "text" | "json" | "xml" | null }[];
   rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean;
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null;
   value_rows: PostgresValueRow[] | null; edit_reason: string | null };
@@ -258,7 +258,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
   const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
-  const [value, setValue] = useState<{ target: PostgresValueTarget; title: string; trigger: HTMLButtonElement } | null>(null);
+  const [value, setValue] = useState<{ target: PostgresValueTarget; title: string; format: PostgresValueFormat | null; trigger: HTMLButtonElement } | null>(null);
   const [editNotice, setEditNotice] = useState("");
   const dataPanel = useRef<HTMLElement>(null);
   const errorId = useId();
@@ -399,14 +399,17 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                 const field = result.columns[column];
                 const stamp = result.row_stamps?.[index];
                 const valueRow = result.value_rows?.[index];
-                const canPreview = valueRow && object && cell.value !== null && (field.value_kind === "binary" || (field.value_kind === "text" && cell.truncated));
+                const format = field.value_kind === "json" || field.value_kind === "xml" ? field.value_kind
+                  : field.value_kind === "binary" && cell.value?.startsWith("\\x89504e470d0a1a0a") ? "png" : null;
+                const canPreview = valueRow && object && cell.value !== null
+                  && (format || field.value_kind === "binary" || (field.value_kind === "text" && cell.truncated));
                 const canEdit = field.editable && stamp && object;
                 const rowNumber = rowPage * 100 + index + 1;
                 return <td key={column}>{canPreview || canEdit ? <div className="postgres-editable-cell">
                   <PostgresValue cell={cell} />
                   {canPreview && <button type="button" className="icon-button" aria-label={`${rowNumber}행 ${field.name} 원본 열기`}
                     onClick={event => setValue({ target: { object: object.id, column: field.name, row: valueRow },
-                      title: `${result.schema}.${result.name} · ${rowNumber}행 · ${field.name}`, trigger: event.currentTarget })}>
+                      title: `${result.schema}.${result.name} · ${rowNumber}행 · ${field.name}`, format, trigger: event.currentTarget })}>
                     <Maximize2 size={14} aria-hidden /></button>}
                   {canEdit && <button type="button" className="icon-button" aria-label={`${rowNumber}행 ${field.name} 편집`}
                     onClick={event => {
@@ -426,7 +429,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   </div>
       {searchOpen && !unavailable && <PostgresSearchDialog id={id} database={profile.settings.database} schema={schema}
         onClose={() => setSearchOpen(false)} onOpen={openSearchHit} />}
-      {value && <PostgresValueDialog id={id} target={value.target} title={value.title} unavailable={unavailable} onBusy={onFileBusy} onClose={() => {
+      {value && <PostgresValueDialog id={id} target={value.target} title={value.title} format={value.format} unavailable={unavailable} onBusy={onFileBusy} onClose={() => {
         const trigger = value.trigger;
         setValue(null);
         requestAnimationFrame(() => {

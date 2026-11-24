@@ -5,6 +5,7 @@ const { once } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { crc32 } = require('node:zlib');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { Server, utils } = require('ssh2');
 
@@ -15,6 +16,16 @@ const password = 'fixture-reader-password';
 const otherPassword = 'fixture-unrelated-role-password';
 const binaryCell = Buffer.from('007fff5c00a1'.repeat(15_000) + 'cafe', 'hex');
 const unicodeCell = '한😀'.repeat(36_000) + '\r\n끝';
+const staticPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMIqIgCAAI+ASOK5tZ4AAAAAElFTkSuQmCC', 'base64');
+const pngMetadata = Buffer.from('tEXtComment\0fixture-only metadata');
+const textChunk = Buffer.alloc(pngMetadata.length + 8);
+textChunk.writeUInt32BE(pngMetadata.length - 4);
+pngMetadata.copy(textChunk, 4);
+textChunk.writeUInt32BE(crc32(pngMetadata), textChunk.length - 4);
+const pngCell = Buffer.concat([staticPng.subarray(0, 33), textChunk, staticPng.subarray(33)]);
+const oversizedRaster = Buffer.from(staticPng);
+oversizedRaster.writeUInt32BE(2049, 16);
+const typedJson = '{"id":9007199254740993,"id":9007199254740995,"padding":"' + '한'.repeat(6000) + '"}';
 if (!root || !bin) throw new Error('Set STACKPORT_TEST_ROOT and STACKPORT_POSTGRES_BIN.');
 
 const readStatementStats = (command, id, options = {}) => command('postgres_statement_stats', { id,
@@ -78,6 +89,12 @@ async function startPostgres(preloadStats = true) {
     'GRANT USAGE ON SCHEMA report TO fixture_unrelated;',
     'CREATE POLICY raw_reader_cells ON report.raw_cells FOR SELECT TO fixture_reader USING (id < 4);',
     'CREATE POLICY raw_other_cell ON report.raw_cells FOR SELECT TO fixture_unrelated USING (id = 4);',
+    'CREATE TABLE report.typed_cells (id integer PRIMARY KEY, payload bytea, document json, document_binary jsonb, markup xml);',
+    `INSERT INTO report.typed_cells VALUES
+      (1, decode('${pngCell.toString('hex')}', 'hex'), '${typedJson}', '{"count":9007199254740993}', '<report id="17"><section>한글</section></report>'),
+      (2, decode('${oversizedRaster.toString('hex')}', 'hex'), NULL, NULL, '<?fixture inert?><report>원문 유지</report>'),
+      (3, decode('${staticPng.toString('hex')}', 'hex') || decode(repeat('00',1048576),'hex'), NULL, jsonb_build_object('large',repeat('x',262145)), '<empty/>');`,
+    'GRANT SELECT ON report.typed_cells TO fixture_reader;',
     'CREATE TABLE report.denied (id integer);',
     "COMMENT ON TABLE report.denied IS 'catalog hidden marker';",
     'CREATE TABLE report.write_probe (id integer);',
@@ -626,6 +643,7 @@ async function verify(browser, fixture, gateway, jump) {
   assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
   const unrelated = await alternate('Unrelated monitor role', { username: 'fixture_unrelated' });
   await verifyCellFiles({ command, open, close, session, unrelated, findObject });
+  await verifyCellRepresentations(command, session.id, findObject('typed_cells'));
   await verifyServerMonitor({ command, open, close, unrelated });
   await verifyStatementStats({ command, query, open, close, session, unrelated });
   await verifyGridWrites({ command, open, close, profile, session, findObject });
@@ -711,6 +729,41 @@ async function verify(browser, fixture, gateway, jump) {
   await originalDialog.getByLabel('셀 원본 텍스트', { exact: true }).waitFor();
   await originalDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
   await originalDialog.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: /typed_cells 테이블/ }).click();
+  const closeCell = async () => {
+    await originalDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+    await originalDialog.waitFor({ state: 'detached' });
+  };
+  const mode = label => originalDialog.getByRole('button', { name: label, exact: true });
+  await data.getByRole('button', { name: '1행 document 원본 열기', exact: true }).click();
+  await originalDialog.getByRole('button', { name: '다음 셀 원본 페이지', exact: true }).click();
+  await mode('JSON 들여쓰기').click();
+  const json = originalDialog.getByLabel('JSON 들여쓰기', { exact: true });
+  await json.waitFor();
+  assert.match(await json.textContent(), /\n\s+"id": 9007199254740993,\n\s+"id": 9007199254740995/);
+  await mode('원문').click();
+  await originalDialog.getByText(/4,097–6,0/).waitFor();
+  await closeCell();
+  await data.getByRole('button', { name: '1행 markup 원본 열기', exact: true }).click();
+  await mode('XML 구조').click();
+  const tree = originalDialog.getByRole('region', { name: 'XML 구조', exact: true });
+  await tree.getByText('<report>', { exact: true }).waitFor();
+  await tree.getByText('<section>', { exact: true }).click();
+  await tree.getByText('한글', { exact: true }).waitFor();
+  await closeCell();
+  await data.getByRole('button', { name: '2행 markup 원본 열기', exact: true }).click();
+  await mode('XML 구조').click();
+  await originalDialog.getByText(/DTD 또는 처리 지시문/).waitFor();
+  assert.equal(await originalDialog.getByLabel('셀 원본 텍스트', { exact: true }).isVisible(), true);
+  await closeCell();
+  await data.getByRole('button', { name: '1행 payload 원본 열기', exact: true }).click();
+  await mode('PNG 이미지').click();
+  const image = originalDialog.getByRole('img', { name: '셀 PNG 미리보기', exact: true });
+  await image.waitFor();
+  await page.waitForFunction(() => document.querySelector('img[alt="셀 PNG 미리보기"]')?.naturalWidth === 1);
+  await mode('HEX').click();
+  assert.match(await hex.textContent(), /89 50 4E 47/);
+  await closeCell();
   const catalogSearch = page.getByRole('dialog', { name: 'PostgreSQL 객체 검색', exact: true });
   await page.getByRole('button', { name: '객체 검색', exact: true }).click();
   await catalogSearch.getByLabel('검색어').fill('meta_child');
@@ -1235,10 +1288,11 @@ async function verifyServerMonitor({ command, open, close, unrelated }) {
     const unrelatedWork = run(other.id, "SELECT pg_sleep(7), 'hidden-monitor-query'");
     let blocked;
     try {
-      const active = await sample('running', item => item.pid === workspacePid && item.wait_event === 'PgSleep');
+      const active = await sample('running', item => item.pid === workspacePid && item.wait_event === 'PgSleep'
+        && item.query?.includes('pg_advisory_xact_lock'));
       assert.match(active.query, /pg_advisory_xact_lock/);
       blocked = run(waiter.id, 'SELECT 1 FROM pg_catalog.pg_advisory_xact_lock(8840291)');
-      const waiting = await sample('blocked', item => item.pid === waiterPid, 1800);
+      const waiting = await sample('blocked', item => item.pid === waiterPid && item.query?.includes('pg_advisory_xact_lock'), 1800);
       assert.equal(waiting.wait_type, 'Lock');
       assert.deepEqual(waiting.blocker_pids, [workspacePid]);
       assert.match(waiting.query, /pg_advisory_xact_lock/);
@@ -1389,6 +1443,7 @@ async function verifyCellFiles({ command, open, close, session, unrelated, findO
     assert.deepEqual(hidden.rows.map(row => row[0].value), ['4']);
     const restricted = { object, column: 'note', row: hidden.value_rows[0] };
     await assert.rejects(read(restricted), /조회 권한/);
+    await assert.rejects(command('postgres_value_representation', { id, target: { ...restricted, column: 'payload' } }), /조회 권한/);
     const hiddenFile = path.join(root, 'postgres-hidden-cell.txt');
     await assert.rejects(save(restricted, hiddenFile), /조회 권한/);
     assert.equal(fs.existsSync(hiddenFile), false);
@@ -1410,6 +1465,31 @@ async function verifyCellFiles({ command, open, close, session, unrelated, findO
   assert.equal(audits.length, 3);
   assert.ok(audits.every(event => event.affected_count === 1 && event.object_name === null));
   assert.ok(!JSON.stringify(audits).includes(textPath));
+}
+
+async function verifyCellRepresentations(command, id, object) {
+  const page = await command('postgres_page', { id, object, rowPage: 0, columnPage: 0 });
+  const field = (index, column) => ({ object, column, row: page.value_rows[index] });
+  const view = target => command('postgres_value_representation', { id, target });
+  assert.deepEqual(page.columns.map(column => column.value_kind), [null, 'binary', 'json', 'json', 'xml']);
+  assert.deepEqual(await view(field(0, 'document')), { kind: 'json', text: typedJson });
+  const normalized = await view(field(0, 'document_binary'));
+  assert.equal(normalized.kind, 'json');
+  assert.match(normalized.text, /9007199254740993/);
+  assert.deepEqual(await view(field(0, 'markup')), { kind: 'xml', text: '<report id="17"><section>한글</section></report>' });
+  const image = await view(field(0, 'payload'));
+  assert.equal(image.kind, 'png');
+  assert.deepEqual(Buffer.from(image.base64, 'base64'), staticPng);
+  const original = path.join(root, 'postgres-image-cell.png');
+  const saved = await command('save_postgres_value', { id, target: field(0, 'payload'), destination: original });
+  assert.equal(saved.size_bytes, pngCell.length);
+  assert.deepEqual(fs.readFileSync(original), pngCell);
+  await assert.rejects(view(field(1, 'payload')), /정적 PNG/);
+  await assert.rejects(view(field(2, 'payload')), /1 MiB/);
+  await assert.rejects(view(field(2, 'document_binary')), /256 KiB/);
+  await assert.rejects(view(field(1, 'document')), /NULL/);
+  const fallback = await command('postgres_value_page', { id, target: field(2, 'document_binary'), page: 0 });
+  assert.equal(fallback.has_next, true);
 }
 
 async function verifyGridWrites({ command, open, close, profile, session, findObject }) {
@@ -1544,7 +1624,7 @@ async function main() {
     await verify(browser, fixture, gateway, jump);
     withoutPreload = await startPostgres(false);
     await verifyStatsWithoutPreload(browser, withoutPreload);
-    console.log('Windows PostgreSQL E2E passed (large cells, statement stats, object search, grid editing, TLS and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (cell representations, large cells, statement stats, grid editing and SSH jump recovery).');
   } finally {
     await browser?.close();
     withoutPreload?.close();

@@ -2,7 +2,11 @@ use super::{
     catalog,
     session::{field, pg_error, VALUE_LENGTH},
 };
-use crate::{local_file::NewFile, quote_identifier, Result};
+use crate::{
+    local_file::NewFile,
+    png_preview::{png_for_display, PNG_LIMIT},
+    quote_identifier, Result,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio_postgres::{
@@ -12,12 +16,15 @@ use tokio_postgres::{
 
 const PREVIEW_SIZE: i32 = 4096;
 const SAVE_SIZE: i32 = 64 * 1024;
+const STRUCTURE_LIMIT: usize = 256 * 1024;
 const STALE: &str = "행이 변경되었거나 조회 권한이 달라졌습니다. 그리드를 다시 조회하세요.";
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ValueKind {
     Text,
+    Json,
+    Xml,
     Binary,
 }
 
@@ -27,16 +34,16 @@ impl ValueKind {
         if oid == Type::BYTEA.oid() {
             return Some(Self::Binary);
         }
-        [
-            Type::TEXT,
-            Type::VARCHAR,
-            Type::JSON,
-            Type::JSONB,
-            Type::XML,
-        ]
-        .iter()
-        .any(|kind| kind.oid() == oid)
-        .then_some(Self::Text)
+        if oid == Type::JSON.oid() || oid == Type::JSONB.oid() {
+            return Some(Self::Json);
+        }
+        if oid == Type::XML.oid() {
+            return Some(Self::Xml);
+        }
+        [Type::TEXT, Type::VARCHAR]
+            .iter()
+            .any(|kind| kind.oid() == oid)
+            .then_some(Self::Text)
     }
 
     pub(super) fn grid_preview(self, column: &str) -> String {
@@ -47,20 +54,20 @@ impl ValueKind {
                 format!("pg_catalog.chr(92) || 'x' || pg_catalog.encode(pg_catalog.substr({column}, 1, {shown}), 'hex') ||
                     CASE WHEN pg_catalog.octet_length({column}) > {shown} THEN '0' ELSE '' END")
             }
-            Self::Text => grid_text(column),
+            Self::Text | Self::Json | Self::Xml => grid_text(column),
         }
     }
 
     fn expression(self, column: &str) -> String {
         match self {
-            Self::Text => format!("{column}::pg_catalog.text"),
+            Self::Text | Self::Json | Self::Xml => format!("{column}::pg_catalog.text"),
             Self::Binary => column.to_owned(),
         }
     }
 
     fn length(self, expression: &str) -> String {
         let function = match self {
-            Self::Text => "char_length",
+            Self::Text | Self::Json | Self::Xml => "char_length",
             Self::Binary => "octet_length",
         };
         format!("pg_catalog.{function}({expression})")
@@ -131,7 +138,7 @@ impl ValueContent {
     fn from_row(kind: ValueKind, row: &Row, index: usize) -> Result<Self> {
         let null = "이 셀의 값이 NULL입니다.";
         Ok(match kind {
-            ValueKind::Text => Self::Text {
+            ValueKind::Text | ValueKind::Json | ValueKind::Xml => Self::Text {
                 text: field::<Option<String>>(row, index)?.ok_or(null)?,
             },
             ValueKind::Binary => Self::Binary {
@@ -153,6 +160,14 @@ impl ValueContent {
             Self::Binary { bytes } => bytes,
         }
     }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PostgresValueRepresentation {
+    Json { text: String },
+    Xml { text: String },
+    Png { base64: String },
 }
 
 #[derive(Serialize)]
@@ -276,6 +291,56 @@ pub(super) async fn preview(
         has_next,
         content,
     })
+}
+
+pub(super) async fn representation(
+    tx: &Transaction<'_>,
+    target: &PostgresValueTarget,
+) -> Result<PostgresValueRepresentation> {
+    let cell = CellTarget::resolve(tx, target).await?;
+    let (limit, too_large) = match cell.kind {
+        ValueKind::Json | ValueKind::Xml => (
+            STRUCTURE_LIMIT,
+            "구조 보기는 최대 256 KiB까지 지원합니다. 원문 페이지에서 계속 볼 수 있습니다.",
+        ),
+        ValueKind::Binary => (
+            PNG_LIMIT,
+            "PNG 미리보기는 최대 1 MiB까지 지원합니다. HEX 페이지에서 계속 볼 수 있습니다.",
+        ),
+        ValueKind::Text => return Err("이 셀은 원문 텍스트로 확인할 수 있습니다.".into()),
+    };
+    let expression = &cell.expression;
+    let sql = format!(
+        "SELECT CASE WHEN pg_catalog.octet_length({expression}) <= {limit} THEN {expression} END,
+            {expression} IS NULL {}",
+        cell.from
+    );
+    let row = tx
+        .query_opt(&sql, &target.parameters())
+        .await
+        .map_err(pg_error)?
+        .ok_or(STALE)?;
+    if field(&row, 1)? {
+        return Err("이 셀의 값이 NULL입니다.".into());
+    }
+    match cell.kind {
+        ValueKind::Binary => {
+            let bytes = field::<Option<Vec<u8>>>(&row, 0)?.ok_or(too_large)?;
+            let base64 = png_for_display(&bytes, bytes.len() as u64)
+                .ok_or("지원되는 정적 PNG를 열 수 없습니다. HEX 페이지에서 값을 확인하세요.")?;
+            Ok(PostgresValueRepresentation::Png { base64 })
+        }
+        kind => {
+            let text = field::<Option<String>>(&row, 0)?
+                .filter(|text| text.len() <= limit)
+                .ok_or(too_large)?;
+            if matches!(kind, ValueKind::Json) {
+                Ok(PostgresValueRepresentation::Json { text })
+            } else {
+                Ok(PostgresValueRepresentation::Xml { text })
+            }
+        }
+    }
 }
 
 pub(super) async fn stage(

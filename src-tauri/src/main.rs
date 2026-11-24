@@ -17,7 +17,7 @@ use stackport_core::{
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
-    PostgresValuePage, PostgresValueSave, PostgresValueTarget,
+    PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -859,6 +859,11 @@ async fn postgres_value_page(postgres: State<'_, PostgresManager>, id: String, t
 }
 
 #[tauri::command]
+async fn postgres_value_representation(postgres: State<'_, PostgresManager>, id: String, target: PostgresValueTarget) -> Result<PostgresValueRepresentation, String> {
+    postgres.value_representation(&id, target).await
+}
+
+#[tauri::command]
 async fn save_postgres_value(postgres: State<'_, PostgresManager>, id: String, target: PostgresValueTarget, destination: String) -> Result<PostgresValueSave, String> {
     postgres.save_value(&id, target, destination).await
 }
@@ -1596,6 +1601,7 @@ fn main() {
             search_postgres_objects,
             postgres_page,
             postgres_value_page,
+            postgres_value_representation,
             save_postgres_value,
             postgres_structure,
             begin_postgres_edit,

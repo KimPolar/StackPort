@@ -11,8 +11,8 @@ use super::{
     sql, sql_range,
     statement_stats::{self, PostgresStatementStats, PostgresStatementStatsInput},
     value::{
-        self, PostgresValuePage, PostgresValueRow, PostgresValueSave, PostgresValueTarget,
-        ValueKind,
+        self, PostgresValuePage, PostgresValueRepresentation, PostgresValueRow, PostgresValueSave,
+        PostgresValueTarget, ValueKind,
     },
     PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
@@ -581,6 +581,29 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "셀 값을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn value_representation(
+        &self,
+        id: &str,
+        target: PostgresValueTarget,
+    ) -> Result<PostgresValueRepresentation> {
+        let session = self.session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client
+                .build_transaction()
+                .read_only(true)
+                .isolation_level(IsolationLevel::RepeatableRead)
+                .start()
+                .await
+                .map_err(pg_error)?;
+            let value = value::representation(&tx, &target).await?;
+            tx.commit().await.map_err(pg_error)?;
+            Ok(value)
+        })
+        .await
+        .map_err(|_| "셀 미리보기를 읽는 시간이 초과되었습니다.")?
     }
 
     pub async fn save_value(
