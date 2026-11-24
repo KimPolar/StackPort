@@ -3,17 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { Copy, Pencil, Play, Plus, Square, Trash2, X } from "lucide-react";
 import type { SshProfile } from "./ssh-profile-types";
 import { SshRouteDialog } from "./SshRouteDialog";
+import { tunnelKindLabels, tunnelListenAddress, tunnelPath, tunnelTarget, type SavedSshTunnel, type TunnelKind, type TunnelSettings } from "./sshTunnel";
 
-type TunnelSettings = { name: string; ssh_profile_id: string; local_port: number; target_host: string; target_port: number };
-export type SavedSshTunnel = { id: string; project_id: string; revision: number; settings: TunnelSettings };
-type TunnelStatus = { tunnel: SavedSshTunnel; local_port: number; gateway: SshProfile; hops: string[];
+type TunnelStatus = { tunnel: SavedSshTunnel; listen_port: number; gateway: SshProfile; hops: string[];
   phase: "running" | "stopping" | "stopped" | "disconnected"; clients: number;
   sent_bytes: string; received_bytes: string; last_error: string | null };
 type DefinitionAction = { kind: "create" } | { kind: "edit" | "delete"; tunnel: SavedSshTunnel };
 const phases: Record<TunnelStatus["phase"], string> = { running: "수신 중", stopping: "중단 중", stopped: "중단됨", disconnected: "연결 끊김" };
 const running = (status: TunnelStatus) => status.phase === "running" || status.phase === "stopping";
-const targetAddress = ({ target_host: host, target_port: port }: TunnelSettings) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
-const localAddress = (port: number) => `127.0.0.1:${port || "자동"}`;
 const numbers = new Intl.NumberFormat("ko-KR");
 
 export function SshTunnelPanel({ projectId, profiles, visible, onCountChange }: {
@@ -85,7 +82,7 @@ export function SshTunnelPanel({ projectId, profiles, visible, onCountChange }: 
 
   async function copy(port: number) {
     setError(""); setNotice("");
-    try { await navigator.clipboard.writeText(localAddress(port)); setNotice(`${localAddress(port)} 주소를 복사했습니다.`); }
+    try { await navigator.clipboard.writeText(tunnelListenAddress(port)); setNotice(`${tunnelListenAddress(port)} 주소를 복사했습니다.`); }
     catch (reason) { setError(`주소를 복사할 수 없습니다. ${String(reason)}`); }
   }
 
@@ -98,14 +95,14 @@ export function SshTunnelPanel({ projectId, profiles, visible, onCountChange }: 
     {notice && <p className="query-notice" role="status">{notice}</p>}
     <div className="results-card network-card ssh-tunnel-card">
       {items.length ? <div className="table-wrap"><table aria-label="저장된 SSH 터널">
-        <thead><tr><th scope="col">이름</th><th scope="col">SSH 연결</th><th scope="col">전달 경로</th><th scope="col">상태</th><th scope="col">작업</th></tr></thead>
+        <thead><tr><th scope="col">이름</th><th scope="col">유형</th><th scope="col">SSH 연결</th><th scope="col">전달 경로</th><th scope="col">상태</th><th scope="col">작업</th></tr></thead>
         <tbody>{items.map(tunnel => {
           const profile = profiles.find(item => item.id === tunnel.settings.ssh_profile_id);
           const status = statuses.find(item => item.tunnel.id === tunnel.id);
           const isActive = status && running(status);
           return <tr key={tunnel.id}>
-            <th scope="row">{tunnel.settings.name}</th><td>{profile?.name ?? "연결 확인 필요"}</td>
-            <td><code>{localAddress(tunnel.settings.local_port)} → {targetAddress(tunnel.settings)}</code></td>
+            <th scope="row">{tunnel.settings.name}</th><td>{tunnelKindLabels[tunnel.settings.kind]}</td><td>{profile?.name ?? "연결 확인 필요"}</td>
+            <td><code>{tunnelPath(tunnel.settings)}</code></td>
             <td><span>{status ? phases[status.phase] : "중단됨"}</span>
               {!isActive && status?.last_error && <p className="form-error ssh-tunnel-error">{status.last_error}</p>}</td>
             <td><div className="ssh-tunnel-actions">
@@ -122,15 +119,16 @@ export function SshTunnelPanel({ projectId, profiles, visible, onCountChange }: 
     {!!active.length && <div className="results-card network-card ssh-tunnel-card">
       <h3>실행 중인 터널</h3>
       <div className="table-wrap"><table aria-label="실행 중인 SSH 터널">
-        <thead><tr><th scope="col">로컬 주소</th><th scope="col">경로</th><th scope="col">트래픽</th><th scope="col">상태</th><th scope="col">작업</th></tr></thead>
+        <thead><tr><th scope="col">수신 주소</th><th scope="col">경로</th><th scope="col">트래픽</th><th scope="col">상태</th><th scope="col">작업</th></tr></thead>
         <tbody>{active.map(status => <tr key={status.tunnel.id}>
-          <th scope="row"><span>{status.tunnel.settings.name}</span><br /><code>{localAddress(status.local_port)}</code></th>
-          <td>{[...status.hops, status.gateway.name, targetAddress(status.tunnel.settings)].join(" → ")}</td>
+          <th scope="row"><span>{status.tunnel.settings.name}</span><br />
+            {status.tunnel.settings.kind === "remote" && <span>SSH 서버의 </span>}<code>{tunnelListenAddress(status.listen_port)}</code></th>
+          <td>{[...status.hops, status.gateway.name, tunnelTarget(status.tunnel.settings)].join(" → ")}</td>
           <td><span>연결 {status.clients}개</span><br />
             <span>보냄 {numbers.format(BigInt(status.sent_bytes))} B · 받음 {numbers.format(BigInt(status.received_bytes))} B</span></td>
           <td>{phases[status.phase]}{status.last_error && <p className="form-error ssh-tunnel-error">{status.last_error}</p>}</td>
           <td><div className="ssh-tunnel-actions">
-            <button type="button" className="icon-button" title="로컬 주소 복사" aria-label={`${status.tunnel.settings.name} 로컬 주소 복사`} onClick={() => void copy(status.local_port)}><Copy size={15} aria-hidden /></button>
+            <button type="button" className="icon-button" title="수신 주소 복사" aria-label={`${status.tunnel.settings.name} 수신 주소 복사`} onClick={() => void copy(status.listen_port)}><Copy size={15} aria-hidden /></button>
             <button type="button" className="secondary small" aria-label={`${status.tunnel.settings.name} 중단`} disabled={status.phase === "stopping" || stopping.includes(status.tunnel.id)}
               onClick={() => void stop(status.tunnel.id)}><Square size={14} aria-hidden /> 중단</button>
           </div></td>
@@ -152,20 +150,22 @@ function TunnelDefinitionDialog({ projectId, action, profiles, onClose, onSaved 
   const saved = action.kind !== "create" ? action.tunnel : null;
   const [name, setName] = useState(saved?.settings.name ?? "");
   const [profileId, setProfileId] = useState(saved?.settings.ssh_profile_id ?? profiles[0]?.id ?? "");
-  const [local, setLocal] = useState(String(saved?.settings.local_port ?? 0));
+  const [kind, setKind] = useState<TunnelKind>(saved?.settings.kind ?? "local");
+  const [listenPort, setListenPort] = useState(String(saved?.settings.listen_port ?? 0));
   const [host, setHost] = useState(saved?.settings.target_host ?? "127.0.0.1");
   const [port, setPort] = useState(String(saved?.settings.target_port ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
-  const title = action.kind === "create" ? "로컬 SSH 터널 등록" : action.kind === "edit" ? "SSH 터널 수정" : "SSH 터널 삭제";
+  const title = action.kind === "create" ? "SSH 터널 등록" : action.kind === "edit" ? "SSH 터널 수정" : "SSH 터널 삭제";
   useEffect(() => { dialog.current?.showModal(); }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (pending.current) return;
     pending.current = true; setBusy(true); setError("");
-    const input: TunnelSettings = { name, ssh_profile_id: profileId, local_port: Number(local), target_host: host, target_port: Number(port) };
+    const input: TunnelSettings = { name, ssh_profile_id: profileId, kind, listen_port: Number(listenPort),
+      target_host: kind === "dynamic" ? null : host, target_port: kind === "dynamic" ? null : Number(port) };
     try {
       if (action.kind === "delete") await invoke("delete_ssh_tunnel", { id: action.tunnel.id, revision: action.tunnel.revision });
       else if (action.kind === "edit") await invoke("update_ssh_tunnel", { id: action.tunnel.id, revision: action.tunnel.revision, input });
@@ -182,15 +182,17 @@ function TunnelDefinitionDialog({ projectId, action, profiles, onClose, onSaved 
       {action.kind === "delete" ? <p className="confirm-copy"><strong>{action.tunnel.settings.name}</strong>의 저장된 설정을 삭제합니다.</p> :
         <fieldset className="ssh-tunnel-fields" disabled={busy}>
           <label className="field">터널 이름<input autoFocus required maxLength={80} value={name} onChange={event => setName(event.target.value)} /></label>
+          <label className="field">전달 유형<select value={kind} onChange={event => setKind(event.target.value as TunnelKind)}>
+            {Object.entries(tunnelKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="field">SSH 연결<select required value={profileId} onChange={event => setProfileId(event.target.value)}>
             {profiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.environment}</option>)}</select></label>
           <div className="field">
-            <label htmlFor={`${id}-port`}>로컬 포트</label>
-            <input id={`${id}-port`} aria-describedby={`${id}-port-hint`} type="number" required min="0" max="65535" value={local} onChange={event => setLocal(event.target.value)} />
-            <span id={`${id}-port-hint`} className="form-note">127.0.0.1에 바인드합니다. 0을 입력하면 사용 가능한 포트를 할당합니다.</span>
+            <label htmlFor={`${id}-port`}>{kind === "remote" ? "원격 포트" : "로컬 포트"}</label>
+            <input id={`${id}-port`} aria-describedby={`${id}-port-hint`} type="number" required min="0" max="65535" value={listenPort} onChange={event => setListenPort(event.target.value)} />
+            <span id={`${id}-port-hint`} className="form-note">{kind === "remote" ? "SSH 서버" : "이 PC"}의 127.0.0.1에서 수신합니다. 0은 자동 할당입니다.</span>
           </div>
-          <label className="field">대상 호스트<input required value={host} onChange={event => setHost(event.target.value)} /></label>
-          <label className="field">대상 포트<input type="number" required min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} /></label>
+          {kind !== "dynamic" && <><label className="field">대상 호스트<input required value={host} onChange={event => setHost(event.target.value)} /></label>
+            <label className="field">대상 포트<input type="number" required min="1" max="65535" value={port} onChange={event => setPort(event.target.value)} /></label></>}
         </fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={() => dialog.current?.close()}>취소</button>

@@ -796,9 +796,10 @@ async fn start_ssh_tunnel(
     authentication: SshCredentials,
     hops: Vec<SshRouteHop>,
     confirmation: String,
+    scope_confirmed: Option<bool>,
 ) -> Result<SshRouteResult<SshTunnelStatus>, String> {
     let gateway = SshRouteHop { profile, authentication };
-    tunnels.start(Arc::clone(ssh.inner()), tunnel, gateway, hops, &confirmation).await
+    tunnels.start(Arc::clone(ssh.inner()), tunnel, gateway, hops, &confirmation, scope_confirmed.unwrap_or_default()).await
 }
 
 #[tauri::command]

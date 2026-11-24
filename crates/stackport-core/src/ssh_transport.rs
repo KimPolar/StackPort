@@ -13,16 +13,44 @@ use std::{
     collections::HashSet,
     fs,
     io::Read,
+    net::IpAddr,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU16, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
-use tokio::time::timeout;
+use tokio::{sync::mpsc, time::timeout};
 use zeroize::Zeroizing;
 
 const MAX_KEY_FILE: u64 = 128 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MAX_SSH_HOPS: usize = 3;
+pub(crate) const FORWARD_LOOPBACK: &str = "127.0.0.1";
+pub(crate) type ForwardedChannel = russh::Channel<client::Msg>;
+
+pub(crate) struct RemoteForward {
+    port: AtomicU16,
+    channels: mpsc::Sender<ForwardedChannel>,
+}
+
+impl RemoteForward {
+    pub(crate) fn channel() -> (Arc<Self>, mpsc::Receiver<ForwardedChannel>) {
+        let (channels, receiver) = mpsc::channel(8);
+        (
+            Arc::new(Self {
+                port: AtomicU16::new(0),
+                channels,
+            }),
+            receiver,
+        )
+    }
+
+    pub(crate) fn set_port(&self, port: u16) {
+        self.port.store(port, Ordering::Release);
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +98,7 @@ pub(crate) async fn connect_route(
     destination: &SshProfile,
     authentication: SshCredentials,
     hops: Vec<SshRouteHop>,
+    remote: Option<Arc<RemoteForward>>,
 ) -> Result<SshRouteResult<SshRoute>> {
     if !(1..=MAX_SSH_HOPS).contains(&hops.len()) {
         return Err(format!("경유 서버를 1~{MAX_SSH_HOPS}개 선택하세요."));
@@ -93,6 +122,7 @@ pub(crate) async fn connect_route(
             hop.authentication,
             connections.last(),
             true,
+            None,
         )
         .await
         .map_err(|error| format!("{stage} — {error}"))?
@@ -110,6 +140,7 @@ pub(crate) async fn connect_route(
         authentication,
         connections.last(),
         true,
+        remote,
     )
     .await
     .map_err(|error| format!("{stage} — {error}"))?
@@ -145,9 +176,14 @@ pub(crate) enum Endpoint {
     TrustRequired(SshHostInfo),
 }
 
-pub(crate) enum HostVerifier {
+enum HostKeyVerifier {
     Pinned(PublicKey),
     Capture(Arc<Mutex<Option<PublicKey>>>),
+}
+
+pub(crate) struct HostVerifier {
+    key: HostKeyVerifier,
+    remote: Option<Arc<RemoteForward>>,
 }
 
 impl client::Handler for HostVerifier {
@@ -160,15 +196,46 @@ impl client::Handler for HostVerifier {
         let PublicKeyOrCertificate::PublicKey { key, .. } = offered else {
             return Ok(false);
         };
-        match self {
-            Self::Pinned(pinned) => Ok(key.key_data() == pinned.key_data()),
-            Self::Capture(slot) => {
+        match &self.key {
+            HostKeyVerifier::Pinned(pinned) => Ok(key.key_data() == pinned.key_data()),
+            HostKeyVerifier::Capture(slot) => {
                 if let Ok(mut slot) = slot.lock() {
                     *slot = Some(key.clone());
                 }
                 Ok(false)
             }
         }
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: ForwardedChannel,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> std::result::Result<(), Self::Error> {
+        let Some(remote) = &self.remote else {
+            return Ok(());
+        };
+        let port = remote.port.load(Ordering::Acquire);
+        if port == 0
+            || connected_port != u32::from(port)
+            || connected_address != FORWARD_LOOPBACK
+            || !originator_address
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.to_canonical().is_loopback())
+        {
+            return Ok(());
+        }
+        let Ok(slot) = remote.channels.try_reserve() else {
+            return Ok(());
+        };
+        reply.accept().await;
+        slot.send(channel);
+        Ok(())
     }
 }
 
@@ -178,10 +245,18 @@ pub(crate) async fn connect_endpoint(
     credentials: SshCredentials,
     previous: Option<&SshConnection>,
     capture_unknown: bool,
+    remote: Option<Arc<RemoteForward>>,
 ) -> Result<Endpoint> {
     timeout(
         CONNECT_TIMEOUT,
-        connect(manager, profile, credentials, previous, capture_unknown),
+        connect(
+            manager,
+            profile,
+            credentials,
+            previous,
+            capture_unknown,
+            remote,
+        ),
     )
     .await
     .map_err(|_| "SSH 연결 시간이 초과되었습니다.")?
@@ -193,6 +268,7 @@ async fn connect(
     credentials: SshCredentials,
     previous: Option<&SshConnection>,
     capture_unknown: bool,
+    remote: Option<Arc<RemoteForward>>,
 ) -> Result<Endpoint> {
     let host = ssh::normalize_host(&profile.host)?;
     let port = profile.port;
@@ -209,7 +285,7 @@ async fn connect(
         nodelay: true,
         ..client::Config::default()
     };
-    let verifier = match pinned {
+    let key = match pinned {
         Some(pinned) => {
             let key = PublicKey::from_openssh(&pinned)
                 .map_err(|_| "저장된 SSH 호스트 키 형식을 읽을 수 없습니다.")?;
@@ -228,11 +304,12 @@ async fn connect(
                 key: Cow::Owned(algorithms),
                 ..Preferred::default()
             };
-            HostVerifier::Pinned(key)
+            HostKeyVerifier::Pinned(key)
         }
-        None if capture_unknown => HostVerifier::Capture(Arc::clone(&capture)),
+        None if capture_unknown => HostKeyVerifier::Capture(Arc::clone(&capture)),
         None => return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into()),
     };
+    let verifier = HostVerifier { key, remote };
     let config = Arc::new(config);
     let connection = if let Some(previous) = previous {
         let channel = previous

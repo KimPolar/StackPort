@@ -1,7 +1,11 @@
 mod runtime;
 
 use crate::{db_error, insert_audit, require_changed, ssh, valid_name, AuditRecord, Result, Store};
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use rusqlite::{
+    params,
+    types::{FromSql, FromSqlError, FromSqlResult, ValueRef},
+    Connection, OptionalExtension, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -12,12 +16,56 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE ssh_tunnels (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     ssh_profile_id TEXT NOT NULL REFERENCES ssh_profiles(id) ON DELETE CASCADE,
     name TEXT NOT NULL COLLATE NOCASE,
-    local_port INTEGER NOT NULL CHECK(local_port BETWEEN 0 AND 65535),
-    target_host TEXT NOT NULL,
-    target_port INTEGER NOT NULL CHECK(target_port BETWEEN 1 AND 65535),
+    kind TEXT NOT NULL CHECK(kind IN ('local', 'dynamic', 'remote')),
+    listen_port INTEGER NOT NULL CHECK(listen_port BETWEEN 0 AND 65535),
+    target_host TEXT,
+    target_port INTEGER,
     revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+    CHECK((kind = 'dynamic' AND target_host IS NULL AND target_port IS NULL)
+       OR (kind <> 'dynamic' AND target_host IS NOT NULL AND target_port IS NOT NULL AND target_port BETWEEN 1 AND 65535)),
     UNIQUE(project_id, name)
 );";
+
+pub(crate) fn migrate_v8(db: &Connection) -> Result<()> {
+    db.execute_batch("ALTER TABLE ssh_tunnels RENAME TO ssh_tunnels_v8;")
+        .map_err(db_error)?;
+    db.execute_batch(SCHEMA).map_err(db_error)?;
+    db.execute_batch(
+        "INSERT INTO ssh_tunnels (id, project_id, ssh_profile_id, name, kind, listen_port, target_host, target_port, revision)
+         SELECT id, project_id, ssh_profile_id, name, 'local', local_port, target_host, target_port, revision FROM ssh_tunnels_v8;
+         DROP TABLE ssh_tunnels_v8;",
+    ).map_err(db_error)
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SshTunnelKind {
+    #[default]
+    Local,
+    Dynamic,
+    Remote,
+}
+
+impl SshTunnelKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Dynamic => "dynamic",
+            Self::Remote => "remote",
+        }
+    }
+}
+
+impl FromSql for SshTunnelKind {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "local" => Ok(Self::Local),
+            "dynamic" => Ok(Self::Dynamic),
+            "remote" => Ok(Self::Remote),
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -33,16 +81,28 @@ pub struct SavedSshTunnel {
 pub struct SshTunnelInput {
     pub name: String,
     pub ssh_profile_id: String,
-    pub local_port: u16,
-    pub target_host: String,
-    pub target_port: u16,
+    #[serde(default)]
+    pub kind: SshTunnelKind,
+    #[serde(alias = "local_port")]
+    pub listen_port: u16,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+}
+
+impl SshTunnelInput {
+    fn target(&self) -> Result<(&str, u16)> {
+        self.target_host
+            .as_deref()
+            .zip(self.target_port)
+            .ok_or_else(|| "대상 호스트와 포트를 입력하세요.".into())
+    }
 }
 
 impl Store {
     pub fn list_ssh_tunnels(&self, project_id: &str) -> Result<Vec<SavedSshTunnel>> {
         let db = self.connect()?;
         let mut query = db.prepare(
-            "SELECT id, project_id, revision, name, ssh_profile_id, local_port, target_host, target_port
+            "SELECT id, project_id, revision, name, ssh_profile_id, kind, listen_port, target_host, target_port
              FROM ssh_tunnels WHERE project_id=?1 ORDER BY name, id",
         ).map_err(db_error)?;
         let rows = query
@@ -100,8 +160,8 @@ impl Store {
         saved.settings = settings;
         let settings = &saved.settings;
         let changed = tx.execute(
-            "UPDATE OR IGNORE ssh_tunnels SET revision=?2, name=?3, ssh_profile_id=?4, local_port=?5, target_host=?6, target_port=?7 WHERE id=?1",
-            params![id, saved.revision, settings.name, settings.ssh_profile_id, settings.local_port, settings.target_host, settings.target_port],
+            "UPDATE OR IGNORE ssh_tunnels SET revision=?2, name=?3, ssh_profile_id=?4, kind=?5, listen_port=?6, target_host=?7, target_port=?8 WHERE id=?1",
+            params![id, saved.revision, settings.name, settings.ssh_profile_id, settings.kind.as_str(), settings.listen_port, settings.target_host, settings.target_port],
         ).map_err(db_error)?;
         require_changed(changed, "같은 이름의 터널이 있습니다.")?;
         audit(&tx, &saved, "ssh_tunnel.update")?;
@@ -132,7 +192,7 @@ pub(crate) fn copy_tunnels_for_profile(
     destination_profile: &str,
 ) -> Result<usize> {
     let mut query = db.prepare(
-        "SELECT id, project_id, revision, name, ssh_profile_id, local_port, target_host, target_port
+        "SELECT id, project_id, revision, name, ssh_profile_id, kind, listen_port, target_host, target_port
          FROM ssh_tunnels WHERE ssh_profile_id=?1",
     ).map_err(db_error)?;
     let rows = query
@@ -155,9 +215,9 @@ pub(crate) fn copy_tunnels_for_profile(
 fn insert_tunnel(db: &Connection, tunnel: &SavedSshTunnel) -> Result<()> {
     let settings = &tunnel.settings;
     let changed = db.execute(
-        "INSERT INTO ssh_tunnels(id, project_id, revision, name, ssh_profile_id, local_port, target_host, target_port)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(project_id, name) DO NOTHING",
-        params![tunnel.id, tunnel.project_id, tunnel.revision, settings.name, settings.ssh_profile_id, settings.local_port, settings.target_host, settings.target_port],
+        "INSERT INTO ssh_tunnels(id, project_id, revision, name, ssh_profile_id, kind, listen_port, target_host, target_port)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) ON CONFLICT(project_id, name) DO NOTHING",
+        params![tunnel.id, tunnel.project_id, tunnel.revision, settings.name, settings.ssh_profile_id, settings.kind.as_str(), settings.listen_port, settings.target_host, settings.target_port],
     ).map_err(db_error)?;
     require_changed(changed, "같은 이름의 터널이 있습니다.")
 }
@@ -185,7 +245,7 @@ fn check_revision(current: &SavedSshTunnel, expected: i64) -> Result<()> {
 
 fn load_tunnel(db: &Connection, id: &str) -> Result<SavedSshTunnel> {
     let item = db.query_row(
-        "SELECT id, project_id, revision, name, ssh_profile_id, local_port, target_host, target_port FROM ssh_tunnels WHERE id=?1",
+        "SELECT id, project_id, revision, name, ssh_profile_id, kind, listen_port, target_host, target_port FROM ssh_tunnels WHERE id=?1",
         [id], read_tunnel,
     ).optional().map_err(db_error)?.ok_or("터널을 찾을 수 없습니다.")?;
     validate_stored(item)
@@ -199,9 +259,10 @@ fn read_tunnel(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedSshTunnel> {
         settings: SshTunnelInput {
             name: row.get(3)?,
             ssh_profile_id: row.get(4)?,
-            local_port: row.get(5)?,
-            target_host: row.get(6)?,
-            target_port: row.get(7)?,
+            kind: row.get(5)?,
+            listen_port: row.get(6)?,
+            target_host: row.get(7)?,
+            target_port: row.get(8)?,
         },
     })
 }
@@ -211,8 +272,15 @@ fn validated(mut input: SshTunnelInput) -> Result<SshTunnelInput> {
     if input.name.encode_utf16().count() > 80 || input.name.chars().any(char::is_control) {
         return Err("터널 이름은 제어 문자 없이 80자 이하로 입력하세요.".into());
     }
-    input.target_host = ssh::normalize_host(&input.target_host)?;
-    ssh::validate_port(input.target_port)?;
+    if input.kind == SshTunnelKind::Dynamic {
+        if input.target_host.is_some() || input.target_port.is_some() {
+            return Err("동적 전달의 대상은 SOCKS5 클라이언트가 지정합니다.".into());
+        }
+    } else {
+        let (host, port) = input.target()?;
+        ssh::validate_port(port)?;
+        input.target_host = Some(ssh::normalize_host(host)?);
+    }
     Ok(input)
 }
 

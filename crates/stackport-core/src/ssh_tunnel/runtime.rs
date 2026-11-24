@@ -1,6 +1,8 @@
-use super::SavedSshTunnel;
+mod socks;
+
+use super::{SavedSshTunnel, SshTunnelKind};
 use crate::{
-    ssh_transport::{self, Endpoint, SshRoute},
+    ssh_transport::{self, Endpoint, ForwardedChannel, RemoteForward, SshRoute, FORWARD_LOOPBACK},
     Result, SshManager, SshProfile, SshRouteHop, SshRouteResult, Store, MAX_SSH_HOPS,
 };
 use serde::Serialize;
@@ -17,7 +19,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpSocket, TcpStream},
-    sync::{oneshot, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinSet,
     time::{interval, interval_at, timeout, MissedTickBehavior},
 };
@@ -27,6 +29,7 @@ const MAX_RECORDS: usize = 64;
 const MAX_CLIENTS: usize = 32;
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(10);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const SOCKS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct SshTunnelManager {
     store: Store,
@@ -42,7 +45,7 @@ struct Session {
 
 struct Stats {
     tunnel: SavedSshTunnel,
-    local_port: u16,
+    listen_port: u16,
     gateway: SshProfile,
     hops: Vec<String>,
     created: Instant,
@@ -69,7 +72,7 @@ struct State {
 #[derive(Serialize)]
 pub struct SshTunnelStatus {
     tunnel: SavedSshTunnel,
-    local_port: u16,
+    listen_port: u16,
     gateway: SshProfile,
     hops: Vec<String>,
     phase: Phase,
@@ -108,6 +111,7 @@ impl SshTunnelManager {
         gateway: SshRouteHop,
         hops: Vec<SshRouteHop>,
         confirmation: &str,
+        scope_confirmed: bool,
     ) -> Result<SshRouteResult<SshTunnelStatus>> {
         let _starting = self
             .starting
@@ -115,6 +119,9 @@ impl SshTunnelManager {
             .map_err(|_| "다른 터널이 연결 중입니다. 연결이 끝난 뒤 다시 시작하세요.")?;
         if hops.len() > MAX_SSH_HOPS {
             return Err(format!("경유 서버는 최대 {MAX_SSH_HOPS}개입니다."));
+        }
+        if tunnel.settings.kind != SshTunnelKind::Local && !scope_confirmed {
+            return Err("터널 수신 범위를 확인하세요.".into());
         }
         let profiles = gateway_profiles(&tunnel, &gateway, &hops, confirmation)?;
         self.verify(&tunnel, &profiles).await?;
@@ -140,8 +147,13 @@ impl SshTunnelManager {
                 );
             }
         }
-        let socket = bind(tunnel.settings.local_port)?;
-        let route = match connect_gateway(ssh, gateway, hops).await? {
+        let prepared = if tunnel.settings.kind == SshTunnelKind::Remote {
+            let (gate, channels) = RemoteForward::channel();
+            PreparedListener::Remote { gate, channels }
+        } else {
+            PreparedListener::Local(bind(tunnel.settings.listen_port)?)
+        };
+        let route = match connect_gateway(ssh, gateway, hops, prepared.forward_gate()).await? {
             SshRouteResult::Open { session } => session,
             SshRouteResult::TrustRequired { stage, host } => {
                 return Ok(SshRouteResult::TrustRequired { stage, host })
@@ -151,16 +163,17 @@ impl SshTunnelManager {
             route.close().await;
             return Err(error);
         }
-        let listener = socket
-            .listen(64)
-            .map_err(|error| listen_error(tunnel.settings.local_port, error))?;
-        let local_port = listener
-            .local_addr()
-            .map_err(|_| "열린 로컬 포트를 확인할 수 없습니다.")?
-            .port();
+        let (listen_port, listener) =
+            match prepared.listen(&route, tunnel.settings.listen_port).await {
+                Ok(ready) => ready,
+                Err(error) => {
+                    route.close().await;
+                    return Err(error);
+                }
+            };
         let stats = Arc::new(Stats {
             tunnel,
-            local_port,
+            listen_port,
             gateway: profiles[0].clone(),
             hops: profiles[1..].iter().map(|item| item.name.clone()).collect(),
             created: Instant::now(),
@@ -282,15 +295,29 @@ async fn connect_gateway(
     ssh: Arc<SshManager>,
     gateway: SshRouteHop,
     hops: Vec<SshRouteHop>,
+    remote: Option<Arc<RemoteForward>>,
 ) -> Result<SshRouteResult<SshRoute>> {
     if !hops.is_empty() {
-        return ssh_transport::connect_route(ssh, &gateway.profile, gateway.authentication, hops)
-            .await;
+        return ssh_transport::connect_route(
+            ssh,
+            &gateway.profile,
+            gateway.authentication,
+            hops,
+            remote,
+        )
+        .await;
     }
     let stage = format!("SSH 서버 · {}", gateway.profile.name);
-    match ssh_transport::connect_endpoint(ssh, &gateway.profile, gateway.authentication, None, true)
-        .await
-        .map_err(|error| format!("{stage} — {error}"))?
+    match ssh_transport::connect_endpoint(
+        ssh,
+        &gateway.profile,
+        gateway.authentication,
+        None,
+        true,
+        remote,
+    )
+    .await
+    .map_err(|error| format!("{stage} — {error}"))?
     {
         Endpoint::Authenticated(connection) => Ok(SshRouteResult::Open {
             session: SshRoute {
@@ -321,7 +348,7 @@ impl Stats {
             .map_err(|_| "터널 상태를 읽을 수 없습니다.")?;
         Ok(SshTunnelStatus {
             tunnel: self.tunnel.clone(),
-            local_port: self.local_port,
+            listen_port: self.listen_port,
             gateway: self.gateway.clone(),
             hops: self.hops.clone(),
             phase: state.phase,
@@ -339,8 +366,111 @@ impl Stats {
     }
 }
 
+enum PreparedListener {
+    Local(TcpSocket),
+    Remote {
+        gate: Arc<RemoteForward>,
+        channels: mpsc::Receiver<ForwardedChannel>,
+    },
+}
+
+enum Listener {
+    Local(TcpListener),
+    Remote {
+        gate: Arc<RemoteForward>,
+        channels: mpsc::Receiver<ForwardedChannel>,
+        port: u16,
+    },
+}
+
+enum Peer {
+    Local(TcpStream, SocketAddr),
+    Remote(ForwardedChannel),
+}
+
+impl PreparedListener {
+    fn forward_gate(&self) -> Option<Arc<RemoteForward>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Remote { gate, .. } => Some(Arc::clone(gate)),
+        }
+    }
+
+    async fn listen(self, route: &SshRoute, requested: u16) -> Result<(u16, Listener)> {
+        match self {
+            Self::Local(socket) => {
+                let listener = socket
+                    .listen(64)
+                    .map_err(|error| listen_error(requested, error))?;
+                let port = listener
+                    .local_addr()
+                    .map_err(|_| "열린 로컬 포트를 확인할 수 없습니다.")?
+                    .port();
+                Ok((port, Listener::Local(listener)))
+            }
+            Self::Remote { gate, channels } => {
+                let assigned = timeout(FORWARD_TIMEOUT, route.connection.tcpip_forward(FORWARD_LOOPBACK, requested.into()))
+                    .await.map_err(|_| "SSH 서버의 원격 포트 응답 시간이 초과되었습니다.")?
+                    .map_err(|_| "SSH 서버가 원격 포트를 열지 못했습니다. 포트 충돌과 포트 전달 권한을 확인하세요.")?;
+                let port = if requested == 0 {
+                    u16::try_from(assigned)
+                        .ok()
+                        .filter(|port| *port != 0)
+                        .ok_or("SSH 서버가 유효한 원격 포트를 반환하지 않았습니다.")?
+                } else {
+                    requested
+                };
+                gate.set_port(port);
+                Ok((
+                    port,
+                    Listener::Remote {
+                        gate,
+                        channels,
+                        port,
+                    },
+                ))
+            }
+        }
+    }
+}
+
+impl Listener {
+    async fn accept(&mut self) -> io::Result<Option<Peer>> {
+        match self {
+            Self::Local(listener) => listener
+                .accept()
+                .await
+                .map(|(stream, peer)| Some(Peer::Local(stream, peer))),
+            Self::Remote { channels, .. } => Ok(channels.recv().await.map(Peer::Remote)),
+        }
+    }
+
+    async fn close(self, route: &SshRoute) -> bool {
+        if let Self::Remote {
+            gate,
+            channels,
+            port,
+        } = self
+        {
+            gate.set_port(0);
+            drop(channels);
+            return matches!(
+                timeout(
+                    Duration::from_secs(2),
+                    route
+                        .connection
+                        .cancel_tcpip_forward(FORWARD_LOOPBACK, port.into())
+                )
+                .await,
+                Ok(Ok(()))
+            );
+        }
+        true
+    }
+}
+
 async fn serve(
-    listener: TcpListener,
+    mut listener: Listener,
     route: SshRoute,
     stats: Arc<Stats>,
     mut stop: oneshot::Receiver<()>,
@@ -365,21 +495,27 @@ async fn serve(
             }
             _ = peers.join_next(), if !peers.is_empty() => {}
             accepted = listener.accept() => match accepted {
-                Ok((stream, peer)) if peers.len() < MAX_CLIENTS => {
+                Ok(Some(peer)) if peers.len() < MAX_CLIENTS => {
                     let route = Arc::clone(&route);
                     let stats = Arc::clone(&stats);
                     stats.clients.fetch_add(1, Relaxed);
                     let client = Client(stats);
                     peers.spawn(async move {
-                        if let Err(error) = forward(&route, &client.0, stream, peer).await { client.0.error(error); }
+                        if let Err(error) = forward(&route, &client.0, peer).await { client.0.error(error); }
                     });
                 }
-                Ok(_) => stats.error("동시 연결이 너무 많아 새 TCP 연결을 거부했습니다."),
+                Ok(Some(Peer::Remote(channel))) => {
+                    let _ = timeout(Duration::from_millis(100), channel.close()).await;
+                    stats.error("동시 연결이 너무 많아 새 TCP 연결을 거부했습니다.");
+                }
+                Ok(Some(Peer::Local(..))) => stats.error("동시 연결이 너무 많아 새 TCP 연결을 거부했습니다."),
+                Ok(None) => break Some("터널의 SSH 연결이 끊겼습니다."),
+                Err(error) if matches!(error.kind(), io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted | io::ErrorKind::ConnectionReset) => {}
                 Err(_) => break Some("로컬 포트에서 새 연결을 받을 수 없습니다."),
             }
         }
     };
-    drop(listener);
+    let cancelled = listener.close(&route).await;
     peers.shutdown().await;
     route.close().await;
     if let Ok(mut state) = stats.state.lock() {
@@ -390,6 +526,9 @@ async fn serve(
         };
         if let Some(error) = error {
             state.last_error = Some(error.into());
+        } else if !cancelled {
+            state.last_error =
+                Some("SSH 서버가 원격 포트 해제를 확인하지 않아 SSH 연결을 닫았습니다.".into());
         }
     }
     done.send_replace(true);
@@ -406,24 +545,79 @@ impl Drop for Client {
 async fn forward(
     route: &SshRoute,
     stats: &Stats,
-    stream: TcpStream,
+    peer: Peer,
+) -> std::result::Result<(), &'static str> {
+    match peer {
+        Peer::Local(stream, origin) => forward_local(route, stats, stream, origin).await,
+        Peer::Remote(channel) => {
+            let (host, port) = stats
+                .tunnel
+                .settings
+                .target()
+                .map_err(|_| "터널 대상이 없습니다.")?;
+            let stream = timeout(FORWARD_TIMEOUT, TcpStream::connect((host, port))).await;
+            match stream {
+                Ok(Ok(stream)) => relay(stats, stream, channel).await,
+                result => {
+                    let _ = timeout(Duration::from_millis(100), channel.close()).await;
+                    Err(if result.is_err() {
+                        "로컬 대상에 연결하는 시간이 초과되었습니다."
+                    } else {
+                        "로컬 대상에 연결할 수 없습니다. 대상 주소와 포트를 확인하세요."
+                    })
+                }
+            }
+        }
+    }
+}
+
+async fn forward_local(
+    route: &SshRoute,
+    stats: &Stats,
+    mut stream: TcpStream,
     peer: SocketAddr,
 ) -> std::result::Result<(), &'static str> {
-    let target = &stats.tunnel.settings;
-    let channel = timeout(
+    let settings = &stats.tunnel.settings;
+    let dynamic = settings.kind == SshTunnelKind::Dynamic;
+    let (host, port) = if dynamic {
+        timeout(SOCKS_TIMEOUT, socks::negotiate(&mut stream))
+            .await
+            .map_err(|_| "SOCKS5 요청 시간이 초과되었습니다.")??
+    } else {
+        let (host, port) = settings.target().map_err(|_| "터널 대상이 없습니다.")?;
+        (host.to_owned(), port)
+    };
+    let result = timeout(
         FORWARD_TIMEOUT,
         route.connection.channel_open_direct_tcpip(
-            target.target_host.as_str(),
-            target.target_port.into(),
+            host,
+            port.into(),
             peer.ip().to_string(),
             peer.port().into(),
         ),
     )
-    .await
-    .map_err(|_| "SSH 서버의 대상 연결 시간이 초과되었습니다.")?
-    .map_err(|_| {
-        "SSH 서버가 대상 연결을 열지 못했습니다. 대상 주소와 서버의 포트 전달 권한을 확인하세요."
-    })?;
+    .await;
+    let result = match result {
+        Ok(Ok(channel)) => Ok(channel),
+        Ok(Err(_)) => Err("SSH 서버가 대상 연결을 열지 못했습니다. 대상 주소와 서버의 포트 전달 권한을 확인하세요."),
+        Err(_) => Err("SSH 서버의 대상 연결 시간이 초과되었습니다."),
+    };
+    if dynamic {
+        let reply = if result.is_ok() { 0 } else { 5 };
+        timeout(SOCKS_TIMEOUT, socks::reply(&mut stream, reply))
+            .await
+            .map_err(|_| "SOCKS5 응답 시간이 초과되었습니다.")?
+            .map_err(|_| "SOCKS5 응답을 보낼 수 없습니다.")?;
+    }
+    let channel = result?;
+    relay(stats, stream, channel).await
+}
+
+async fn relay(
+    stats: &Stats,
+    stream: TcpStream,
+    channel: ForwardedChannel,
+) -> std::result::Result<(), &'static str> {
     let (local_read, local_write) = stream.into_split();
     let (remote_read, remote_write) = tokio::io::split(channel.into_stream());
     tokio::try_join!(

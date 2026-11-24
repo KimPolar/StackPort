@@ -45,7 +45,7 @@ mod sftp;
 mod ssh_transport;
 pub use ssh_transport::{SshCredentials, SshRouteHop, SshRouteResult, MAX_SSH_HOPS};
 mod ssh_tunnel;
-pub use ssh_tunnel::{SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus};
+pub use ssh_tunnel::{SavedSshTunnel, SshTunnelInput, SshTunnelKind, SshTunnelManager, SshTunnelStatus};
 pub use sftp::{
     list_local_directory, list_local_tree, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, FolderTree, RemotePath,
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
@@ -99,7 +99,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -407,7 +407,11 @@ impl Store {
                 if current < 7 {
                     tx.execute_batch(sql_templates::SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
+                if current < 8 {
+                    tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
+                } else {
+                    ssh_tunnel::migrate_v8(&tx)?;
+                }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

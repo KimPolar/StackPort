@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
 import type { SshProfile } from "./ssh-profile-types";
-import type { SavedSshTunnel } from "./SshTunnelPanel";
+import { tunnelPath, type SavedSshTunnel } from "./sshTunnel";
 
 type Credentials = { method: "password" | "private_key"; path: string; secret: string };
 type Hop = { profile: SshProfile; credentials: Credentials };
@@ -43,6 +43,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   }));
   const [credentials, setCredentials] = useState(emptyCredentials);
   const [confirmation, setConfirmation] = useState("");
+  const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [trust, setTrust] = useState<TrustRequest | null>(null);
@@ -50,8 +51,9 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   const [notice, setNotice] = useState("");
   const production = target.environment === "PROD" || hops.some(hop => hop.profile.environment === "PROD");
   const connectLabel = tool === "sftp" ? "SFTP 연결" : tool === "tunnel" ? "터널 시작" : "SSH 터미널 연결";
-  const heading = tool === "sftp" ? "SSH 경유로 SFTP 연결" : tool === "tunnel" ? "로컬 SSH 터널 시작" : "경유 서버로 SSH 터미널 연결";
+  const heading = tool === "sftp" ? "SSH 경유로 SFTP 연결" : tool === "tunnel" ? "SSH 터널 시작" : "경유 서버로 SSH 터미널 연결";
   const command = tool === "sftp" ? "open_routed_sftp" : tool === "tunnel" ? "start_ssh_tunnel" : "open_routed_ssh_terminal";
+  const confirmScope = tunnel?.settings.kind === "dynamic" || tunnel?.settings.kind === "remote";
 
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => { if (trust) trustHeading.current?.focus(); }, [trust]);
@@ -70,7 +72,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   }
 
   function editHops(next: Hop[]) {
-    setHops(next); setConfirmation(""); setNotice(""); setError("");
+    setHops(next); setConfirmation(""); setScopeConfirmed(false); setNotice(""); setError("");
   }
 
   function move(index: number, direction: -1 | 1) {
@@ -88,13 +90,13 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
 
   function open(event: FormEvent) {
     event.preventDefault();
-    if (!tunnel && !hops.length) return;
+    if ((!tunnel && !hops.length) || (confirmScope && !scopeConfirmed)) return;
     void perform(async () => {
       const result = await invoke<RouteResponse<Session>>(command, {
         profile: target, confirmation, authentication: authentication(credentials),
         hops: hops.map(hop => ({ profile: hop.profile, authentication: authentication(hop.credentials) })),
         ...(tool === "terminal" ? { rows: 24, cols: 80 } : {}),
-        ...(tunnel ? { tunnel } : {}),
+        ...(tunnel ? { tunnel, scopeConfirmed } : {}),
       });
       if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile));
       else { setNotice(""); setCompared(false); setTrust(result); }
@@ -122,7 +124,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
           })}>확인한 키 신뢰</button>
         </div>
       </fieldset> : <fieldset className="sftp-route-settings" disabled={busy}>
-        {tunnel && <p className="confirm-copy"><strong>{tunnel.settings.name}</strong> · 127.0.0.1:{tunnel.settings.local_port || "자동"} → {address({ host: tunnel.settings.target_host, port: tunnel.settings.target_port })}</p>}
+        {tunnel && <p className="confirm-copy"><strong>{tunnel.settings.name}</strong> · {tunnelPath(tunnel.settings)}</p>}
         <p className="form-note">경유 서버는 위에서 아래로 연결합니다. 각 서버에 사용할 인증 정보를 입력하세요.</p>
         <ol className="sftp-route-list">
           {hops.map((hop, index) => <li key={hop.profile.id}>
@@ -150,8 +152,13 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
           <CredentialFields value={credentials} onChange={setCredentials} onChoose={chooseKey} />
         </fieldset>
         {production && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
+        {tunnel?.settings.kind === "remote" && <p className="form-note">SSH 서버에 루프백 수신을 요청합니다. 서버의 GatewayPorts 설정에 따라 실제 수신 범위가 달라질 수 있습니다.</p>}
+        {confirmScope && <label className="files-check">
+          <input type="checkbox" required checked={scopeConfirmed} onChange={event => setScopeConfirmed(event.target.checked)} />
+          {tunnel.settings.kind === "remote" ? "SSH 서버가 루프백에서만 수신하도록 설정했음을 확인했습니다." : "이 PC의 앱이 SOCKS5 인증 없이 터널에 연결할 수 있음을 확인했습니다."}
+        </label>}
         {notice && <p className="form-note" role="status">{notice}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={!tunnel && !hops.length}>{connectLabel}</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={(!tunnel && !hops.length) || (confirmScope && !scopeConfirmed)}>{connectLabel}</button></div>
       </fieldset>}
       {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}

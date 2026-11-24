@@ -163,7 +163,7 @@ impl SftpManager {
     ) -> Result<SftpOpened> {
         let permit = self.acquire()?;
         let ready = timeout(START_TIMEOUT, async {
-            let endpoint = ssh_transport::connect_endpoint(ssh, &profile, auth, None, false).await?;
+            let endpoint = ssh_transport::connect_endpoint(ssh, &profile, auth, None, false, None).await?;
             let Endpoint::Authenticated(connection) = endpoint else {
                 return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
             };
@@ -179,7 +179,7 @@ impl SftpManager {
         hops: Vec<SftpHop>,
     ) -> Result<RoutedSftpOpened> {
         let permit = self.acquire()?;
-        let route = match ssh_transport::connect_route(ssh, &destination.profile, destination.authentication, hops).await? {
+        let route = match ssh_transport::connect_route(ssh, &destination.profile, destination.authentication, hops, None).await? {
             SshRouteResult::Open { session } => session,
             SshRouteResult::TrustRequired { stage, host } => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
         };

@@ -59,15 +59,20 @@ impl TerminalManager {
     ) -> Result<SshRouteResult<TerminalInfo>> {
         let size = terminal_size(rows, cols)?;
         let profile = destination.profile;
-        let route =
-            match ssh_transport::connect_route(manager, &profile, destination.authentication, hops)
-                .await?
-            {
-                SshRouteResult::Open { session } => session,
-                SshRouteResult::TrustRequired { stage, host } => {
-                    return Ok(SshRouteResult::TrustRequired { stage, host })
-                }
-            };
+        let route = match ssh_transport::connect_route(
+            manager,
+            &profile,
+            destination.authentication,
+            hops,
+            None,
+        )
+        .await?
+        {
+            SshRouteResult::Open { session } => session,
+            SshRouteResult::TrustRequired { stage, host } => {
+                return Ok(SshRouteResult::TrustRequired { stage, host })
+            }
+        };
         let channel = match timeout(SETUP_TIMEOUT, open_shell(&route, size)).await {
             Ok(Ok(channel)) => channel,
             result => {
