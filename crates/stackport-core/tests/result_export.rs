@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection};
 use serde_json::json;
-use stackport_core::{CsvOptions, CsvQuery, QueryOutcome, SqlParameterValue, Store};
+use stackport_core::{CsvOptions, CsvQuery, ExportQuery, QueryOutcome, SqlParameterValue, Store};
 use std::{
     fs,
     path::Path,
@@ -173,4 +173,94 @@ fn binds_saved_values_and_never_publishes_failed_or_cancelled_exports() {
         .file_name()
         .to_string_lossy()
         .starts_with(".stackport-csv-")));
+}
+
+#[test]
+fn json_preserves_column_positions_and_sqlite_storage_classes() {
+    let (dir, db, store, profile) = fixture();
+    let blob = vec![0xABu8; 2053];
+    let label = "=한글\n\"값\"";
+    db.execute(
+        "INSERT INTO records VALUES (1, ?1, ?2, NULL)",
+        params![label, blob],
+    )
+    .unwrap();
+    let query = ExportQuery::Sql {
+        sql: "SELECT 9223372036854775807 AS duplicate, label AS duplicate, 12.5 AS finite, 1e999 AS infinite, data, note, '' AS empty FROM records WHERE id = ?1".into(),
+        parameters: Some(vec![SqlParameterValue::Integer("1".into())]),
+    };
+    let path = dir.path().join("private.json");
+    let token = store.prepare_query().unwrap();
+    let QueryOutcome::Exported { report } = store
+        .export_json_prepared(&token, &profile, &query, path.to_str().unwrap())
+        .unwrap()
+    else {
+        panic!("expected a saved JSON export");
+    };
+    let data = fs::read(&path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&data).unwrap();
+    assert_eq!(report.format, "JSON");
+    assert_eq!(
+        (report.rows, report.size_bytes, report.protected_fields),
+        (1, data.len() as u64, 0)
+    );
+    assert_eq!(
+        parsed,
+        json!({
+            "format": "stackport.sqlite-results",
+            "version": 1,
+        "columns": ["duplicate", "duplicate:1", "finite", "infinite", "data", "note", "empty"],
+            "rows": [[{"integer": "9223372036854775807"}, label, {"real": "12.5"}, {"real": "inf"}, {"blob_hex": "AB".repeat(2053)}, null, ""]]
+        })
+    );
+    let records = store.list_audit_events(None).unwrap().events;
+    assert_eq!(
+        (records[0].operation.as_str(), records[0].affected_count),
+        ("sqlite.export.json", Some(1))
+    );
+    assert!(!serde_json::to_string(&records)
+        .unwrap()
+        .contains("private.json"));
+    let token = store.prepare_query().unwrap();
+    assert!(store
+        .export_json_prepared(&token, &profile, &query, path.to_str().unwrap())
+        .is_err());
+    assert_eq!(fs::read(path).unwrap(), data);
+}
+
+#[test]
+fn json_publishes_empty_results_and_discards_incomplete_files() {
+    let (dir, _, store, profile) = fixture();
+    let target = dir.path().join("empty.json");
+    let token = store.prepare_query().unwrap();
+    let query = ExportQuery::Sql {
+        sql: "SELECT 1 AS result WHERE 0".into(),
+        parameters: None,
+    };
+    assert!(matches!(
+        store
+            .export_json_prepared(&token, &profile, &query, target.to_str().unwrap())
+            .unwrap(),
+        QueryOutcome::Exported { .. }
+    ));
+    let parsed: serde_json::Value = serde_json::from_slice(&fs::read(target).unwrap()).unwrap();
+    assert_eq!(parsed["columns"], json!(["result"]));
+    assert_eq!(parsed["rows"], json!([]));
+
+    let invalid = dir.path().join("invalid.json");
+    let token = store.prepare_query().unwrap();
+    let query = ExportQuery::Sql {
+        sql: "SELECT 1 UNION ALL SELECT CAST(X'ff' AS text)".into(),
+        parameters: None,
+    };
+    assert!(store
+        .export_json_prepared(&token, &profile, &query, invalid.to_str().unwrap())
+        .unwrap_err()
+        .contains("UTF-8"));
+    assert!(!invalid.exists());
+    assert!(!fs::read_dir(dir.path()).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with(".stackport-json-")));
 }

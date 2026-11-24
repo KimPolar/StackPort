@@ -44,7 +44,7 @@ PARTIAL = {
     "SP-DB-010": "SQLite 테이블·뷰와 열·기본 키·외래 키·인덱스 열람",
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
-    "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV 내보내기",
+    "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기",
     "SP-DB-028": "읽기 전용 연결과 쓰기 차단",
     "SP-DT-001": "100행 단위 결과 페이지",
     "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀 수정",
@@ -65,10 +65,10 @@ PARTIAL = {
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
     "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
-    "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV로 내보내기",
-    "SP-MG-005": "CSV 내보내기에서 숫자·문자열·빈 문자열·NULL·BLOB 구분",
-    "SP-MG-008": "SQLite CSV 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
-    "SP-MG-028": "SQLite CSV 내보내기의 행 수·파일 크기·보호 필드 수 보고와 작업 기록",
+    "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
+    "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
+    "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
+    "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·CSV 보호 필드 수 보고와 작업 기록",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
     "SP-BK-002": "SQLite 온라인 백업 API",
     "SP-BK-003": "복원 가능한 SQLite 바이너리 파일",
@@ -83,7 +83,7 @@ PARTIAL = {
     "SP-SEC-003": "SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·고정과 변경 차단, 신뢰·교체 이력",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·CSV 내보내기·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
     "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
@@ -126,7 +126,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):
-                evidence = "crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/csv_export.rs; tests/desktop-smoke.cjs; src/CsvExportDialog.tsx; src-tauri/"
+                evidence = "crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-011", "SP-SEC-011"}:
                 evidence = "crates/stackport-core/tests/audit.rs; crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id == "SP-SEC-009":

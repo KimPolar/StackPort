@@ -1,9 +1,10 @@
 //! Cancellable, bounded read-only SQLite queries.
 
 use super::{
-    csv_export::CsvFile, db_error, display_value, insert_audit, open_schema_db, open_user_db,
-    set_read_authorizer, AuditRecord, CsvOptions, CsvQuery, CsvReport, QueryPage, Result, Store,
-    TableQuery, PAGE_SIZE,
+    db_error, display_value, insert_audit, open_schema_db, open_user_db,
+    result_export::{ExportFile, ExportFormat},
+    set_read_authorizer, AuditRecord, CsvOptions, ExportQuery, ExportReport, QueryPage, Result,
+    Store, TableQuery, PAGE_SIZE,
 };
 use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle};
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ const PUBLISHING: u8 = 3;
 pub enum QueryOutcome {
     Completed { result: QueryPage },
     Plan { plan: QueryPlan },
-    Exported { report: CsvReport },
+    Exported { report: ExportReport },
     ParametersRequired { parameters: Vec<SqlParameter> },
     Cancelled,
     TimedOut,
@@ -57,7 +58,7 @@ struct PlanStep {
 enum QueryOutput {
     Rows(QueryPage),
     Plan(QueryPlan),
-    Export(CsvReport),
+    Export(ExportReport),
 }
 
 #[derive(Debug, Serialize)]
@@ -304,7 +305,10 @@ enum QuerySource<'a> {
 
 enum QueryDelivery<'a> {
     Page(u32),
-    Csv(&'a CsvOptions),
+    Export {
+        destination: &'a str,
+        format: ExportFormat,
+    },
 }
 
 fn query_outcome(result: std::result::Result<QueryOutput, QueryFailure>) -> Result<QueryOutcome> {
@@ -335,6 +339,10 @@ impl Store {
     }
 
     pub fn csv_export_progress(&self, token: &str) -> Result<Option<u64>> {
+        self.result_export_progress(token)
+    }
+
+    pub fn result_export_progress(&self, token: &str) -> Result<Option<u64>> {
         self.queries.read_export_progress(token)
     }
 
@@ -342,8 +350,38 @@ impl Store {
         &self,
         token: &str,
         profile_id: &str,
-        query: &CsvQuery,
+        query: &ExportQuery,
         options: &CsvOptions,
+    ) -> Result<QueryOutcome> {
+        self.export_prepared(
+            token,
+            profile_id,
+            query,
+            &options.destination,
+            ExportFormat::Csv {
+                include_header: options.include_header,
+                spreadsheet_safe: options.spreadsheet_safe,
+            },
+        )
+    }
+
+    pub fn export_json_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        query: &ExportQuery,
+        destination: &str,
+    ) -> Result<QueryOutcome> {
+        self.export_prepared(token, profile_id, query, destination, ExportFormat::Json)
+    }
+
+    fn export_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        query: &ExportQuery,
+        destination: &str,
+        format: ExportFormat,
     ) -> Result<QueryOutcome> {
         let guard = self.queries.claim(token)?;
         if let Err(reason) = guard.control.check() {
@@ -353,7 +391,7 @@ impl Store {
         let correlation_id = Uuid::new_v4().to_string();
         let audit = |outcome, affected_count| AuditRecord {
             correlation_id: &correlation_id,
-            operation: "sqlite.export.csv",
+            operation: format.audit_operation(),
             project_id: Some(&profile.project_id),
             profile_id: Some(&profile.id),
             environment: Some(&profile.environment),
@@ -363,17 +401,20 @@ impl Store {
         };
         insert_audit(&self.connect()?, audit("started", None))?;
         let source = match query {
-            CsvQuery::Sql { sql, parameters } => QuerySource::Sql {
+            ExportQuery::Sql { sql, parameters } => QuerySource::Sql {
                 sql,
                 parameters: parameters.as_deref(),
                 explain: false,
             },
-            CsvQuery::Table { request } => QuerySource::Object(request),
+            ExportQuery::Table { request } => QuerySource::Object(request),
         };
         let mut result = self.query_inner(
             profile_id,
             source,
-            QueryDelivery::Csv(options),
+            QueryDelivery::Export {
+                destination,
+                format,
+            },
             &guard.control,
             EXPORT_TIMEOUT,
         );
@@ -400,9 +441,10 @@ impl Store {
                     error.push_str(" 완료 작업 기록도 저장하지 못했습니다.")
                 }
                 _ => {
-                    return Err(
-                        "CSV 파일을 저장하지 않았으며 완료 작업 기록도 저장하지 못했습니다.".into(),
-                    )
+                    return Err(format!(
+                        "{} 파일을 저장하지 않았으며 완료 작업 기록도 저장하지 못했습니다.",
+                        format.label()
+                    ))
                 }
             }
         }
@@ -536,7 +578,7 @@ impl Store {
         control.check_deadline(deadline)?;
         let page = match delivery {
             QueryDelivery::Page(page) => Some(page),
-            QueryDelivery::Csv(_) => None,
+            QueryDelivery::Export { .. } => None,
         };
         let page_clause = page
             .map(|index| {
@@ -636,15 +678,13 @@ impl Store {
         if explain {
             return read_plan(&mut cursor, control).map(QueryOutput::Plan);
         }
-        if let QueryDelivery::Csv(options) = delivery {
-            let mut file = CsvFile::create(options).map_err(QueryFailure::Error)?;
-            if options.include_header {
-                file.write_header(&columns).map_err(QueryFailure::Error)?;
-            }
+        if let QueryDelivery::Export { destination, format } = delivery {
+            let mut file =
+                ExportFile::create(destination, format, &columns).map_err(QueryFailure::Error)?;
             let mut rows = 0;
             while let Some(row) = cursor.next().map_err(|error| control.sqlite_error(error))? {
                 control.check_deadline(deadline)?;
-                file.write_row(row).map_err(QueryFailure::Error)?;
+                file.write_row(row, rows).map_err(QueryFailure::Error)?;
                 rows += 1;
                 control.exported_rows.store(rows, Ordering::Relaxed);
             }

@@ -78,10 +78,10 @@ async function main() {
   await resultRows.nth(3).getByText('사용자 204', { exact: true }).waitFor();
   await page.getByText('61개 행', { exact: true }).waitFor();
   const filteredCsv = path.join(path.dirname(database), 'filtered-results.csv');
-  await page.getByRole('button', { name: 'CSV 내보내기' }).click();
-  const csvDialog = page.getByRole('dialog', { name: 'CSV 내보내기' });
-  await csvDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
-  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await page.getByRole('button', { name: '결과 내보내기' }).click();
+  const exportDialog = page.getByRole('dialog', { name: '결과 내보내기' });
+  await exportDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
+  await exportDialog.getByRole('button', { name: 'CSV 저장' }).click();
   await page.getByRole('status').getByText('CSV 내보내기 완료').waitFor();
   const csvLines = fs.readFileSync(filteredCsv, 'utf8').trimEnd().split('\r\n');
   if (csvLines.length !== 162 || csvLines[1] !== '205,"사용자 205",\\N' || csvLines.at(-1) !== '90,"사용자 90","테스트"') {
@@ -117,17 +117,27 @@ async function main() {
   await page.getByRole('button', { name: '다음 페이지' }).click();
   await resultRows.first().getByText('사용자 102', { exact: true }).waitFor();
   const sqlCsv = path.join(path.dirname(database), 'bound-results.csv');
-  await page.getByRole('button', { name: 'CSV 내보내기' }).click();
-  await csvDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
-  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
-  await csvDialog.getByRole('alert').getByText(/이미 있습니다/).waitFor();
-  await csvDialog.getByLabel('새 CSV 파일 경로').fill(sqlCsv);
-  await csvDialog.getByLabel('열 이름 포함').uncheck();
-  await csvDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await page.getByRole('button', { name: '결과 내보내기' }).click();
+  await exportDialog.getByLabel('새 CSV 파일 경로').fill(filteredCsv);
+  await exportDialog.getByRole('button', { name: 'CSV 저장' }).click();
+  await exportDialog.getByRole('alert').getByText(/이미 있습니다/).waitFor();
+  await exportDialog.getByLabel('새 CSV 파일 경로').fill(sqlCsv);
+  await exportDialog.getByLabel('열 이름 포함').uncheck();
+  await exportDialog.getByRole('button', { name: 'CSV 저장' }).click();
   await page.getByRole('status').getByText('CSV 내보내기 완료').waitFor();
   const sqlCsvLines = fs.readFileSync(sqlCsv, 'utf8').trimEnd().split('\r\n');
   if (sqlCsvLines.length !== 204 || sqlCsvLines[0] !== '"사용자 2"' || sqlCsvLines.at(-1) !== '"사용자 205"') {
     throw new Error('CSV lost the bound input or included a disabled header.');
+  }
+  const sqlJson = path.join(path.dirname(database), 'bound-results.json');
+  await page.getByRole('button', { name: '결과 내보내기' }).click();
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로').fill(sqlJson);
+  await exportDialog.getByRole('button', { name: 'JSON 저장' }).click();
+  await page.getByRole('status').getByText('JSON 내보내기 완료').waitFor();
+  const exportedJson = JSON.parse(fs.readFileSync(sqlJson, 'utf8'));
+  if (exportedJson.version !== 1 || exportedJson.columns.join(',') !== 'name' || exportedJson.rows.length !== 204 || exportedJson.rows[0][0] !== '사용자 2' || exportedJson.rows.at(-1)[0] !== '사용자 205') {
+    throw new Error('JSON lost the bound input or exported only one page.');
   }
 
   await page.getByRole('button', { name: '실행 계획', exact: true }).click();
@@ -257,11 +267,12 @@ async function main() {
   await page.getByText('SQLite 백업', { exact: true }).first().waitFor();
   await page.getByText('SQLite 복원', { exact: true }).first().waitFor();
   await page.getByText('SQLite CSV 내보내기', { exact: true }).first().waitFor();
+  await page.getByText('SQLite JSON 내보내기', { exact: true }).first().waitFor();
   await page.getByText('SQLite 셀 변경', { exact: true }).first().waitFor();
   await page.getByText('실패', { exact: true }).first().waitFor();
   await page.getByText('완료', { exact: true }).first().waitFor();
   const history = await page.locator('.audit-panel').innerText();
-  if ([database, backupPath, restoredPath, filteredCsv, sqlCsv, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
+  if ([database, backupPath, restoredPath, filteredCsv, sqlCsv, sqlJson, backupSha, parameterSecret, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
 
@@ -320,7 +331,7 @@ async function main() {
   copiedMetadata.close();
 
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, project lifecycle and workspace copy passed.');
+  console.log('SQLite browsing, cancellation, editing, CSV/JSON, restore, audit, project lifecycle and workspace copy passed.');
   await browser.close();
 }
 

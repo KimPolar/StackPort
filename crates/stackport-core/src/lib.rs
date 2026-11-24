@@ -4,8 +4,9 @@
 //! queries use read-only connections and an SQLite authorizer. Controlled cell
 //! updates use a separate previewed, audited transaction.
 
-mod csv_export;
-pub use csv_export::{CsvOptions, CsvQuery, CsvReport};
+mod result_export;
+pub use result_export::{CsvOptions, ExportQuery, ExportReport};
+pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 mod network;
@@ -763,6 +764,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
+        "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
         "project.duplicate" => "local-project-metadata-only",
         "workspace.copy" => "local-verified-copy-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {

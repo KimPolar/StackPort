@@ -4,21 +4,23 @@ import { X } from "lucide-react";
 import type { SqlParameterValue } from "./SqlParameterFields";
 import type { TableQuery } from "./TableQueryControls";
 
-export type CsvSource =
+export type ExportSource =
   | { kind: "sql"; sql: string; parameters?: SqlParameterValue[] }
   | { kind: "table"; request: TableQuery };
-export type CsvReport = { path: string; rows: number; size_bytes: number; protected_fields: number; audit_warning: string | null };
-type CsvOutcome = { status: "exported"; report: CsvReport } | { status: "cancelled" | "timed_out" };
+type ExportFormat = "CSV" | "JSON";
+export type ExportReport = { format: ExportFormat; path: string; rows: number; size_bytes: number; protected_fields: number; audit_warning: string | null };
+type ExportOutcome = { status: "exported"; report: ExportReport } | { status: "cancelled" | "timed_out" };
 const number = new Intl.NumberFormat("ko-KR");
 
-export function CsvExportDialog({ profile, query, onClose, onExported }: {
+export function ResultExportDialog({ profile, query, onClose, onExported }: {
   profile: { id: string; name: string; environment: string };
-  query: CsvSource;
+  query: ExportSource;
   onClose: () => void;
-  onExported: (report: CsvReport) => void;
+  onExported: (report: ExportReport) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pending = useRef(false);
+  const [format, setFormat] = useState<ExportFormat>("CSV");
   const [destination, setDestination] = useState("");
   const [header, setHeader] = useState(true);
   const [spreadsheetSafe, setSpreadsheetSafe] = useState(true);
@@ -38,7 +40,7 @@ export function CsvExportDialog({ profile, query, onClose, onExported }: {
       if (reading) return;
       reading = true;
       try {
-        const progress = await invoke<number | null>("csv_export_progress", { token });
+        const progress = await invoke<number | null>("result_export_progress", { token });
         if (live && progress !== null) setRows(progress);
       } catch {
         // The export's response supplies the final status if polling fails.
@@ -52,14 +54,21 @@ export function CsvExportDialog({ profile, query, onClose, onExported }: {
   async function chooseFolder() {
     setError("");
     try {
-      const folder = await invoke<string | null>("choose_csv_directory");
+      const folder = await invoke<string | null>("choose_result_export_directory");
       if (folder) {
         const separator = /[\\/]$/.test(folder) ? "" : folder.includes("\\") ? "\\" : "/";
-        setDestination(`${folder}${separator}stackport-results.csv`);
+        setDestination(`${folder}${separator}stackport-results.${format.toLowerCase()}`);
       }
     } catch (error) {
       setError(String(error));
     }
+  }
+
+  function changeFormat(next: ExportFormat) {
+    setFormat(next);
+    setDestination(current => current.replace(/\.(csv|json)$/i, `.${next.toLowerCase()}`));
+    setNotice("");
+    setError("");
   }
 
   async function start() {
@@ -69,12 +78,10 @@ export function CsvExportDialog({ profile, query, onClose, onExported }: {
     try {
       const request = await invoke<string>("prepare_query");
       setToken(request);
-      const response = await invoke<CsvOutcome>("export_sqlite_csv", {
-        token: request,
-        profileId: profile.id,
-        query,
-        options: { destination, include_header: header, spreadsheet_safe: spreadsheetSafe },
-      });
+      const source = { token: request, profileId: profile.id, query };
+      const response = format === "CSV"
+        ? await invoke<ExportOutcome>("export_sqlite_csv", { ...source, options: { destination, include_header: header, spreadsheet_safe: spreadsheetSafe } })
+        : await invoke<ExportOutcome>("export_sqlite_json", { ...source, destination });
       if (response.status === "exported") onExported(response.report);
       else if (response.status === "cancelled") setNotice("내보내기를 중단했습니다.");
       else setError("내보내기 제한 시간 5분을 초과했습니다. 조회 범위를 줄여 다시 시도하세요.");
@@ -97,32 +104,38 @@ export function CsvExportDialog({ profile, query, onClose, onExported }: {
     }
   }
 
-  return <dialog ref={dialog} className="dialog" aria-labelledby="csv-export-title" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
+  return <dialog ref={dialog} className="dialog" aria-labelledby="result-export-title" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
     <div className="dialog-heading">
-      <h2 id="csv-export-title">CSV 내보내기</h2>
+      <h2 id="result-export-title">결과 내보내기</h2>
       <button className="icon-button" aria-label="닫기" disabled={busy} onClick={onClose}><X size={18} /></button>
     </div>
     <form onSubmit={event => { event.preventDefault(); void start(); }}>
       <p className="confirm-copy"><strong>{profile.name}</strong> · {profile.environment}<br />
         {query.kind === "table" ? `${query.request.object}의 적용된 필터와 정렬` : "마지막으로 실행한 SQL과 매개변수"}로 전체 결과를 다시 조회합니다.
       </p>
-      <label className="field">새 CSV 파일 경로<span className="file-input">
+      <label className="field">파일 형식
+        <select disabled={busy} value={format} onChange={event => changeFormat(event.target.value as ExportFormat)}>
+          <option value="CSV">CSV</option>
+          <option value="JSON">JSON</option>
+        </select>
+      </label>
+      <label className="field">새 {format} 파일 경로<span className="file-input">
         <input required disabled={busy} value={destination} placeholder="새 파일의 절대 경로" onChange={event => setDestination(event.target.value)} />
         <button type="button" className="secondary" disabled={busy} onClick={() => void chooseFolder()}>폴더 선택</button>
       </span></label>
-      <fieldset className="csv-options" disabled={busy}>
+      {format === "CSV" && <fieldset className="csv-options" disabled={busy}>
         <legend className="sr-only">CSV 옵션</legend>
         <label><input type="checkbox" checked={header} onChange={event => setHeader(event.target.checked)} /> 열 이름 포함</label>
         <label><input type="checkbox" checked={spreadsheetSafe} onChange={event => setSpreadsheetSafe(event.target.checked)} /> 수식처럼 보이는 텍스트 앞에 작은따옴표 추가</label>
-      </fieldset>
-      <p className="form-note">CSV에는 조회 데이터가 포함됩니다. 파일을 보관할 위치와 공유 대상을 확인하세요.</p>
+      </fieldset>}
+      <p className="form-note">조회 데이터가 포함된 파일입니다. 보관 위치와 공유 대상을 확인하세요.</p>
       {busy && <p role="status" className="query-notice">{notice || `${number.format(rows)}행 기록 · 파일을 만드는 중`}</p>}
       {!busy && notice && <p role="status" className="query-notice">{notice}</p>}
       {error && <p role="alert" className="form-error">{error}</p>}
       <div className="dialog-actions">
         {busy ? <button type="button" className="secondary" disabled={!token || stopping} onClick={() => void cancel()}>내보내기 중단</button> : <>
           <button type="button" className="secondary" onClick={onClose}>닫기</button>
-          <button type="submit" className="primary">CSV 저장</button>
+          <button type="submit" className="primary">{format} 저장</button>
         </>}
       </div>
     </form>
