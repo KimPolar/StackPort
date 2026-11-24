@@ -900,6 +900,49 @@ async fn list_postgres_profiles(store: State<'_, Store>, project_id: String) -> 
 }
 
 #[tauri::command]
+async fn list_redis_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::RedisProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_redis_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_redis_profile(store: State<'_, Store>, project_id: String, input: stackport_core::RedisSettings)
+    -> Result<stackport_core::RedisProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_redis_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_redis_profile(store: State<'_, Store>, id: String, revision: i64, input: stackport_core::RedisSettings)
+    -> Result<stackport_core::RedisProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_redis_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_redis_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_redis_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_redis(redis: State<'_, stackport_core::RedisManager>, profile_id: String, revision: i64,
+    password: stackport_core::RedisPassword, confirmation: String) -> Result<stackport_core::RedisSessionInfo, String> {
+    redis.open(profile_id, revision, password, &confirmation).await
+}
+
+#[tauri::command]
+fn close_redis(redis: State<'_, stackport_core::RedisManager>, id: String) -> Result<(), String> { redis.close(&id) }
+
+#[tauri::command]
+async fn redis_keys(redis: State<'_, stackport_core::RedisManager>, id: String, input: stackport_core::RedisScanInput)
+    -> Result<stackport_core::RedisKeyPage, String> { redis.keys(&id, input).await }
+
+#[tauri::command]
+async fn redis_value(redis: State<'_, stackport_core::RedisManager>, id: String, input: stackport_core::RedisValueInput)
+    -> Result<stackport_core::RedisValuePage, String> { redis.value(&id, input).await }
+
+#[tauri::command]
 async fn create_postgres_profile(store: State<'_, Store>, project_id: String, input: PostgresProfileInput) -> Result<PostgresProfile, String> {
     let store = store.inner().clone();
     worker(move || store.create_postgres_profile(&project_id, input)).await
@@ -1646,7 +1689,7 @@ async fn choose_sqlite_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 async fn choose_postgres_ca() -> Result<Option<String>, String> {
-    worker(|| Ok(rfd::FileDialog::new().set_title("PostgreSQL CA 인증서 선택")
+    worker(|| Ok(rfd::FileDialog::new().set_title("TLS CA 인증서 선택")
         .add_filter("PEM 인증서", &["pem", "crt", "cer"]).pick_file()
         .map(|path| path.to_string_lossy().into_owned()))).await
 }
@@ -1768,6 +1811,7 @@ fn main() {
             app.manage(SftpManager::new(store.clone()));
             app.manage(SshTunnelManager::new(store.clone()));
             app.manage(PostgresManager::new(store.clone()));
+            app.manage(stackport_core::RedisManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -1865,6 +1909,14 @@ fn main() {
             open_routed_ssh_terminal,
             list_ssh_tunnels,
             list_postgres_profiles,
+            list_redis_profiles,
+            create_redis_profile,
+            update_redis_profile,
+            delete_redis_profile,
+            open_redis,
+            close_redis,
+            redis_keys,
+            redis_value,
             create_postgres_profile,
             update_postgres_profile,
             delete_postgres_profile,

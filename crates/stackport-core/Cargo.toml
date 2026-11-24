@@ -23,6 +23,7 @@ zeroize = "1.9"
 tokio-postgres = "0.7.18"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
+tokio-native-tls = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinHttp", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authentication_Identity", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading"] }

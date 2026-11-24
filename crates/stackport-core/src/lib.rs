@@ -27,6 +27,7 @@ pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
+pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};
 pub use postgres::PostgresDisconnect;
@@ -122,7 +123,10 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 13;
+mod redis;
+mod tls;
+
+const SCHEMA_VERSION: i64 = 14;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -401,6 +405,7 @@ impl Store {
                 tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(redis::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -448,8 +453,11 @@ impl Store {
                 }
                 if current < 12 {
                     tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
-                } else {
+                } else if current < 13 {
                     workspace_favorites::migrate_v12(&tx)?;
+                }
+                if current < 14 {
+                    tx.execute_batch(redis::SCHEMA).map_err(db_error)?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;

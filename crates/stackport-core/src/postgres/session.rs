@@ -28,14 +28,12 @@ use crate::{
     table_query::bounded_filter_text,
     AuditRecord, LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
 };
-use native_tls::{Certificate, Protocol, TlsConnector};
+use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::HashMap,
-    fs::File,
     future::pending,
-    io::Read,
     net::Ipv4Addr,
     sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex},
     time::{Duration, Instant},
@@ -56,7 +54,6 @@ const CATALOG_SIZE: usize = 100;
 pub(super) const ROW_SIZE: usize = 100;
 pub(super) const COLUMN_SIZE: usize = 24;
 pub(super) const VALUE_LENGTH: usize = 512;
-const CA_SIZE: u64 = 256 * 1024;
 const TUNNEL_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 
 #[derive(Deserialize)]
@@ -1820,23 +1817,7 @@ pub(super) fn field<T: for<'a> tokio_postgres::types::FromSql<'a>>(
 }
 
 fn tls_connector(ca_path: Option<&str>) -> Result<TlsConnector> {
-    let mut builder = TlsConnector::builder();
-    builder.min_protocol_version(Some(Protocol::Tlsv12));
-    if let Some(path) = ca_path {
-        let mut pem = Vec::new();
-        File::open(path)
-            .and_then(|file| file.take(CA_SIZE + 1).read_to_end(&mut pem))
-            .map_err(|_| "PostgreSQL CA 인증서를 읽을 수 없습니다.")?;
-        if pem.len() as u64 > CA_SIZE {
-            return Err("CA 인증서 크기는 256 KiB 이하여야 합니다.".into());
-        }
-        let ca =
-            Certificate::from_pem(&pem).map_err(|_| "올바른 PEM 형식의 CA 인증서를 선택하세요.")?;
-        builder.add_root_certificate(ca);
-    }
-    builder
-        .build()
-        .map_err(|_| "PostgreSQL TLS 검증을 초기화할 수 없습니다.".into())
+    crate::tls::verified_connector(ca_path, "PostgreSQL")
 }
 
 fn connect_error(error: tokio_postgres::Error) -> String {

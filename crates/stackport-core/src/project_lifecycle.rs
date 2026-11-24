@@ -92,6 +92,7 @@ impl Store {
         let mut ssh_profiles = Self::list_ssh_profiles_on(&tx, source)?;
         let mut copied_total = db_profiles.len() + ssh_profiles.len() + copy_project_templates(&tx, source, &duplicate.id)?;
         copied_total += crate::postgres::copy_profiles(&tx, source, &duplicate.id)?;
+        copied_total += crate::redis::copy_profiles(&tx, source, &duplicate.id)?;
         for profile in db_profiles {
             let new_id = Uuid::new_v4().to_string();
             let changed = tx.execute(
