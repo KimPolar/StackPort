@@ -10,12 +10,13 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpManager, SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
+    save_terminal_output, SftpAuthentication, SftpDownloadOutcome, SftpDownloadProgress, SftpManager,
+    SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
 };
 use std::sync::Arc;
-use tauri::{Manager, RunEvent, State};
+use tauri::{ipc::Channel, Manager, RunEvent, State};
 
 async fn worker<T, F>(operation: F) -> Result<T, String>
 where
@@ -606,6 +607,24 @@ async fn list_sftp_directory(
 }
 
 #[tauri::command]
+async fn download_sftp_file(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    source: RemotePath,
+    destination: String,
+    progress: Channel<SftpDownloadProgress>,
+) -> Result<SftpDownloadOutcome, String> {
+    sftp.download(&id, source, destination, |update| {
+        let _ = progress.send(update);
+    }).await
+}
+
+#[tauri::command]
+fn cancel_sftp_download(sftp: State<'_, SftpManager>, id: String, transfer_id: String) -> bool {
+    sftp.cancel_download(&id, &transfer_id)
+}
+
+#[tauri::command]
 async fn close_sftp(sftp: State<'_, SftpManager>, id: String) -> Result<(), String> {
     sftp.close(&id).await
 }
@@ -820,6 +839,8 @@ fn main() {
             open_saved_ssh_terminal,
             open_sftp,
             list_sftp_directory,
+            download_sftp_file,
+            cancel_sftp_download,
             close_sftp,
             browse_local_directory,
             choose_local_browse_directory,

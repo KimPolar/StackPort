@@ -184,6 +184,12 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .files-table th, .files-table td { text-align: start; padding: 7px 8px; white-space: nowrap; border-top: 1px solid #e7eee9; }
 .files-table th { position: sticky; top: 0; background: #eef4f0; }
+.files-table td .icon-button { width: 24px; height: 24px; }
+.files-download-source, .files-download-result { overflow-wrap: anywhere; }
+.files-download-result { margin-bottom: 12px; }
+.files-download-result summary { cursor: pointer; }
+.files-transfer { display: grid; gap: 6px; margin: 12px 0; color: #526a5f; font-size: 12px; }
+.files-transfer progress { width: 100%; accent-color: #268971; }
 .files-entry { display: flex; align-items: center; gap: 6px; text-align: start; color: #2e4a3e; font-size: inherit; }
 button.files-entry { background: transparent; padding: 0; border: 0; text-decoration: underline; }
 @media (max-width: 850px) { .files-panes { grid-template-columns: minmax(0, 1fr); } }

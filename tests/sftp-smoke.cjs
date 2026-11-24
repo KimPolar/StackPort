@@ -12,14 +12,25 @@ const root = process.env.STACKPORT_TEST_ROOT;
 const password = 'fixture-sftp-password';
 const passphrase = 'fixture-encrypted-key';
 const { STATUS_CODE: code } = utils.sftp;
+const downloadFixtures = new Map([
+  ['대시보드.txt', { data: Buffer.from('0123456789abcdef!') }],
+  ['빈 파일.txt', { data: Buffer.alloc(0) }],
+  ['전송.bin', { data: Buffer.from(Array.from({ length: 145_000 }, (_, index) => index % 251)) }],
+  ['느린 파일.bin', { data: Buffer.alloc(384 * 1024, 17), delay: 70 }],
+  ['전송 중 수정.txt', { data: Buffer.from('fixture mutation'), changed: true }],
+  ['잘린 파일.txt', { data: Buffer.from('short'), short: true }],
+]);
 
 const directory = (filename) => ({ filename, longname: filename, attrs: { mode: 0o40750, uid: 42, gid: 9, mtime: 1700000000, atime: 1700000000 } });
-const file = (filename) => ({ filename, longname: filename, attrs: { mode: 0o100640, size: 17, uid: 42, gid: 9, mtime: 1700000000, atime: 1700000000 } });
+const file = (filename) => {
+  const fixture = downloadFixtures.get(filename);
+  return { filename, longname: filename, attrs: { mode: 0o100640, size: (fixture?.data.length ?? 17) + (fixture?.short ? 8 : 0), uid: 42, gid: 9, mtime: 1700000000, atime: 1700000000 } };
+};
 
 function sftpChannel(channel) {
   const directories = new Map([
     ['/home', [directory('stackport')]],
-    ['/home/stackport', [directory('.'), directory('..'), file('.숨김'), directory('문서'), file('대시보드.txt')]],
+    ['/home/stackport', [directory('.'), directory('..'), file('.숨김'), directory('문서'), ...Array.from(downloadFixtures.keys(), file)]],
     ['/home/stackport/문서', [file('보고서.txt')]],
   ]);
   const handles = new Map();
@@ -34,17 +45,51 @@ function sftpChannel(channel) {
     if (!entries) return channel.status(id, code.NO_SUCH_FILE);
     const handle = Buffer.alloc(4);
     handle.writeUInt32BE(++next);
-    handles.set(handle.toString('hex'), [...entries]);
+    handles.set(handle.toString('hex'), { entries: [...entries] });
     channel.handle(id, handle);
   });
   channel.on('READDIR', (id, handle) => {
-    const entries = handles.get(handle.toString('hex'));
+    const entries = handles.get(handle.toString('hex'))?.entries;
     if (!entries) return channel.status(id, code.FAILURE);
     if (!entries.length) return channel.status(id, code.EOF);
     channel.name(id, entries.splice(0, 2));
   });
   channel.on('CLOSE', (id, handle) => {
     channel.status(id, handles.delete(handle.toString('hex')) ? code.OK : code.FAILURE);
+  });
+  const sourceName = remotePath => remotePath.startsWith('/home/stackport/') ? remotePath.slice('/home/stackport/'.length) : '';
+  channel.on('LSTAT', (id, remotePath) => {
+    const name = sourceName(remotePath);
+    if (downloadFixtures.has(name)) channel.attrs(id, file(name).attrs);
+    else channel.status(id, code.NO_SUCH_FILE);
+  });
+  channel.on('OPEN', (id, remotePath, flags) => {
+    const name = sourceName(remotePath);
+    const fixture = downloadFixtures.get(name);
+    if (!fixture) return channel.status(id, code.NO_SUCH_FILE);
+    if (flags !== utils.sftp.OPEN_MODE.READ) return channel.status(id, code.PERMISSION_DENIED);
+    const handle = Buffer.alloc(4);
+    handle.writeUInt32BE(++next);
+    handles.set(handle.toString('hex'), { name, fixture, stats: 0 });
+    channel.handle(id, handle);
+  });
+  channel.on('FSTAT', (id, handle) => {
+    const open = handles.get(handle.toString('hex'));
+    if (!open?.fixture) return channel.status(id, code.FAILURE);
+    const attrs = file(open.name).attrs;
+    if (open.fixture.changed && open.stats++ > 0) attrs.mtime++;
+    channel.attrs(id, attrs);
+  });
+  channel.on('READ', (id, handle, offset, length) => {
+    const open = handles.get(handle.toString('hex'));
+    if (!open?.fixture) return channel.status(id, code.FAILURE);
+    const { data, delay } = open.fixture;
+    if (offset >= data.length) return channel.status(id, code.EOF);
+    const respond = () => {
+      if (!channel.destroyed) channel.data(id, data.subarray(offset, offset + Math.min(length, 7000)));
+    };
+    if (delay) setTimeout(respond, delay);
+    else respond();
   });
 }
 
@@ -85,14 +130,16 @@ async function startHost(host, identity, port = 0) {
   });
   server.listen(port, '127.0.0.1');
   await once(server, 'listening');
+  let closing;
   return {
     port: server.address().port,
     stats,
-    async close() {
-      const closed = once(server, 'close');
-      for (const client of clients) client.destroy();
+    close() {
+      if (closing) return closing;
+      closing = once(server, 'close');
+      for (const client of clients) client.end();
       server.close();
-      await closed;
+      return closing;
     },
   };
 }
@@ -149,7 +196,8 @@ async function main() {
     await connect.click();
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
     assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), '/home/stackport');
-    await remote.getByText('0640 · 42/9', { exact: true }).waitFor();
+    await remote.getByRole('row').filter({ has: page.getByRole('cell', { name: '대시보드.txt', exact: true }) })
+      .getByText('0640 · 42/9', { exact: true }).waitFor();
     assert.equal(await remote.getByText('.숨김', { exact: true }).count(), 0);
     await remote.getByLabel('숨김 파일 표시').check();
     await remote.getByText('.숨김', { exact: true }).waitFor();
@@ -174,6 +222,8 @@ async function main() {
     await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
 
+    await verifyDownloads(page, remote, local);
+
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
     await page.getByLabel('인증 방식').selectOption('private_key');
@@ -193,10 +243,69 @@ async function main() {
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, password and encrypted key, PROD validation, local/remote folder navigation, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, password and encrypted key, PROD validation, file navigation, download integrity, cancellation, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
+  }
+}
+
+async function verifyDownloads(page, remote, local) {
+  const dialog = page.getByRole('dialog', { name: '원격 파일 다운로드' });
+  const destination = dialog.getByLabel('로컬 저장 경로');
+  const start = dialog.getByRole('button', { name: '다운로드', exact: true });
+  const done = page.getByRole('status').getByText('다운로드 완료', { exact: true });
+  const close = () => dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  const click = name => remote.getByRole('button', { name: `${name} 다운로드`, exact: true }).click();
+  const noPartials = () => assert.equal(fs.readdirSync(local).filter(name => name.startsWith('.stackport-download-')).length, 0);
+
+  await click('전송.bin');
+  const complete = path.join(local, '전송.bin');
+  assert.equal(path.normalize(await destination.inputValue()).toLowerCase(), complete.toLowerCase());
+  await start.click();
+  await done.waitFor();
+  const expected = downloadFixtures.get('전송.bin').data;
+  assert.deepEqual(fs.readFileSync(complete), expected);
+  await page.getByText('SHA-256', { exact: true }).click();
+  await page.getByText(createHash('sha256').update(expected).digest('hex'), { exact: true }).waitFor();
+  noPartials();
+
+  await click('빈 파일.txt');
+  await start.click();
+  await done.waitFor();
+  assert.equal(fs.statSync(path.join(local, '빈 파일.txt')).size, 0);
+
+  await click('전송.bin');
+  await start.click();
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  assert.deepEqual(fs.readFileSync(complete), expected);
+  await close();
+
+  const slow = path.join(local, '느린 파일.bin');
+  await click('느린 파일.bin');
+  await start.click();
+  await dialog.getByText(/KiB\/s/).waitFor();
+  assert.equal(fs.existsSync(slow), false);
+  await dialog.getByRole('button', { name: '다운로드 중단' }).click();
+  await dialog.getByText('다운로드가 중단되었습니다.', { exact: true }).waitFor();
+  assert.equal(fs.existsSync(slow), false);
+  noPartials();
+
+  await start.click();
+  await dialog.getByText(/KiB\/s/).waitFor();
+  fs.writeFileSync(slow, 'keep');
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  assert.equal(fs.readFileSync(slow, 'utf8'), 'keep');
+  noPartials();
+  await close();
+
+  for (const [name, error] of [['전송 중 수정.txt', /전송 중 변경/], ['잘린 파일.txt', /예상 크기보다 먼저 끝/]]) {
+    await click(name);
+    await start.click();
+    await dialog.getByRole('alert').getByText(error).waitFor();
+    assert.equal(fs.existsSync(path.join(local, name)), false);
+    noPartials();
+    await close();
   }
 }
 

@@ -1,7 +1,8 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, File, FolderOpen, Link, RefreshCw } from "lucide-react";
+import { ArrowUp, Download, File, FolderOpen, Link, RefreshCw } from "lucide-react";
 import type { SshProfile } from "./ssh-profile-types";
+import { SftpDownloadDialog, type DownloadResult, type RemoteDownload } from "./SftpDownloadDialog";
 
 type Entry = { name: string; kind: "directory" | "file" | "symlink" | "other"; location: string | null; size: string | null; modified: number | null; mode: number | null; uid: number | null; gid: number | null; hidden: boolean };
 type Directory = { path: string; location: string; parent: string | null; entries: Entry[]; truncated: boolean };
@@ -16,6 +17,9 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [localFolder, setLocalFolder] = useState("");
+  const [download, setDownload] = useState<RemoteDownload | null>(null);
+  const [downloaded, setDownloaded] = useState<DownloadResult | null>(null);
   const [error, setError] = useState("");
   const selected = profiles.find(profile => profile.id === selectedId) ?? profiles[0];
 
@@ -26,6 +30,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     try {
       await invoke("close_sftp", { id: remote.id });
       setRemote(null);
+      setDownload(null);
+      setDownloaded(null);
     } catch (error) {
       setError(String(error));
     } finally {
@@ -49,11 +55,18 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
         onOpened={session => setRemote({ ...session, profile: selected })} />}
     </div>}
     {error && <p className="error-banner" role="alert">{error}</p>}
+    {downloaded && <div className="success-banner files-download-result" role="status">
+      <strong>다운로드 완료</strong><span>{displayPath(downloaded.path)} · {numbers.format(BigInt(downloaded.bytes))} B</span>
+      <details><summary>SHA-256</summary><code>{downloaded.sha256}</code></details>
+    </div>}
     <div className="files-panes">
-      <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder />
+      <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder onFolder={setLocalFolder} />
       {remote ? <DirectoryPane key={remote.id} title="원격 파일" initial={remote.directory}
-        load={path => invoke("list_sftp_directory", { id: remote.id, path })} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
+        load={path => invoke("list_sftp_directory", { id: remote.id, path })}
+        onDownload={file => { setDownloaded(null); setDownload(file); }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
     </div>
+    {remote && download && <SftpDownloadDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      file={download} folder={localFolder} onClose={() => setDownload(null)} onSaved={result => { setDownloaded(result); setDownload(null); }} />}
   </section>;
 }
 
@@ -144,7 +157,10 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder }: { title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean }) {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onDownload }: {
+  title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
+  onFolder?: (path: string) => void; onDownload?: (file: RemoteDownload) => void;
+}) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
   const [value, setValue] = useState(initial ? displayPath(initial.path) : "");
   const [hidden, setHidden] = useState(false);
@@ -167,6 +183,7 @@ function DirectoryPane({ title, load, initial, chooseFolder }: { title: string; 
       const next = await load(path);
       setDirectory(next);
       setValue(displayPath(next.path));
+      onFolder?.(displayPath(next.path));
     } catch (error) {
       setError(String(error));
     } finally {
@@ -197,16 +214,19 @@ function DirectoryPane({ title, load, initial, chooseFolder }: { title: string; 
     {error && <p className="form-error files-note" role="alert">{error}</p>}
     {directory?.truncated && <p className="form-note files-note">처음 2,000개 항목을 표시합니다. 하위 폴더는 경로를 입력해 열 수 있습니다.</p>}
     {directory && <div className="files-table-wrap"><table className="files-table" aria-label={`${title} 목록`}>
-      <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}</tr></thead>
+      <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}{onDownload && <th scope="col"><span className="sr-only">다운로드</span></th>}</tr></thead>
       <tbody>{shown.map((entry, index) => {
+        const location = entry.location;
         const icon = entry.kind === "directory" ? <FolderOpen size={14} /> : entry.kind === "symlink" ? <Link size={14} /> : <File size={14} />;
         return <tr key={entry.location ?? index}>
-          <td>{entry.kind === "directory" && entry.location ? <button type="button" className="files-entry" disabled={busy}
-            onClick={() => void navigate({ kind: "token", value: entry.location! })}>{icon}{entry.name}</button>
+          <td>{entry.kind === "directory" && location ? <button type="button" className="files-entry" disabled={busy}
+            onClick={() => void navigate({ kind: "token", value: location })}>{icon}{entry.name}</button>
             : <span className="files-entry">{icon}{entry.name}</span>}</td>
           <td>{entry.kind !== "directory" && entry.size !== null ? `${numbers.format(BigInt(entry.size))} B` : "—"}</td>
           <td>{entry.modified === null ? "—" : dates.format(entry.modified * 1000)}</td>
           {!chooseFolder && <td>{entry.mode === null ? "—" : entry.mode.toString(8).padStart(4, "0")} · {entry.uid ?? "—"}/{entry.gid ?? "—"}</td>}
+          {onDownload && <td>{entry.kind === "file" && location && <button type="button" className="icon-button" disabled={busy}
+            aria-label={`${entry.name} 다운로드`} title="다운로드" onClick={() => onDownload({ name: entry.name, location })}><Download size={14} /></button>}</td>}
         </tr>;
       })}</tbody>
     </table></div>}

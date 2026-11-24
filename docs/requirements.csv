@@ -90,9 +90,9 @@ SP-FL-002,이중 패널 탐색,"로컬·원격·원격 간 디렉터리 트리, 
 SP-FL-003,파일 작업,"생성, 읽기, 이름 변경, 이동, 복사, 삭제, 폴더 생성, 다중 선택, 드래그앤드롭.",not_started,,
 SP-FL-004,프로토콜,"SFTP, SCP, FTP(Active/Passive), FTPS(명시적/암시적·지원 범위), rsync 기반 동기화.",partial,"확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-005,FTP 전송 설정,"제어/데이터 채널 TLS 옵션, 바이너리/ASCII 모드, 인코딩, 프록시, 보안 경고.",not_started,,
-SP-FL-006,업·다운로드,"큐, 동시성, 진행률, 전송 속도, 예상 잔여 데이터, 취소, 일시정지/재개(지원 시).",not_started,,
-SP-FL-007,실패 복구,"연결 단절 이후 재시도, 청크 재개 가능 여부, 오류 항목 재전송, 원자적 업로드 옵션.",not_started,,
-SP-FL-008,충돌 정책,"덮어쓰기/건너뛰기/이름 변경/날짜·크기 비교/해시 비교, 배치별 공통 정책.",not_started,,
+SP-FL-006,업·다운로드,"큐, 동시성, 진행률, 전송 속도, 예상 잔여 데이터, 취소, 일시정지/재개(지원 시).",partial,"SFTP의 단일 파일 다운로드, 진행 바이트·평균 속도·예상 잔여 시간 표시와 중단",crates/stackport-core/src/sftp/download.rs; tests/sftp-smoke.cjs; src/SftpDownloadDialog.tsx; src-tauri/
+SP-FL-007,실패 복구,"연결 단절 이후 재시도, 청크 재개 가능 여부, 오류 항목 재전송, 원자적 업로드 옵션.",partial,"SFTP 다운로드 실패·중단 시 임시 파일 정리, 성공 후 원자적 파일 게시와 재시도",crates/stackport-core/src/sftp/download.rs; tests/sftp-smoke.cjs; src/SftpDownloadDialog.tsx; src-tauri/
+SP-FL-008,충돌 정책,"덮어쓰기/건너뛰기/이름 변경/날짜·크기 비교/해시 비교, 배치별 공통 정책.",partial,다운로드 대상의 기존 파일 보존과 원격 크기·수정 시간 변경 감지,crates/stackport-core/src/sftp/download.rs; tests/sftp-smoke.cjs; src/SftpDownloadDialog.tsx; src-tauri/
 SP-FL-009,파일 속성,"크기, 시간, 유형, 소유자/그룹/Unix 권한, 심볼릭 링크, 숨김 파일 표시.",partial,"로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-010,원격 권한 변경,chmod/chown 등 서버가 지원하는 수정 기능과 실패 사유 표시.,not_started,,
 SP-FL-011,파일 미리보기,텍스트·이미지·바이너리 HEX·웹 문서·JSON·XML·CSV의 안전한 보기.,not_started,,
@@ -105,7 +105,7 @@ SP-FL-017,증분 동기화,"단방향/양방향, 삭제 반영 여부, 제외 �
 SP-FL-018,경로 동기화,지원 셸의 현재 디렉터리를 파일 탐색기에 반영하는 선택적 연동.,not_started,,
 SP-FL-019,링크/중복 탐색,심볼릭 링크 정책·중복 파일 탐색·빈 폴더 확인·대량 삭제 전 검토.,not_started,,
 SP-FL-020,보관 작업,"원격 tar/zip 생성·해제, 경로 순회 검증, 원격 도구 없을 때 대체 경로 안내.",not_started,,
-SP-FL-021,전송 무결성,"지원하는 프로토콜/서버에서 SHA-256 등 해시 검증, 파일 크기/수정 시간 검증.",not_started,,
+SP-FL-021,전송 무결성,"지원하는 프로토콜/서버에서 SHA-256 등 해시 검증, 파일 크기/수정 시간 검증.",partial,SFTP 다운로드의 수신 바이트 SHA-256 계산 및 서버 파일 크기와 수정 시간 검증,crates/stackport-core/src/sftp/download.rs; tests/sftp-smoke.cjs; src/SftpDownloadDialog.tsx; src-tauri/
 SP-FL-022,작업 재사용,"전송·백업·동기화 프로필 저장, 수동 실행·자동화 연결.",not_started,,
 SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",not_started,,
 SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",not_started,,

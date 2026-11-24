@@ -1,5 +1,8 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
+mod download;
+pub use download::{SftpDownloadOutcome, SftpDownloadProgress};
+
 use crate::{ssh, Result, SshManager, SshProfile};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use russh::{
@@ -126,6 +129,7 @@ struct FilesSession {
     ssh: Handle<PinnedHost>,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
+    downloads: Mutex<download::DownloadState>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -145,6 +149,15 @@ impl client::Handler for PinnedHost {
 }
 
 impl SftpManager {
+    fn session(&self, id: &str) -> Result<Arc<FilesSession>> {
+        self.sessions
+            .lock()
+            .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
+            .get(id)
+            .cloned()
+            .ok_or_else(|| "SFTP 연결이 닫혔습니다. 다시 연결하세요.".into())
+    }
+
     pub async fn open(
         &self,
         ssh: Arc<SshManager>,
@@ -185,13 +198,7 @@ impl SftpManager {
 
     pub async fn list(&self, id: &str, requested: RemotePath) -> Result<BrowseDirectory> {
         let path = requested.into_path()?;
-        let session = self
-            .sessions
-            .lock()
-            .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
-            .get(id)
-            .cloned()
-            .ok_or("SFTP 연결이 닫혔습니다. 다시 연결하세요.")?;
+        let session = self.session(id)?;
         let _operation = session
             .operation
             .try_lock()
@@ -216,6 +223,7 @@ impl SftpManager {
             .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
             .remove(id);
         if let Some(session) = session {
+            session.cancel_download_on_close();
             let _ = timeout(
                 Duration::from_secs(2),
                 session.ssh.disconnect(Disconnect::ByApplication, "", ""),
@@ -319,6 +327,7 @@ async fn start_session(
             ssh,
             files,
             operation: AsyncMutex::new(()),
+            downloads: Mutex::new(download::DownloadState::default()),
             _permit: permit,
         },
         directory,
