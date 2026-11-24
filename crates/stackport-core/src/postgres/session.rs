@@ -2,8 +2,9 @@ use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
     edit::{
-        self, PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
-        PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
+        self, row as row_edit, PostgresCellChange, PostgresEditField, PostgresEditInput,
+        PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview,
+        PostgresRowStamp,
     },
     export::EXPORT_TIMEOUT,
     grid_layout::PostgresGridLayout,
@@ -18,7 +19,10 @@ use super::{
     PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
-    insert_audit, quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
+    edit::{RowChangePreview, RowChangeSession},
+    insert_audit, quote_identifier,
+    ssh_tunnel::DatabaseTunnel,
+    table_query::bounded_filter_text,
     AuditRecord, LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
 };
 use native_tls::{Certificate, Protocol, TlsConnector};
@@ -156,6 +160,9 @@ pub struct PostgresPage {
     row_stamps: Option<Vec<Option<PostgresRowStamp>>>,
     value_rows: Option<Vec<PostgresValueRow>>,
     edit_reason: Option<&'static str>,
+    row_insert: bool,
+    row_delete: bool,
+    row_delete_reason: Option<&'static str>,
 }
 
 pub struct PostgresManager {
@@ -175,6 +182,7 @@ struct Session {
     running_sql: Mutex<Option<sql::RunningSql>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
+    row_edit: AsyncMutex<Option<row_edit::Plan>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -361,6 +369,7 @@ impl PostgresManager {
             running_sql: Mutex::default(),
             grid_edit,
             edit: AsyncMutex::default(),
+            row_edit: AsyncMutex::default(),
             _permit: permit,
         });
         let id = Uuid::new_v4().to_string();
@@ -881,6 +890,92 @@ impl PostgresManager {
         Ok(())
     }
 
+    pub async fn begin_row_change(
+        &self,
+        id: &str,
+        object: i64,
+        change: row_edit::PostgresRowChange,
+    ) -> Result<RowChangeSession> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.row_edit.lock().await;
+        let (plan, response) = timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            row_edit::begin(&mut client, object, change).await
+        })
+        .await
+        .map_err(|_| "행 작업 정보를 읽는 시간이 초과되었습니다.")??;
+        let token = plan.token;
+        *pending = Some(plan);
+        let session = Arc::downgrade(&session);
+        tokio::spawn(async move {
+            tokio::time::sleep(edit::LIFETIME).await;
+            if let Some(session) = session.upgrade() {
+                let mut pending = session.row_edit.lock().await;
+                if pending.as_ref().is_some_and(|plan| plan.token == token) {
+                    pending.take();
+                }
+            }
+        });
+        Ok(response)
+    }
+
+    pub async fn preview_row_insert(
+        &self,
+        id: &str,
+        token: &str,
+        changes: Vec<PostgresCellChange>,
+    ) -> Result<RowChangePreview> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.row_edit.lock().await;
+        let token = edit_token(token)?;
+        checked_row_change(&mut pending, token)?.clear_insert_preview()?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let plan = checked_row_change(&mut pending, token)?;
+            row_edit::preview(&mut client, plan, changes).await
+        })
+        .await
+        .map_err(|_| "행 추가 미리보기 시간이 초과되었습니다.")?
+    }
+
+    pub async fn apply_row_change(
+        &self,
+        id: &str,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+    ) -> Result<row_edit::PostgresRowChangeOutcome> {
+        let session = self.edit_session(id)?;
+        let token = edit_token(token)?;
+        if session.profile.settings.environment == "PROD" && confirmation != "PROD" {
+            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+        }
+        let mut pending = session.row_edit.lock().await;
+        if !checked_row_change(&mut pending, token)?.approved(edit_token(approval)?) {
+            return Err("현재 행 작업을 다시 미리 보세요.".into());
+        }
+        let mut client = timeout(QUERY_TIMEOUT, session.client.lock())
+            .await
+            .map_err(|_| "연결에서 실행 중인 작업이 끝난 뒤 다시 시도하세요.")?;
+        checked_row_change(&mut pending, token)?;
+        let plan = pending.take().ok_or(edit::EXPIRED)?;
+        let outcome = row_edit::apply(&mut client, &self.store, &session.profile, plan).await?;
+        if matches!(outcome, row_edit::PostgresRowChangeOutcome::Unknown) {
+            session.connection.abort();
+        }
+        Ok(outcome)
+    }
+
+    pub async fn cancel_row_change(&self, id: &str, token: &str) -> Result<()> {
+        let session = self.edit_session(id)?;
+        let token = edit_token(token)?;
+        let mut pending = session.row_edit.lock().await;
+        if pending.as_ref().is_some_and(|plan| plan.token == token) {
+            pending.take();
+        }
+        Ok(())
+    }
+
     fn edit_session(&self, id: &str) -> Result<Arc<Session>> {
         let session = self.session(id)?;
         if !session.grid_edit {
@@ -908,6 +1003,16 @@ fn checked_edit(pending: &mut Option<edit::Plan>, token: Uuid) -> Result<&mut ed
     pending
         .as_mut()
         .filter(|plan| plan.token == token && plan.created.elapsed() < edit::LIFETIME)
+        .ok_or_else(|| edit::EXPIRED.into())
+}
+
+fn checked_row_change(
+    pending: &mut Option<row_edit::Plan>,
+    token: Uuid,
+) -> Result<&mut row_edit::Plan> {
+    pending
+        .as_mut()
+        .filter(|plan| plan.active(token))
         .ok_or_else(|| edit::EXPIRED.into())
 }
 
@@ -960,12 +1065,25 @@ async fn browse(
     let catalog::Relation { schema, name, kind } = catalog::relation(&tx, object).await?;
     let (edit_table, edit_reason) = if session.grid_edit {
         match edit::access(&tx, object, kind).await? {
-            edit::Access::Allowed(table) => (Some(table), None),
+            edit::Access::Allowed(table) => {
+                let reason = table.update_reason();
+                (Some(table), reason)
+            }
             edit::Access::Blocked(reason) => (None, Some(reason)),
         }
     } else {
         (None, None)
     };
+    let row_insert = edit_table
+        .as_ref()
+        .is_some_and(edit::EditTable::allow_insert);
+    let row_delete = edit_table
+        .as_ref()
+        .is_some_and(edit::EditTable::allow_delete);
+    let row_delete_reason = edit_table.as_ref().and_then(edit::EditTable::delete_reason);
+    let stamp_table = edit_table
+        .as_ref()
+        .filter(|_| edit_reason.is_none() || row_delete);
     let details = tx.query(
         "SELECT a.attname::text, pg_catalog.format_type(a.atttypid, a.atttypmod), a.attnotnull, pk.position, a.atttypid::bigint
          FROM pg_catalog.pg_attribute a
@@ -1045,7 +1163,7 @@ async fn browse(
         projection.push_str(", ");
         projection.push_str(PostgresValueRow::PROJECTION);
     }
-    if let Some(table) = &edit_table {
+    if let Some(table) = stamp_table {
         projection.push_str(", ");
         projection.push_str(&table.row_projection());
     }
@@ -1088,7 +1206,7 @@ async fn browse(
         } else {
             0
         };
-    let row_stamps = if let Some(table) = edit_table {
+    let row_stamps = if let Some(table) = stamp_table {
         Some(
             result
                 .iter()
@@ -1119,6 +1237,9 @@ async fn browse(
         row_stamps,
         value_rows,
         edit_reason,
+        row_insert,
+        row_delete,
+        row_delete_reason,
     })
 }
 

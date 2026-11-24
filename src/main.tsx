@@ -15,7 +15,7 @@ import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout"
 import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
-import { SqliteRowChangeDialog, SqliteRowFields, type RowChangeRequest, type RowChangeResult } from "./SqliteRowChangeDialog";
+import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { SqlFileDialog } from "./SqlFileDialog";
@@ -232,7 +232,7 @@ function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editRequest, setEditRequest] = useState<EditRequest | null>(null);
   const [editReport, setEditReport] = useState<EditResult | null>(null);
-  const [rowChange, setRowChange] = useState<RowChangeRequest | null>(null);
+  const [rowChange, setRowChange] = useState<Extract<RowChangeRequest, { engine: "sqlite" }> | null>(null);
   const [rowReport, setRowReport] = useState<{ profile: string; table: string; result: RowChangeResult } | null>(null);
   const rowChangeTrigger = useRef<HTMLButtonElement | null>(null);
   const rowAddButton = useRef<HTMLButtonElement>(null);
@@ -1196,11 +1196,12 @@ function App() {
     setSqliteLayoutDialog(null);
     requestAnimationFrame(() => sqliteLayoutButton.current?.focus());
   }
-  function openRowChange(change: RowChangeRequest["change"], trigger: HTMLButtonElement) {
+  function openRowChange(change: Extract<RowChangeRequest, { engine: "sqlite" }>["change"], trigger: HTMLButtonElement) {
     if (!profile || !rowChangeTable) return;
     rowChangeTrigger.current = trigger;
     setRowReport(null);
-    setRowChange({ profile: { ...profile, path: displayPath(profile.path) }, table: rowChangeTable, change });
+    setRowChange({ engine: "sqlite", profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
+      environment: profile.environment, table: rowChangeTable, change });
   }
   function closeRowChange(applied = false) {
     const trigger = rowChangeTrigger.current;
@@ -1461,7 +1462,7 @@ function App() {
         {currentRowReport && <div className="sqlite-row-report">
           <p className="success-banner" role="status">{currentRowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}
             {currentRowReport.audit_warning && <strong className="audit-warning">{currentRowReport.audit_warning}</strong>}</p>
-          {!!currentRowReport.fields.length && <details><summary>저장된 행 보기</summary><SqliteRowFields fields={currentRowReport.fields} /></details>}
+          {!!currentRowReport.fields.length && <details><summary>저장된 행 보기</summary><RowChangeFields fields={currentRowReport.fields} /></details>}
         </div>}
         {sqliteGrid.error && <p className="form-note" role="status">{sqliteGrid.error}</p>}
         {result ? <><div className="table-wrap"><table style={sqliteGeometry ? { tableLayout: "fixed", width: sqliteGeometry.total } : undefined}>
@@ -1684,8 +1685,8 @@ function App() {
       onApply={(range, update) => replaceSqlDraftRange(aliasRename, range, update.text,
         { start: update.first, end: update.first + update.spelling.length })} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
-    {rowChange && <SqliteRowChangeDialog request={rowChange} onClose={() => closeRowChange()} onApplied={report => {
-      setRowReport({ profile: rowChange.profile.id, table: rowChange.table, result: report });
+    {rowChange && <RowChangeDialog request={rowChange} onClose={() => closeRowChange()} onApplied={report => {
+      setRowReport({ profile: rowChange.profileId, table: rowChange.table, result: report });
       closeRowChange(true);
       if (result && executedQuery) {
         const previous = rowChange.change.kind === "delete" && result.rows.length === 1 && result.page > 0;
@@ -1794,6 +1795,7 @@ const auditOperationNames: Record<string, string> = {
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
+  "postgres.row.insert": "PostgreSQL 행 추가", "postgres.row.delete": "PostgreSQL 행 삭제",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.schema.sync": "SQLite 스키마 변경 적용",
   "sqlite.restore": "SQLite 복원",

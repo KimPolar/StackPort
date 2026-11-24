@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Search, ShieldCheck, X } from "lucide-react";
+import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
 import { PostgresEditDialog, type PostgresEditExitGuard, type PostgresRowStamp } from "./PostgresEditDialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
@@ -9,6 +9,7 @@ import { PostgresServerMonitor } from "./PostgresServerMonitor";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
+import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { gridDisplay, gridTypeLabels, postgresGridValueType } from "./gridValuePresentation";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
@@ -34,7 +35,10 @@ type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: s
   rows: PostgresCell[][]; total_columns: number; visible_columns: number; pinned_columns: number;
   has_next: boolean; has_next_columns: boolean; primary_key_order: boolean;
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null;
-  value_rows: PostgresValueRow[] | null; edit_reason: string | null };
+  value_rows: PostgresValueRow[] | null; edit_reason: string | null;
+  row_insert: boolean; row_delete: boolean; row_delete_reason: string | null };
+type PostgresRowChangeRequest = Extract<RowChangeRequest, { engine: "postgres" }>;
+const rowActionWidth = 56;
 type Route = { id: string; name: string; port: number };
 type RouteChoice = Pick<Route, "id" | "name">;
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
@@ -263,6 +267,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
   const [layoutOpen, setLayoutOpen] = useState(false);
   const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
+  const [rowChange, setRowChange] = useState<{ request: PostgresRowChangeRequest; trigger: HTMLButtonElement } | null>(null);
+  const [rowReport, setRowReport] = useState<RowChangeResult | null>(null);
   const [value, setValue] = useState<{ target: PostgresValueTarget; title: string; format: PostgresValueFormat | null; trigger: HTMLButtonElement } | null>(null);
   const [editNotice, setEditNotice] = useState("");
   const dataPanel = useRef<HTMLElement>(null);
@@ -279,7 +285,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
   const result = page.data;
-  const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns);
+  const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns,
+    result.row_delete ? rowActionWidth : 0);
   const displayFormats = useMemo(() => new Map(grid.layout.active.map(column => [column.name, column.format])), [grid.layout.active]);
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
@@ -294,6 +301,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     setStructureStart(current => ({ section: section ?? "overview", version: current.version + 1 }));
     setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
     setEditNotice("");
+    setRowReport(null);
   }
 
   function chooseSchema(next: Schema | null) {
@@ -338,6 +346,31 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     });
   }
 
+  function openRowChange(change: PostgresRowChangeRequest["change"], trigger: HTMLButtonElement) {
+    if (!object || !result || unavailable) return;
+    const settings = profile.settings;
+    setRowReport(null);
+    setEditNotice("");
+    setRowChange({ trigger, request: { engine: "postgres", id, object: object.id,
+      table: `${result.schema}.${result.name}`, profileName: settings.name, environment: settings.environment,
+      location: `${settings.username}@${endpoint(settings.host, settings.port)}/${settings.database}`, change } });
+  }
+
+  function closeRowChange(report?: RowChangeResult) {
+    const trigger = rowChange?.trigger;
+    setRowChange(null);
+    if (report) {
+      setRowReport(report);
+      if (!report.fields.length && rowPage > 0 && result?.rows.length === 1) setRowPage(rowPage - 1);
+      else setRefresh(value => value + 1);
+    }
+    requestAnimationFrame(() => {
+      if (unavailable) onReconnectFocus();
+      else if (!report && trigger?.isConnected) trigger.focus();
+      else dataPanel.current?.focus();
+    });
+  }
+
   return <><div className="postgres-layout" hidden={Boolean(unavailable)}>
     <aside className="postgres-catalog results-card" aria-label="PostgreSQL 객체 탐색">
       <div className="panel-heading"><strong>스키마</strong>
@@ -371,6 +404,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       tabIndex={-1} ref={dataPanel}>
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
+          {result?.row_insert && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
+            onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
           {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && exportPage(page.data)}>결과 내보내기</button>}
           {!structureOpen && !!filterColumns?.length && <button ref={columnSettings} type="button" className="secondary small"
@@ -397,6 +432,11 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       <div hidden={structureOpen}>
         {grid.error && <p className="form-note" role="status">{grid.error}</p>}
         {editNotice && <p className="success-banner" role="status">{editNotice}</p>}
+        {rowReport && <div className="row-change-report">
+          <p className="success-banner" role="status">{rowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}
+            {rowReport.audit_warning && <strong className="audit-warning">{rowReport.audit_warning}</strong>}</p>
+          {!!rowReport.fields.length && <details><summary>저장된 행 보기</summary><RowChangeFields fields={rowReport.fields} /></details>}
+        </div>}
         {schema && object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns}
           target={{ engine: "postgres", profile_id: profile.id, revision: profile.revision, schema: schema.name, object: object.name }}
           busy={page.loading} errorId={page.error ? errorId : undefined} apply={next => {
@@ -407,6 +447,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
         {result && <>
           {result.edit_reason && <p className="form-note postgres-page-note">{result.edit_reason}</p>}
+          {result.row_delete_reason && <p className="form-note postgres-page-note">{result.row_delete_reason}</p>}
           <p className="form-note postgres-page-note">{kindLabels[result.kind]} · {result.rows.length}행 · 전체 {result.total_columns}열
             {result.visible_columns < result.total_columns && ` · 표시 ${result.visible_columns}열`}
             {tableQuery.filters.length > 0 && ` · 필터 ${tableQuery.filters.length}개`}
@@ -419,12 +460,13 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           </details>}
           {result.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
             <table aria-label="PostgreSQL 데이터" style={geometry ? { tableLayout: "fixed", width: geometry.total } : undefined}>
-              {geometry && <colgroup>{geometry.widths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>}
+              {geometry && <colgroup>{geometry.widths.map((width, index) => <col key={index} style={{ width }} />)}
+                {result.row_delete && <col style={{ width: rowActionWidth }} />}</colgroup>}
               <thead><tr>{result.columns.map((column, index) => <th key={column.name} scope="col"
                 className={index < result.pinned_columns ? "grid-sticky-column" : undefined}
                 style={{ insetInlineStart: geometry?.pins[index] }}>
               {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
-            </th>)}</tr></thead>
+            </th>)}{result.row_delete && <th scope="col" className="postgres-row-actions">작업</th>}</tr></thead>
               <tbody>{result.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => {
                 const field = result.columns[column];
                 const stamp = result.row_stamps?.[index];
@@ -449,10 +491,16 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                   {canEdit && <button type="button" className="icon-button" aria-label={`${rowNumber}행 ${field.name} 편집`}
                     onClick={event => {
                       setEditNotice("");
+                      setRowReport(null);
                       setEdit({ object: object.id, stamp, column: field.name, trigger: event.currentTarget });
                     }}><Pencil size={14} aria-hidden /></button>}
                 </div> : <PostgresValue cell={cell} display={display} />}</td>;
-              })}</tr>)}</tbody></table></div>}
+              })}{result.row_delete && <td className="postgres-row-actions">{result.row_stamps?.[index] &&
+                <button type="button" className="icon-button" title="행 삭제" aria-label={`${rowPage * 100 + index + 1}행 삭제`}
+                  disabled={page.loading || Boolean(unavailable)} onClick={event => {
+                    const stamp = result.row_stamps?.[index];
+                    if (stamp) openRowChange({ kind: "delete", stamp }, event.currentTarget);
+                  }}><Trash2 size={14} aria-hidden /></button>}</td>}</tr>)}</tbody></table></div>}
           {result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
           <div className="postgres-paging">
             <Pager label="데이터" page={rowPage} next={result.has_next} change={setRowPage} />
@@ -483,5 +531,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           setEditNotice(warning ? result + " · 작업 기록을 저장할 수 없습니다." : result);
           closeEdit(true);
         }} />}
+      {rowChange && <RowChangeDialog request={rowChange.request} unavailable={unavailable} onClose={() => closeRowChange()}
+        onApplied={closeRowChange} onUnknown={onEditUnknown} onBusy={onFileBusy} onExitGuard={onEditExitGuard} />}
   </>;
 }

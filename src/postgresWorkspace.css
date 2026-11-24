@@ -92,6 +92,7 @@
 .postgres-editable-cell { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .postgres-editable-cell .icon-button { flex: 0 0 auto; opacity: .65; }
 .postgres-editable-cell .icon-button:hover, .postgres-editable-cell .icon-button:focus-visible { opacity: 1; }
+.postgres-data .postgres-row-actions { width: 56px; text-align: center; }
 .dialog.postgres-value-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
 .postgres-value-content { padding: 0 21px; }
 .postgres-value-content .confirm-copy { overflow-wrap: anywhere; }

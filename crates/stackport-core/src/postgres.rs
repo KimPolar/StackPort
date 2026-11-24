@@ -18,6 +18,7 @@ pub use edit::{
     PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
     PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
 };
+pub use edit::row::{PostgresRowChange, PostgresRowChangeOutcome};
 pub use export::PostgresExportOptions;
 pub use grid_layout::PostgresGridLayout;
 pub use monitor::{PostgresActivityInput, PostgresActivitySnapshot};

@@ -15,6 +15,8 @@ use tokio_postgres::{Client, Error, IsolationLevel, Row, Transaction};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
 
+pub(super) mod row;
+
 pub(super) const LIFETIME: Duration = Duration::from_secs(300);
 const DEADLINE: Duration = Duration::from_secs(12);
 const VALUE_LIMIT: usize = 4096;
@@ -140,7 +142,7 @@ pub enum PostgresEditOutcome {
     Unknown,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct Attribute {
     name: String,
     number: i16,
@@ -149,6 +151,43 @@ struct Attribute {
     typmod: i32,
     nullable: bool,
     default_sql: Option<String>,
+    default_oid: Option<i64>,
+    identity: String,
+}
+
+impl Attribute {
+    fn supported(&self) -> bool {
+        matches!(
+            self.type_oid,
+            16 | 20
+                | 21
+                | 23
+                | 25
+                | 114
+                | 142
+                | 700
+                | 701
+                | 1042
+                | 1043
+                | 1082
+                | 1083
+                | 1114
+                | 1184
+                | 1186
+                | 1266
+                | 1700
+                | 2950
+                | 3802
+        )
+    }
+
+    fn insertable(&self) -> bool {
+        self.supported() && self.identity != "a"
+    }
+
+    fn required_for_insert(&self) -> bool {
+        !self.nullable && self.default_sql.is_none() && self.identity.is_empty()
+    }
 }
 
 pub(super) enum Access {
@@ -159,6 +198,11 @@ pub(super) enum Access {
 pub(super) struct EditTable {
     key: Vec<Attribute>,
     columns: Vec<Attribute>,
+    shape: Vec<Attribute>,
+    can_update: bool,
+    can_insert: bool,
+    can_delete: bool,
+    delete_cascades: bool,
 }
 
 impl Access {
@@ -171,8 +215,34 @@ impl Access {
 }
 
 impl EditTable {
+    pub(super) fn update_reason(&self) -> Option<&'static str> {
+        if !self.can_update {
+            return Some("이 테이블에 UPDATE 권한이 없습니다.");
+        }
+        self.columns
+            .is_empty()
+            .then_some("이 테이블에 편집 가능한 열이 없습니다.")
+    }
+
+    pub(super) fn allow_insert(&self) -> bool {
+        self.can_insert
+            && !self
+                .shape
+                .iter()
+                .any(|column| column.required_for_insert() && !column.insertable())
+    }
+
+    pub(super) fn allow_delete(&self) -> bool {
+        self.can_delete && !self.delete_cascades
+    }
+
+    pub(super) fn delete_reason(&self) -> Option<&'static str> {
+        (self.can_delete && self.delete_cascades)
+            .then_some("연쇄 변경을 일으키는 외래 키가 있어 그리드에서 삭제할 수 없습니다.")
+    }
+
     pub(super) fn editable(&self, name: &str) -> bool {
-        self.columns.iter().any(|column| column.name == name)
+        self.can_update && self.columns.iter().any(|column| column.name == name)
     }
 
     pub(super) fn row_projection(&self) -> String {
@@ -210,37 +280,43 @@ pub(super) async fn access(tx: &Transaction<'_>, object: i64, kind: &str) -> Res
         ));
     }
     let row = tx.query_one(
-        "SELECT pg_catalog.pg_is_in_recovery(), pg_catalog.has_table_privilege(c.oid,'UPDATE'),
-                NOT c.relispartition AND am.amname = 'heap'
+        "SELECT pg_catalog.pg_is_in_recovery(), NOT c.relispartition AND am.amname = 'heap'
                     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE i.inhrelid = c.oid OR i.inhparent = c.oid),
                 NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal)
                     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid)
-                    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid AND NOT a.attisdropped AND a.attgenerated <> '')
+                    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a WHERE a.attrelid = c.oid AND NOT a.attisdropped AND a.attgenerated <> ''),
+                pg_catalog.has_table_privilege(c.oid,'UPDATE'), pg_catalog.has_table_privilege(c.oid,'INSERT'),
+                pg_catalog.has_table_privilege(c.oid,'DELETE'),
+                EXISTS (SELECT 1 FROM pg_catalog.pg_constraint fk WHERE fk.contype='f' AND fk.confrelid=c.oid AND fk.confdeltype IN ('c','n','d'))
          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_am am ON am.oid = c.relam WHERE c.oid::bigint = $1",
         &[&object],
     ).await.map_err(pg_error)?;
     if field::<bool>(&row, 0)? {
         return Ok(Access::Blocked("읽기 복제본에서는 편집할 수 없습니다."));
     }
-    if !field::<bool>(&row, 1)? {
-        return Ok(Access::Blocked("이 테이블에 UPDATE 권한이 없습니다."));
-    }
-    if !field::<bool>(&row, 2)? || !field::<bool>(&row, 3)? {
+    if !field::<bool>(&row, 1)? || !field::<bool>(&row, 2)? {
         return Ok(Access::Blocked(
             "상속·파티션·사용자 트리거·규칙·생성 열이 없는 일반 힙 테이블만 편집할 수 있습니다.",
         ));
+    }
+    let can_update = field(&row, 3)?;
+    let can_insert = field(&row, 4)?;
+    let can_delete = field(&row, 5)?;
+    let delete_cascades = field(&row, 6)?;
+    if !(can_update || can_insert || can_delete) {
+        return Ok(Access::Blocked("이 테이블에 UPDATE 권한이 없습니다."));
     }
 
     let rows = tx.query(
         "SELECT a.attname::text, a.attnum, pg_catalog.format_type(a.atttypid, a.atttypmod),
                 a.atttypid::bigint, a.atttypmod, NOT a.attnotnull,
-                CASE WHEN keys.position IS NULL THEN pg_catalog.left(pg_catalog.pg_get_expr(d.adbin,d.adrelid), 4097) END,
+                pg_catalog.left(pg_catalog.pg_get_expr(d.adbin,d.adrelid), 4097),
                 keys.position,
                 a.attidentity = '' AND NOT EXISTS (
                     SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = a.attrelid AND i.indisunique
                     AND EXISTS (SELECT 1 FROM pg_catalog.unnest(i.indkey::smallint[]) WITH ORDINALITY k(attnum,ordinality)
                                 WHERE k.ordinality <= i.indnkeyatts AND k.attnum = a.attnum)
-                )
+                ), d.oid::bigint, a.attidentity::text
          FROM pg_catalog.pg_attribute a
          LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
          LEFT JOIN LATERAL (
@@ -254,6 +330,7 @@ pub(super) async fn access(tx: &Transaction<'_>, object: i64, kind: &str) -> Res
     ).await.map_err(pg_error)?;
     let mut keys = Vec::new();
     let mut columns = Vec::new();
+    let mut shape = Vec::new();
     for row in rows {
         let column = Attribute {
             name: field(&row, 0)?,
@@ -263,52 +340,35 @@ pub(super) async fn access(tx: &Transaction<'_>, object: i64, kind: &str) -> Res
             typmod: field(&row, 4)?,
             nullable: field(&row, 5)?,
             default_sql: field(&row, 6)?,
+            default_oid: field(&row, 9)?,
+            identity: field(&row, 10)?,
         };
-        let supported = matches!(
-            column.type_oid,
-            16 | 20
-                | 21
-                | 23
-                | 25
-                | 114
-                | 142
-                | 700
-                | 701
-                | 1042
-                | 1043
-                | 1082
-                | 1083
-                | 1114
-                | 1184
-                | 1186
-                | 1266
-                | 1700
-                | 2950
-                | 3802
-        );
         if let Some(position) = field::<Option<i32>>(&row, 7)? {
-            if !supported || column.nullable {
+            if !column.supported() || column.nullable {
                 return Ok(Access::Blocked(
                     "기본 키의 데이터 타입을 안전하게 편집할 수 없습니다.",
                 ));
             }
-            keys.push((position, column));
-        } else if supported && field::<bool>(&row, 8)? {
-            columns.push(column);
+            keys.push((position, column.clone()));
+        } else if can_update && column.supported() && field::<bool>(&row, 8)? {
+            columns.push(column.clone());
         }
+        shape.push(column);
     }
     if keys.is_empty() {
         return Ok(Access::Blocked(
             "편집하려면 즉시 검증되는 기본 키가 필요합니다.",
         ));
     }
-    if columns.is_empty() {
-        return Ok(Access::Blocked("이 테이블에 편집 가능한 열이 없습니다."));
-    }
     keys.sort_by_key(|(index, _)| *index);
     Ok(Access::Allowed(EditTable {
         key: keys.into_iter().map(|(_, key)| key).collect(),
         columns,
+        shape,
+        can_update,
+        can_insert,
+        can_delete,
+        delete_cascades,
     }))
 }
 
@@ -380,6 +440,9 @@ pub(super) async fn begin(
         .map_err(pg_error)?;
     let relation = catalog::relation(&tx, object).await?;
     let edit = access(&tx, object, relation.kind).await?.allowed()?;
+    if let Some(reason) = edit.update_reason() {
+        return Err(reason.into());
+    }
     let columns = edit
         .columns
         .iter()
@@ -581,35 +644,45 @@ pub(super) async fn apply(
     } else {
         "postgres.edit.row"
     };
-    audit(store, profile, plan.token, operation, "started").await?;
+    audit(store, profile, plan.token, operation, None, "started").await?;
     let attempted = timeout(DEADLINE, update(client, &plan)).await;
     let (tx, actual) = match attempted {
         Ok(Ok(result)) => result,
         other => {
-            let _ = audit(store, profile, plan.token, operation, "failed").await;
+            let _ = audit(store, profile, plan.token, operation, None, "failed").await;
             return match other {
                 Ok(Err(error)) => Err(error),
                 _ => Err("행 변경 시간이 초과되었습니다. 다시 조회하세요.".into()),
             };
         }
     };
-    match timeout(DEADLINE, tx.commit()).await {
-        Ok(Ok(())) => Ok(PostgresEditOutcome::Applied {
+    match commit(tx).await {
+        Ok(true) => Ok(PostgresEditOutcome::Applied {
             actual,
             affected_cells,
-            audit_warning: audit(store, profile, plan.token, operation, "succeeded")
+            audit_warning: audit(store, profile, plan.token, operation, None, "succeeded")
                 .await
                 .is_err(),
         }),
+        Err(error) => {
+            let _ = audit(store, profile, plan.token, operation, None, "failed").await;
+            Err(error)
+        }
+        Ok(false) => Ok(PostgresEditOutcome::Unknown),
+    }
+}
+
+async fn commit(tx: Transaction<'_>) -> Result<bool> {
+    match timeout(DEADLINE, tx.commit()).await {
+        Ok(Ok(())) => Ok(true),
         Ok(Err(error))
             if error.code().is_some_and(|code| {
                 matches!(&code.code()[..2], "23" | "40") && code.code() != "40003"
             }) =>
         {
-            let _ = audit(store, profile, plan.token, operation, "failed").await;
             Err(write_error(error))
         }
-        _ => Ok(PostgresEditOutcome::Unknown),
+        _ => Ok(false),
     }
 }
 
@@ -689,6 +762,9 @@ async fn recheck(tx: &Transaction<'_>, plan: &Plan) -> Result<EditTable> {
         return Err(STALE.into());
     }
     let edit = access(tx, plan.object, relation.kind).await?.allowed()?;
+    if let Some(reason) = edit.update_reason() {
+        return Err(reason.into());
+    }
     if plan.key != edit.key {
         return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
     }
@@ -696,8 +772,12 @@ async fn recheck(tx: &Transaction<'_>, plan: &Plan) -> Result<EditTable> {
 }
 
 fn predicate(plan: &Plan) -> String {
-    let mut where_sql = format!("tableoid::bigint = {}", plan.object);
-    for (index, key) in plan.key.iter().enumerate() {
+    key_predicate(plan.object, &plan.key)
+}
+
+fn key_predicate(object: i64, keys: &[Attribute]) -> String {
+    let mut where_sql = format!("tableoid::bigint = {object}");
+    for (index, key) in keys.iter().enumerate() {
         where_sql.push_str(&format!(" AND {} = ${}", quote(&key.name), index + 1));
     }
     where_sql
@@ -809,10 +889,12 @@ async fn audit(
     profile: &PostgresProfile,
     token: Uuid,
     operation: &'static str,
+    object: Option<&str>,
     outcome: &'static str,
 ) -> Result<()> {
     let store = store.clone();
     let profile = profile.clone();
+    let object = object.map(str::to_owned);
     tokio::task::spawn_blocking(move || {
         if outcome == "started"
             && (store.postgres_profile(&profile.id)? != profile
@@ -831,7 +913,7 @@ async fn audit(
                 project_id: Some(&profile.project_id),
                 profile_id: Some(&profile.id),
                 environment: Some(&profile.settings.environment),
-                object_name: None,
+                object_name: object.as_deref(),
                 outcome,
                 affected_count: (outcome == "succeeded").then_some(1),
             },

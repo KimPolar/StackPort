@@ -94,14 +94,14 @@ PARTIAL = {
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
-    "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 객체의 SELECT·UPDATE 권한 확인과 편집 제한 안내",
+    "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 그리드의 SELECT·INSERT·UPDATE·DELETE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
     "SP-DT-001": "SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",
     "SP-DT-002": "PostgreSQL 일반 힙 테이블 그리드에서 원문 텍스트·bytea HEX 페이지와 JSON·JSONB 들여쓰기·XML 트리·정적 PNG 보기",
-    "SP-DT-003": "SQLite 그리드에서 한 행 추가·삭제 및 단일 셀 수정, PostgreSQL 한 행의 최대 16개 셀 수정",
-    "SP-DT-004": "SQLite 단일 셀 수정과 한 행 추가·삭제의 미리보기·명시적 적용·취소, PostgreSQL 한 행의 여러 셀 미리보기·변경 강조·미적용 변경 확인과 취소",
+    "SP-DT-003": "SQLite·PostgreSQL 그리드에서 한 행 추가·삭제, SQLite 단일 셀 수정과 PostgreSQL 한 행의 최대 16개 셀 수정",
+    "SP-DT-004": "SQLite·PostgreSQL 그리드의 행 추가·삭제 미리보기·적용·취소, SQLite 단일 셀과 PostgreSQL 여러 셀의 변경 비교 및 초안 확인",
     "SP-DT-005": "SQLite·PostgreSQL 기본 키 검증과 키 없는 테이블 편집 차단",
-    "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자 구분, SQLite 행 추가에서 DB 기본값과 자동 기본 키 반영, PostgreSQL 서버 타입 검증과 기본값 적용",
+    "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자 구분, 행 추가에서 DB 기본값과 자동 생성 키 반영, PostgreSQL 서버 타입 검증과 저장 값 확인",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집, PostgreSQL의 숫자·날짜·UUID·JSON 등 지원 타입 바인딩",
     "SP-DT-008": "PostgreSQL 일반 힙 테이블의 긴 텍스트·JSON·XML·bytea 부분 조회, 범위 내 구조·PNG 미리보기와 원본 새 파일 저장",
     "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
@@ -360,7 +360,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             }:
                 evidence += "; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006"}:
-                evidence += "; crates/stackport-core/src/edit/row.rs; src/SqliteRowChangeDialog.tsx"
+                evidence += "; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row.rs; src/RowChangeDialog.tsx"
             if requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-017", "SP-DB-018", "SP-DB-020", "SP-DB-022"}:
                 evidence += "; crates/stackport-core/src/postgres/catalog.rs; src/PostgresObjectStructure.tsx"
                 if requirement_id in {"SP-DB-014", "SP-DB-018"}:

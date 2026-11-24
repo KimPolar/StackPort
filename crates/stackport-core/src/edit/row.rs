@@ -42,6 +42,7 @@ pub struct InsertColumn {
     pub required: bool,
     pub auto_key: bool,
     pub default_value: Option<String>,
+    pub editable: bool,
 }
 
 #[derive(Serialize)]
@@ -340,6 +341,7 @@ fn insert_columns(details: &ObjectDetails) -> Vec<InsertColumn> {
                 required: !nullable && !auto_key && column.default_value.is_none(),
                 auto_key,
                 default_value: column.default_value.clone(),
+                editable: true,
             }
         })
         .collect()

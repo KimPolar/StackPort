@@ -6,7 +6,10 @@
 //! full impact planner exists.
 
 mod row;
-pub use row::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField};
+pub use row::{
+    InsertColumn, RowChange, RowChangeField, RowChangePreview, RowChangeResult, RowChangeSession,
+    RowChangeValue, RowInsertField,
+};
 
 use super::quote_identifier as quote;
 use super::{

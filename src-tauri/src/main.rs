@@ -17,6 +17,7 @@ use stackport_core::{
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
+    PostgresRowChange, PostgresRowChangeOutcome,
     PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
     PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget,
     PostgresGridLayout,
@@ -943,6 +944,26 @@ async fn cancel_postgres_edit(postgres: State<'_, PostgresManager>, id: String, 
 }
 
 #[tauri::command]
+async fn begin_postgres_row_change(postgres: State<'_, PostgresManager>, id: String, object: i64, change: PostgresRowChange) -> Result<RowChangeSession, String> {
+    postgres.begin_row_change(&id, object, change).await
+}
+
+#[tauri::command]
+async fn preview_postgres_row_insert(postgres: State<'_, PostgresManager>, id: String, token: String, fields: Vec<PostgresCellChange>) -> Result<RowChangePreview, String> {
+    postgres.preview_row_insert(&id, &token, fields).await
+}
+
+#[tauri::command]
+async fn apply_postgres_row_change(postgres: State<'_, PostgresManager>, id: String, token: String, approval: String, confirmation: String) -> Result<PostgresRowChangeOutcome, String> {
+    postgres.apply_row_change(&id, &token, &approval, &confirmation).await
+}
+
+#[tauri::command]
+async fn cancel_postgres_row_change(postgres: State<'_, PostgresManager>, id: String, token: String) -> Result<(), String> {
+    postgres.cancel_row_change(&id, &token).await
+}
+
+#[tauri::command]
 async fn execute_postgres_sql(
     postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
     bindings: Option<PostgresSqlBindings>,
@@ -1641,6 +1662,10 @@ fn main() {
             preview_postgres_row_edit,
             apply_postgres_edit,
             cancel_postgres_edit,
+            begin_postgres_row_change,
+            preview_postgres_row_insert,
+            apply_postgres_row_change,
+            cancel_postgres_row_change,
             execute_postgres_sql,
             postgres_export_progress,
             cancel_postgres_sql,

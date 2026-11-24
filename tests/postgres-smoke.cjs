@@ -113,6 +113,18 @@ async function startPostgres(preloadStats = true) {
     'CREATE POLICY edit_visible ON report."edit demo" FOR SELECT TO fixture_reader USING (true);',
     'CREATE POLICY edit_allowed ON report."edit demo" FOR UPDATE TO fixture_reader USING ("tenant key" = 1);',
     'GRANT SELECT, UPDATE ON report."edit demo" TO fixture_reader;',
+    'CREATE TABLE report."row actions" (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "row label" text NOT NULL UNIQUE, ' +
+      "empty_text text DEFAULT 'default text', optional text DEFAULT 'not null', amount numeric(12,2) DEFAULT 7, due date DEFAULT DATE '2026-01-02');",
+    'ALTER TABLE report."row actions" ENABLE ROW LEVEL SECURITY;',
+    'CREATE POLICY row_action_read ON report."row actions" FOR SELECT TO fixture_reader USING (true);',
+    'CREATE POLICY row_action_insert ON report."row actions" FOR INSERT TO fixture_reader WITH CHECK ("row label" <> \'deny\');',
+    'CREATE POLICY row_action_delete ON report."row actions" FOR DELETE TO fixture_reader USING (true);',
+    'GRANT SELECT, INSERT, DELETE ON report."row actions" TO fixture_reader;',
+    "CREATE TABLE report.row_guard (id integer PRIMARY KEY, label text); INSERT INTO report.row_guard VALUES (1, 'before');",
+    'GRANT SELECT, UPDATE, DELETE ON report.row_guard TO fixture_reader;',
+    'CREATE TABLE report.row_cascade (id integer PRIMARY KEY); INSERT INTO report.row_cascade VALUES (1);',
+    'CREATE TABLE report.row_cascade_child (parent integer REFERENCES report.row_cascade(id) ON DELETE CASCADE);',
+    'GRANT SELECT, DELETE ON report.row_cascade TO fixture_reader;',
     'CREATE TABLE report.meta_parent (parent_id integer, tenant integer, CONSTRAINT meta_parent_pk PRIMARY KEY (parent_id, tenant));',
     'CREATE TABLE report.meta_child (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer, tenant integer, ' +
       "status text COLLATE \"C\" DEFAULT '대기', normalized text GENERATED ALWAYS AS (lower(status)) STORED, " +
@@ -1162,6 +1174,45 @@ async function verify(browser, fixture, gateway, jump) {
   await connect(null, true);
   await page.getByText('그리드 편집 허용', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'report', exact: true }).click();
+  await page.getByRole('button', { name: 'row actions 테이블', exact: true }).click();
+  await page.getByRole('button', { name: '행 추가', exact: true }).click();
+  const rowInsert = page.getByRole('dialog', { name: 'PostgreSQL 행 추가', exact: true });
+  await rowInsert.getByLabel('row label 값', { exact: true }).fill('화면 추가 행');
+  await rowInsert.getByLabel('empty_text 값 형식', { exact: true }).selectOption('text');
+  await rowInsert.getByLabel('optional 값 형식', { exact: true }).selectOption('null');
+  await rowInsert.getByLabel('amount 값 형식', { exact: true }).selectOption('text');
+  await rowInsert.getByLabel('amount 값', { exact: true }).fill('0');
+  await page.keyboard.press('Escape');
+  await rowInsert.getByRole('button', { name: '계속 편집', exact: true }).click();
+  assert.equal(await rowInsert.getByLabel('row label 값', { exact: true }).inputValue(), '화면 추가 행');
+  await rowInsert.getByRole('button', { name: '행 추가 미리보기', exact: true }).click();
+  const previewRow = rowInsert.getByRole('region', { name: '추가할 행', exact: true });
+  await previewRow.getByText('빈 문자열', { exact: true }).waitFor();
+  await previewRow.getByText('NULL', { exact: true }).waitFor();
+  await previewRow.getByText('0.00', { exact: true }).waitFor();
+  await previewRow.getByText('자동 생성', { exact: true }).waitFor();
+  await previewRow.getByText(/DB 기본값.*2026-01-02/).waitFor();
+  await rowInsert.getByLabel('운영 환경 확인 · PROD 입력', { exact: true }).fill('PROD');
+  await rowInsert.getByRole('button', { name: '행 추가 적용', exact: true }).click();
+  await rowInsert.waitFor({ state: 'detached' });
+  await page.getByText('행 1개 추가 완료', { exact: true }).waitFor();
+  await data.getByText('화면 추가 행', { exact: true }).waitFor();
+  await page.getByText('저장된 행 보기', { exact: true }).click();
+  await page.locator('.row-change-report').getByText('2026-01-02', { exact: true }).waitFor();
+  const rowDelete = page.getByRole('dialog', { name: 'PostgreSQL 행 삭제', exact: true });
+  const deleteRow = data.getByRole('button', { name: '1행 삭제', exact: true });
+  await deleteRow.click();
+  await rowDelete.getByText('화면 추가 행', { exact: true }).waitFor();
+  await rowDelete.getByRole('button', { name: '취소', exact: true }).click();
+  await rowDelete.waitFor({ state: 'detached' });
+  await data.getByText('화면 추가 행', { exact: true }).waitFor();
+  await deleteRow.click();
+  await rowDelete.getByLabel('운영 환경 확인 · PROD 입력', { exact: true }).fill('PROD');
+  await rowDelete.getByRole('button', { name: '행 삭제 적용', exact: true }).click();
+  await rowDelete.waitFor({ state: 'detached' });
+  await page.getByText('행 1개 삭제 완료', { exact: true }).waitFor();
+  await data.getByText('화면 추가 행', { exact: true }).waitFor({ state: 'detached' });
+
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
   const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });
   const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });
@@ -1692,10 +1743,73 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     const rows = history.events.filter(event => event.operation === 'postgres.edit.row');
     assert.deepEqual(rows.map(event => event.outcome).sort(), ['failed', 'started', 'started', 'succeeded']);
     assert.equal(rows.find(event => event.outcome === 'succeeded').affected_count, 1);
+    await verifyRowActions({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
   } finally {
     await close(writer.id);
     await close(peer.id);
   }
+}
+
+async function verifyRowActions({ command, page, id, peer, findObject, readOnly }) {
+  const target = findObject('row actions');
+  const begin = (change, object = target, connection = id) => command('begin_postgres_row_change', { id: connection, object, change });
+  const preview = (token, fields) => command('preview_postgres_row_insert', { id, token, fields });
+  const apply = (session, approval, confirmation = 'PROD') => command('apply_postgres_row_change', {
+    id, token: session.token, approval, confirmation,
+  });
+  const text = (column, value) => ({ column, input: { kind: 'text', value } });
+  const actionView = await page(id, target);
+  assert.equal(actionView.row_insert, true);
+  assert.equal(actionView.row_delete, true);
+  assert.ok(actionView.columns.every(column => !column.editable));
+  assert.equal((await page(readOnly, target)).row_insert, false);
+  await assert.rejects(begin({ kind: 'insert' }, target, readOnly), /편집을 허용/);
+  const insert = await begin({ kind: 'insert' });
+  assert.equal(insert.columns[0].editable, false);
+  await assert.rejects(preview(insert.token, [text('id', '5')]), /직접 입력/);
+  const inputs = [text('row label', 'native row action'), text('empty_text', ''), { column: 'optional', input: { kind: 'null' } }, text('amount', '0')];
+  const original = await preview(insert.token, inputs);
+  await assert.rejects(preview(insert.token, [...inputs, text('amount', '1')]), /두 번/);
+  await assert.rejects(apply(insert, original.approval), /미리/);
+  const approved = await preview(insert.token, inputs);
+  assert.equal(approved.fields.find(field => field.name === 'amount').cell.display, '0.00');
+  assert.equal((await page(peer, target)).rows.length, 0);
+  await assert.rejects(apply(insert, approved.approval, ''), /PROD/);
+  const added = await apply(insert, approved.approval);
+  assert.equal(added.status, 'applied');
+  assert.equal(added.result.fields.find(field => field.name === 'due').cell.display, '2026-01-02');
+  await assert.rejects(apply(insert, approved.approval), /만료/);
+  const stored = await page(peer, target);
+  assert.deepEqual(stored.rows[0].slice(1).map(cell => cell.value), ['native row action', '', null, '0.00', '2026-01-02']);
+  const denied = await begin({ kind: 'insert' });
+  const rejected = await preview(denied.token, [text('row label', 'deny')]);
+  await assert.rejects(apply(denied, rejected.approval), /권한/);
+  assert.equal((await page(peer, target)).rows.length, 1);
+  const deleted = await begin({ kind: 'delete', stamp: stored.row_stamps[0] });
+  await assert.rejects(apply(deleted, deleted.preview.approval, ''), /PROD/);
+  assert.equal((await apply(deleted, deleted.preview.approval)).status, 'applied');
+  assert.equal((await page(peer, target)).rows.length, 0);
+
+  const cascade = findObject('row_cascade');
+  const cascadeView = await page(id, cascade);
+  assert.equal(cascadeView.row_delete, false);
+  assert.match(cascadeView.row_delete_reason, /연쇄 변경/);
+  await assert.rejects(begin({ kind: 'delete', stamp: stored.row_stamps[0] }, cascade), /연쇄 변경/);
+  const guard = findObject('row_guard');
+  const guardStamp = (await page(id, guard)).row_stamps[0];
+  const stale = await begin({ kind: 'delete', stamp: guardStamp }, guard);
+  const edit = await command('begin_postgres_edit', { id: peer, object: guard, stamp: guardStamp, column: 'label' });
+  const changed = await command('preview_postgres_edit', { id: peer, token: edit.token, input: { kind: 'text', value: 'concurrent' } });
+  await command('apply_postgres_edit', { id: peer, token: edit.token, approval: changed.approval, confirmation: 'PROD' });
+  await assert.rejects(apply(stale, stale.preview.approval), /행이 변경/);
+  assert.equal((await page(peer, guard)).rows[0][1].value, 'concurrent');
+  const history = await command('list_audit_events', { before: null });
+  const entries = history.events.filter(event => event.operation === 'postgres.row.insert' || event.operation === 'postgres.row.delete');
+  assert.ok(entries.some(event => event.operation === 'postgres.row.insert' && event.outcome === 'succeeded'
+    && event.affected_count === 1 && event.object_name === '"report"."row actions"'));
+  assert.ok(entries.some(event => event.operation === 'postgres.row.delete' && event.outcome === 'succeeded'
+    && event.policy === 'postgres-row-change-prod-confirmed' && event.affected_count === 1));
+  assert.doesNotMatch(JSON.stringify(entries), /native row action|concurrent/);
 }
 
 async function main() {
