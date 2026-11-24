@@ -1,5 +1,7 @@
 //! Terminal sessions. Input and output are never written to workspace storage.
 
+mod routed;
+
 use crate::Result;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -53,14 +55,20 @@ struct TerminalState {
     output_error: Mutex<Option<String>>,
 }
 
+struct OutputChunk {
+    data: Vec<u8>,
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
 struct Session {
     closing: Arc<AtomicBool>,
     state: Arc<TerminalState>,
-    receiver: Mutex<Option<Receiver<Vec<u8>>>>,
+    receiver: Mutex<Option<Receiver<OutputChunk>>>,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     job: Mutex<Option<ProcessJob>>,
     known_hosts: Mutex<Option<tempfile::TempPath>>,
+    remote: Mutex<Option<routed::RemoteControl>>,
 }
 
 impl Session {
@@ -72,6 +80,11 @@ impl Session {
         // once its receiver is dropped. ConPTY must be drained while closing.
         if let Ok(mut receiver) = self.receiver.lock() {
             receiver.take();
+        }
+        if let Ok(mut remote) = self.remote.lock() {
+            if let Some(remote) = remote.take() {
+                remote.stop();
+            }
         }
         // Closing the Windows job terminates the shell and its associated
         // children before the PTY handles are released.
@@ -134,7 +147,7 @@ impl TerminalManager {
             .master
             .take_writer()
             .map_err(|e| format!("터미널 입력을 열 수 없습니다: {e}"))?;
-        let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(OUTPUT_CHUNKS);
+        let (sender, receiver) = mpsc::sync_channel(OUTPUT_CHUNKS);
         let closing = Arc::new(AtomicBool::new(false));
         let state = Arc::new(TerminalState::default());
         let session = Arc::new(Session {
@@ -145,6 +158,7 @@ impl TerminalManager {
             master: Mutex::new(Some(pair.master)),
             job: Mutex::new(Some(job)),
             known_hosts: Mutex::new(known_hosts),
+            remote: Mutex::new(None),
         });
         let reader_closing = Arc::clone(&closing);
         let reader_state = Arc::clone(&state);
@@ -157,7 +171,12 @@ impl TerminalManager {
                         Ok(0) => break,
                         Ok(count) => {
                             if !reader_closing.load(Ordering::SeqCst)
-                                && sender.send(buffer[..count].to_vec()).is_err()
+                                && sender
+                                    .send(OutputChunk {
+                                        data: buffer[..count].to_vec(),
+                                        _permit: None,
+                                    })
+                                    .is_err()
                                 && !reader_closing.load(Ordering::SeqCst)
                             {
                                 break;
@@ -267,13 +286,13 @@ impl TerminalManager {
                 .map_err(|_| "터미널 출력을 사용할 수 없습니다.")?;
             let receiver = receiver.as_ref().ok_or("터미널이 닫혔습니다.")?;
             match receiver.recv_timeout(READ_WAIT) {
-                Ok(chunk) => data.extend(chunk),
+                Ok(chunk) => data.extend(chunk.data),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => output_closed = true,
             }
             while data.len() < READ_LIMIT {
                 match receiver.try_recv() {
-                    Ok(chunk) => data.extend(chunk),
+                    Ok(chunk) => data.extend(chunk.data),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         output_closed = true;
@@ -317,6 +336,14 @@ impl TerminalManager {
         {
             return Err("이미 종료된 터미널입니다.".into());
         }
+        if let Some(remote) = session
+            .remote
+            .lock()
+            .map_err(|_| "터미널 입력을 사용할 수 없습니다.")?
+            .as_ref()
+        {
+            return remote.write(data);
+        }
         let mut writer = session
             .writer
             .lock()
@@ -331,6 +358,14 @@ impl TerminalManager {
     pub fn resize(&self, id: &str, rows: u16, cols: u16) -> Result<()> {
         let size = terminal_size(rows, cols)?;
         let session = self.session(id)?;
+        if let Some(remote) = session
+            .remote
+            .lock()
+            .map_err(|_| "터미널 크기를 변경할 수 없습니다.")?
+            .as_ref()
+        {
+            return remote.resize(size);
+        }
         let master = session
             .master
             .lock()

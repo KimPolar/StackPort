@@ -14,7 +14,7 @@ import { SftpEditorDialog, type SftpEditDocument, type SftpEditorSelection } fro
 import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
 import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
-import { SftpRouteDialog } from "./SftpRouteDialog";
+import { SshRouteDialog } from "./SshRouteDialog";
 import type { TerminalDirectory } from "./terminalDirectory";
 
 type Session = { id: string; directory: Directory };
@@ -373,7 +373,8 @@ function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
     </fieldset>}
     {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-  </form>{routeDialog && <SftpRouteDialog target={profile} profiles={profiles} onBusy={onConnecting} onClose={() => setRouteDialog(false)} onOpened={onOpened} />}</>;
+  </form>{routeDialog && <SshRouteDialog<Session> tool="sftp" target={profile} profiles={profiles} onBusy={onConnecting}
+    onClose={() => setRouteDialog(false)} onOpened={(session, hops) => onOpened(session, hops.map(hop => hop.name))} />}</>;
 }
 
 function directoryLocation({ path, location }: Directory): DirectoryLocation {

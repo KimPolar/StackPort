@@ -33,7 +33,8 @@ pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
 
 pub use crate::ssh_transport::SshCredentials as SftpAuthentication;
-use crate::{ssh_transport::{self, Endpoint, SshConnection}, Result, SshHostInfo, SshManager, SshProfile, Store};
+pub use crate::ssh_transport::SshRouteHop as SftpHop;
+use crate::{ssh_transport::{self, Endpoint, SshRoute}, Result, SshManager, SshProfile, SshRouteResult, Store};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use russh::ChannelMsg;
 use russh_sftp::{
@@ -42,7 +43,7 @@ use russh_sftp::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs,
     path::Path,
     sync::{Arc, Mutex},
@@ -57,7 +58,6 @@ use uuid::Uuid;
 const MAX_CONNECTIONS: usize = 8;
 const MAX_ITEMS: usize = 2_000;
 const MAX_REMOTE_PATH: usize = 4_096;
-const MAX_HOPS: usize = 3;
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(18);
 
@@ -113,19 +113,7 @@ pub struct SftpOpened {
     pub directory: BrowseDirectory,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SftpHop {
-    pub profile: SshProfile,
-    pub authentication: SftpAuthentication,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum RoutedSftpOpened {
-    Open { session: SftpOpened },
-    TrustRequired { stage: String, host: SshHostInfo },
-}
+pub type RoutedSftpOpened = SshRouteResult<SftpOpened>;
 
 pub struct SftpManager {
     store: Store,
@@ -135,8 +123,7 @@ pub struct SftpManager {
 
 struct FilesSession {
     profile: SshProfile,
-    ssh: SshConnection,
-    hops: Vec<SshConnection>,
+    ssh: SshRoute,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
     pending_delete: Mutex<Option<delete::PendingDelete>>,
@@ -180,7 +167,7 @@ impl SftpManager {
             let Endpoint::Authenticated(connection) = endpoint else {
                 return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
             };
-            start_session(profile, connection, Vec::new(), permit).await
+            start_session(profile, SshRoute { connection, hops: Vec::new() }, permit).await
         }).await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
         self.insert_session(ready)
     }
@@ -191,34 +178,14 @@ impl SftpManager {
         destination: SftpHop,
         hops: Vec<SftpHop>,
     ) -> Result<RoutedSftpOpened> {
-        if !(1..=MAX_HOPS).contains(&hops.len()) {
-            return Err(format!("경유 서버를 1~{MAX_HOPS}개 선택하세요."));
-        }
-        let mut seen = HashSet::from([(destination.profile.host.as_str(), destination.profile.port)]);
-        for hop in &hops {
-            if hop.profile.project_id != destination.profile.project_id
-                || !seen.insert((&hop.profile.host, hop.profile.port)) {
-                return Err("대상과 다른 같은 프로젝트의 SSH 서버를 순서대로 한 번씩 선택하세요.".into());
-            }
-        }
         let permit = self.acquire()?;
-        let mut route = Vec::with_capacity(hops.len());
-        for (index, hop) in hops.into_iter().enumerate() {
-            let stage = format!("경유 {} · {}", index + 1, hop.profile.name);
-            match ssh_transport::connect_endpoint(Arc::clone(&ssh), &hop.profile, hop.authentication, route.last(), true)
-                .await.map_err(|error| format!("{stage} — {error}"))? {
-                Endpoint::Authenticated(connection) => route.push(connection),
-                Endpoint::TrustRequired(host) => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
-            }
-        }
-        let stage = format!("대상 · {}", destination.profile.name);
-        let connection = match ssh_transport::connect_endpoint(ssh, &destination.profile, destination.authentication, route.last(), true)
-            .await.map_err(|error| format!("{stage} — {error}"))? {
-            Endpoint::Authenticated(connection) => connection,
-            Endpoint::TrustRequired(host) => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
+        let route = match ssh_transport::connect_route(ssh, &destination.profile, destination.authentication, hops).await? {
+            SshRouteResult::Open { session } => session,
+            SshRouteResult::TrustRequired { stage, host } => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
         };
-        let ready = timeout(START_TIMEOUT, start_session(destination.profile, connection, route, permit)).await
-            .map_err(|_| format!("{stage} — SFTP 연결 준비 시간이 초과되었습니다."))?
+        let stage = format!("대상 · {}", destination.profile.name);
+        let ready = timeout(START_TIMEOUT, start_session(destination.profile, route, permit))
+            .await.map_err(|_| format!("{stage} — SFTP 연결 준비 시간이 초과되었습니다."))?
             .map_err(|error| format!("{stage} — {error}"))?;
         let session = self.insert_session(ready)?;
         Ok(RoutedSftpOpened::Open { session })
@@ -271,10 +238,7 @@ impl SftpManager {
             .remove(id);
         if let Some(session) = session {
             session.cancel_transfer_on_close();
-            let _ = timeout(Duration::from_secs(2), async {
-                ssh_transport::disconnect(&session.ssh).await;
-                for hop in session.hops.iter().rev() { ssh_transport::disconnect(hop).await; }
-            }).await;
+            session.ssh.close().await;
         }
         Ok(())
     }
@@ -282,11 +246,10 @@ impl SftpManager {
 
 async fn start_session(
     profile: SshProfile,
-    ssh: SshConnection,
-    hops: Vec<SshConnection>,
+    ssh: SshRoute,
     permit: OwnedSemaphorePermit,
 ) -> Result<(FilesSession, BrowseDirectory)> {
-    let mut channel = ssh
+    let mut channel = ssh.connection
         .channel_open_session()
         .await
         .map_err(|_| "SFTP 채널을 열 수 없습니다.")?;
@@ -308,7 +271,6 @@ async fn start_session(
         FilesSession {
             profile,
             ssh,
-            hops,
             files,
             operation: AsyncMutex::new(()),
             pending_delete: Mutex::new(None),

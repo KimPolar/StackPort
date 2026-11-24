@@ -1349,7 +1349,7 @@ function App() {
     workspace: databasePane,
     terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
-        <TerminalWorkspace visible={toolVisible("terminal")} colorScheme={colorScheme} onCountChange={updateTerminalCount} request={sshOpenRequest}
+        <TerminalWorkspace visible={toolVisible("terminal")} colorScheme={colorScheme} onCountChange={updateTerminalCount} request={sshOpenRequest} sshProfiles={sshProfiles}
           onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} />
       </React.Suspense>
     </div>,

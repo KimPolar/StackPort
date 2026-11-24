@@ -10,6 +10,7 @@ use russh::{
 use serde::{Deserialize, Deserializer};
 use std::{
     borrow::Cow,
+    collections::HashSet,
     fs,
     io::Read,
     path::Path,
@@ -21,6 +22,21 @@ use zeroize::Zeroizing;
 
 const MAX_KEY_FILE: u64 = 128 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+pub const MAX_SSH_HOPS: usize = 3;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SshRouteHop {
+    pub profile: SshProfile,
+    pub authentication: SshCredentials,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SshRouteResult<T> {
+    Open { session: T },
+    TrustRequired { stage: String, host: SshHostInfo },
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -43,6 +59,86 @@ fn secret<'de, D: Deserializer<'de>>(
 }
 
 pub(crate) type SshConnection = Handle<HostVerifier>;
+
+pub(crate) struct SshRoute {
+    pub(crate) connection: SshConnection,
+    pub(crate) hops: Vec<SshConnection>,
+}
+
+pub(crate) async fn connect_route(
+    manager: Arc<SshManager>,
+    destination: &SshProfile,
+    authentication: SshCredentials,
+    hops: Vec<SshRouteHop>,
+) -> Result<SshRouteResult<SshRoute>> {
+    if !(1..=MAX_SSH_HOPS).contains(&hops.len()) {
+        return Err(format!("경유 서버를 1~{MAX_SSH_HOPS}개 선택하세요."));
+    }
+    let mut seen = HashSet::from([(destination.host.as_str(), destination.port)]);
+    for hop in &hops {
+        if hop.profile.project_id != destination.project_id
+            || !seen.insert((&hop.profile.host, hop.profile.port))
+        {
+            return Err(
+                "대상과 다른 같은 프로젝트의 SSH 서버를 순서대로 한 번씩 선택하세요.".into(),
+            );
+        }
+    }
+    let mut connections = Vec::with_capacity(hops.len());
+    for (index, hop) in hops.into_iter().enumerate() {
+        let stage = format!("경유 {} · {}", index + 1, hop.profile.name);
+        match connect_endpoint(
+            Arc::clone(&manager),
+            &hop.profile,
+            hop.authentication,
+            connections.last(),
+            true,
+        )
+        .await
+        .map_err(|error| format!("{stage} — {error}"))?
+        {
+            Endpoint::Authenticated(connection) => connections.push(connection),
+            Endpoint::TrustRequired(host) => {
+                return Ok(SshRouteResult::TrustRequired { stage, host })
+            }
+        }
+    }
+    let stage = format!("대상 · {}", destination.name);
+    match connect_endpoint(
+        manager,
+        destination,
+        authentication,
+        connections.last(),
+        true,
+    )
+    .await
+    .map_err(|error| format!("{stage} — {error}"))?
+    {
+        Endpoint::Authenticated(connection) => Ok(SshRouteResult::Open {
+            session: SshRoute {
+                connection,
+                hops: connections,
+            },
+        }),
+        Endpoint::TrustRequired(host) => Ok(SshRouteResult::TrustRequired { stage, host }),
+    }
+}
+
+impl SshRoute {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.connection.is_closed()
+    }
+
+    pub(crate) async fn close(&self) {
+        let _ = timeout(Duration::from_secs(2), async {
+            disconnect(&self.connection).await;
+            for hop in self.hops.iter().rev() {
+                disconnect(hop).await;
+            }
+        })
+        .await;
+    }
+}
 
 pub(crate) enum Endpoint {
     Authenticated(SshConnection),

@@ -12,7 +12,7 @@ use stackport_core::{
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
-    RoutedSftpOpened, SftpHop, SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
+    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -713,27 +713,48 @@ async fn open_routed_sftp(
     sftp: State<'_, SftpManager>,
     profile: SshProfile,
     confirmation: String,
-    authentication: SftpAuthentication,
-    mut hops: Vec<SftpHop>,
+    authentication: SshCredentials,
+    hops: Vec<SshRouteHop>,
 ) -> Result<RoutedSftpOpened, String> {
-    let store = store.inner().clone();
-    let (profile, hops) = worker(move || {
-        let profile = confirmed_ssh_profile(&store, &profile, &confirmation)?;
-        if hops.len() > 3 {
-            return Err("경유 서버는 최대 3개입니다.".into());
+    let (destination, hops) = confirmed_ssh_route(store.inner().clone(), profile, confirmation, authentication, hops).await?;
+    sftp.open_routed(Arc::clone(ssh.inner()), destination, hops).await
+}
+
+#[tauri::command]
+async fn open_routed_ssh_terminal(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    terminals: State<'_, Arc<TerminalManager>>,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: SshCredentials,
+    hops: Vec<SshRouteHop>,
+    rows: u16,
+    cols: u16,
+) -> Result<SshRouteResult<TerminalInfo>, String> {
+    let (destination, hops) = confirmed_ssh_route(store.inner().clone(), profile, confirmation, authentication, hops).await?;
+    terminals.open_routed_ssh(Arc::clone(ssh.inner()), destination, hops, rows, cols).await
+}
+
+async fn confirmed_ssh_route(
+    store: Store,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: SshCredentials,
+    mut hops: Vec<SshRouteHop>,
+) -> Result<(SshRouteHop, Vec<SshRouteHop>), String> {
+    worker(move || {
+        if !(1..=MAX_SSH_HOPS).contains(&hops.len()) {
+            return Err(format!("경유 서버를 1~{MAX_SSH_HOPS}개 선택하세요."));
         }
+        let profile = confirmed_ssh_profile(&store, &profile, &confirmation)
+            .map_err(|error| format!("대상 · {} — {error}", profile.name))?;
         for (index, hop) in hops.iter_mut().enumerate() {
             hop.profile = confirmed_ssh_profile(&store, &hop.profile, &confirmation)
                 .map_err(|error| format!("경유 {} · {} — {error}", index + 1, hop.profile.name))?;
         }
-        Ok((profile, hops))
-    })
-    .await?;
-    let destination = SftpHop {
-        profile,
-        authentication,
-    };
-    sftp.open_routed(Arc::clone(ssh.inner()), destination, hops).await
+        Ok((SshRouteHop { profile, authentication }, hops))
+    }).await
 }
 
 #[tauri::command]
@@ -1314,6 +1335,7 @@ fn main() {
             list_ssh_trust_events,
             open_ssh_terminal,
             open_saved_ssh_terminal,
+            open_routed_ssh_terminal,
             open_sftp,
             open_routed_sftp,
             list_sftp_directory,

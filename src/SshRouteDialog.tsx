@@ -1,16 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
-import type { Directory } from "./fileBrowse";
 import type { SshProfile } from "./ssh-profile-types";
 
-type Session = { id: string; directory: Directory };
 type Credentials = { method: "password" | "private_key"; path: string; secret: string };
 type Hop = { profile: SshProfile; credentials: Credentials };
 type TrustRequest = { status: "trust_required"; stage: string; host: {
   host: string; port: number; token: string; keys: { algorithm: string; fingerprint: string }[];
 } };
-type RouteResponse = { status: "open"; session: Session } | TrustRequest;
+type RouteResponse<Session> = { status: "open"; session: Session } | TrustRequest;
 
 const maxHops = 3;
 const emptyCredentials: Credentials = { method: "password", path: "", secret: "" };
@@ -19,19 +17,24 @@ const authentication = (credentials: Credentials) => credentials.method === "pas
   ? { kind: "password", password: credentials.secret }
   : { kind: "private_key", path: credentials.path, passphrase: credentials.secret };
 
-export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }: {
+export function SshRouteDialog<Session>({ tool, target, profiles, initialHops = [], onBusy, onClose, onOpened }: {
+  tool: "sftp" | "terminal";
   target: SshProfile;
   profiles: SshProfile[];
+  initialHops?: string[];
   onBusy: (value: boolean) => void;
   onClose: () => void;
-  onOpened: (session: Session, route: string[]) => void;
+  onOpened: (session: Session, route: SshProfile[]) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const title = useId();
   const trustHeading = useRef<HTMLLegendElement>(null);
   const pending = useRef(false);
   const options = profiles.filter(profile => address(profile) !== address(target));
-  const [hops, setHops] = useState<Hop[]>([]);
+  const [hops, setHops] = useState<Hop[]>(() => initialHops.flatMap(id => {
+    const profile = options.find(item => item.id === id);
+    return profile ? [{ profile, credentials: emptyCredentials }] : [];
+  }));
   const [credentials, setCredentials] = useState(emptyCredentials);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,6 +43,8 @@ export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }:
   const [compared, setCompared] = useState(false);
   const [notice, setNotice] = useState("");
   const production = target.environment === "PROD" || hops.some(hop => hop.profile.environment === "PROD");
+  const connectLabel = tool === "sftp" ? "SFTP 연결" : "SSH 터미널 연결";
+  const heading = tool === "sftp" ? "SSH 경유로 SFTP 연결" : "경유 서버로 SSH 터미널 연결";
 
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => { if (trust) trustHeading.current?.focus(); }, [trust]);
@@ -78,11 +83,12 @@ export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }:
     event.preventDefault();
     if (!hops.length) return;
     void perform(async () => {
-      const result = await invoke<RouteResponse>("open_routed_sftp", {
+      const result = await invoke<RouteResponse<Session>>(tool === "sftp" ? "open_routed_sftp" : "open_routed_ssh_terminal", {
         profile: target, confirmation, authentication: authentication(credentials),
         hops: hops.map(hop => ({ profile: hop.profile, authentication: authentication(hop.credentials) })),
+        ...(tool === "terminal" ? { rows: 24, cols: 80 } : {}),
       });
-      if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile.name));
+      if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile));
       else { setNotice(""); setCompared(false); setTrust(result); }
     });
   }
@@ -90,7 +96,7 @@ export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }:
   const next = available(-1)[0];
   return <dialog ref={dialog} className="dialog sftp-route-dialog" aria-labelledby={title}
     onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
-    <div className="dialog-heading"><h2 id={title}>SSH 경유로 SFTP 연결</h2>
+    <div className="dialog-heading"><h2 id={title}>{heading}</h2>
       <button type="button" className="icon-button" disabled={busy} aria-label="경유 연결 닫기" onClick={() => dialog.current?.close()}><X size={17} aria-hidden /></button>
     </div>
     <form onSubmit={open}>
@@ -103,7 +109,7 @@ export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }:
           <button type="button" className="secondary" onClick={() => { setTrust(null); setError(""); }}>연결 설정으로 돌아가기</button>
           <button type="button" className="primary" disabled={!compared} onClick={() => void perform(async () => {
             await invoke("trust_ssh_host", { token: trust.host.token, fingerprint: trust.host.keys[0].fingerprint, confirmation: "" });
-            setNotice(`${trust.stage}의 지문을 저장했습니다. SFTP 연결을 눌러 계속하세요.`);
+            setNotice(`${trust.stage}의 지문을 저장했습니다. ${connectLabel}을 눌러 계속하세요.`);
             setTrust(null);
           })}>확인한 키 신뢰</button>
         </div>
@@ -136,7 +142,7 @@ export function SftpRouteDialog({ target, profiles, onBusy, onClose, onOpened }:
         </fieldset>
         {production && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
         {notice && <p className="form-note" role="status">{notice}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={!hops.length}>SFTP 연결</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={!hops.length}>{connectLabel}</button></div>
       </fieldset>}
       {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}

@@ -43,6 +43,7 @@ mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
 mod ssh_transport;
+pub use ssh_transport::{SshCredentials, SshRouteHop, SshRouteResult, MAX_SSH_HOPS};
 pub use sftp::{
     list_local_directory, list_local_tree, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, FolderTree, RemotePath,
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,

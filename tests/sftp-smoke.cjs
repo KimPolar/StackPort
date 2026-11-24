@@ -311,9 +311,9 @@ function makeHost() {
   return { privateKey, fingerprint: 'SHA256:' + createHash('sha256').update(key.getPublicSSH()).digest('base64').replace(/=+$/, '') };
 }
 
-async function startHost(host, identity, port = 0) {
+async function startHost(host, identity, port = 0, terminal = false) {
   const clients = new Set();
-  const stats = { passwords: 0, signatures: 0, subsystem: 0 };
+  const stats = { passwords: 0, signatures: 0, subsystem: 0, ptys: [], windowChanges: [], rejectPty: false };
   const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), comparisonDirectories: new Map(), moves: 0, moveCollision: false,
     deletions: 0, edits: 0, editRace: null, advertiseEdit: true, advertisePermissions: true,
     permissionDirectories: new Map(), permissionRequests: [] };
@@ -338,10 +338,32 @@ async function startHost(host, identity, port = 0) {
     });
     client.on('ready', () => client.on('session', accept => {
       const session = accept();
-      session.on('pty', acceptPty => acceptPty());
-      session.on('window-change', acceptResize => acceptResize?.());
+      session.on('pty', (acceptPty, rejectPty, size) => {
+        stats.ptys.push(size);
+        if (stats.rejectPty) rejectPty();
+        else acceptPty();
+      });
+      session.on('window-change', (acceptResize, _reject, size) => {
+        stats.windowChanges.push(size);
+        acceptResize?.();
+      });
       session.on('shell', acceptShell => {
         const stream = acceptShell();
+        if (terminal) {
+          stream.write('ROUTED_SHELL_READY\r\n');
+          let input = '';
+          stream.on('data', buffer => {
+            input += buffer.toString('ascii');
+            if (input.includes('route-check\r')) {
+              stream.write('경유 터미널 응답\r\n');
+              input = '';
+            } else if (input.includes('route-exit\r')) {
+              stream.exit(37);
+              stream.end();
+            }
+          });
+          return;
+        }
         stream.write('SFTP_FOLLOW_SHELL_READY\r\n');
         stream.on('data', buffer => {
           for (const value of buffer.toString('utf8')) {
@@ -421,7 +443,7 @@ async function verifyRoutedSftp(page, command, identity) {
   const secondHost = makeHost();
   const destinationHost = 'fixture-sftp.invalid';
   const secondName = 'fixture-jump.invalid';
-  const target = await startHost(finalHost, identity);
+  const target = await startHost(finalHost, identity, 0, true);
   const second = await startJump(secondHost, 'fixture-second', { host: destinationHost, port: target.port });
   const first = await startJump(firstHost, 'fixture-first', { host: secondName, port: second.port });
   try {
@@ -483,13 +505,92 @@ async function verifyRoutedSftp(page, command, identity) {
     assert.ok(first.stats.forwards >= 3 && second.stats.forwards >= 2);
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: '경유 서버 사용', exact: true }).waitFor();
-    for (let attempt = 0; (first.clients.size || second.clients.size) && attempt < 25; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    assert.equal(first.clients.size + second.clients.size, 0, 'All SSH hop connections closed');
+    await verifyHopsClosed(first, second);
+    await verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target);
   } finally {
     await Promise.all([first.close(), second.close(), target.close()]);
   }
+}
+
+async function verifyHopsClosed(first, second) {
+  for (let attempt = 0; (first.clients.size || second.clients.size) && attempt < 50; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal(first.clients.size + second.clients.size, 0, 'All SSH hop connections closed');
+}
+
+async function verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target) {
+  const authentication = { kind: 'password', password };
+  const hops = [firstProfile, secondProfile].map(profile => ({ profile, authentication }));
+  await assert.rejects(command('open_routed_ssh_terminal', { profile, authentication, hops, confirmation: '', rows: 24, cols: 80 }), /경유 2.*PROD/);
+  await page.getByRole('button', { name: 'SSH 경유 대상 연결', exact: true }).click();
+  await page.getByRole('dialog', { name: 'SSH 연결', exact: true }).getByRole('button', { name: '경유 서버 사용', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '경유 서버로 SSH 터미널 연결', exact: true });
+  const add = dialog.getByRole('button', { name: '경유 서버 추가', exact: true });
+  await add.click();
+  await dialog.getByLabel('경유 1 서버').selectOption(firstProfile.id);
+  await add.click();
+  await dialog.getByLabel('경유 2 서버').selectOption(secondProfile.id);
+  const secret = stage => dialog.getByRole('group', { name: stage, exact: true }).getByLabel('SSH 암호', { exact: true });
+  const open = dialog.getByRole('button', { name: 'SSH 터미널 연결', exact: true });
+  async function fillCredentials() {
+    await secret('경유 1').fill('fixture-first');
+    await secret('경유 2').fill('fixture-second');
+    await secret('대상 · 경유 대상').fill(password);
+    await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  }
+  await fillCredentials();
+  target.stats.rejectPty = true;
+  await open.click();
+  await dialog.getByRole('alert').getByText(/대상.*원격 터미널 요청을 거부/).waitFor();
+  await verifyHopsClosed(first, second);
+  target.stats.rejectPty = false;
+  await open.click();
+  await dialog.waitFor({ state: 'detached' });
+  const rows = page.locator('[role=tabpanel]:visible .xterm-rows');
+  const input = page.locator('[role=tabpanel]:visible .xterm-helper-textarea');
+  await rows.getByText('ROUTED_SHELL_READY', { exact: true }).waitFor();
+  const tabName = await page.getByRole('tab', { name: /^SSH \d+ · stackport@fixture-sftp\.invalid:\d+$/ }).getAttribute('aria-label');
+  await page.getByText('경유 첫 경유 서버 → 둘째 경유 서버', { exact: true }).waitFor();
+  assert.equal(target.stats.ptys.at(-1).term, 'xterm-256color');
+  assert.equal(target.stats.ptys.at(-1).rows, 24);
+  assert.equal(target.stats.ptys.at(-1).cols, 80);
+  await input.focus();
+  await page.keyboard.type('route-check');
+  await page.keyboard.press('Enter');
+  await rows.getByText('경유 터미널 응답', { exact: true }).waitFor();
+  const initialCount = target.stats.windowChanges.length;
+  await page.setViewportSize({ width: 1140, height: 820 });
+  for (let attempt = 0; target.stats.windowChanges.length === initialCount && attempt < 25; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.ok(target.stats.windowChanges.length > initialCount, 'WebView resizing reaches the routed PTY');
+  assert.ok(target.stats.windowChanges.at(-1).cols > 0);
+  await input.focus();
+  await page.keyboard.type('route-exit');
+  await page.keyboard.press('Enter');
+  await page.getByRole('status').getByText('셸이 종료되었습니다. 종료 코드: 37', { exact: true }).waitFor();
+  await verifyHopsClosed(first, second);
+  const closeTab = () => {
+    page.once('dialog', confirm => confirm.accept());
+    return page.getByRole('button', { name: /^SSH \d+ · stackport@fixture-sftp\.invalid:\d+ 터미널 닫기$/ }).click();
+  };
+  await closeTab();
+  await page.getByRole('tab', { name: tabName, exact: true }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '최근 닫은 탭', exact: true }).click();
+  await page.getByRole('dialog', { name: '터미널 탭 관리', exact: true }).getByRole('button', { name: `${tabName} 다시 열기`, exact: true }).click();
+  await dialog.waitFor();
+  assert.equal(await dialog.getByLabel('경유 1 서버').inputValue(), firstProfile.id);
+  assert.equal(await dialog.getByLabel('경유 2 서버').inputValue(), secondProfile.id);
+  assert.equal(await secret('경유 1').inputValue(), '');
+  assert.equal(await secret('대상 · 경유 대상').inputValue(), '');
+  assert.equal(await dialog.getByLabel('운영 환경 확인').inputValue(), '');
+  await fillCredentials();
+  await open.click();
+  await rows.getByText('ROUTED_SHELL_READY', { exact: true }).waitFor();
+  await closeTab();
+  await verifyHopsClosed(first, second);
+  await page.setViewportSize({ width: 1440, height: 900 });
 }
 
 async function main() {
@@ -527,7 +628,7 @@ async function main() {
     if (process.env.STACKPORT_SFTP_ROUTE_ONLY === '1') {
       await verifyRoutedSftp(page, command, identity);
       assert.deepEqual(errors, []);
-      console.log('Two SSH jumps, per-host verification, TCP and authentication failures, SFTP listing and disconnect passed.');
+      console.log('Two SSH jumps, per-host verification, SFTP and terminal, routed PTY input/output, resizing, exit and disconnect passed.');
       return;
     }
     await page.getByRole('button', { name: '새 프로젝트' }).click();

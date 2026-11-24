@@ -31,11 +31,11 @@ PARTIAL = {
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
-    "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SFTP 접속, 단계별 지문·인증·실패 표시",
+    "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",
     "SP-CN-023": "저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단",
     "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널과 셸별 바로 열기",
-    "SP-TM-002": "Windows OpenSSH의 대화형 원격 셸 입출력",
+    "SP-TM-002": "Windows OpenSSH의 대화형 원격 셸과 SSH 경유 PTY의 입출력·크기 변경·종료 코드",
     "SP-TM-003": "Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절",
     "SP-TM-005": "터미널 메모리 스크롤백, 탭별 일반 문자열 검색과 TXT·ANSI 출력 내보내기",
     "SP-TM-006": "터미널 키보드 입력과 선택·붙여넣기",
@@ -205,8 +205,12 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/workspace_resume.rs"
             elif requirement_id in {"SP-ST-011", "SP-ST-014"}:
                 evidence = "src-tauri/src/data_location.rs; tests/portable-smoke.cjs; crates/stackport-core/tests/workspace_copy.rs; tests/desktop-smoke.cjs"
-            elif requirement_id in {"SP-CN-015", "SP-FL-001"}:
-                evidence = "crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/sftp.rs; src/SftpRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
+            elif requirement_id == "SP-CN-015":
+                evidence = "crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/terminal/routed.rs; src/SshRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
+            elif requirement_id == "SP-FL-001":
+                evidence = "crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/sftp.rs; src/SshRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
+            elif requirement_id == "SP-TM-002":
+                evidence = "crates/stackport-core/src/ssh.rs; crates/stackport-core/src/terminal/routed.rs; src/TerminalWorkspace.tsx; tests/ssh-smoke.cjs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-012", "SP-ST-006", "SP-ST-017"}:
@@ -301,7 +305,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-SEC-004":
                 evidence = "crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; crates/stackport-core/src/rdp.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs; tests/rdp-smoke.cjs"
-            elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-008", "SP-AT-001"}:
+            elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-SEC-008", "SP-AT-001"}:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-TM-005":
                 evidence = "crates/stackport-core/tests/terminal_output.rs; tests/terminal-smoke.cjs; src/TerminalOutputDialog.tsx; src/TerminalWorkspace.tsx"

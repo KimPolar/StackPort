@@ -9,6 +9,7 @@ import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
 import { TerminalTabDialog } from "./TerminalTabDialog";
+import { SshRouteDialog } from "./SshRouteDialog";
 import { terminalDirectoryFromOsc, type TerminalDirectory } from "./terminalDirectory";
 import type { ColorScheme } from "./appearance";
 import "@xterm/xterm/css/xterm.css";
@@ -21,10 +22,18 @@ type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: 
 type DirectSshTarget = { host: string; port: number; username: string };
 type TerminalLaunch = { kind: "local"; shell: LocalShell }
   | { kind: "saved_ssh"; projectId: string; profileId: string; revision: number; authentication: SshAuthenticationMode }
+  | { kind: "routed_ssh"; projectId: string; profileId: string; revision: number; hops: Pick<SshProfile, "id" | "name">[] }
   | { kind: "direct_ssh"; target: DirectSshTarget; authentication: SshAuthenticationMode };
 type ClosedTab = { number: number; name: string; launch: TerminalLaunch };
 type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; directory: string | null; unreadOutput: boolean; pinned: boolean; launch: TerminalLaunch };
-type SshDialogRequest = { profile: SshProfile | null; target?: DirectSshTarget; authentication?: SshAuthenticationMode; reopen?: number };
+type SshDialogRequest = {
+  profile: SshProfile | null;
+  target?: DirectSshTarget;
+  profiles?: SshProfile[];
+  route?: { ids: string[]; returnToConnection: boolean };
+  authentication?: SshAuthenticationMode;
+  reopen?: number;
+};
 type SshKey = { algorithm: string; fingerprint: string };
 type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
@@ -54,11 +63,12 @@ function terminalTheme(host: HTMLElement) {
   };
 }
 
-export function TerminalWorkspace({ visible, colorScheme, onCountChange, request, onRequestHandled, onDirectoryChange }: {
+export function TerminalWorkspace({ visible, colorScheme, onCountChange, request, sshProfiles, onRequestHandled, onDirectoryChange }: {
   visible: boolean;
   colorScheme: ColorScheme;
   onCountChange: (count: number) => void;
   request: SshOpenRequest | null;
+  sshProfiles: SshProfile[];
   onRequestHandled: () => void;
   onDirectoryChange: (directory: TerminalDirectory | null) => void;
 }) {
@@ -87,7 +97,7 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
   useEffect(() => {
     if (activeDirectory && activeLaunch?.kind === "local") {
       onDirectoryChange({ kind: "local", path: activeDirectory });
-    } else if (activeDirectory && activeLaunch?.kind === "saved_ssh") {
+    } else if (activeDirectory && (activeLaunch?.kind === "saved_ssh" || activeLaunch?.kind === "routed_ssh")) {
       onDirectoryChange({ kind: "ssh", path: activeDirectory, profileId: activeLaunch.profileId, revision: activeLaunch.revision });
     } else {
       onDirectoryChange(null);
@@ -132,7 +142,16 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
         if (generation !== sshRequestGeneration.current) return;
         const profile = profiles.find(item => item.id === launch.profileId);
         if (!profile) throw "저장된 SSH 연결을 찾을 수 없습니다.";
-        setSshDialog({ profile, authentication: launch.authentication, reopen: reopened });
+        if (launch.kind === "routed_ssh") {
+          const ids = launch.hops.map(hop => hop.id);
+          const endpoints = [profile, ...ids.map(id => profiles.find(item => item.id === id))];
+          if (endpoints.some(item => !item) || new Set(endpoints.map(item => `${item?.host}:${item?.port}`)).size !== endpoints.length) {
+            throw "이전 경유 연결을 사용할 수 없습니다. 저장된 연결에서 경유 서버를 다시 선택하세요.";
+          }
+          setSshDialog({ profile, profiles, route: { ids, returnToConnection: false }, reopen: reopened });
+        } else {
+          setSshDialog({ profile, profiles, authentication: launch.authentication, reopen: reopened });
+        }
       }
     } catch (e) { if (launch.kind === "local" || generation === sshRequestGeneration.current) setError(errorText(e)); }
     finally { openingRef.current = false; setOpening(false); }
@@ -309,7 +328,17 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
         if (item) void openTerminal(item.launch, number);
       }}
       onClose={() => setTabDialogOpen(false)} />}
-    {sshDialog && <SshDialog profile={sshDialog.profile} target={sshDialog.target} initialAuthentication={sshDialog.authentication}
+    {sshDialog?.route && sshDialog.profile ? <SshRouteDialog<TerminalInfo> tool="terminal"
+      target={sshDialog.profile} profiles={sshDialog.profiles ?? sshProfiles} initialHops={sshDialog.route.ids}
+      onBusy={setSshOpening} onClose={() => setSshDialog(sshDialog.route?.returnToConnection ? { ...sshDialog, route: undefined } : null)}
+      onOpened={(terminal, hops) => {
+        const profile = sshDialog.profile!;
+        addTerminal(terminal, { kind: "routed_ssh", projectId: profile.project_id, profileId: profile.id,
+          revision: profile.revision, hops: hops.map(({ id, name }) => ({ id, name })) }, sshDialog.reopen);
+        setSshDialog(null);
+      }} /> : sshDialog && <SshDialog profile={sshDialog.profile} target={sshDialog.target} initialAuthentication={sshDialog.authentication}
+      onRoute={sshDialog.profile && (sshDialog.profiles ?? sshProfiles).some(item => item.host !== sshDialog.profile?.host || item.port !== sshDialog.profile?.port)
+        ? () => setSshDialog({ ...sshDialog, route: { ids: [], returnToConnection: true } }) : undefined}
       onClose={() => setSshDialog(null)} onOpeningChange={setSshOpening}
       onOpened={(terminal, launch) => { addTerminal(terminal, launch, sshDialog.reopen); setSshDialog(null); }} />}
   </section>;
@@ -399,7 +428,7 @@ function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirecto
       let resizeQueue = Promise.resolve();
       let reportedExit = false;
       const directoryUpdates = emulator.parser.registerOscHandler(7, data => {
-        if (tab.cwd_authority || tab.launch.kind === "saved_ssh") {
+        if (tab.cwd_authority || tab.launch.kind === "saved_ssh" || tab.launch.kind === "routed_ssh") {
           const directory = terminalDirectoryFromOsc(data, tab.cwd_authority);
           if (directory !== undefined) directoryCallback.current(tab.id, directory);
         }
@@ -490,7 +519,9 @@ function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirecto
   }
 
   return <div role="tabpanel" id={`terminal-panel-${tab.id}`} aria-labelledby={`terminal-tab-${tab.id}`} className="terminal-panel" hidden={!visible}>
-    {tab.target && <div className={`terminal-remote ${tab.environment === "PROD" ? "prod" : ""}`}><strong>SSH · {tab.target} · {tab.environment ?? "환경 미지정"}</strong><span>이 터미널의 명령은 원격 서버에서 실행됩니다.</span></div>}
+    {tab.target && <div className={`terminal-remote ${tab.environment === "PROD" ? "prod" : ""}`}><strong>SSH · {tab.target} · {tab.environment ?? "환경 미지정"}</strong>
+      <span>{tab.launch.kind === "routed_ssh" ? `경유 ${tab.launch.hops.map(hop => hop.name).join(" → ")}` : "이 터미널의 명령은 원격 서버에서 실행됩니다."}</span>
+    </div>}
     <div className="terminal-tools">
       <button className="terminal-tool-button" aria-haspopup="dialog" onClick={() => { setSavedOutput(null); setOutputDialog(true); }}><FileDown size={14} /> 출력 저장</button>
       <button className="terminal-tool-button" aria-expanded={searchOpen} onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); requestAnimationFrame(() => searchInput.current?.focus()); } }}><Search size={14} /> 출력 찾기 <span>Ctrl+Shift+F</span></button>
@@ -509,10 +540,11 @@ function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirecto
   </div>;
 }
 
-function SshDialog({ profile, target, initialAuthentication = "automatic", onClose, onOpened, onOpeningChange }: {
+function SshDialog({ profile, target, initialAuthentication = "automatic", onRoute, onClose, onOpened, onOpeningChange }: {
   profile: SshProfile | null;
   target?: DirectSshTarget;
   initialAuthentication?: SshAuthenticationMode;
+  onRoute?: () => void;
   onClose: () => void;
   onOpened: (terminal: TerminalInfo, launch: TerminalLaunch) => void;
   onOpeningChange: (opening: boolean) => void;
@@ -603,7 +635,9 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", onClo
   return <dialog ref={dialog} className="dialog ssh-dialog" aria-labelledby="ssh-session-title" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
     <div className="dialog-heading"><h2 id="ssh-session-title">SSH 연결</h2><button className="icon-button" aria-label="닫기" disabled={Boolean(busy)} onClick={onClose}><X size={18} /></button></div>
     <form onSubmit={inspect} aria-busy={Boolean(busy)}>
-      {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>}
+      {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span>
+        {onRoute && <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={onRoute}>경유 서버 사용</button>}
+      </p>}
       <div className="ssh-connection-fields ssh-endpoint">
         <label className="field">호스트 또는 IP<input autoFocus={!profile} required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
         <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>
