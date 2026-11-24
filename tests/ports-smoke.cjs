@@ -69,7 +69,15 @@ async function main() {
   await target.fill('127.0.0.1');
   await page.getByLabel('대상 포트').fill(String(tcp.address().port));
   await run.click();
-  await page.getByRole('status', { name: '연결 진단 결과' }).getByText(/TCP 연결 성공/).waitFor();
+  const tcpSuccess = page.getByRole('status', { name: '연결 진단 결과' }).getByText(/TCP 연결 성공/);
+  await tcpSuccess.waitFor();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
+  await page.getByRole('button', { name: '네트워크', exact: true }).click();
+  await tcpSuccess.waitFor();
+  if (await target.inputValue() !== '127.0.0.1') throw new Error('Leaving the network tool cleared the diagnostic target.');
+  await page.getByRole('button', { name: '로컬 포트', exact: true }).click();
+  if (await filter.inputValue() !== udpEndpoint) throw new Error('Leaving the ports view cleared its filter.');
+  await page.getByRole('button', { name: '연결 진단', exact: true }).click();
   const route = page.getByRole('status', { name: '경로 진단 결과' });
   await tool.selectOption('ping');
   await target.fill('::1');

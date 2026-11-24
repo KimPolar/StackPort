@@ -67,7 +67,7 @@ SP-TM-021,빠른 팝업 터미널,"단축키로 표시/숨김, 항상 위 선택
 SP-TM-022,검색 및 강조,"사용자 정의 정규식 강조 규칙, 링크 자동 인식, 오류/경고 표시 설정.",not_started,,
 SP-TM-023,전송 통합,터미널과 파일 관리자의 현재 원격 경로 연동(지원 셸/서버에 한정).,not_started,,
 SP-TM-024,세션 녹화,입력 이벤트와 출력 로그를 분리 저장하며 암호·민감 입력의 기록 제외 설정.,not_started,,
-SP-RG-001,RDP,Windows 원격 화면의 새 연결·다중 세션·전체 화면·창 모드·다중 모니터·해상도·색 깊이.,partial,"Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
+SP-RG-001,RDP,Windows 원격 화면의 새 연결·다중 세션·전체 화면·창 모드·다중 모니터·해상도·색 깊이.,partial,"Windows 네이티브 RDP 실행, 열린 클라이언트 목록, 창·전체 화면·다중 모니터, 펼칠 수 있는 해상도·색 깊이 설정",crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-RG-002,RDP 인증,"사용자/도메인, NLA/CredSSP 및 서버 인증서 검증, 관리 콘솔 세션(`/admin`) 옵션.",partial,"사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-RG-003,RDP 리디렉션,"클립보드, 드라이브, 프린터, 스마트카드, 지원 디바이스 및 단축키 전달 정책.",partial,RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-RG-004,RDP 조작,"화면 크기 재조정, 그래픽 품질/대역폭 옵션, 재연결, 특수 키 전송, 입력 잠금.",partial,RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
@@ -109,8 +109,8 @@ SP-FL-021,전송 무결성,"지원하는 프로토콜/서버에서 SHA-256 등 �
 SP-FL-022,작업 재사용,"전송·백업·동기화 프로필 저장, 수동 실행·자동화 연결.",not_started,,
 SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",partial,SFTP 전송·복사·편집·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록,crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
 SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",partial,"SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
-SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",partial,Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회,crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/
-SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",partial,네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적,crates/stackport-core/tests/network.rs; tests/ports-smoke.cjs; src/NetworkDiagnosticsPanel.tsx; src-tauri/
+SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",partial,"Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회, 도구 전환 후 포트 필터 유지",crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/
+SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",partial,"네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적, 도구 전환 후 진단 상태 유지",crates/stackport-core/tests/network.rs; tests/ports-smoke.cjs; src/NetworkDiagnosticsPanel.tsx; src-tauri/
 SP-NW-003,웹 상태 확인,"HTTP/HTTPS 요청 시간·상태 코드·헤더·TLS 정보, 반복 가용성 측정.",partial,"Windows HTTP/HTTPS HEAD·GET, 최대 5회 가용성 측정, 상태 코드·헤더·경과 시간·TLS 정보",crates/stackport-core/tests/web_check.rs; tests/ports-smoke.cjs; src/WebDiagnosticResult.tsx; src-tauri/
 SP-NW-004,대역폭 측정,사용자가 허가한 측정 대상에 대한 iperf 계열 클라이언트/서버 실행 및 결과 정리.,not_started,,
 SP-NW-005,패킷 캡처,사용자 허가 인터페이스의 캡처·필터·PCAP 저장; OS 권한 및 드라이버 요구사항 명시.,not_started,,

@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity } from "lucide-react";
 import { WebDiagnosticResult, type WebDiagnostic } from "./WebDiagnosticResult";
 
 type TcpStatus = "connected" | "refused" | "unreachable" | "timed_out" | "failed" | "not_tested";
@@ -54,7 +53,7 @@ export function NetworkDiagnosticsPanel() {
   }
 
   return <section className="network-diagnostics" aria-label="연결 진단 도구">
-    <div className="terminal-heading"><div><h1><Activity size={20} /> 연결 진단</h1></div></div>
+    <div className="network-panel-heading"><h2>연결 진단</h2></div>
     <form className="results-card network-diagnostic-form" onSubmit={event => { event.preventDefault(); void diagnose(); }}>
       <fieldset className="network-filters" disabled={busy}>
         <label>진단 유형<select value={tool} onChange={event => {

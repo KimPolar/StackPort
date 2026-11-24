@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, Network, RefreshCw } from "lucide-react";
+import { Activity, ArrowLeft, ArrowRight, Network, RefreshCw } from "lucide-react";
 import { NetworkDiagnosticsPanel } from "./NetworkDiagnosticsPanel";
 
 type Endpoint = { address: string; port: number };
@@ -24,12 +24,17 @@ function address(endpoint: Endpoint) {
 export function NetworkWorkspace() {
   const [mode, setMode] = useState<"ports" | "diagnostics">("ports");
   return <section className="network-workspace" aria-label="네트워크 도구">
-    <nav className="network-navigation" aria-label="네트워크 화면">
-      <button className="secondary small" aria-pressed={mode === "ports"} onClick={() => setMode("ports")}>로컬 포트</button>
-      <button className="secondary small" aria-pressed={mode === "diagnostics"} onClick={() => setMode("diagnostics")}>연결 진단</button>
-    </nav>
-    <div hidden={mode !== "ports"}><LocalPorts /></div>
-    <div hidden={mode !== "diagnostics"}><NetworkDiagnosticsPanel /></div>
+    <header className="network-heading">
+      <h1><Network size={20} aria-hidden /> 네트워크</h1>
+      <nav className="network-navigation" aria-label="네트워크 화면">
+        <button type="button" className="secondary small" aria-pressed={mode === "ports"} aria-controls="network-ports"
+          onClick={() => setMode("ports")}><Network size={14} aria-hidden /> 로컬 포트</button>
+        <button type="button" className="secondary small" aria-pressed={mode === "diagnostics"} aria-controls="network-diagnostics"
+          onClick={() => setMode("diagnostics")}><Activity size={14} aria-hidden /> 연결 진단</button>
+      </nav>
+    </header>
+    <div id="network-ports" hidden={mode !== "ports"}><LocalPorts /></div>
+    <div id="network-diagnostics" hidden={mode !== "diagnostics"}><NetworkDiagnosticsPanel /></div>
   </section>;
 }
 
@@ -80,9 +85,9 @@ function LocalPorts() {
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
 
   return <section aria-label="Windows 로컬 포트">
-    <div className="terminal-heading">
-      <div><h1><Network size={20} /> 로컬 포트</h1><p>이 장치에서 Windows가 보고한 TCP 연결과 UDP 바인딩입니다.</p></div>
-      <button className="secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> 포트 새로고침</button>
+    <div className="network-panel-heading">
+      <h2>로컬 포트</h2>
+      <button type="button" className="secondary small" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} aria-hidden /> 포트 새로고침</button>
     </div>
     {error && <p className="error-banner" role="alert">{error}{snapshot && " 마지막으로 성공한 결과를 표시합니다."}</p>}
     {snapshot?.unavailable.length ? <p className="query-notice" role="status">일부 목록을 읽을 수 없습니다. {snapshot.unavailable.join(" · ")}</p> : null}

@@ -312,7 +312,7 @@ async function main() {
   const sourceProject = await projectSelector.inputValue();
   await page.getByRole('button', { name: 'SSH 연결 추가' }).click();
   await page.getByLabel('연결 이름').fill('복제할 SSH');
-  await page.getByLabel('호스트 또는 IP').fill('example.test');
+  await page.getByLabel('호스트 또는 IP', { exact: true }).fill('example.test');
   await page.getByLabel('사용자 이름').fill('stackport');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();

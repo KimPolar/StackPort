@@ -76,6 +76,7 @@ function App() {
   const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [rdpLoaded, setRdpLoaded] = useState(false);
   const [filesLoaded, setFilesLoaded] = useState(false);
+  const [networkLoaded, setNetworkLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
@@ -350,6 +351,7 @@ function App() {
     if (next === "terminal") setTerminalLoaded(true);
     if (next === "rdp") setRdpLoaded(true);
     if (next === "files") setFilesLoaded(true);
+    if (next === "network") setNetworkLoaded(true);
     setPage(next);
   }
 
@@ -538,7 +540,7 @@ function App() {
           {!profile && error && <div className="error-banner" role="alert">{error}</div>}
         </main>
         {terminalLoaded && <main className="tool-body terminal-body" hidden={page !== "terminal"}><React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense></main>}
-        {page === "network" && <main className="tool-body network-body"><NetworkWorkspace /></main>}
+        {networkLoaded && <main className="tool-body network-body" hidden={page !== "network"}><NetworkWorkspace /></main>}
         {rdpLoaded && <main className="tool-body network-body" hidden={page !== "rdp"}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></main>}
         {filesLoaded && <main className="tool-body network-body" hidden={page !== "files"}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></main>}
       </div>

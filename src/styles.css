@@ -166,20 +166,29 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }
 .network-workspace { flex: 1; min-width: 0; padding: 26px 32px; }
-.rdp-workspace { max-width: 880px; }
+.rdp-workspace { max-width: 1140px; }
+.rdp-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(250px, .85fr); align-items: start; gap: 12px; }
+.rdp-layout > .results-card { min-width: 0; min-height: 0; margin: 0; }
 .rdp-form fieldset { border: 0; margin: 0; padding: 16px; min-width: 0; }
 .rdp-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
 .rdp-endpoint { grid-template-columns: minmax(0, 1fr) minmax(80px, 128px); }
-.rdp-options { border-top: 1px solid #e7eee9; margin-top: 3px; padding-top: 12px; }
+.rdp-options { border-top: 1px solid #e7eee9; padding: 11px 0; }
 .rdp-options summary { cursor: pointer; color: #405b50; font-size: 13px; font-weight: 600; }
+.rdp-options summary span { margin-left: 7px; color: #667f73; font-size: 11px; font-weight: 400; }
+.rdp-options-body { margin-top: 12px; }
+.rdp-options-body .rdp-fields:last-child .field { margin-bottom: 0; }
 .rdp-options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 12px 0; font-size: 12px; color: #526a5f; }
 .rdp-options-grid label { display: flex; align-items: start; gap: 6px; }
-.rdp-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
-.rdp-clients { margin-top: 14px; }
+.rdp-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.rdp-clients .panel-heading { height: 44px; }
+.rdp-clients .panel-heading span { color: #526a5f; font-size: 11px; }
+.rdp-no-clients { margin: 0; padding: 20px 14px; color: #526a5f; font-size: 12px; }
 .rdp-clients ul { list-style: none; padding: 0; margin: 0; }
 .rdp-clients li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 14px; border-top: 1px solid #e7eee9; }
 .rdp-clients li div { min-width: 0; display: grid; gap: 4px; overflow-wrap: anywhere; font-size: 12px; }
 .rdp-clients li span { color: #526a5f; }
+.rdp-clients li button { flex-shrink: 0; }
+@container (max-width: 760px) { .rdp-layout { grid-template-columns: minmax(0, 1fr); } }
 .files-workspace { display: flex; flex-direction: column; gap: 12px; }
 .files-workspace > :not(.files-panes) { flex-shrink: 0; }
 .files-header, .files-title { display: flex; align-items: center; gap: 12px; }
@@ -243,15 +252,20 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 @container (max-width: 600px) {
   .files-setup:has(.files-auth[data-step="inspect"]) { grid-template-columns: minmax(0, 1fr); }
 }
-.network-card { margin-top: 16px; }
+.network-heading, .network-panel-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.network-heading { margin-bottom: 16px; }
+.network-heading h1 { display: flex; align-items: center; gap: 8px; margin: 0; color: #1f3531; font-size: 20px; }
+.network-heading h1 svg { color: #268971; }
+.network-panel-heading h2 { margin: 0; color: #30463e; font-size: 15px; }
+.network-card { margin-top: 9px; }
 .network-filters { display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 12px 14px; }
 .network-filters label { display: grid; gap: 4px; color: #526a5f; font-size: 11px; }
 .network-filters input, .network-filters select { min-height: 31px; min-width: 0; border: 1px solid #d6e4db; border-radius: 4px; padding: 4px 6px; background: white; color: #39594b; }
 .network-card .table-wrap { max-height: min(55vh, 600px); overflow: auto; }
 .network-card th { position: sticky; top: 0; z-index: 1; }
-.network-navigation { display: flex; gap: 8px; margin-bottom: 16px; }
+.network-navigation { display: flex; flex-wrap: wrap; gap: 6px; }
 .network-navigation button[aria-pressed="true"] { color: #156b55; background: #e7f3eb; border-color: #c4ddd0; }
-.network-diagnostic-form { margin: 12px 0; }
+.network-diagnostic-form { min-height: 0; margin: 9px 0 12px; }
 .network-diagnostic-form fieldset { border: 0; align-items: end; }
 .route-result { margin-top: 12px; }
 .route-result pre { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: #30473b; }

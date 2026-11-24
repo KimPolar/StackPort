@@ -81,12 +81,24 @@ async function main() {
   }
 
   try {
+    await page.setViewportSize({ width: 900, height: 600 });
     await page.getByRole('button', { name: '원격 화면', exact: true }).click();
     await page.getByRole('heading', { name: '원격 데스크톱 (RDP)' }).waitFor();
     await page.getByLabel('대상 호스트 또는 IP').fill('127.0.0.1');
     await page.getByLabel('사용자 이름 (선택)').fill('테스트 사용자');
     await page.getByLabel('도메인 (선택)').fill('LAB');
     await page.getByLabel('포트', { exact: true }).fill(String(first.address().port));
+    const displaySettings = page.locator('summary').filter({ hasText: '화면 설정' });
+    const width = page.getByLabel('가로 (픽셀)');
+    await width.waitFor({ state: 'hidden' });
+    await displaySettings.click();
+    await width.fill('100');
+    await displaySettings.click();
+    await page.getByRole('button', { name: 'Windows RDP 열기' }).click();
+    await width.waitFor({ state: 'visible' });
+    assert.equal(profiles().length, 0);
+    await width.fill('1280');
+    await displaySettings.click();
     await page.getByText('인증·리디렉션·입력 설정').click();
     await page.getByLabel('공유할 드라이브').fill('*');
     await page.getByRole('button', { name: 'Windows RDP 열기' }).click();
@@ -100,6 +112,8 @@ async function main() {
     }
     assert.doesNotMatch(window.native.CommandLine, /\/admin/);
 
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await displaySettings.click();
     await page.getByLabel('화면 모드').selectOption('multiple_monitors');
     await page.getByLabel('색 깊이').selectOption('24');
     await page.getByLabel('관리 콘솔 세션').check();
