@@ -55,6 +55,7 @@ mod sql_completion;
 pub use sql_completion::SqlCompletionCatalog;
 mod sql_diagnostics;
 pub use sql_diagnostics::SqlDiagnostics;
+mod sql_refactor;
 pub use sql_statement::sqlite_statement_at;
 mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};

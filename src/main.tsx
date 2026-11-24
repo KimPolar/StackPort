@@ -22,10 +22,11 @@ import { ResultExportDialog, type ExportReport, type ExportSource } from "./Resu
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { CodeTextarea } from "./CodeTextarea";
-import { sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlCompletionCatalog, type SqlDefinitionReference } from "./sqlCompletion";
+import { sqlAliasRenameTarget, sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlAliasRenameTarget, type SqlCompletionCatalog, type SqlDefinitionReference, type SqlReferenceRange } from "./sqlCompletion";
 import { SqlDiagnostics } from "./SqlDiagnostics";
 import { SqlDefinitionDialog, type SqlDefinitionResult } from "./SqlDefinitionDialog";
 import { SqlFormatDialog } from "./SqlFormatDialog";
+import { SqlAliasRenameDialog } from "./SqlAliasRenameDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
 import { NetworkWorkspace } from "./NetworkWorkspace";
@@ -56,7 +57,9 @@ type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: Que
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
 type SqlDefinitionRequest = { profileId: string; tabId: string; source: string; result: Promise<SqlDefinitionResult> };
-type SqlFormatSelection = { profileId: string; tabId: string; source: string; start: number; end: number };
+type SqlDraftSnapshot = { profileId: string; tabId: string; source: string };
+type SqlFormatSelection = SqlDraftSnapshot & SqlReferenceRange;
+type SqlAliasRenameRequest = SqlDraftSnapshot & { target: SqlAliasRenameTarget | null };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -125,6 +128,7 @@ function App() {
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
   const [formatSelection, setFormatSelection] = useState<SqlFormatSelection | null>(null);
+  const [aliasRename, setAliasRename] = useState<SqlAliasRenameRequest | null>(null);
   const [closingSqlTab, setClosingSqlTab] = useState<SqlDraft | null>(null);
   const [exitPrompt, setExitPrompt] = useState(false);
   const [exitClosing, setExitClosing] = useState(false);
@@ -453,18 +457,26 @@ function App() {
       start: selected ? editor.selectionStart : 0, end: selected ? editor.selectionEnd : source.length });
   }
 
-  function applySqlFormat(selection: SqlFormatSelection, text: string) {
+  function openSqlAliasRename() {
     const editor = sqlEditor.current;
-    if (!editor || profile?.id !== selection.profileId || sqlDraft?.id !== selection.tabId || editor.value !== selection.source) {
-      setError("SQL 탭이나 내용이 바뀌었습니다. 서식을 다시 미리보세요.");
+    if (!editor || !sqlDraft || !profile || !editor.value.trim()) return;
+    const source = editor.value;
+    const caret = editor.selectionDirection === "backward" ? editor.selectionStart : editor.selectionEnd;
+    setAliasRename({ profileId: profile.id, tabId: sqlDraft.id, source, target: sqlAliasRenameTarget(source, caret) });
+  }
+
+  function replaceSqlDraftRange(snapshot: SqlDraftSnapshot, range: SqlReferenceRange, text: string, reveal?: SqlReferenceRange) {
+    const editor = sqlEditor.current;
+    if (!editor || profile?.id !== snapshot.profileId || sqlDraft?.id !== snapshot.tabId || editor.value !== snapshot.source) {
+      setError("SQL 탭이나 내용이 바뀌었습니다. 편집 내용을 다시 확인하세요.");
       return;
     }
     editor.focus({ preventScroll: true });
-    editor.setSelectionRange(selection.start, selection.end);
+    editor.setSelectionRange(range.start, range.end);
     if (!document.execCommand("insertText", false, text)) {
-      setError("SQL 편집기에 서식을 적용할 수 없습니다.");
-    } else if (selection.start > 0 || selection.end < selection.source.length) {
-      revealEditorRange(editor, selection.start, selection.start + text.length);
+      setError("SQL 편집기에 변경을 적용할 수 없습니다.");
+    } else if (reveal) {
+      revealEditorRange(editor, reveal.start, reveal.end);
     }
   }
 
@@ -893,6 +905,7 @@ function App() {
       <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
       {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
+      {sqlDraft && <button type="button" className="secondary small" title="F2" disabled={!sql.trim()} onClick={openSqlAliasRename}>별칭 변경</button>}
       {sqlDraft && <button type="button" className="secondary small" title="Ctrl+Alt+F" disabled={!sql.trim()} onClick={openSqlFormat}>SQL 서식</button>}
     </div>
     {sqlDraft && <span className="sql-file-state" role="status" title={sqlDraft.savedPath || undefined}>
@@ -952,6 +965,11 @@ function App() {
                   setSqlSelection(start === end ? null : { start, end });
                 }} onKeyDown={event => {
                   if (event.nativeEvent.isComposing) return;
+                  if (event.key === "F2" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+                    event.preventDefault();
+                    openSqlAliasRename();
+                    return;
+                  }
                   if (event.key === "F12" && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
                     event.preventDefault();
                     if (sql.trim()) openSqlDefinition();
@@ -1148,7 +1166,16 @@ function App() {
       }} />}
     {formatSelection && formatSelection.profileId === profile?.id && formatSelection.tabId === sqlDraft?.id && <SqlFormatDialog
       source={formatSelection.source} start={formatSelection.start} end={formatSelection.end}
-      onClose={() => setFormatSelection(null)} onApply={text => applySqlFormat(formatSelection, text)} />}
+      onClose={() => setFormatSelection(null)} onApply={text => replaceSqlDraftRange(formatSelection, formatSelection, text,
+        formatSelection.start > 0 || formatSelection.end < formatSelection.source.length
+          ? { start: formatSelection.start, end: formatSelection.start + text.length } : undefined)} />}
+    {aliasRename && aliasRename.profileId === profile?.id && aliasRename.tabId === sqlDraft?.id && <SqlAliasRenameDialog
+      source={aliasRename.source} target={aliasRename.target} onClose={() => setAliasRename(null)}
+      onValidate={(range, text) => call<void>("validate_sql_alias_rename", {
+        profileId: aliasRename.profileId, original: aliasRename.source.slice(range.start, range.end), changed: text,
+      })}
+      onApply={(range, update) => replaceSqlDraftRange(aliasRename, range, update.text,
+        { start: update.first, end: update.first + update.spelling.length })} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}

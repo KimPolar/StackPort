@@ -324,6 +324,14 @@ async fn diagnose_sql(store: State<'_, Store>, profile_id: String, sql: String) 
 }
 
 #[tauri::command]
+async fn validate_sql_alias_rename(
+    store: State<'_, Store>, profile_id: String, original: String, changed: String,
+) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.validate_sql_alias_rename(&profile_id, &original, &changed)).await
+}
+
+#[tauri::command]
 fn prepare_query(store: State<'_, Store>) -> Result<String, String> {
     store.prepare_query()
 }
@@ -1157,6 +1165,7 @@ fn main() {
             describe_object,
             sql_completion_catalog,
             diagnose_sql,
+            validate_sql_alias_rename,
             prepare_query,
             current_sql_statement,
             cancel_query,

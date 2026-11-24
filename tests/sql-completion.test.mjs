@@ -6,7 +6,7 @@ import { test } from "node:test";
 const hooks = registerHooks({ resolve(specifier, context, next) {
   return next(specifier === "./editorSyntax" && context.parentURL?.endsWith("/src/sqlCompletion.ts") ? "./editorSyntax.ts" : specifier, context);
 } });
-const { sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference } = await import("../src/sqlCompletion.ts");
+const { proposeSqlAliasRename, sqlAliasRenameTarget, sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference } = await import("../src/sqlCompletion.ts");
 hooks.deregister();
 
 function at(text) {
@@ -15,6 +15,45 @@ function at(text) {
 }
 
 const empty = { relations: [], columns: [], functions: [] };
+
+test("renames resolved table aliases across correlated subqueries without changing shadowed names", () => {
+  const sql = "SELECT P.id, 'p.id' AS note FROM main.people p "
+    + "WHERE EXISTS (SELECT p.id FROM people p) "
+    + "AND EXISTS (SELECT 1 FROM people q WHERE q.id = p.id); -- p.id\nSELECT p.id FROM people p;";
+  const target = sqlAliasRenameTarget(sql, sql.indexOf("P.id") + 1);
+  assert.equal(target.alias, "p");
+  assert.equal(target.occurrences.length, 3);
+  assert.match(proposeSqlAliasRename(sql, target, "Q").error, /다른 테이블이나 별칭/);
+  const edit = proposeSqlAliasRename(sql, target, "한 팀");
+  assert.equal(edit.text, 'SELECT "한 팀".id, \'p.id\' AS note FROM main.people "한 팀" '
+    + 'WHERE EXISTS (SELECT p.id FROM people p) '
+    + 'AND EXISTS (SELECT 1 FROM people q WHERE q.id = "한 팀".id)');
+  assert.equal(sql.slice(target.statement.end), "; -- p.id\nSELECT p.id FROM people p;");
+});
+
+test("handles aliases of CTEs and derived tables, and rejects newly captured outer references", () => {
+  const sql = "WITH c AS (SELECT id FROM people) SELECT d.id FROM (SELECT c.id FROM c) AS d "
+    + "WHERE EXISTS (SELECT q.id FROM c q WHERE q.id = d.id)";
+  const target = sqlAliasRenameTarget(sql, sql.indexOf("AS d") + 4);
+  assert.equal(target.alias, "d");
+  assert.equal(target.occurrences.length, 3);
+  assert.match(proposeSqlAliasRename(sql, target, "q").error, /참조가 바뀝니다/);
+
+  const outer = "SELECT p.id FROM people p WHERE EXISTS (SELECT q.id FROM people q WHERE q.id = p.id)";
+  const inner = sqlAliasRenameTarget(outer, outer.lastIndexOf("q.id") + 1);
+  assert.equal(inner.alias, "q");
+  assert.match(proposeSqlAliasRename(outer, inner, "p").error, /참조가 바뀝니다/);
+  assert.equal(sqlAliasRenameTarget("SELECT p.id FROM people p UNION SELECT 1", 8), null);
+  assert.equal(sqlAliasRenameTarget("SELECT p.id FROM people p WHERE (", 8), null);
+});
+
+test("resolves SQLite quoted aliases and skips schema-qualified table names", () => {
+  const sql = "SELECT 'main'.id, [main].note, main.main.id FROM main.people AS 'main'";
+  const target = sqlAliasRenameTarget(sql, sql.indexOf("'main'") + 3);
+  assert.equal(target.occurrences.length, 4);
+  assert.equal(proposeSqlAliasRename(sql, target, 'by"team').text,
+    'SELECT "by""team".id, "by""team".note, main."by""team".id FROM main.people AS "by""team"');
+});
 
 test("finds the active statement, active query scope and names declared after the cursor", () => {
   const result = at("SELECT unrelated FROM prior; SELECT p.na| FROM main.people AS p WHERE EXISTS (SELECT 1 FROM hidden h)");

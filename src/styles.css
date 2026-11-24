@@ -188,6 +188,9 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-definition-uses ul { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; padding: 0; list-style: none; }
 .sql-definition-uses code { overflow-wrap: anywhere; }
 .sql-definition tr[aria-current="true"] > td { background: #e0eee8; color: #155e4e; }
+.sql-alias-preview { display: grid; gap: 7px; max-height: 210px; overflow: auto; margin: 0; padding: 10px; list-style: none; border: 1px solid #dce7df; border-radius: 5px; background: #f6f9f7; }
+.sql-alias-preview li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; color: #526a5f; font-size: 12px; overflow-wrap: anywhere; }
+.sql-alias-preview code:last-child { color: #155e4e; }
 .dialog.sql-format { width: min(820px, calc(100vw - 32px)); }
 .sql-format-body { padding: 0 21px 21px; }
 .sql-format-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px 12px; }

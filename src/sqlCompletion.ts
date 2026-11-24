@@ -20,6 +20,14 @@ export type SqlDefinitionReference = {
   column: string | null;
   sources: { name: string; uses: SqlReferenceRange[] }[];
 };
+export type SqlAliasRenameTarget = {
+  alias: string;
+  declaration: SqlReferenceRange;
+  occurrences: SqlReferenceRange[];
+  statement: SqlReferenceRange;
+  unavailable: Set<string>;
+};
+export type SqlAliasRenameEdit = { text: string; spelling: string; first: number };
 type CompletionContext = {
   start: number;
   end: number;
@@ -35,6 +43,7 @@ type CompletionContext = {
 const relationWords = new Set(["FROM", "JOIN", "UPDATE", "INTO"]);
 const fromEnd = new Set(["WHERE", "GROUP", "HAVING", "ORDER", "LIMIT", "UNION", "INTERSECT", "EXCEPT", "RETURNING", "WINDOW", "SET", "VALUES"]);
 const fallbackKeywords = ["SELECT", "FROM", "WHERE", "JOIN", "GROUP", "ORDER", "LIMIT", "WITH", "EXPLAIN"];
+const sqlEditorLimit = 256 * 1024;
 export const sqliteNameKey = (name: string) => name.replace(/[A-Z]/g, letter => letter.toLowerCase());
 const caseFold = sqliteNameKey;
 const word = (token?: SqlEditorToken) => token?.kind === "word" ? token.text.toUpperCase() : "";
@@ -142,11 +151,12 @@ function sourcesFor(tokens: SqlEditorToken[], ctes: string[]) {
   return { sources, unresolved };
 }
 
-function statementContext(value: string, caret: number) {
-  if (value.length > 256 * 1024 || caret < 0 || caret > value.length) return null;
+function statementContext(value: string, caret: number, allowQuotedName = false) {
+  if (value.length > sqlEditorLimit || caret < 0 || caret > value.length) return null;
   const tokens = sqliteEditorTokens(value);
   const current = tokens.find(token => token.start < caret && token.end >= caret);
-  if (current && ["comment", "string", "parameter", "number"].includes(current.kind)) return null;
+  if (current && ["comment", "string", "parameter", "number"].includes(current.kind) &&
+    !(allowQuotedName && current.kind === "string" && current.text.startsWith("'"))) return null;
   const replace = tokens.find(token => token.start <= caret && token.end >= caret && (token.kind === "word" || token.kind === "identifier"));
   const start = replace?.start ?? caret;
   const end = replace?.end ?? caret;
@@ -236,6 +246,159 @@ export function sqlDefinitionReference(value: string, caret: number): SqlDefinit
       return { name: source.name, uses: [...uses].sort((a, b) => a.start - b.start).map(({ start, end }) => ({ start, end })) };
     }),
   };
+}
+
+type AliasScope = { parent: AliasScope | null; bindings: AliasBinding[]; references: SqlEditorToken[] };
+type AliasBinding = { key: string; declaration?: SqlEditorToken };
+const queryStarts = new Set(["SELECT", "WITH", "VALUES"]);
+const compound = new Set(["UNION", "INTERSECT", "EXCEPT"]);
+const joinModifiers = new Set(["LEFT", "RIGHT", "FULL", "OUTER", "INNER", "CROSS", "NATURAL", "JOIN", "ON", "USING", "INDEXED", "NOT"]);
+
+function aliasName(token?: SqlEditorToken) {
+  return token?.kind === "string" && token.text.startsWith("'")
+    ? token.text.slice(1, -1).replaceAll("''", "'") : name(token);
+}
+
+function aliasScopes(tokens: SqlEditorToken[], pairs: Map<number, number>) {
+  const scopes: AliasScope[] = [];
+  const visit = (first: number, last: number, parent: AliasScope | null, depth: number): boolean => {
+    if (depth > 32 || scopes.length === 200 || !queryStarts.has(word(tokens[first]))) return false;
+    const scope: AliasScope = { parent, bindings: [], references: [] };
+    scopes.push(scope);
+    const direct: SqlEditorToken[] = [];
+    const children: number[] = [];
+    const visible: SqlEditorToken[] = [];
+    const boundaries: number[] = [];
+    for (let index = first; index < last; index++) {
+      const token = tokens[index];
+      if (punctuation(token, ")") && boundaries.pop() !== index) return false;
+      if (!boundaries.length) direct.push(token);
+      visible.push(token);
+      if (!punctuation(token, "(")) continue;
+      const end = pairs.get(index);
+      if (end === undefined || end >= last) return false;
+      if (queryStarts.has(word(tokens[index + 1]))) {
+        children.push(index);
+        if (!boundaries.length) direct.push(tokens[end]);
+        visible.push(tokens[end]);
+        index = end;
+      } else boundaries.push(end);
+    }
+    if (direct.some(token => compound.has(word(token)))) return false;
+    const select = direct.findIndex(token => word(token) === "SELECT");
+    const tableNames = new Set<SqlEditorToken>();
+    const derived = new Set<SqlEditorToken>();
+    let inFrom = false;
+    for (let index = select + 1; select >= 0 && index < direct.length; index++) {
+      const label = word(direct[index]);
+      if (fromEnd.has(label)) inFrom = false;
+      if (label === "FROM" && word(direct[index - 1]) === "DISTINCT") continue;
+      if (label !== "FROM" && label !== "JOIN" && !(inFrom && punctuation(direct[index], ","))) continue;
+      inFrom = true;
+      let next = index + 1;
+      const relation = direct[next++];
+      let key = aliasName(relation);
+      if (punctuation(relation, "(")) {
+        if (!children.some(open => tokens[open] === relation) || !punctuation(direct[next++], ")")) return false;
+        derived.add(relation);
+      } else {
+        if (!key) return false;
+        tableNames.add(relation);
+        if (punctuation(direct[next], ".")) {
+          const qualified = direct[next + 1];
+          key = aliasName(qualified);
+          if (!key) return false;
+          tableNames.add(qualified);
+          next += 2;
+        }
+        if (punctuation(direct[next], "(") && punctuation(direct[next + 1], ")")) next += 2;
+      }
+      const following = word(direct[next]);
+      const declaration = following === "AS" ? direct[next + 1]
+        : !fromEnd.has(following) && !joinModifiers.has(following) && aliasName(direct[next]) ? direct[next] : undefined;
+      const qualifier = aliasName(declaration) || key;
+      if (qualifier) scope.bindings.push({ key: caseFold(qualifier), declaration });
+      if (declaration) tableNames.add(declaration);
+      // Do not reinterpret a contextual keyword used as a table or alias.
+      index = declaration ? next + Number(following === "AS") : next - 1;
+    }
+    scope.references = visible.filter((token, index) => aliasName(token) && !tableNames.has(token)
+      && punctuation(visible[index + 1], ".") && !punctuation(visible[index + 3], "."));
+    // A FROM subquery can see outer queries but not its own query's sibling sources.
+    return children.every(open => visit(open + 1, pairs.get(open)!, derived.has(tokens[open]) ? parent : scope, depth + 1));
+  };
+  return visit(0, tokens.length, null, 0) ? scopes : null;
+}
+
+function aliasOwner(scope: AliasScope | null, key: string): AliasBinding | undefined {
+  while (scope) {
+    const binding = scope.bindings.find(binding => binding.key === key);
+    if (binding) return binding;
+    scope = scope.parent;
+  }
+}
+
+export function sqlAliasRenameTarget(value: string, caret: number): SqlAliasRenameTarget | null {
+  const context = statementContext(value, caret, true);
+  if (!context?.statement.length) return null;
+  const { statement, scopes: { pairs } } = context;
+  const scopes = aliasScopes(statement, pairs);
+  if (!scopes) return null;
+  const at = (token: SqlEditorToken | undefined) => token && token.start <= caret && caret <= token.end;
+  for (const scope of scopes) {
+    const reference = scope.references.find(at);
+    const binding = scope.bindings.find(binding => at(binding.declaration))
+      ?? (reference && aliasOwner(scope, caseFold(aliasName(reference))));
+    if (!binding?.declaration) continue;
+    const { declaration } = binding;
+    const owner = scopes.find(other => other.bindings.includes(binding))!;
+    if (owner.bindings.filter(other => other.key === binding.key).length !== 1) return null;
+    const unavailable = new Set(owner.bindings.filter(other => other !== binding).map(other => other.key));
+    const occurrences = [declaration];
+    for (const useScope of scopes) {
+      const shadow = new Set<string>();
+      let ancestor: AliasScope | null = useScope;
+      for (; ancestor && ancestor !== owner; ancestor = ancestor.parent) {
+        ancestor.bindings.forEach(other => shadow.add(other.key));
+      }
+      if (!ancestor) continue;
+      for (const token of useScope.references) {
+        const key = caseFold(aliasName(token));
+        if (shadow.has(key)) continue;
+        if (key === binding.key) {
+          occurrences.push(token);
+          shadow.forEach(other => unavailable.add(other));
+        } else unavailable.add(key);
+      }
+    }
+    return { alias: aliasName(declaration), declaration, occurrences: occurrences.sort((a, b) => a.start - b.start),
+      statement: { start: statement[0].start, end: statement.at(-1)!.end }, unavailable };
+  }
+  return null;
+}
+
+export function proposeSqlAliasRename(source: string, target: SqlAliasRenameTarget, next: string): SqlAliasRenameEdit | { error: string } | null {
+  const proposed = next.trim();
+  if (!proposed || proposed.length > 256 || /[\x00-\x1f\x7f]/.test(proposed)) {
+    return { error: "제어 문자 없이 1~256자의 별칭을 입력하세요." };
+  }
+  if (target.unavailable.has(caseFold(proposed))) return { error: "같은 이름을 사용하면 다른 테이블이나 별칭의 참조가 바뀝니다." };
+  if (proposed === target.alias) return null;
+  const spelling = identifier(proposed);
+  const length = target.occurrences.reduce((length, range) => length + spelling.length - (range.end - range.start),
+    target.statement.end - target.statement.start);
+  const tooLarge = { error: "변경한 SQL은 UTF-8로 256 KiB 이하여야 합니다." };
+  if (length > sqlEditorLimit) return tooLarge;
+  const parts: string[] = [];
+  let offset = target.statement.start;
+  for (const range of target.occurrences) {
+    parts.push(source.slice(offset, range.start), spelling);
+    offset = range.end;
+  }
+  const text = parts.join("") + source.slice(offset, target.statement.end);
+  if (new TextEncoder().encode(text).length > sqlEditorLimit) return tooLarge;
+  const first = target.occurrences[0].start;
+  return { text, spelling, first };
 }
 
 export function sqlCompletionSuggestions(context: CompletionContext, catalog: SqlCompletionCatalog): EditorCompletion[] {

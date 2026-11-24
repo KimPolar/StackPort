@@ -46,6 +46,7 @@ async function main() {
     await verifySqlDiagnostics(page, editor, dev);
     await verifySqlDefinition(page, editor, dev);
     await verifySqlFormatting(page, editor);
+    await verifySqlAliasRename(page, editor);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
     await editor.fill(colored);
     const syntax = page.locator('.code-highlight-lines');
@@ -493,6 +494,49 @@ async function verifySqlFormatting(page, editor) {
   await dialog.getByRole('button', { name: '취소', exact: true }).click();
   await dialog.waitFor({ state: 'detached' });
   assert.equal(await editor.inputValue(), selectionSource);
+}
+
+async function verifySqlAliasRename(page, editor) {
+  const dialog = page.getByRole('dialog', { name: '테이블 별칭 변경', exact: true });
+  const newName = dialog.getByRole('textbox', { name: '새 별칭', exact: true });
+  const apply = dialog.getByRole('button', { name: '별칭 변경', exact: true });
+  const source = "SELECT 9;\nSELECT P.id, 'p.id' AS label FROM main.people p\n"
+    + "WHERE EXISTS (SELECT p.id FROM people p)\n"
+    + "AND EXISTS (SELECT 1 FROM people q WHERE q.id = p.id); -- p.id\nSELECT 3;";
+  const expected = 'SELECT 9;\nSELECT "한 팀".id, \'p.id\' AS label FROM main.people "한 팀"\n'
+    + "WHERE EXISTS (SELECT p.id FROM people p)\n"
+    + 'AND EXISTS (SELECT 1 FROM people q WHERE q.id = "한 팀".id); -- p.id\nSELECT 3;';
+  async function selectAlias(sql, token) {
+    await editor.fill(sql);
+    await editor.evaluate((node, offset) => node.setSelectionRange(offset, offset), sql.indexOf(token) + 1);
+  }
+
+  await selectAlias(source, 'P.id');
+  await editor.press('F2');
+  await newName.waitFor();
+  assert.equal(await newName.inputValue(), 'p');
+  assert.equal(await newName.evaluate(node => node === document.activeElement && node.selectionStart === 0 && node.selectionEnd === node.value.length), true);
+  await newName.fill('q');
+  await dialog.getByRole('alert').getByText(/다른 테이블이나 별칭/).waitFor();
+  assert.equal(await apply.isDisabled(), true);
+  await newName.fill('한 팀');
+  assert.equal(await dialog.getByRole('list', { name: '변경 위치', exact: true }).getByRole('listitem').count(), 3);
+  assert.equal(await editor.inputValue(), source);
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), expected);
+  await editor.press('Control+z');
+  assert.equal(await editor.inputValue(), source);
+
+  const implicit = 'SELECT p.id + 1 FROM people p;';
+  await selectAlias(implicit, 'p.id');
+  await page.getByRole('button', { name: '별칭 변경', exact: true }).click();
+  await newName.fill('changed');
+  await apply.click();
+  await dialog.getByRole('alert').getByText(/결과 열 이름이 바뀝니다/).waitFor();
+  assert.equal(await editor.inputValue(), implicit);
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
 }
 
 main().catch(error => { console.error(error); process.exit(1); });
