@@ -1,10 +1,11 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Copy, Download, Eye, File, FolderInput, FolderOpen, FolderPlus, Link, Pencil, RefreshCw, Upload } from "lucide-react";
+import { ArrowUp, Copy, Download, Eye, File, FolderInput, FolderOpen, FolderPlus, Link, Pencil, RefreshCw, Trash2, Upload } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
+import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
 import { SftpDestinationDialog, type SftpDestinationSelection } from "./SftpDestinationDialog";
-import { SftpNameDialog, type SftpNameAction } from "./SftpNameDialog";
+import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
 type Entry = { name: string; kind: "directory" | "file" | "symlink" | "other"; location: string | null; size: string | null; modified: number | null; mode: number | null; uid: number | null; gid: number | null; hidden: boolean };
@@ -14,7 +15,7 @@ type Host = { status: string; token: string | null; keys: { algorithm: string; f
 type BrowsePath = { kind: "text" | "token"; value: string };
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
-const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료" };
+const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료" };
 
 export function SftpWorkspace({ projectName, profiles }: { projectName: string; profiles: SshProfile[] }) {
@@ -27,6 +28,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [finished, setFinished] = useState<TransferResult | null>(null);
   const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
   const [destinationSelection, setDestinationSelection] = useState<SftpDestinationSelection | null>(null);
+  const [deleteSelection, setDeleteSelection] = useState<SftpDeleteSelection | null>(null);
   const [nameResult, setNameResult] = useState<{ kind: keyof typeof mutationTitles; name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -45,6 +47,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       setFinished(null);
       setNameAction(null);
       setDestinationSelection(null);
+      setDeleteSelection(null);
       setNameResult(null);
       setRemoteRefresh(0);
     } catch (error) {
@@ -87,6 +90,23 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     setDestinationSelection(selection);
   }
 
+  function chooseDelete(parent: Directory, item: SftpListedItem) {
+    if (!remote) return;
+    setFinished(null);
+    setNameResult(null);
+    const result = invoke<SftpDeletePreview>("preview_sftp_delete", { id: remote.id, parent: parent.location, source: listedItemSnapshot(item) });
+    setDeleteSelection({ name: item.name, result: result.then(preview => ({ preview }), error => ({ error: String(error) })) });
+  }
+
+  function closeDelete() {
+    if (remote && deleteSelection) {
+      void deleteSelection.result.then(result => {
+        if ("preview" in result) return invoke("discard_sftp_delete", { id: remote.id, token: result.preview.token });
+      }).catch(() => {});
+    }
+    setDeleteSelection(null);
+  }
+
   function mutationSaved(kind: keyof typeof mutationTitles, name: string, auditWarning: string | null) {
     setNameResult({ kind, name, auditWarning });
     setRemoteRefresh(value => value + 1);
@@ -127,6 +147,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
         onNameAction={chooseNameAction}
         onDestination={chooseDestination}
+        onDelete={chooseDelete}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
@@ -138,6 +159,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     {remote && destinationSelection && <SftpDestinationDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       selection={destinationSelection} onClose={() => setDestinationSelection(null)}
       onMoved={(path, warning) => mutationSaved("move", path, warning)} onCopied={transferSaved} />}
+    {remote && deleteSelection && <SftpDeleteDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      selection={deleteSelection} onClose={closeDelete} onDeleted={(path, warning) => mutationSaved("delete", path, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
@@ -229,11 +252,12 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, action, refresh }: {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, action, refresh }: {
   title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
   onNameAction?: (action: SftpNameAction) => void;
   onDestination?: (selection: SftpDestinationSelection) => void;
+  onDelete?: (directory: Directory, item: SftpListedItem) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -326,6 +350,9 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
             {kind === "file" && onDestination && <button type="button" className="icon-button" disabled={busy}
               aria-label={`${entry.name} 복사`} title="복사"
               onClick={() => onDestination({ kind: "copy", parent: directory, item: { ...entry, kind, location } })}><Copy size={14} /></button>}
+            {onDelete && <button type="button" className="icon-button" disabled={busy}
+              aria-label={`${entry.name} 삭제`} title="삭제"
+              onClick={() => onDelete(directory, { ...entry, kind, location })}><Trash2 size={14} /></button>}
           </div>}</td>
         </tr>;
       })}</tbody>

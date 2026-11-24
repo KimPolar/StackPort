@@ -17,6 +17,7 @@ pub(super) enum FileOperation {
     Rename,
     Move,
     Copy,
+    Delete,
 }
 
 impl FileOperation {
@@ -31,6 +32,7 @@ impl FileOperation {
             (Self::Move, _) => "sftp.move",
             (Self::Copy, false) => "sftp.copy",
             (Self::Copy, true) => "sftp.copy.cancel",
+            (Self::Delete, _) => "sftp.delete",
         }
     }
 }

@@ -603,6 +603,7 @@ const auditOperationNames: Record<string, string> = {
   "sftp.rename": "SFTP 이름 변경",
   "sftp.move": "SFTP 이동",
   "sftp.copy": "SFTP 복사", "sftp.copy.cancel": "SFTP 복사",
+  "sftp.delete": "SFTP 삭제",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
 

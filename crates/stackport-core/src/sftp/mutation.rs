@@ -121,7 +121,7 @@ impl SftpManager {
         .await
     }
 
-    async fn run_mutation<F>(
+    pub(super) async fn run_mutation<F>(
         &self,
         id: &str,
         operation: FileOperation,

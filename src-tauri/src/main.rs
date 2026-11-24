@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpDeletePreview, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -648,6 +648,31 @@ async fn move_sftp_entry(
 }
 
 #[tauri::command]
+async fn preview_sftp_delete(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    source: SftpEntrySource,
+) -> Result<SftpDeletePreview, String> {
+    sftp.preview_delete(&id, parent, source).await
+}
+
+#[tauri::command]
+fn discard_sftp_delete(sftp: State<'_, SftpManager>, id: String, token: String) {
+    sftp.discard_delete_preview(&id, &token);
+}
+
+#[tauri::command]
+async fn delete_sftp_entry(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    token: String,
+    confirmation: String,
+) -> Result<SftpMutationReport, String> {
+    sftp.delete_entry(&id, token, confirmation).await
+}
+
+#[tauri::command]
 async fn copy_sftp_file(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -920,6 +945,9 @@ fn main() {
             create_sftp_folder,
             rename_sftp_entry,
             move_sftp_entry,
+            preview_sftp_delete,
+            discard_sftp_delete,
+            delete_sftp_entry,
             copy_sftp_file,
             preview_local_browse_file,
             download_sftp_file,

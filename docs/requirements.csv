@@ -9,7 +9,7 @@ SP-UI-007,명령 팔레트,단축키로 기능·명령·호스트·DB를 빠르�
 SP-UI-008,빠른 연결,"호스트/IP/URL/연결 문자열 입력에서 프로토콜 추론, 유효성 검사 및 신규 프로필 저장 제안.",partial,Windows SSH 호스트·포트·사용자 빠른 연결,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-UI-009,즐겨찾기,연결·쿼리·테이블·스크립트·폴더·작업을 고정하고 개인 즐겨찾기 및 프로젝트 공유 구분.,not_started,,
 SP-UI-010,가상 그룹,같은 연결·DB 객체를 실제 위치를 바꾸지 않고 태그/논리 그룹으로 분류.,not_started,,
-SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,"프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
+SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 전송·자동화 내역 표시, 필터 및 재실행.",partial,"프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
 SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목록 복구, 실제 재연결은 정책에 따라 수행.",not_started,,
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
 SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
@@ -87,7 +87,7 @@ SP-RG-017,장비 연결 충돌,포트 사용 중·장치 제거·권한 부족·
 SP-RG-018,프로토콜별 기능 가용성,OS·하드웨어·권한·라이선스에 따라 미지원 기능을 숨기지 말고 이유를 표시.,partial,Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-FL-001,자동 파일 탐색,SSH 접속 직후 허용된 SFTP/SCP 브라우저를 같은 프로젝트에 자동 표시(설정 가능).,partial,현재 프로젝트의 저장된 SSH 연결과 동일한 호스트 키 저장소로 SFTP 탐색 시작,crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-002,이중 패널 탐색,"로컬·원격·원격 간 디렉터리 트리, 파일 목록, 경로 이동, 탭, 새로고침.",partial,"로컬·SFTP 이중 패널의 파일 목록, 경로·하위/상위 폴더 이동과 새로고침",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
-SP-FL-003,파일 작업,"생성, 읽기, 이름 변경, 이동, 복사, 삭제, 폴더 생성, 다중 선택, 드래그앤드롭.",partial,"SFTP 원격 폴더 생성, 일반 파일·폴더 이름 변경·이동과 일반 파일 복사, 기존 대상 보호와 목록 갱신",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpNameDialog.tsx; src/SftpDestinationDialog.tsx; src-tauri/
+SP-FL-003,파일 작업,"생성, 읽기, 이름 변경, 이동, 복사, 삭제, 폴더 생성, 다중 선택, 드래그앤드롭.",partial,"SFTP 원격 폴더 생성, 일반 파일·폴더 이름 변경·이동, 일반 파일 복사와 단일 파일·빈 폴더 삭제",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-004,프로토콜,"SFTP, SCP, FTP(Active/Passive), FTPS(명시적/암시적·지원 범위), rsync 기반 동기화.",partial,"확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-005,FTP 전송 설정,"제어/데이터 채널 TLS 옵션, 바이너리/ASCII 모드, 인코딩, 프록시, 보안 경고.",not_started,,
 SP-FL-006,업·다운로드,"큐, 동시성, 진행률, 전송 속도, 예상 잔여 데이터, 취소, 일시정지/재개(지원 시).",partial,"SFTP의 단일 파일 업·다운로드, 진행 바이트·평균 속도·예상 잔여 시간 표시와 중단",crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/src/sftp/copy.rs; tests/sftp-smoke.cjs; src/SftpTransferStatus.tsx; src-tauri/
@@ -103,12 +103,12 @@ SP-FL-015,파일 비교,"두 파일의 텍스트·바이너리·해시 비교, �
 SP-FL-016,폴더 비교,"하위 구조·크기·수정 시간·해시 비교, 차이 목록 및 동기화 계획 미리보기.",not_started,,
 SP-FL-017,증분 동기화,"단방향/양방향, 삭제 반영 여부, 제외 패턴, 변경 충돌, dry-run, 실행 로그.",not_started,,
 SP-FL-018,경로 동기화,지원 셸의 현재 디렉터리를 파일 탐색기에 반영하는 선택적 연동.,not_started,,
-SP-FL-019,링크/중복 탐색,심볼릭 링크 정책·중복 파일 탐색·빈 폴더 확인·대량 삭제 전 검토.,not_started,,
+SP-FL-019,링크/중복 탐색,심볼릭 링크 정책·중복 파일 탐색·빈 폴더 확인·대량 삭제 전 검토.,partial,SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존,crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx
 SP-FL-020,보관 작업,"원격 tar/zip 생성·해제, 경로 순회 검증, 원격 도구 없을 때 대체 경로 안내.",not_started,,
 SP-FL-021,전송 무결성,"지원하는 프로토콜/서버에서 SHA-256 등 해시 검증, 파일 크기/수정 시간 검증.",partial,"SFTP 업로드·원격 복사의 원본·복사본 SHA-256 비교, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/src/sftp/copy.rs; tests/sftp-smoke.cjs; src/SftpTransferStatus.tsx; src-tauri/
 SP-FL-022,작업 재사용,"전송·백업·동기화 프로필 저장, 수동 실행·자동화 연결.",not_started,,
-SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",partial,SFTP 전송·복사·원격 폴더 생성·이름 변경·이동의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록,crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
-SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",partial,"SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpNameDialog.tsx; src/SftpDestinationDialog.tsx; src-tauri/
+SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",partial,SFTP 전송·복사·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록,crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
+SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",partial,"SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",partial,Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회,crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/
 SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",partial,네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적,crates/stackport-core/tests/network.rs; tests/ports-smoke.cjs; src/NetworkDiagnosticsPanel.tsx; src-tauri/
 SP-NW-003,웹 상태 확인,"HTTP/HTTPS 요청 시간·상태 코드·헤더·TLS 정보, 반복 가용성 측정.",partial,"Windows HTTP/HTTPS HEAD·GET, 최대 5회 가용성 측정, 상태 코드·헤더·경과 시간·TLS 정보",crates/stackport-core/tests/web_check.rs; tests/ports-smoke.cjs; src/WebDiagnosticResult.tsx; src-tauri/
@@ -375,7 +375,7 @@ SP-ST-017,다중 프로세스,복수 창/인스턴스에서 설정 충돌 방지
 SP-ST-018,국제화,"한국어/영어 UI, 다국어 문자 입력·출력, IME 입력, 지역별 숫자·날짜·시간 형식.",not_started,,
 SP-SEC-001,기본 거부,"명시적으로 허용하지 않은 호스트 접근, 로컬 서버 공개, 외부 API 송신, 확장 실행을 기본 차단.",not_started,,
 SP-SEC-002,최소 권한,읽기/쓰기/관리 권한과 자격 증명·네트워크·파일 접근을 기능별로 제한.,not_started,,
-SP-SEC-003,고위험 작업,"데이터 삭제/복원/스키마 변경, 동시 원격 명령, 원격 키 삭제 시 환경·대상·예상 영향 확인.",partial,SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-SEC-003,고위험 작업,"데이터 삭제/복원/스키마 변경, 동시 원격 명령, 원격 키 삭제 시 환경·대상·예상 영향 확인.",partial,"SFTP 원격 삭제 시 연결·경로·영향과 PROD 확인, SQLite 운영 환경 셀 변경의 미리보기와 확인",crates/stackport-core/tests/edit.rs; crates/stackport-core/src/sftp/delete.rs; tests/desktop-smoke.cjs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx
 SP-SEC-004,세션 보안,호스트 키·TLS 인증서 경고를 무음 우회하지 않으며 예외는 범위·만료·감사 기록.,partial,"SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; crates/stackport-core/src/rdp.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs; tests/rdp-smoke.cjs
 SP-SEC-005,전송 암호화,보안 프로토콜을 우선 제안; Telnet/Rlogin/FTP/XDMCP 등 평문 사용 시 위험 배너.,not_started,,
 SP-SEC-006,비밀값 보호,"암호·토큰·키를 OS 보안 저장소/암호화 보관함에 보관, 사용 후 가능한 범위에서 메모리 정리.",not_started,,
@@ -383,11 +383,11 @@ SP-SEC-007,UI 보안,"WebView 콘텐츠 보안 정책(CSP), 교차 컨텍스트 
 SP-SEC-008,입력 방어,"DB 파라미터 바인딩, 파일 경로 검증, 셸 실행 인자 분리, 프로토콜 URI 검증.",partial,"메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-SEC-009,로그 정책,"민감 자격 증명·개인키·원본 데이터·쿼리 리터럴의 마스킹/제외, 보존 기간과 삭제 정책.",partial,작업 기록에서 SQL·행 데이터·경로·자격 증명 제외,crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-SEC-010,네트워크 권한,브라우저 중계 게이트웨이의 사용자 인증·RBAC·세션 범위·허용 목적지·TLS·감사·레이트 리밋.,not_started,,
-SP-SEC-011,감사 무결성,중요 동작은 사건 ID·시간·주체·대상·결과·정책을 남기고 외부 반출을 통제.,partial,"로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SFTP 전송·복사·폴더 생성·이름 변경·이동, SSH 연결 정의와 키 신뢰·교체 이력 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
+SP-SEC-011,감사 무결성,중요 동작은 사건 ID·시간·주체·대상·결과·정책을 남기고 외부 반출을 통제.,partial,"로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 키 신뢰·교체 이력 기록",crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx
 SP-SEC-012,데이터 유출 차단,팀 동기화·AI 호출·진단 수집에서 시크릿/원본 레코드 비포함 기본값.,not_started,,
 SP-SEC-013,백업 안전,"암호화/복구키 분리, 백업 파일 권한·보존·파기, 복원 테스트 상태 제공.",not_started,,
 SP-SEC-014,공급망,"의존성·네이티브 바이너리·드라이버·플러그인 서명 검증, SBOM 및 라이선스 고지.",not_started,,
-SP-SEC-015,프로덕션 경고,운영 환경에서 쓰기·DDL·대량 명령은 사용자 지정 보호 수준 적용.,partial,SQLite PROD 단일 셀 변경에 추가 확인 적용,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
+SP-SEC-015,프로덕션 경고,운영 환경에서 쓰기·DDL·대량 명령은 사용자 지정 보호 수준 적용.,partial,SQLite PROD 단일 셀 변경과 SFTP PROD 항목 삭제 시 추가 확인 적용,crates/stackport-core/tests/edit.rs; crates/stackport-core/src/sftp/delete.rs; tests/desktop-smoke.cjs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx
 SP-SEC-016,안전한 취소,작업 취소가 실제 원격 DB 작업 종료를 보장하지 않을 수 있음을 명확히 표시.,not_started,,
 SP-NFR-001,응답성,UI 이벤트는 네트워크 지연·장시간 쿼리에 의해 메인 스레드가 블로킹되지 않아야 함,partial,SQLite 작업을 별도 스레드에서 실행,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
 SP-NFR-002,대량 결과,DB 결과 그리드는 가상 스크롤·페이지 단위 로딩으로 메모리 사용량이 조회 건수에 선형 비례해 계속 증가하지 않아야 함,partial,한 번에 최대 100행 표시,crates/stackport-core/tests/workspace.rs; src/; src-tauri/

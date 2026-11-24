@@ -35,7 +35,9 @@ function sftpChannel(channel, uploads) {
     ['/home', [directory('stackport')]],
     ['/home/stackport', [directory('.'), directory('..'), file('.숨김'), directory('문서'), directory('정리'), ...Array.from(downloadFixtures.keys(), file)]],
     ['/home/stackport/문서', [file('보고서.txt')]],
-    ['/home/stackport/정리', []],
+    ['/home/stackport/정리', [directory('비어 있는 폴더'), directory('삭제 중 변경 폴더')]],
+    ['/home/stackport/정리/비어 있는 폴더', [directory('.'), directory('..')]],
+    ['/home/stackport/정리/삭제 중 변경 폴더', []],
   ]);
   const handles = new Map();
   let next = 0;
@@ -170,8 +172,26 @@ function sftpChannel(channel, uploads) {
     channel.status(id, code.OK);
   });
   channel.on('REMOVE', (id, remotePath) => {
-    if (!path.posix.basename(remotePath).startsWith('.stackport-upload-')) return channel.status(id, code.PERMISSION_DENIED);
+    const name = path.posix.basename(remotePath);
+    if (!name.startsWith('.stackport-upload-')) uploads.deletions++;
+    if (name === '삭제 금지.bin') return channel.status(id, code.PERMISSION_DENIED);
     channel.status(id, uploads.files.delete(remotePath) ? code.OK : code.NO_SUCH_FILE);
+  });
+  channel.on('RMDIR', (id, remotePath) => {
+    uploads.deletions++;
+    const entries = directories.get(remotePath);
+    if (!entries) return channel.status(id, code.NO_SUCH_FILE);
+    if (path.posix.basename(remotePath) === '삭제 중 변경 폴더') {
+      uploads.files.set(remotePath + '/.새 파일', { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
+    }
+    if (entries.some(entry => entry.filename !== '.' && entry.filename !== '..')
+      || Array.from(uploads.files.keys()).some(name => path.posix.dirname(name) === remotePath)) {
+      return channel.status(id, code.FAILURE);
+    }
+    directories.delete(remotePath);
+    const parent = directories.get(path.posix.dirname(remotePath));
+    parent.splice(parent.findIndex(entry => entry.filename === path.posix.basename(remotePath)), 1);
+    channel.status(id, code.OK);
   });
 }
 
@@ -184,7 +204,7 @@ function makeHost() {
 async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
-  const uploads = { files: new Map(), behavior: '', aliases: new Map(), moves: 0, moveCollision: false };
+  const uploads = { files: new Map(), behavior: '', aliases: new Map(), moves: 0, moveCollision: false, deletions: 0 };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
     client.on('error', () => {});
@@ -314,6 +334,7 @@ async function main() {
     await verifyRenames(page, remote, server.uploads);
     await verifyMoves(page, remote, server.uploads);
     await verifyCopies(page, remote, server.uploads, local);
+    await verifyDeletes(page, remote, server.uploads);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
@@ -327,15 +348,16 @@ async function main() {
     assert.equal(server.stats.subsystem, 2);
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await connect.waitFor({ state: 'detached' });
+    const updatedProfile = await verifyDeleteToken(command, profile, authentication, server.uploads);
 
     await server.close();
     server = await startHost(makeHost(), identity, port);
-    await assert.rejects(command('open_sftp', { profile, confirmation: 'PROD', authentication }), /호스트 키/);
+    await assert.rejects(command('open_sftp', { profile: updatedProfile, confirmation: 'PROD', authentication }), /호스트 키/);
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
     await verifyFileAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, browsing and previews, remote file operations, verified copies/transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, previews, verified transfers, remote file operations and deletes, production confirmation and audit passed.');
   } finally {
     await browser.close();
     await server.close();
@@ -649,9 +671,126 @@ async function verifyCopies(page, remote, uploads, local) {
   noPartials();
 }
 
+async function verifyDeletes(page, remote, uploads) {
+  const parent = '/home/stackport/정리';
+  const folderName = '변경한 폴더';
+  const raceFolder = '삭제 중 변경 폴더';
+  const emptyFolder = '비어 있는 폴더';
+  const fileName = '동일 폴더 복사.bin';
+  const deniedFile = '삭제 금지.bin';
+  const dialog = page.getByRole('alertdialog', { name: '원격 항목 삭제' });
+  const confirm = dialog.getByLabel('운영 환경 삭제 확인');
+  const submit = dialog.getByRole('button', { name: '영구 삭제', exact: true });
+  const rowAction = name => remote.getByRole('button', { name: `${name} 삭제`, exact: true });
+  const error = pattern => dialog.getByRole('alert').getByText(pattern).waitFor();
+  const close = async () => {
+    await dialog.getByRole('button', { name: '취소', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+  };
+  const confirmDelete = async name => {
+    await rowAction(name).click();
+    await confirm.fill('PROD');
+    await submit.click();
+  };
+  const done = async name => {
+    await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('status').getByText('원격 삭제 완료', { exact: true }).waitFor();
+    await rowAction(name).waitFor({ state: 'detached' });
+  };
+  uploads.files.set(`${parent}/${deniedFile}`, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
+  await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
+  await rowAction(deniedFile).waitFor();
+
+  await rowAction(folderName).click();
+  await error(/빈 폴더만 삭제/);
+  assert.equal(await submit.isDisabled(), true);
+  assert.equal(uploads.deletions, 0);
+  assert.equal(uploads.files.get(`${parent}/${folderName}/하위.txt`).data.toString(), 'nested file');
+  await close();
+
+  await rowAction(fileName).click();
+  await dialog.getByText(`${parent}/${fileName}`, { exact: false }).waitFor();
+  await dialog.getByText(/파일 1개를 영구 삭제/).waitFor();
+  await confirm.fill('prod');
+  assert.equal(await submit.isDisabled(), true);
+  await close();
+  assert.equal(uploads.deletions, 0);
+  const source = uploads.files.get(`${parent}/${fileName}`);
+
+  await rowAction(fileName).click();
+  await confirm.fill('PROD');
+  source.attrs.mtime++;
+  await submit.click();
+  await error(/삭제 확인 이후 원격 항목이 변경/);
+  assert.equal(uploads.deletions, 0);
+  assert.deepEqual(uploads.files.get(`${parent}/${fileName}`).data, source.data);
+  source.attrs.mtime--;
+  await close();
+
+  await confirmDelete(deniedFile);
+  await error(/접근을 거부/);
+  assert.equal(uploads.files.get(`${parent}/${deniedFile}`).data.toString(), 'keep');
+  await close();
+
+  await confirmDelete(raceFolder);
+  await error(/빈 폴더만 삭제/);
+  assert.equal(uploads.files.get(`${parent}/${raceFolder}/.새 파일`).data.toString(), 'keep');
+  await close();
+
+  await confirmDelete(emptyFolder);
+  await done(emptyFolder);
+  await confirmDelete(fileName);
+  await done(fileName);
+  assert.equal(uploads.files.has(`${parent}/${fileName}`), false);
+  assert.equal(uploads.deletions, 4);
+}
+
+async function verifyDeleteToken(command, profile, authentication, uploads) {
+  const name = '빈 복사본.txt';
+  const path = '/home/stackport/정리';
+  const session = await command('open_sftp', { profile, confirmation: 'PROD', authentication });
+  const id = session.id;
+  try {
+    const folder = await command('list_sftp_directory', { id, path: { kind: 'text', value: path } });
+    const prepare = (itemName = name) => {
+      const { location, kind, size, modified } = folder.entries.find(entry => entry.name === itemName);
+      return command('preview_sftp_delete', { id, parent: folder.location, source: { location, kind, size, modified } });
+    };
+    const apply = (token, confirmation = 'PROD') => command('delete_sftp_entry', { id, token, confirmation });
+    await assert.rejects(apply('missing-token'), /만료되었거나/);
+    const discarded = await prepare();
+    await command('discard_sftp_delete', { id, token: discarded.token });
+    await assert.rejects(apply(discarded.token), /만료되었거나/);
+    const preview = await prepare();
+    assert.equal(preview.path, `${path}/${name}`);
+    await assert.rejects(apply(preview.token, ''), /PROD/);
+    assert.equal(uploads.files.has(preview.path), true);
+    await apply(preview.token);
+    assert.equal(uploads.files.has(preview.path), false);
+    await assert.rejects(apply(preview.token), /이미 사용/);
+    const beforeChange = await prepare('빈 원격 파일.txt');
+    const { host, port, username, environment } = profile;
+    const updated = await command('update_ssh_profile', {
+      id: profile.id,
+      revision: profile.revision,
+      input: { name: '설정이 변경된 운영 서버', host, port, username, environment },
+    });
+    await assert.rejects(apply(beforeChange.token), /연결 설정이 변경/);
+    assert.equal(uploads.files.has(beforeChange.path), true);
+    return updated;
+  } finally {
+    await command('close_sftp', { id });
+  }
+}
+
 async function verifyFileAudit(page, command, project, profile, localPath) {
-  const { events } = await command('list_audit_events', { before: null });
-  const fileEvents = events.filter(event => event.operation.startsWith('sftp.'));
+  const fileEvents = [];
+  let before = null;
+  do {
+    const { events, next_cursor } = await command('list_audit_events', { before });
+    fileEvents.push(...events.filter(event => event.operation.startsWith('sftp.')));
+    before = next_cursor;
+  } while (before !== null);
   const groups = Map.groupBy(fileEvents, event => event.correlation_id);
   for (const records of groups.values()) {
     assert.equal(records.length, 2);
@@ -666,7 +805,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     }
     assert.ok(fileEvents.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
   }
-  for (const operation of ['sftp.mkdir', 'sftp.rename', 'sftp.move']) {
+  for (const operation of ['sftp.mkdir', 'sftp.rename', 'sftp.move', 'sftp.delete']) {
     for (const outcome of ['started', 'succeeded', 'failed']) {
       assert.ok(fileEvents.some(event => event.operation === operation && event.outcome === outcome));
     }
@@ -675,13 +814,14 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.equal(event.project_id, project.id);
     assert.equal(event.profile_id, profile.id);
     assert.equal(event.environment, 'PROD');
+    if (event.operation === 'sftp.delete') assert.equal(event.policy, 'sftp-delete-preview-prod-required');
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
     assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
   const serialized = JSON.stringify(fileEvents);
-  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', password, passphrase]) {
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
   }
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
@@ -692,7 +832,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
       await rows.getByText(state, { exact: true }).first().waitFor();
     }
   }
-  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동']) {
+  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제']) {
     const rows = page.getByRole('listitem').filter({ hasText: action });
     await rows.getByText('완료', { exact: true }).first().waitFor();
     await rows.getByText('실패', { exact: true }).first().waitFor();
