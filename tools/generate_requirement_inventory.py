@@ -52,7 +52,7 @@ PARTIAL = {
     "SP-FL-008": "전송·복사·원격 이름 변경·이동에서 기존 대상 보존, 파일 크기·수정 시간 변경 감지",
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시각, 숨김 표시와 크기·시각 정렬, SFTP 권한·소유자/그룹 ID",
     "SP-FL-010": "SFTP 일반 파일·폴더의 Unix 권한·소유자 변경, 변경 전후 확인과 서버 거부·미지원 사유 표시",
-    "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
+    "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문, HEX 및 정적 PNG 미리보기, 전체를 읽은 JSON 들여쓰기·XML 구조·CSV 표와 원문 전환",
     "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, 줄 번호·커서 위치와 일반 텍스트 찾기·바꾸기, BOM·LF/CRLF 유지, 로컬 초안 보관",
     "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
     "SP-FL-014": "Windows .exe 외부 편집기에서 임시 UTF-8 초안 열기, 저장된 내용 감시와 가져오기, 원격 저장 확인 및 임시 파일 정리",
@@ -200,7 +200,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-FL-010":
                 evidence = "src/SftpPermissionsDialog.tsx; crates/stackport-core/src/sftp/permissions.rs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-011":
-                evidence = "crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/"
+                evidence = "crates/stackport-core/src/sftp/preview.rs; src/FilePreviewDialog.tsx; src/structuredFilePreview.ts; tests/structured-preview.test.mjs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-012":
                 evidence = "src/CodeTextarea.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-FL-013", "SP-AT-002", "SP-AT-003"}:

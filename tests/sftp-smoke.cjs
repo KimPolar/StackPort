@@ -20,6 +20,7 @@ function requestNativeClose(pid) {
   execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-Command', script], { stdio: 'pipe' });
 }
 const htmlSource = '<!doctype html><strong>보고서</strong>';
+const jsonSource = '{"제목":"보고서","id":90071992547409931234,"id":1.2300e+25}';
 const downloadFixtures = new Map([
   ['대시보드.txt', { data: Buffer.from('0123456789abcdef!') }],
   ['보고서.html', { data: Buffer.from(htmlSource) }],
@@ -378,7 +379,7 @@ async function main() {
   fs.mkdirSync(local);
   fs.mkdirSync(path.join(local, '하위 폴더'));
   fs.writeFileSync(path.join(local, '로컬 파일.txt'), 'fixture');
-  fs.writeFileSync(path.join(local, '로컬 문서.json'), '\uFEFF{"제목":"보고서"}');
+  fs.writeFileSync(path.join(local, '로컬 문서.json'), '\uFEFF' + jsonSource);
   const two = path.join(local, 'sort-2.txt');
   const ten = path.join(local, 'sort-10.txt');
   fs.writeFileSync(two, '22');
@@ -556,7 +557,7 @@ async function main() {
     await verifyFolderComparison(page, local, server.uploads);
     await verifySyncAdditions(page, remote, localPane, local, server.uploads);
     await verifyPermissions(page, remote, server.uploads, 'lsetstat');
-    await verifyPreviews(page, remote, localPane);
+    await verifyPreviews(page, remote, localPane, server.uploads);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
     await verifyNewFolder(page, remote, server.uploads);
@@ -2115,7 +2116,7 @@ async function verifySyncStop(page, comparison, plan, localRoot, remoteRoot, upl
   await relative.waitFor();
 }
 
-async function verifyPreviews(page, remote, local) {
+async function verifyPreviews(page, remote, local, uploads) {
   const dialog = page.getByRole('dialog', { name: '파일 미리보기' });
   const open = async (pane, name) => {
     const button = pane.getByRole('button', { name: `${name} 미리보기`, exact: true });
@@ -2129,17 +2130,78 @@ async function verifyPreviews(page, remote, local) {
   };
 
   const localButton = await open(local, '로컬 문서.json');
-  await dialog.getByText('{"제목":"보고서"}', { exact: true }).waitFor();
+  const json = dialog.locator('pre[aria-label="JSON 들여쓰기"]');
+  await json.waitFor();
+  assert.equal(await json.textContent(), '{\n  "제목": "보고서",\n  "id": 90071992547409931234,\n  "id": 1.2300e+25\n}');
+  await dialog.getByRole('button', { name: '원문', exact: true }).click();
+  const source = dialog.getByLabel('UTF-8 원문', { exact: true });
+  assert.equal(await source.textContent(), jsonSource);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached' });
   assert.equal(await localButton.evaluate(button => button === document.activeElement), true);
 
   await open(remote, '보고서.html');
-  const source = dialog.getByLabel('UTF-8 원문', { exact: true });
   await source.waitFor();
   assert.equal(await source.textContent(), htmlSource);
   assert.equal(await source.locator('strong').count(), 0);
   await close();
+
+  const csvSource = '이름,값,설명\r\n"숨은, 쉼표",=1+1,"첫 줄\r\n둘째 줄"\r\n"<b>문자</b>","""인용""",';
+  const xmlSource = '<?xml version="1.0"?><보고서 xmlns:h="http://www.w3.org/1999/xhtml" id="raw&amp;값"><항목>한글 &lt;값&gt;</항목><h:img src="http://127.0.0.1:9/stackport-preview-resource"/><h:img src="/stackport-preview-same-origin"/><![CDATA[<b>데이터</b>]]></보고서>';
+  const dtdSource = '<!DOCTYPE 보고서 SYSTEM "http://127.0.0.1:9/stackport-preview-dtd"><보고서/>';
+  const piSource = '<?xml-stylesheet href="http://127.0.0.1:9/stackport-preview-style"?><보고서/>';
+  const fixtures = new Map([
+    ['표 자료.csv', csvSource], ['구조 문서.xml', xmlSource], ['DTD 자료.xml', dtdSource], ['스타일 지시.xml', piSource],
+    ['잘못된 자료.xml', '<root><child></root>'], ['큰 표.csv', 'name,value\r\n' + '값,항목\r\n'.repeat(8000)],
+  ]);
+  for (const [name, content] of fixtures) {
+    const data = Buffer.from(content);
+    uploads.files.set(`/home/stackport/${name}`, { data, attrs: { ...file('').attrs, size: data.length } });
+  }
+  await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
+  const resourceRequests = [];
+  const watch = request => { if (request.url().includes('stackport-preview-')) resourceRequests.push(request.url()); };
+  page.on('request', watch);
+  try {
+    await open(remote, '표 자료.csv');
+    const csv = dialog.getByRole('table', { name: 'CSV 표', exact: true });
+    await csv.getByRole('cell', { name: '숨은, 쉼표', exact: true }).waitFor();
+    await csv.getByRole('cell', { name: '=1+1', exact: true }).waitFor();
+    await csv.getByText('"인용"', { exact: true }).waitFor();
+    assert.equal(await csv.locator('tbody tr').nth(1).locator('td').nth(2).textContent(), '첫 줄\r\n둘째 줄');
+    assert.equal(await csv.locator('tbody tr').nth(2).locator('td').first().textContent(), '<b>문자</b>');
+    assert.equal(await csv.locator('tbody tr').nth(2).locator('td').last().textContent(), '');
+    assert.equal(await csv.locator('td b, td a').count(), 0);
+    await dialog.getByRole('button', { name: '원문', exact: true }).click();
+    assert.equal(await source.textContent(), csvSource);
+    await close();
+
+    await open(remote, '구조 문서.xml');
+    const tree = dialog.getByRole('region', { name: 'XML 구조', exact: true });
+    await tree.getByText('<보고서>', { exact: true }).waitFor();
+    await tree.getByText('raw&값', { exact: true }).waitFor();
+    await tree.getByText('<항목>', { exact: true }).click();
+    await tree.getByText('한글 <값>', { exact: true }).waitFor();
+    await tree.getByText('<![CDATA[<b>데이터</b>]]>', { exact: true }).waitFor();
+    assert.equal(await tree.locator('img, a, script').count(), 0);
+    await dialog.getByRole('button', { name: '원문', exact: true }).click();
+    assert.equal(await source.textContent(), xmlSource);
+    await close();
+
+    for (const [name, reason] of [['DTD 자료.xml', /DTD/], ['스타일 지시.xml', /처리 지시문/],
+      ['잘못된 자료.xml', /올바른 XML 형식/], ['큰 표.csv', /파일의 일부를 읽어/]]) {
+      await open(remote, name);
+      await dialog.getByRole('status').getByText(reason).waitFor();
+      assert.ok((await source.textContent()).startsWith(fixtures.get(name).slice(0, 80)), name);
+      assert.equal(await dialog.getByRole('group', { name: '미리보기 방식' }).count(), 0);
+      await close();
+    }
+    assert.deepEqual(resourceRequests, []);
+  } finally {
+    page.off('request', watch);
+    for (const name of fixtures.keys()) uploads.files.delete(`/home/stackport/${name}`);
+  }
+  await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
 
   await open(remote, '미리보기.png');
   const image = dialog.getByRole('img', { name: '미리보기.png' });
