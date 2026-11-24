@@ -162,6 +162,14 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .code-gutter-lines > div { padding-inline: 6px; }
 .code-gutter-lines > [data-active="true"] { color: #155e4e; background: #eaf4ee; font-weight: 700; }
 .code-editor-nav { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px 12px; margin-inline-start: auto; }
+.code-completion { padding: 0 12px 8px; background: #fff; }
+.code-completion ul { max-width: 620px; max-height: 167px; overflow: auto; list-style: none; border: 1px solid #d9e6de; border-radius: 5px; margin: 0; padding: 3px; }
+.code-completion li { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; border-radius: 3px; padding: 4px 8px; cursor: pointer; }
+.code-completion li[aria-selected="true"] { background: #e0eee8; color: #155e4e; }
+.code-completion li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px Consolas, "Cascadia Code", monospace; }
+.code-completion li small, .code-completion p { font-size: 11px; color: #526a5f; }
+.code-completion p { margin: 0; }
+@media (forced-colors: active) { .code-completion li[aria-selected="true"] { outline: 1px solid Highlight; } }
 .code-position { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .code-find { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; padding: 6px 9px; border-bottom: 1px solid #e0e9e4; background: #f7faf8; color: #526a5f; font-size: 12px; font-weight: 400; }
 .code-find input[type="search"], .code-replace input[type="text"] { flex: 1 1 140px; min-width: 96px; width: auto; height: 32px; padding: 4px 8px; border: 1px solid #d6e4db; border-radius: 5px; background: #fff; color: #29463b; }

@@ -22,6 +22,7 @@ import { ResultExportDialog, type ExportReport, type ExportSource } from "./Resu
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { CodeTextarea } from "./CodeTextarea";
+import { sqlCompletionContext, sqlCompletionSuggestions, type SqlCompletionCatalog } from "./sqlCompletion";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -396,6 +397,16 @@ function App() {
     }));
     setSqlSelection(null);
     if (queryPlan) editSqlQueryView(sqlDraft.id, { plan: null });
+  }
+
+  async function completeSql(value: string, position: number) {
+    const context = sqlCompletionContext(value, position);
+    if (!context || !profileId) return null;
+    const generation = objectGeneration.current;
+    const sources = [...new Set(context.sources.map(source => source.name))].slice(0, 12);
+    const catalog = await call<SqlCompletionCatalog>("sql_completion_catalog", { profileId, prefix: context.prefix, sources });
+    if (objectGeneration.current !== generation) return null;
+    return { start: context.start, end: context.end, items: sqlCompletionSuggestions(context, catalog) };
   }
 
   function editSqlTabs(target: SqlTarget, edit: (group: SqlTabSet) => SqlTabSet) {
@@ -873,7 +884,7 @@ function App() {
             aria-labelledby={sqlTabButtonId(draft.id)} hidden={draft.id !== sqlTabs.activeId}>
             {draft.id === sqlTabs.activeId && <>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label>
-              <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql} language="sqlite"
+              <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql} language="sqlite" complete={completeSql}
                 footer={sqlEditorFooter} onChange={event => changeSql(event.target.value)}
                 onSelect={event => {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;

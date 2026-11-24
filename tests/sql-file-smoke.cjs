@@ -1,5 +1,6 @@
 /* Connect only to an isolated Windows StackPort instance. */
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
+const { DatabaseSync } = require('node:sqlite');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -25,6 +26,11 @@ async function main() {
     for (const name of ['개발 DB', '운영 DB']) {
       await invoke('create_sqlite_profile', { projectId: project.id, name, path: process.env.STACKPORT_TEST_DATABASE, environment: name === '개발 DB' ? 'DEV' : 'PROD' });
     }
+    const isolatedPath = path.join(root, 'completion-isolated.sqlite');
+    const isolated = new DatabaseSync(isolatedPath);
+    isolated.exec('CREATE TABLE source (value TEXT); CREATE VIEW "web view" AS SELECT value FROM source;');
+    isolated.close();
+    await invoke('create_sqlite_profile', { projectId: project.id, name: '격리 DB', path: isolatedPath, environment: 'DEV' });
     await page.reload();
     const dev = page.getByRole('button', { name: /개발 DB DEV/ });
     const prod = page.getByRole('button', { name: /운영 DB PROD/ });
@@ -36,6 +42,7 @@ async function main() {
     const saveDialog = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
 
     await dev.click();
+    await verifySqlCompletion(page, editor, dev);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
     await editor.fill(colored);
     const syntax = page.locator('.code-highlight-lines');
@@ -325,6 +332,52 @@ async function main() {
   } finally {
     await browser.close();
   }
+}
+
+async function verifySqlCompletion(page, editor, dev) {
+  const choices = page.getByRole('listbox', { name: 'SQL 자동완성 후보', exact: true });
+  const option = label => choices.getByRole('option').filter({ has: page.getByText(label, { exact: true }) });
+  await editor.fill('SELECT * FROM pe');
+  await editor.press('Control+Space');
+  await option('people').getByText('테이블', { exact: true }).waitFor();
+  await editor.press('Tab');
+  assert.equal(await editor.inputValue(), 'SELECT * FROM people');
+  await editor.press('Control+z');
+  assert.equal(await editor.inputValue(), 'SELECT * FROM pe');
+
+  await editor.fill('SELECT p FROM people AS p');
+  await editor.evaluate(node => node.setSelectionRange('SELECT p'.length, 'SELECT p'.length));
+  await editor.press('.');
+  await option('name').getByText('p · 열', { exact: true }).waitFor();
+  await editor.press('n');
+  await option('note').waitFor();
+  assert.equal(await option('id').count(), 0);
+  await editor.press('ArrowDown');
+  await editor.press('Enter');
+  assert.equal(await editor.inputValue(), 'SELECT p.note FROM people AS p');
+  await choices.waitFor({ state: 'detached' });
+
+  await editor.fill('SELECT cou');
+  await page.getByRole('button', { name: '자동완성', exact: true }).click();
+  await option('count').getByText('함수', { exact: true }).click();
+  assert.equal(await editor.inputValue(), 'SELECT count()');
+  assert.equal(await editor.evaluate(node => node.selectionStart), 'SELECT count('.length);
+
+  await editor.fill('SELECT * FROM pe');
+  await editor.press('Control+Space');
+  await option('people').waitFor();
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  await choices.waitFor({ state: 'detached' });
+  await editor.fill('SELECT * FROM pe');
+  await editor.press('Control+Space');
+  await page.getByRole('status').getByText('일치하는 자동완성 후보가 없습니다.', { exact: true }).waitFor();
+  await editor.press('Escape');
+  await editor.fill('SELECT * FROM main.we');
+  await editor.press('Control+Space');
+  await option('web view').getByText('뷰', { exact: true }).waitFor();
+  await editor.press('Tab');
+  assert.equal(await editor.inputValue(), 'SELECT * FROM main."web view"');
+  await dev.click();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

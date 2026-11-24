@@ -8,7 +8,7 @@ use stackport_core::{
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
-    RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
+    RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument,
@@ -307,6 +307,14 @@ async fn describe_object(
 ) -> Result<ObjectDetails, String> {
     let store = store.inner().clone();
     worker(move || store.describe_object(&profile_id, &name)).await
+}
+
+#[tauri::command]
+async fn sql_completion_catalog(
+    store: State<'_, Store>, profile_id: String, prefix: String, sources: Vec<String>,
+) -> Result<SqlCompletionCatalog, String> {
+    let store = store.inner().clone();
+    worker(move || store.sql_completion_catalog(&profile_id, &prefix, sources)).await
 }
 
 #[tauri::command]
@@ -1141,6 +1149,7 @@ fn main() {
             delete_profile,
             list_objects,
             describe_object,
+            sql_completion_catalog,
             prepare_query,
             current_sql_statement,
             cancel_query,

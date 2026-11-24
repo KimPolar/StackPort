@@ -51,6 +51,8 @@ mod local_file;
 mod sql_file;
 pub use sql_file::{open_sql_file, save_sql_file, SqlDocument};
 mod sql_statement;
+mod sql_completion;
+pub use sql_completion::SqlCompletionCatalog;
 pub use sql_statement::sqlite_statement_at;
 mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};
@@ -1014,6 +1016,7 @@ fn set_read_authorizer(db: &Connection, allow_schema_pragmas: bool) {
                 && matches!(
                     pragma_name,
                     "table_xinfo"
+                        | "function_list"
                         | "index_list"
                         | "index_xinfo"
                         | "foreign_key_list"

@@ -25,14 +25,34 @@ function syntaxGrammar(...rules: RegExp[]) {
   return new RegExp(rules.map(rule => rule.source).join("|"), "gu");
 }
 
-const sqlite = syntaxGrammar(
+const sqliteRules = [
   /(?<comment>--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))/,
   /(?<string>[xX]?'(?:''|[^'])*(?:'|$))/,
   /(?<identifier>"(?:""|[^"])*(?:"|$)|`(?:``|[^`])*(?:`|$)|\[[^\]]*(?:\]|$))/u,
   /(?<parameter>\?[0-9]*|[:@$][\p{L}\p{N}_$]+)/u,
   /(?<number>0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?)/,
   /(?<word>[\p{L}_][\p{L}\p{M}\p{N}_$]*)/u,
-);
+];
+const sqlite = syntaxGrammar(...sqliteRules);
+const sqliteLex = syntaxGrammar(...sqliteRules, /(?<punctuation>\S)/);
+
+export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
+
+export function sqliteEditorTokens(value: string): SqlEditorToken[] {
+  return Array.from(value.matchAll(sqliteLex), match => ({
+    kind: Object.keys(match.groups!).find(name => match.groups?.[name] !== undefined) as SqlEditorToken["kind"],
+    text: match[0], start: match.index, end: match.index + match[0].length,
+  }));
+}
+
+export function isSqliteKeyword(word: string) {
+  return sqliteKeywords.has(word.toUpperCase());
+}
+
+export function sqliteKeywordsStartingWith(prefix: string) {
+  const normalized = prefix.toUpperCase();
+  return [...sqliteKeywords].filter(keyword => keyword.startsWith(normalized));
+}
 const json = syntaxGrammar(
   /(?<string>"(?:\\[^\n]|[^"\\\n])*(?:"|(?=\n|$)))/,
   /(?<number>-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/,
@@ -59,7 +79,7 @@ export function editorSyntaxTokens(value: string, language: EditorLanguage): Syn
     const end = start + match[0].length;
     let kind: SyntaxKind;
     if (groups.word) {
-      const marked = language === "sqlite" ? sqliteKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
+      const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : /^(?:true|false|null)$/.test(groups.word);
       if (!marked) continue;
       kind = "keyword";
     } else if (groups.string && language === "json") {

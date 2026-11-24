@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type Re
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { findEditorMatches, firstAtOrAfter, replaceEditorMatches, revealEditorMatch } from "./editorSearch";
 import { editorSyntaxLine, editorSyntaxTokens, type EditorLanguage } from "./editorSyntax";
+import { useEditorCompletion, type EditorCompletionProvider } from "./useEditorCompletion";
 
 const lineHeight = 21;
 const formatNumber = new Intl.NumberFormat("ko-KR");
@@ -13,10 +14,11 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "wrap">
   value: string;
   footer: ReactNode;
   language?: EditorLanguage;
+  complete?: EditorCompletionProvider;
 };
 
-export function CodeTextarea({ editorRef, value, footer, language, onChange, onSelect, onFocus, onScroll,
-  onCompositionStart, onCompositionEnd, ...props }: Props) {
+export function CodeTextarea({ editorRef, value, footer, language, complete, onChange, onSelect, onFocus, onScroll,
+  onCompositionStart, onCompositionEnd, onKeyDown, onBlur, ...props }: Props) {
   const [selection, setSelection] = useState({ start: 0, end: 0, backward: false });
   const [viewport, setViewport] = useState({ top: 0, left: 0, height: 0, width: 0 });
   const [composing, setComposing] = useState(false);
@@ -30,6 +32,9 @@ export function CodeTextarea({ editorRef, value, footer, language, onChange, onS
   const replacementInput = useRef<HTMLInputElement>(null);
   const findId = `${props.id}-find`;
   const replaceId = `${props.id}-replace`;
+  const completionId = `${props.id}-completions`;
+  const completion = useEditorCompletion(editorRef, complete);
+  const completionItemId = completion.items.length ? `${completionId}-${completion.selected}` : undefined;
   const editable = !props.readOnly && !props.disabled;
   const showingReplace = replaceOpen && editable;
   const lineStarts = useMemo(() => {
@@ -41,6 +46,10 @@ export function CodeTextarea({ editorRef, value, footer, language, onChange, onS
   }, [value]);
   const matches = useMemo(() => findEditorMatches(value, query, matchCase), [value, query, matchCase]);
   const syntax = useMemo(() => language && !composing ? editorSyntaxTokens(value, language) : null, [value, language, composing]);
+
+  useLayoutEffect(() => {
+    if (completionItemId) document.getElementById(completionItemId)?.scrollIntoView({ block: "nearest" });
+  }, [completionItemId]);
 
   function syncViewport(editor: HTMLTextAreaElement) {
     const { scrollTop: top, scrollLeft: left, clientHeight: height, clientWidth: width } = editor;
@@ -172,6 +181,7 @@ export function CodeTextarea({ editorRef, value, footer, language, onChange, onS
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && (key === "f" || key === "h")) {
       event.preventDefault();
+      completion.close();
       openFind(key === "h");
     } else if (findOpen && event.key === "Escape") {
       event.preventDefault();
@@ -240,17 +250,37 @@ export function CodeTextarea({ editorRef, value, footer, language, onChange, onS
           <div className="code-highlight-lines" style={{ transform: `translate(${-viewport.left}px, ${shift}px)` }}>{highlightedLines}</div>
         </div>}
         <textarea {...props} ref={editorRef} wrap="off" value={value}
-          onChange={event => { syncCaret(event.currentTarget); syncViewport(event.currentTarget); setReplaceReport(null); onChange?.(event); }}
-          onSelect={event => { syncCaret(event.currentTarget); onSelect?.(event); }}
+          aria-autocomplete={complete ? "list" : props["aria-autocomplete"]}
+          aria-controls={completion.items.length ? completionId : props["aria-controls"]}
+          aria-activedescendant={completionItemId ?? props["aria-activedescendant"]}
+          onChange={event => {
+            syncCaret(event.currentTarget); syncViewport(event.currentTarget); setReplaceReport(null);
+            completion.handleInput(event.currentTarget, event.nativeEvent as InputEvent);
+            onChange?.(event);
+          }}
+          onSelect={event => { syncCaret(event.currentTarget); completion.handleSelection(event.currentTarget); onSelect?.(event); }}
           onFocus={event => { syncCaret(event.currentTarget); onFocus?.(event); }}
+          onBlur={event => { completion.close(); onBlur?.(event); }}
+          onKeyDown={event => { completion.handleKey(event); if (!event.defaultPrevented) onKeyDown?.(event); }}
           onScroll={event => { syncViewport(event.currentTarget); onScroll?.(event); }}
-          onCompositionStart={event => { setComposing(true); onCompositionStart?.(event); }}
+          onCompositionStart={event => { setComposing(true); completion.close(); onCompositionStart?.(event); }}
           onCompositionEnd={event => { setComposing(false); onCompositionEnd?.(event); }} />
       </div>
     </div>
+    {completion.status !== "closed" && <div className="code-completion">
+      {completion.items.length ? <ul id={completionId} role="listbox" aria-label="SQL 자동완성 후보">
+        {completion.items.map((item, index) => <li key={item.insert} id={`${completionId}-${index}`} role="option"
+          aria-selected={completion.selected === index} onPointerDown={event => event.preventDefault()} onClick={() => completion.choose(index)}>
+          <span title={item.label}>{item.label}</span><small>{item.detail}</small>
+        </li>)}
+      </ul> : <p role="status">{completion.status === "pending" ? "자동완성 후보를 읽는 중…" : completion.status === "error"
+        ? "이 연결의 자동완성 후보를 읽지 못했습니다." : "일치하는 자동완성 후보가 없습니다."}</p>}
+    </div>}
     <div className="editor-footer">
       {footer}
       <div className="code-editor-nav">
+        {complete && <button type="button" className="secondary small" title="Ctrl+Space" disabled={!editable}
+          onClick={() => { const editor = editorRef.current; if (editor) { editor.focus({ preventScroll: true }); completion.open(editor); } }}>자동완성</button>}
         <button type="button" className="secondary small" aria-expanded={findOpen} aria-controls={findId} title="Ctrl+F"
           onClick={findOpen ? closeFind : () => openFind()}><Search size={14} aria-hidden /> 찾기</button>
         <span className="code-position">{formatNumber.format(activeLine)}줄 · {formatNumber.format(column)}열</span>
