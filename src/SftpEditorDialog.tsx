@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
+import { SftpExternalEditor } from "./SftpExternalEditor";
 import { SftpTransferStatus, useSftpTransfer } from "./SftpTransferStatus";
 import type { TransferResult } from "./SftpTransferDialog";
 
@@ -51,12 +52,14 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
   const [draftError, setDraftError] = useState("");
   const [draftBusy, setDraftBusy] = useState(false);
   const [exitDuringDraft, setExitDuringDraft] = useState(false);
+  const [externalLocked, setExternalLocked] = useState(false);
+  const [exitDuringExternal, setExitDuringExternal] = useState(false);
   const draftPending = useRef(false);
   const transfer = useSftpTransfer(id, "저장");
   const doc = result && "document" in result ? result.document : null;
   const copy = saveAs || !doc?.replace_supported;
   const dirty = !!doc && text !== doc.text;
-  const editingLocked = transfer.running || closeScope !== null || draftMode !== null;
+  const editingLocked = externalLocked || transfer.running || closeScope !== null || draftMode !== null;
   const bytes = utf8.encode(text).length + (doc?.bom ? 3 : 0) +
     (doc?.line_ending === "crlf" ? (text.match(/\n/g)?.length ?? 0) : 0);
   const oversized = !!doc && bytes > doc.max_bytes;
@@ -65,17 +68,18 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
 
   useEffect(() => { dialog.current?.showModal(); }, []);
   useLayoutEffect(() => {
-    if (!dirty && !transfer.running && !draftBusy) return;
+    if (!dirty && !transfer.running && !draftBusy && !externalLocked) return;
     onExitGuard(() => {
       if (transfer.running) setExitDuringSave(true);
       else if (draftPending.current) setExitDuringDraft(true);
+      else if (externalLocked) setExitDuringExternal(true);
       else {
         setDraftMode(null);
         setCloseScope("window");
       }
     });
     return () => onExitGuard(null);
-  }, [dirty, transfer.running, draftBusy, onExitGuard]);
+  }, [dirty, transfer.running, draftBusy, externalLocked, onExitGuard]);
   useEffect(() => {
     let mounted = true;
     void selection.result.then(value => {
@@ -87,7 +91,7 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
   }, [selection.result]);
 
   function requestClose() {
-    if (transfer.running || draftPending.current) return;
+    if (transfer.running || draftPending.current || externalLocked) return;
     if (draftMode) {
       setDraftMode(null);
       return;
@@ -104,6 +108,11 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
     onExitGuard(null);
     dialog.current?.close();
     if (scope === "window") onRequestExit();
+  }
+
+  function lockForExternalEditor(locked: boolean) {
+    setExternalLocked(locked);
+    if (!locked) setExitDuringExternal(false);
   }
 
   async function saveRemote() {
@@ -184,7 +193,7 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
     }}>
     <div className="dialog-heading">
       <h2 id="sftp-editor-title">원격 텍스트 편집</h2>
-      <button type="button" className="icon-button" aria-label="닫기" disabled={transfer.running || draftBusy} onClick={requestClose}><X size={18} /></button>
+      <button type="button" className="icon-button" aria-label="닫기" disabled={transfer.running || draftBusy || externalLocked} onClick={requestClose}><X size={18} /></button>
     </div>
     <form ref={form} onSubmit={submit} aria-busy={transfer.running || draftBusy}>
       <p className="confirm-copy files-download-source"><strong>{target}</strong><br />{doc?.path ?? selection.name}</p>
@@ -197,6 +206,8 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
             spellCheck={false} readOnly={editingLocked} onChange={event => setText(event.target.value)}
             footer={<span>UTF-8{doc.bom && " BOM"} · {doc.line_ending.toUpperCase()} · {numbers.format(bytes)} B</span>} />
         </div>
+        {!draftMode && !closeScope && <SftpExternalEditor id={id} token={doc.token} text={text} locked={transfer.running}
+          oversized={oversized} onLockChange={lockForExternalEditor} onImport={setText} />}
         {!draftMode && <>
           {oversized && <p role="alert" className="form-error">파일이 512 KiB를 초과했습니다.</p>}
           {doc.replace_supported ? <label className="field">저장 위치
@@ -215,6 +226,7 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
       {!draftMode && <SftpTransferStatus transfer={transfer} />}
       {exitDuringSave && transfer.running && <p className="form-note" role="status">원격 파일 저장을 끝내거나 중단한 뒤 앱을 닫을 수 있습니다.</p>}
       {exitDuringDraft && draftBusy && <p className="form-note" role="status">로컬 초안 작업을 마친 뒤 앱을 닫을 수 있습니다.</p>}
+      {exitDuringExternal && externalLocked && <p className="form-note" role="status">외부 편집을 마치거나 취소한 뒤 앱을 닫을 수 있습니다.</p>}
       {savedDraftPath && !draftMode && !closeScope && <p className="form-note" role="status">로컬 초안 저장 완료 · {savedDraftPath}</p>}
       {draftMode && <div className="field">
         <label htmlFor="sftp-draft-path">새 로컬 초안 파일 경로</label>
@@ -241,9 +253,9 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
           <button type="button" className="secondary" onClick={() => openDraft(closeScope)}>로컬에 초안 저장</button>
           <button type="button" className="danger" onClick={() => finishClose(closeScope)}>{closeScope === "window" ? "변경 버리고 앱 종료" : "변경 버리기"}</button>
         </> : <>
-          <button type="button" className="secondary" onClick={requestClose}>닫기</button>
-          {dirty && <button type="button" className="secondary" onClick={() => openDraft("keep")}>로컬에 초안 저장</button>}
-          {doc && <button type="submit" className="primary" disabled={!canSave}>{copy ? "새 이름으로 저장" : "저장"}</button>}
+          <button type="button" className="secondary" disabled={externalLocked} onClick={requestClose}>닫기</button>
+          {dirty && <button type="button" className="secondary" disabled={externalLocked} onClick={() => openDraft("keep")}>로컬에 초안 저장</button>}
+          {doc && <button type="submit" className="primary" disabled={!canSave || externalLocked}>{copy ? "새 이름으로 저장" : "저장"}</button>}
         </>}
       </div>
     </form>

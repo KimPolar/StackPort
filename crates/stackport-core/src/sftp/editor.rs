@@ -19,8 +19,12 @@ use russh_sftp::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use tokio::time::timeout;
 use uuid::Uuid;
+
+mod external;
+use external::ExternalDraft;
 
 const LIMIT: usize = 512 * 1024;
 const CLOSED: &str = "편집 세션이 닫혔습니다. 원격 파일을 다시 여세요.";
@@ -58,6 +62,7 @@ pub(super) struct PendingEdit {
     line_ending: TextLineEnding,
     bom: bool,
     replace_supported: bool,
+    external: Option<Arc<ExternalDraft>>,
 }
 
 impl SftpManager {
@@ -98,6 +103,7 @@ impl SftpManager {
             line_ending,
             bom,
             replace_supported,
+            external: None,
         });
         Ok(SftpEditDocument {
             token,
@@ -138,6 +144,9 @@ impl SftpManager {
             update(0, None, false);
             let edit = session.pending_edit.lock().map_err(|_| CLOSED)?.as_ref()
                 .filter(|edit| edit.token == input.token).cloned().ok_or(CLOSED)?;
+            if edit.external.is_some() {
+                return Err("외부 편집기의 변경 사항을 먼저 가져오거나 버리세요.".into());
+            }
             let replacing = input.copy_name.is_none();
             if replacing && !edit.replace_supported {
                 return Err("이 파일은 원래 경로에 저장할 수 없습니다. 새 이름으로 저장하세요.".into());

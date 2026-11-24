@@ -1156,7 +1156,9 @@ async function verifyEditor(page, remote, uploads, local) {
   await dialog.getByText('200줄 · 3열', { exact: true }).waitFor();
   await dialog.locator('.code-gutter-lines > [data-active="true"]').getByText('200', { exact: true }).waitFor();
   assert.ok(await dialog.locator('.code-gutter-lines > div').count() < 30);
-  await text.fill('alpha\nsaved\n');
+  await text.fill('alpha\neditor input\n');
+  await verifyExternalEditor(dialog, text, save, () => assert.deepEqual(uploads.files.get(filePath).data, original));
+  assert.equal(await text.inputValue(), 'alpha\nsaved\n');
   await confirmation.fill('prod');
   assert.equal(await save.isDisabled(), true);
   await confirmation.fill('PROD');
@@ -1275,6 +1277,59 @@ async function verifyEditor(page, remote, uploads, local) {
   assert.deepEqual(fs.readFileSync(destination), expected);
   assert.deepEqual(uploads.files.get(filePath).data, external);
   return exit;
+}
+
+async function verifyExternalEditor(dialog, text, save, assertRemoteUnchanged) {
+  const windowPid = process.env.STACKPORT_TEST_WINDOW_PID;
+  const fixture = path.join(root, 'fixture editor.exe');
+  execFileSync('rustc', [path.join(__dirname, 'fixtures', 'sftp_external_editor.rs'), '-o', fixture]);
+  const trace = path.join(root, 'fixture editor.trace');
+  const toggle = dialog.getByRole('button', { name: '외부 편집기', exact: true });
+  const pathInput = dialog.getByLabel('편집기 실행 파일');
+  const open = dialog.getByRole('button', { name: '외부 편집기에서 열기', exact: true });
+  const detected = dialog.getByRole('status').getByText('외부 편집기에서 저장한 변경을 감지했습니다.');
+  const importDraft = dialog.getByRole('button', { name: '변경 가져오기', exact: true });
+
+  await toggle.click();
+  await pathInput.fill('missing.exe');
+  await open.click();
+  await dialog.getByRole('alert').getByText(/\.exe 파일 경로/).waitFor();
+  assert.equal(await text.isEditable(), true);
+
+  await pathInput.fill(fixture);
+  await open.click();
+  await detected.waitFor();
+  const discarded = fs.readFileSync(trace, 'utf8');
+  assert.ok(fs.existsSync(discarded));
+  assert.equal(await text.isEditable(), false);
+  assert.equal(await save.isDisabled(), true);
+  assert.equal(await dialog.getByRole('button', { name: '닫기', exact: true }).last().isDisabled(), true);
+  if (windowPid) {
+    requestNativeClose(windowPid);
+    await dialog.getByRole('status').getByText(/외부 편집을 마치거나 취소한 뒤 앱을 닫을/).waitFor();
+  }
+  await dialog.getByRole('button', { name: '외부 편집 취소', exact: true }).click();
+  await dialog.getByRole('button', { name: '계속 감시', exact: true }).click();
+  await importDraft.waitFor();
+  assertRemoteUnchanged();
+  await dialog.getByRole('button', { name: '외부 편집 취소', exact: true }).click();
+  await dialog.getByRole('button', { name: '임시 파일 삭제', exact: true }).click();
+  await toggle.waitFor();
+  assert.equal(fs.existsSync(discarded), false);
+  assert.equal(await text.inputValue(), 'alpha\neditor input\n');
+
+  await toggle.click();
+  assert.equal(await pathInput.inputValue(), fixture);
+  await open.click();
+  await detected.waitFor();
+  const imported = fs.readFileSync(trace, 'utf8');
+  assert.notEqual(imported, discarded);
+  assertRemoteUnchanged();
+  await importDraft.click();
+  await toggle.waitFor();
+  assert.equal(fs.existsSync(imported), false);
+  assert.equal(await text.isEditable(), true);
+  assertRemoteUnchanged();
 }
 
 async function verifyEditorCopyOnly(page, remote, uploads) {

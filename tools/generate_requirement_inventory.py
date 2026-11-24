@@ -55,6 +55,7 @@ PARTIAL = {
     "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
     "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, 줄 번호·커서 위치와 일반 텍스트 찾기·바꾸기, BOM·LF/CRLF 유지, 로컬 초안 보관",
     "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
+    "SP-FL-014": "Windows .exe 외부 편집기에서 임시 UTF-8 초안 열기, 저장된 내용 감시와 가져오기, 원격 저장 확인 및 임시 파일 정리",
     "SP-FL-015": "현재 로컬·SFTP 폴더에서 각 파일 직접 선택, SHA-256(16 MiB), UTF-8 줄·HEX 차이(64 KiB), 변경 구간 선택 및 UTF-8 병합 결과 별도 저장",
     "SP-FL-016": "로컬·SFTP 하위 구조·크기·수정 시각과 미확인 상태, 선택한 쌍의 SHA-256 비교, 동기화 작업 미리보기",
     "SP-FL-017": "단방향·양방향 dry-run·실행, 검증 후 갱신과 단방향 삭제 반영, 제외·충돌 표시, 남은 작업 중단과 작업 기록",
@@ -202,6 +203,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/CodeTextarea.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-FL-013", "SP-AT-002", "SP-AT-003"}:
                 evidence = "crates/stackport-core/src/sftp/editor.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/tests/text_draft.rs; tests/sftp-smoke.cjs; src/SftpEditorDialog.tsx"
+            elif requirement_id == "SP-FL-014":
+                evidence = "src/SftpExternalEditor.tsx; src/SftpEditorDialog.tsx; crates/stackport-core/src/sftp/editor/external.rs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-FL-003", "SP-FL-024"}:
                 evidence = "crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-FL-015":

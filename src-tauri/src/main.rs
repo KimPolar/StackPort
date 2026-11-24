@@ -656,6 +656,27 @@ fn discard_sftp_editor(sftp: State<'_, SftpManager>, id: String, token: String) 
 }
 
 #[tauri::command]
+async fn start_sftp_external_editor(
+    sftp: State<'_, SftpManager>, id: String, token: String, executable: String, text: String,
+) -> Result<(), String> {
+    sftp.start_external_editor(&id, token, executable, text).await
+}
+
+#[tauri::command]
+async fn sftp_external_editor_changed(
+    sftp: State<'_, SftpManager>, id: String, token: String,
+) -> Result<bool, String> {
+    sftp.external_editor_changed(&id, token).await
+}
+
+#[tauri::command]
+async fn finish_sftp_external_editor(
+    sftp: State<'_, SftpManager>, id: String, token: String, discard: bool,
+) -> Result<Option<String>, String> {
+    sftp.finish_external_editor(&id, token, discard).await
+}
+
+#[tauri::command]
 async fn save_sftp_editor(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -900,6 +921,17 @@ async fn choose_local_text_draft_path() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_sftp_external_editor() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("외부 편집기 실행 파일 선택")
+            .add_filter("실행 파일", &["exe"])
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
 async fn choose_sql_document_path(save: bool) -> Result<Option<String>, String> {
     worker(move || {
         let dialog = rfd::FileDialog::new().add_filter("SQL", &["sql"]);
@@ -1123,6 +1155,10 @@ fn main() {
             preview_sftp_file,
             open_sftp_editor,
             discard_sftp_editor,
+            choose_sftp_external_editor,
+            start_sftp_external_editor,
+            sftp_external_editor_changed,
+            finish_sftp_external_editor,
             save_sftp_editor,
             save_local_text_draft,
             create_sftp_folder,

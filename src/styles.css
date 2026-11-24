@@ -390,6 +390,9 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sftp-editor-text { min-height: 220px; max-height: 48vh; }
 .sftp-editor .dialog-actions { flex-wrap: wrap; }
 .sftp-editor .form-note { overflow-wrap: anywhere; }
+.sftp-external-editor { display: grid; gap: 8px; margin-bottom: 12px; }
+.sftp-external-editor .field[hidden] { display: none; }
+.sftp-external-editor-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .dialog.files-preview { width: min(760px, calc(100vw - 32px)); }
 .files-preview-body { padding: 0 21px 21px; }
 .files-preview-name { margin: 0; overflow-wrap: anywhere; }
