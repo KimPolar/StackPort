@@ -19,8 +19,7 @@ async function main() {
   page.on('pageerror', error => errors.push(String(error)));
   await page.getByRole('button', { name: '터미널', exact: true }).click();
   await page.getByRole('heading', { name: '터미널', exact: true }).waitFor();
-  await page.getByLabel('셸', { exact: true }).selectOption('cmd');
-  await page.getByRole('button', { name: '새 터미널' }).click();
+  await page.getByRole('button', { name: 'CMD 열기', exact: true }).press('Enter');
   await page.getByRole('tab', { name: 'CMD 1' }).waitFor();
   const cmd = page.locator('[role=tabpanel]:visible .xterm-helper-textarea');
   await cmd.focus();
@@ -28,8 +27,7 @@ async function main() {
   await page.keyboard.press('Enter');
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
 
-  await page.getByLabel('셸', { exact: true }).selectOption('powershell');
-  await page.getByRole('button', { name: '새 터미널' }).click();
+  await page.getByRole('button', { name: 'PowerShell 열기', exact: true }).click();
   await page.getByRole('tab', { name: 'PowerShell 2' }).waitFor();
   await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
   await page.keyboard.type("[Console]::WriteLine('STACKPORT-PS-' + $PID)");
@@ -118,7 +116,6 @@ async function main() {
   await page.getByRole('button', { name: '터미널', exact: true }).click();
   await hiddenActivity.waitFor({ state: 'detached' });
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('STACKPORT_HIDDEN', { exact: false }).last().waitFor();
-  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.keyboard.press('Control+Shift+F');
   if (await page.getByLabel('터미널 출력 검색어').count()) throw new Error('Search shortcut opened behind an SSH dialog.');

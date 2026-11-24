@@ -74,7 +74,6 @@ async function main() {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.getByRole('button', { name: '터미널', exact: true }).click();
-  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));

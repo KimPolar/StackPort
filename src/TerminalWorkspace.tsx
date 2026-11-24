@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { ChevronDown, ChevronUp, FileDown, Plus, Search, TerminalSquare, X } from "lucide-react";
+import { ChevronDown, ChevronUp, FileDown, Plug, Plus, Search, TerminalSquare, X } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
@@ -27,7 +27,6 @@ const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target
 export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled }: { visible: boolean; onCountChange: (count: number) => void; request: SshOpenRequest | null; onRequestHandled: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState("");
-  const [shell, setShell] = useState<Shell>("powershell");
   const [opening, setOpening] = useState(false);
   const [sshDialog, setSshDialog] = useState(false);
   const [dialogProfile, setDialogProfile] = useState<SshProfile | null>(null);
@@ -60,8 +59,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
     setActiveId(terminal.id);
   }
 
-  async function openTerminal() {
-    if (shell === "ssh") { setDialogProfile(null); setSshDialog(true); return; }
+  async function openTerminal(shell: "powershell" | "cmd") {
     if (openingRef.current) return;
     openingRef.current = true; setOpening(true); setError("");
     try {
@@ -109,13 +107,18 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   }
 
   return <section className="terminal-workspace" aria-label="터미널">
-    <div className="terminal-heading">
-      <div><h1><TerminalSquare size={20} /> 터미널</h1><p>로컬 PowerShell·CMD와 호스트 키를 확인한 SSH 세션을 엽니다.</p></div>
-      <div className="terminal-actions"><label htmlFor="terminal-shell">셸</label><select id="terminal-shell" value={shell} onChange={event => setShell(event.target.value as Shell)} disabled={opening}><option value="powershell">PowerShell</option><option value="cmd">CMD</option><option value="ssh">SSH</option></select><button className="primary" disabled={opening} onClick={() => void openTerminal()}><Plus size={15} /> {opening ? "여는 중…" : shell === "ssh" ? "SSH 연결" : "새 터미널"}</button></div>
-    </div>
-    <p className="terminal-hint">터미널 출력은 메모리에 유지되며, 출력 저장을 선택하면 파일로 내보낼 수 있습니다. 셸과 실행한 프로그램은 자체 기록 설정을 사용합니다.</p>
+    <header className="terminal-heading session-heading">
+      <h1><TerminalSquare size={20} aria-hidden /> 터미널</h1>
+      <div className="terminal-actions" role="group" aria-label="새 터미널">
+        <button type="button" className="primary small" disabled={opening} onClick={() => void openTerminal("powershell")}><Plus size={14} aria-hidden /> PowerShell 열기</button>
+        <button type="button" className="secondary small" disabled={opening} onClick={() => void openTerminal("cmd")}><Plus size={14} aria-hidden /> CMD 열기</button>
+        <button type="button" className="secondary small" disabled={opening}
+          onClick={() => { setDialogProfile(null); setSshDialog(true); }}><Plug size={14} aria-hidden /> SSH 연결</button>
+      </div>
+    </header>
+    {opening && <p className="terminal-hint" role="status">터미널을 여는 중…</p>}
     {error && <div className="error-banner" role="alert">{error}</div>}
-    {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} /><strong>열린 터미널이 없습니다</strong><span>셸을 선택하고 새 터미널을 여세요.</span></div> : <div className="terminal-card">
+    {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} aria-hidden /><strong>열린 터미널이 없습니다</strong><span>상단에서 새 터미널을 열거나 탐색기에서 저장된 SSH 연결을 선택하세요.</span></div> : <div className="terminal-card">
       <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} key={tab.id}>
         <button role="tab" id={`terminal-tab-${tab.id}`} aria-label={tabName(tab)} aria-describedby={[tab.unreadOutput && `terminal-activity-${tab.id}`, tab.exit && `terminal-exit-tab-${tab.id}`].filter(Boolean).join(" ") || undefined} aria-selected={tab.id === activeId} aria-controls={`terminal-panel-${tab.id}`} tabIndex={tab.id === activeId ? 0 : -1} onKeyDown={event => moveTab(event, index)} onClick={() => setActiveId(tab.id)}><TerminalSquare size={14} /><span>{tabName(tab)}</span>{tab.unreadOutput && <small className="terminal-activity" id={`terminal-activity-${tab.id}`}>새 출력</small>}{tab.exit && <small id={`terminal-exit-tab-${tab.id}`}>종료</small>}</button>
         <button className="terminal-close" aria-label={`${tabName(tab)} 터미널 닫기`} disabled={closing.includes(tab.id)} onClick={() => void closeTerminal(tab)}><X size={14} /></button>
@@ -379,19 +382,23 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
     finally { onOpeningChange(false); setBusy(""); }
   }
 
-  return <dialog ref={dialog} className="dialog ssh-dialog" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
-    <div className="dialog-heading"><h2>SSH 연결</h2><button className="icon-button" aria-label="닫기" disabled={Boolean(busy)} onClick={onClose}><X size={18} /></button></div>
+  return <dialog ref={dialog} className="dialog ssh-dialog" aria-labelledby="ssh-session-title" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
+    <div className="dialog-heading"><h2 id="ssh-session-title">SSH 연결</h2><button className="icon-button" aria-label="닫기" disabled={Boolean(busy)} onClick={onClose}><X size={18} /></button></div>
     <form onSubmit={inspect} aria-busy={Boolean(busy)}>
       {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></p>}
-      <label className="field">호스트 또는 IP<input autoFocus required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
-      <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>
-      <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
-      <label className="field">SSH 인증 방식<select disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as SshAuthenticationMode); setError(""); }}>
-        <option value="automatic">자동</option>
-        <option value="key_files">지정한 키 파일</option>
-        <option value="password">암호</option>
-        <option value="keyboard_interactive">서버 대화형 인증</option>
-      </select></label>
+      <div className="ssh-connection-fields ssh-endpoint">
+        <label className="field">호스트 또는 IP<input autoFocus={!profile} required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
+        <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>
+      </div>
+      <div className="ssh-connection-fields">
+        <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
+        <label className="field">SSH 인증 방식<select autoFocus={Boolean(profile)} disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as SshAuthenticationMode); setError(""); }}>
+          <option value="automatic">자동</option>
+          <option value="key_files">지정한 키 파일</option>
+          <option value="password">암호</option>
+          <option value="keyboard_interactive">서버 대화형 인증</option>
+        </select></label>
+      </div>
       {authentication === "key_files" && <div className="ssh-identity-fields">
         {identityPaths.map((path, index) => <div className="ssh-identity-row" key={index}>
           <label className="field">SSH 키 파일 {index + 1} 경로

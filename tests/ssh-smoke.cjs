@@ -84,7 +84,6 @@ async function waitForRows(page, pattern, timeout = 15000) {
 }
 
 async function openDialog(page, port) {
-  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
@@ -114,7 +113,6 @@ async function main() {
   if (instance.stats.connections !== 0) throw new Error('Untrusted session attempted a connection.');
 
   // The network test opens TCP only; it must not try SSH authentication.
-  await page.getByLabel('셸', { exact: true }).selectOption('ssh');
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(instance.port));

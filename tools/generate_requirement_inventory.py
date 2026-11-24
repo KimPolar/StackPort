@@ -28,7 +28,7 @@ PARTIAL = {
     "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
     "SP-CN-023": "저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단",
-    "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널",
+    "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널과 셸별 바로 열기",
     "SP-TM-002": "Windows OpenSSH의 대화형 원격 셸 입출력",
     "SP-TM-003": "Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절",
     "SP-TM-005": "터미널 메모리 스크롤백, 탭별 일반 문자열 검색과 TXT·ANSI 출력 내보내기",

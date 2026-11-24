@@ -43,7 +43,7 @@ SP-CN-021,공유 연결 정의,"읽기 전용 공유/편집 가능한 공유, �
 SP-CN-022,연결 정책,관리자가 허용하는 프로토콜·인증 방식·호스트 범위·TLS 검증 예외를 설정.,not_started,,
 SP-CN-023,환경 분리,"DEV/STAGING/PROD 구분, 색상·배너·파괴적 명령 승인 정책.",partial,저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인,crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/
 SP-CN-024,인증 실패 처리,로그인 실패 횟수·재시도 제한·계정 잠금 메시지를 구분하고 무차별 재시도를 금지.,partial,SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
-SP-TM-001,로컬 셸,"PowerShell, CMD, WSL, 설치된 Bash/Zsh 등 사용자 지정 실행 파일을 터미널 탭에서 실행.",partial,Windows PowerShell·CMD 로컬 터미널,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
+SP-TM-001,로컬 셸,"PowerShell, CMD, WSL, 설치된 Bash/Zsh 등 사용자 지정 실행 파일을 터미널 탭에서 실행.",partial,Windows PowerShell·CMD 로컬 터미널과 셸별 바로 열기,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-002,원격 셸,"SSH, Telnet, Rlogin/Rsh, Mosh 세션에서 명령 입력·표준입출력·종료 코드·에러 스트림 처리.",partial,Windows OpenSSH의 대화형 원격 셸 입출력,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-003,터미널 호환,"PTY/ConPTY, ANSI/VT100/VT220/xterm 계열 제어, UTF-8·기타 문자집합, 24-bit 색, 줄 바꿈·커서·스크롤 영역.",partial,Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-004,인터랙티브 프로그램,"vim, less, top, tmux, screen, curses 애플리케이션의 입력/리사이즈 정상 동작.",not_started,,
