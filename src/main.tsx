@@ -30,6 +30,7 @@ import { SqlAliasRenameDialog } from "./SqlAliasRenameDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
 import type { EditorHoverInfo } from "./editorHover";
+import { addSqlHistoryEntry, createSqlHistoryEntry, type SqlHistoryEntry, type SqlHistoryOutcome, type SqlHistoryScope } from "./sqlHistory";
 import type { ResultComparisonSource } from "./SqlResultComparison";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
@@ -96,6 +97,7 @@ const desktop = isTauri();
 const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
 const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").then(module => ({ default: module.SqlResultComparison })));
 const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(module => ({ default: module.SqlTemplateLibrary })));
+const SqlHistoryDialog = React.lazy(() => import("./SqlHistoryDialog").then(module => ({ default: module.SqlHistoryDialog })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -109,9 +111,10 @@ const maxPinnedResultBytes = 8 * 1024 * 1024;
 
 function Dialog({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = React.useId();
   useEffect(() => { ref.current?.showModal(); }, []);
-  return <dialog ref={ref} className="dialog" onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
-    <div className="dialog-heading"><h2>{title}</h2><button className="icon-button" aria-label="닫기" disabled={busy} onClick={onClose}><X size={18} /></button></div>
+  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
+    <div className="dialog-heading"><h2 id={titleId}>{title}</h2><button className="icon-button" aria-label="닫기" disabled={busy} onClick={onClose}><X size={18} /></button></div>
     {children}
   </dialog>;
 }
@@ -150,6 +153,10 @@ function App() {
   const [sqlTabSets, setSqlTabSets] = useState<Record<string, SqlTabSet>>({});
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
   const [templateLibrary, setTemplateLibrary] = useState<{ projectId: string; source: string; selection: boolean } | null>(null);
+  const [sqlHistory, setSqlHistory] = useState<SqlHistoryEntry[]>([]);
+  const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
+  const nextSqlHistoryId = useRef(0);
+  const pendingSqlHistory = useRef(new Map<number, string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
   const [formatSelection, setFormatSelection] = useState<SqlFormatSelection | null>(null);
   const [aliasRename, setAliasRename] = useState<SqlAliasRenameRequest | null>(null);
@@ -168,7 +175,7 @@ function App() {
   const [resultMode, setResultMode] = useState<QueryTarget["kind"]>("sql");
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
-  const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[] } | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[]; scope?: SqlHistoryScope } | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
@@ -349,6 +356,7 @@ function App() {
     setSqlEditorOpen(true);
     setSqlSelection(null);
     setParameterRequest(null);
+    setSqlHistoryProfile(null);
     setExportReport(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
@@ -587,6 +595,14 @@ function App() {
     const tabs = [...ids].flatMap(id => sqlTabSets[id]?.tabs ?? []);
     setSqlTabSets(current => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
     forgetSqlQueryViews(new Set(tabs.map(draft => draft.id)));
+    clearSqlHistory(ids);
+  }
+
+  function clearSqlHistory(ids: Set<string>) {
+    for (const [id, profileId] of pendingSqlHistory.current) {
+      if (ids.has(profileId)) pendingSqlHistory.current.delete(id);
+    }
+    setSqlHistory(current => current.filter(entry => !ids.has(entry.profileId)));
   }
 
   function activateSqlView() {
@@ -657,14 +673,23 @@ function App() {
 
   function openSqlTemplate(template: { name: string; sql: string }, owner: string) {
     if (sqlTarget?.projectId !== owner) return;
+    openSqlDraft(template.sql, template.name);
+    setTemplateLibrary(null);
+  }
+
+  function openSqlDraft(text: string, templateName?: string) {
+    if (!sqlTarget) return;
     showTool("workspace");
     setSqlEditorOpen(true);
     resetSqlView();
     editSqlTabs(sqlTarget, group => addSqlTab(group, sqlTarget, {
-      ...emptySqlDocument, text: template.sql.replace(/\r\n?/g, "\n"),
-    }, { templateName: template.name }));
-    setTemplateLibrary(null);
+      ...emptySqlDocument, text: text.replace(/\r\n?/g, "\n"),
+    }, { templateName }));
     requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
+  }
+
+  function openSqlHistory() {
+    if (desktop && profile) setSqlHistoryProfile(profile.id);
   }
 
   function finishSqlFile(action: SqlFileAction, contents: SqlDocument, path: string) {
@@ -744,14 +769,14 @@ function App() {
     void requestCancellation(task);
   }
 
-  function runQuery(query: string, explain = false, document?: SqlDocumentRange) {
+  function runQuery(query: string, scope: SqlHistoryScope, document?: SqlDocumentRange) {
     if (!sqlDraft || !query.trim()) return;
     if (queryPlan) editSqlQueryView(sqlDraft.id, { plan: null });
-    void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: explain ? sql : undefined, document });
+    void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: scope === "plan" ? sql : undefined, document }, 0, scope);
   }
 
   function runDocument(start: number, end: number) {
-    runQuery(sql.slice(start, end), false, { source: sql, offset: start });
+    runQuery(sql.slice(start, end), start === 0 && end === sql.length ? "document" : "selection", { source: sql, offset: start });
   }
 
   async function runCurrentStatement() {
@@ -762,19 +787,28 @@ function App() {
     try {
       const statement = await call<string | null>("current_sql_statement", { sql, caret });
       if (request !== statementRequest.current) return;
-      if (statement) runQuery(statement);
+      if (statement) runQuery(statement, "statement");
       else setError("커서를 실행할 SQL 문장 안에 두세요.");
     } catch (error) {
       if (request === statementRequest.current) setError(errorText(error));
     }
   }
 
-  async function executeQuery(target: QueryTarget, page = 0) {
+  async function executeQuery(target: QueryTarget, page = 0, scope?: SqlHistoryScope) {
     if (!profileId || (target.kind === "sql" && target.tabId !== sqlDraft?.id)) return;
     statementRequest.current++;
     abandonQuery();
     const generation = ++queryGeneration.current;
     const task: ActiveQuery = { kind: target.kind, token: null, cancelRequested: false, cancellation: null };
+    const started = performance.now();
+    const history = scope && target.kind === "sql" ? { id: ++nextSqlHistoryId.current, scope, sql: target.sql, startedAt: Date.now() } : null;
+    if (history) pendingSqlHistory.current.set(history.id, profileId);
+    function finishHistory(outcome: SqlHistoryOutcome | null) {
+      if (!history || !pendingSqlHistory.current.delete(history.id) || !outcome) return;
+      const elapsedMs = Math.round(performance.now() - started);
+      const entry = createSqlHistoryEntry(history.id, profileId, history.scope, history.sql, history.startedAt, { ...outcome, elapsedMs });
+      setSqlHistory(current => addSqlHistoryEntry(current, entry));
+    }
     activeQuery.current = task;
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
     const planning = target.kind === "sql" && target.planSource !== undefined;
@@ -790,6 +824,12 @@ function App() {
       const response = target.kind === "sql"
         ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: planning, document: !!target.document })
         : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
+      if (response.status === "parameters_required") finishHistory(null);
+      else if (response.status === "completed") finishHistory({ status: "completed", displayedRows: response.result.rows.length });
+      else if (response.status === "plan") finishHistory({ status: "planned" });
+      else if (response.status === "batch") finishHistory({ status: response.stopped?.status ?? "completed",
+        batch: { finished: response.items.length, total: response.total } });
+      else finishHistory({ status: response.status });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
           if (target.kind === "sql") {
@@ -815,7 +855,7 @@ function App() {
         } else if (response.status === "plan" && target.kind === "sql" && target.planSource !== undefined) {
           editSqlQueryView(target.tabId, { plan: { sql: target.planSource, data: response.plan } });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
-          if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters });
+          if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters, scope });
           else setQueryNotice("쿼리 실행을 중단했습니다.");
         } else if (response.status === "cancelled") {
           setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
@@ -823,7 +863,10 @@ function App() {
           setQueryNotice("쿼리 실행 시간 10초를 초과해 중단되었습니다. 조건을 줄여 다시 실행하세요.");
         }
       }
-    } catch (e) { if (queryGeneration.current === generation) { setQueryNotice(""); setError(errorText(e)); } }
+    } catch (e) {
+      finishHistory({ status: "error" });
+      if (queryGeneration.current === generation) { setQueryNotice(""); setError(errorText(e)); }
+    }
     finally {
       if (activeQuery.current === task) activeQuery.current = null;
       if (queryGeneration.current === generation) { setQuerying(false); setCancelling(false); }
@@ -948,6 +991,8 @@ function App() {
       id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
       Icon: TerminalSquare, run: () => openSavedSsh(item),
     });
+    if (desktop && profile) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
+      keywords: "query history recent sql", Icon: History, run: openSqlHistory });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
         id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
@@ -1034,6 +1079,7 @@ function App() {
       <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
       <button type="button" className="secondary small" onClick={openSqlTemplates}><FileCode2 size={14} aria-hidden /> SQL 템플릿</button>
+      <button type="button" className="secondary small" onClick={openSqlHistory}><History size={14} aria-hidden /> 최근 SQL</button>
       {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
       {sqlDraft && <button type="button" className="secondary small" title="F2" disabled={!sql.trim()} onClick={openSqlAliasRename}>별칭 변경</button>}
       {sqlDraft && <button type="button" className="secondary small" title="Ctrl+Alt+F" disabled={!sql.trim()} onClick={openSqlFormat}>SQL 서식</button>}
@@ -1074,7 +1120,7 @@ function App() {
           </button>
           {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
           : sqlEditorOpen && <div className="sql-editor-actions">
-          <button className="secondary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun, true)}>실행 계획</button>
+          <button className="secondary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun, "plan")}>실행 계획</button>
           <button type="button" className="secondary small" disabled={!sql.trim()} title="Ctrl+Shift+Enter"
             onClick={() => void runCurrentStatement()} aria-label="현재 문장 실행">현재 문장</button>
           {sqlSelection && <button type="button" className="secondary small" disabled={!sql.trim()} title="Ctrl+Alt+Enter"
@@ -1183,7 +1229,7 @@ function App() {
           <div className="sql-pinned-actions">
             <span>고정된 {pinned.page.page + 1}페이지</span>
             <button type="button" className="secondary small" disabled={querying}
-              onClick={() => void executeQuery({ ...pinned.target, replayedFrom: pinned.id }, pinned.page.page)}>고정 쿼리 재실행</button>
+              onClick={() => void executeQuery({ ...pinned.target, replayedFrom: pinned.id }, pinned.page.page, "replay")}>고정 쿼리 재실행</button>
             <button type="button" className="secondary small" disabled={querying} onClick={() => {
               editSqlQueryView(sqlDraft.id, { pins: sqlView.pins.filter(pin => pin.id !== pinned.id), pinId: null });
               setExportReport(null);
@@ -1381,10 +1427,17 @@ function App() {
         source={templateLibrary.source} selection={templateLibrary.selection} canOpen={sqlTarget?.projectId === project.id}
         onOpen={template => openSqlTemplate(template, project.id)} onClose={() => setTemplateLibrary(null)} />
     </React.Suspense>}
+    {profile && sqlHistoryProfile === profile.id && <React.Suspense fallback={null}>
+      <SqlHistoryDialog key={profile.id} connection={`${profile.name} · ${profile.environment}`}
+        entries={sqlHistory.filter(entry => entry.profileId === profile.id)}
+        onClear={() => clearSqlHistory(new Set([profile.id]))}
+        onOpen={text => { setSqlHistoryProfile(null); openSqlDraft(text); }}
+        onClose={() => setSqlHistoryProfile(null)} />
+    </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
         setParameterRequest(null);
-        void executeQuery({ ...parameterRequest.target, parameters });
+        void executeQuery({ ...parameterRequest.target, parameters }, 0, parameterRequest.scope);
       }} />
     </Dialog>}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}

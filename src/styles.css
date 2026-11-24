@@ -327,6 +327,19 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-template-editor-field { grid-column: 1 / -1; }
 @media (max-width: 580px) { .sql-template-browser { grid-template-columns: 1fr; } .sql-template-list { max-height: 22vh; } }
 @media (forced-colors: active) { .sql-template-list button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -1px; } }
+.dialog.sql-history { width: min(840px, calc(100vw - 32px)); }
+.sql-history-body { padding: 0 21px 21px; color: #435e50; font-size: 12px; }
+.sql-history-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 7px 10px; }
+.sql-history-controls > strong { flex: 1; min-width: min(100%, 140px); overflow-wrap: anywhere; }
+.sql-history-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 13px; }
+.sql-history-list { display: grid; align-content: start; gap: 4px; max-height: 45vh; overflow: auto; padding: 4px; margin: 0; list-style: none; border: 1px solid #dce7df; border-radius: 5px; }
+.sql-history-list button { display: grid; gap: 4px; width: 100%; padding: 7px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #30473b; text-align: start; overflow-wrap: anywhere; }
+.sql-history-list button[aria-pressed="true"] { border-color: #a4c8b8; background: #e3f0e9; }
+.sql-history-list time { color: #526a5f; }
+.sql-history-detail { min-width: 0; }
+.sql-history-detail pre { min-height: 64px; max-height: 35vh; padding: 9px; overflow: auto; border: 1px solid #dce7df; border-radius: 5px; background: #f6f9f7; font: 12px/1.6 Consolas, monospace; }
+@media (max-width: 580px) { .sql-history-layout { grid-template-columns: 1fr; } .sql-history-list { max-height: 24vh; } }
+@media (forced-colors: active) { .sql-history-list button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -1px; } }
 .csv-options { display: grid; gap: 8px; margin: 12px 0; padding: 0; border: 0; color: #526a5f; font-size: 12px; }
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }

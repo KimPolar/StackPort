@@ -335,8 +335,9 @@ async function main() {
     await verifySqlBatch(page, editor, exportJson);
     await verifySqlResultPins(page, editor, sqlTabs, add, exportJson);
     await verifySqlTemplates(page, editor, sqlTabs);
+    await verifySqlHistory(page, editor, sqlTabs, dev, prod);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, plans, batches, result pins, comparisons and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, plans, batches, result pins, comparisons and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -816,6 +817,94 @@ async function verifySqlTemplates(page, editor, sqlTabs) {
   await library.getByText('조건에 맞는 템플릿이 없습니다.', { exact: true }).waitFor();
   await library.getByRole('button', { name: '닫기', exact: true }).click();
   assert.equal(await editor.inputValue(), snippet);
+}
+
+async function verifySqlHistory(page, editor, sqlTabs, dev, prod) {
+  const open = page.getByRole('button', { name: '최근 SQL', exact: true });
+  const dialog = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  const list = dialog.getByRole('list', { name: '실행 기록 목록', exact: true });
+  const records = list.getByRole('listitem');
+  const raw = dialog.getByLabel('실행한 SQL 원문', { exact: true });
+  const close = () => dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  async function clear() {
+    await dialog.getByRole('button', { name: '이 연결 기록 지우기', exact: true }).click();
+    await page.getByRole('alertdialog', { name: '최근 SQL', exact: true }).getByRole('button', { name: '기록 지우기', exact: true }).click();
+    await dialog.getByText('이 연결의 최근 실행 기록이 없습니다.', { exact: true }).waitFor();
+  }
+
+  await open.click();
+  await list.getByText('문서 전체 · 중단', { exact: true }).first().waitFor();
+  await list.getByText('문서 전체 · 시간 초과', { exact: true }).first().waitFor();
+  await clear();
+  await close();
+  const previous = await sqlTabs.getByRole('tab', { selected: true }).getAttribute('id');
+  const prefix = "SELECT '선택 밖의 문장';\n";
+  const query = "SELECT :fixture_parameter AS result, 'fixture-private-literal😀' AS label;";
+  await editor.fill(prefix + query);
+  await editor.evaluate((node, offset) => node.setSelectionRange(offset, node.value.length), prefix.length);
+  await editor.press('Control+Enter');
+  await page.getByLabel(':fixture_parameter 값', { exact: true }).fill('fixture-bound-value');
+  await page.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await page.getByRole('cell', { name: 'fixture-bound-value', exact: true }).waitFor();
+  await open.click();
+  await list.getByText('선택 영역 · 완료', { exact: true }).waitFor();
+  assert.equal(await records.count(), 1);
+  const masked = await dialog.getByLabel('값을 가린 SQL', { exact: true }).textContent();
+  assert.match(masked, /SELECT/);
+  assert.doesNotMatch(await dialog.textContent(), /fixture-private-literal|fixture_parameter|fixture-bound-value/);
+  await dialog.getByRole('button', { name: 'SQL 원문 표시', exact: true }).click();
+  assert.equal(await raw.textContent(), query);
+  assert.doesNotMatch(await dialog.textContent(), /fixture-bound-value/);
+  await dialog.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  assert.equal(await editor.inputValue(), query);
+  await page.getByText('아직 조회 결과가 없습니다', { exact: true }).waitFor();
+  await editor.press('Control+Enter');
+  const parameters = page.getByRole('dialog', { name: 'SQL 매개변수', exact: true });
+  await parameters.getByRole('button', { name: '취소', exact: true }).click();
+  await open.click();
+  await list.waitFor();
+  assert.equal(await records.count(), 1);
+  await close();
+  await sqlTabs.locator(`[id="${previous}"]`).click();
+  assert.equal(await editor.inputValue(), prefix + query);
+
+  await editor.fill('SELECT name FROM people WHERE id = 1;');
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await page.getByRole('region', { name: 'SQLite 실행 계획', exact: true }).waitFor();
+  await editor.fill('SELECT 1; SELECT id FROM fixture_missing_private_table; SELECT 2;');
+  await editor.press('Control+Enter');
+  await page.getByRole('group', { name: '일괄 실행 결과', exact: true }).getByText(/3개 문장 중 1개 완료/).waitFor();
+  await open.click();
+  await list.getByText('문서 전체 · 오류', { exact: true }).waitFor();
+  await list.getByText('실행 계획 · 계획 완료', { exact: true }).waitFor();
+  await dialog.getByText(/3개 문장 중 1개 완료/).waitFor();
+  assert.equal(await records.count(), 3);
+  assert.doesNotMatch(await dialog.textContent(), /fixture_missing_private_table/);
+  await close();
+
+  await prod.click();
+  await open.click();
+  await dialog.getByText('이 연결의 최근 실행 기록이 없습니다.', { exact: true }).waitFor();
+  await close();
+  await editor.fill('SELECT 24 AS fresh;');
+  await editor.press('Control+Enter');
+  await page.getByRole('cell', { name: '24', exact: true }).waitFor();
+  await dev.click();
+  await open.click();
+  await list.waitFor();
+  assert.equal(await records.count(), 3);
+  await clear();
+  await close();
+  await prod.click();
+  await open.click();
+  await list.waitFor();
+  assert.equal(await records.count(), 1);
+  await close();
+  await page.reload();
+  await prod.click();
+  await open.click();
+  await dialog.getByText('이 연결의 최근 실행 기록이 없습니다.', { exact: true }).waitFor();
+  await close();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });
