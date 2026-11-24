@@ -36,6 +36,7 @@ PARTIAL = {
     "SP-TM-007": "여러 줄 붙여넣기 전 확인",
     "SP-TM-016": "비활성 터미널에 새 출력이 있으면 탭에 표시하고 확인 시 지움",
     "SP-TM-017": "로컬 터미널·앱 종료 시 실행 작업 확인",
+    "SP-NW-001": "Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회",
     "SP-NW-002": "SSH 연결 화면의 DNS 조회와 TCP 포트 연결 진단",
     "SP-DB-001": "SQLite 읽기 전용 어댑터",
     "SP-DB-007": "한 프로젝트에 여러 SQLite 연결 정의",
@@ -134,6 +135,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
                 evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
+            elif requirement_id == "SP-NW-001":
+                evidence = "crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-CN-002", "SP-NW-002"}:
                 evidence = "crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:

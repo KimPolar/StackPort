@@ -109,7 +109,7 @@ SP-FL-021,전송 무결성,"지원하는 프로토콜/서버에서 SHA-256 등 �
 SP-FL-022,작업 재사용,"전송·백업·동기화 프로필 저장, 수동 실행·자동화 연결.",not_started,,
 SP-FL-023,파일 감사,"사용자의 전송·수정·삭제·동기화 내역, 대상·시간·결과 기록; 원격 파일 원문은 기본 미기록.",not_started,,
 SP-FL-024,디렉터리 권한·오류,"접근 거부, 디스크 부족, 파일 잠금, 권한 오류, 이름 인코딩 문제를 상세 표시.",not_started,,
-SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",not_started,,
+SP-NW-001,포트 목록,"로컬 LISTEN/ESTABLISHED 등 상태, 바인딩 주소, PID·프로세스명, IPv4/IPv6 표시.",partial,Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회,crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/
 SP-NW-002,네트워크 진단,"ping, traceroute/tracert, DNS 조회, TCP 연결 테스트, 지정 대상 포트 확인.",partial,SSH 연결 화면의 DNS 조회와 TCP 포트 연결 진단,crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-NW-003,웹 상태 확인,"HTTP/HTTPS 요청 시간·상태 코드·헤더·TLS 정보, 반복 가용성 측정.",not_started,,
 SP-NW-004,대역폭 측정,사용자가 허가한 측정 대상에 대한 iperf 계열 클라이언트/서버 실행 및 결과 정리.,not_started,,

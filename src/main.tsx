@@ -4,7 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
-  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3,
+  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, Network,
   Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
@@ -15,6 +15,7 @@ import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from ".
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { CsvExportDialog, type CsvReport, type CsvSource } from "./CsvExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
+import { NetworkWorkspace } from "./NetworkWorkspace";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -61,7 +62,7 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
-  const [page, setPage] = useState<"workspace" | "terminal">("workspace");
+  const [page, setPage] = useState<"workspace" | "terminal" | "network">("workspace");
   const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
@@ -381,12 +382,13 @@ function App() {
       <div className="brand-mark" aria-label="StackPort"><Layers3 size={22} strokeWidth={2.2} /></div>
       <button className={`rail-item ${page === "workspace" ? "rail-active" : ""}`} aria-label="워크스페이스" aria-current={page === "workspace" ? "page" : undefined} onClick={() => setPage("workspace")}><Boxes size={20} /><span>워크스페이스</span></button>
       <button className={`rail-item ${page === "terminal" ? "rail-active" : ""}`} aria-label="터미널" aria-current={page === "terminal" ? "page" : undefined} disabled={!desktop} onClick={() => { setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={20} /><span>터미널</span></button>
+      <button className={`rail-item ${page === "network" ? "rail-active" : ""}`} aria-label="네트워크" aria-current={page === "network" ? "page" : undefined} disabled={!desktop} onClick={() => setPage("network")}><Network size={20} /><span>네트워크</span></button>
       <div className="rail-bottom"><CircleHelp size={19} /><span>로컬 우선</span></div>
     </aside>
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{page === "terminal" ? "터미널" : "워크스페이스"}</span></div>
-        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page === "terminal" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
+        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{{ workspace: "워크스페이스", terminal: "터미널", network: "네트워크" }[page]}</span></div>
+        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button><span className="offline-indicator"><span /> 로컬 작업 공간</span><span className="version">EARLY ACCESS</span></div>
       </header>
       <div className="body-layout" hidden={page !== "workspace"}>
         <aside className="explorer" aria-label="작업 공간 탐색기">
@@ -483,6 +485,7 @@ function App() {
         </main>
       </div>
       <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense>}</div>
+      {page === "network" && <div className="body-layout network-body"><NetworkWorkspace /></div>}
       <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>

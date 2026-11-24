@@ -2,7 +2,7 @@
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
+    local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
     RestorePreview, RestoreReport, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
@@ -24,6 +24,11 @@ where
 async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> {
     let store = store.inner().clone();
     worker(move || store.list_projects()).await
+}
+
+#[tauri::command]
+async fn list_local_ports() -> Result<PortSnapshot, String> {
+    worker(local_ports).await
 }
 
 #[tauri::command]
@@ -601,6 +606,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_projects,
+            list_local_ports,
             list_archived_projects,
             archive_project,
             unarchive_project,
