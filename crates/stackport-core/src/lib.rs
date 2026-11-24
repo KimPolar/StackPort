@@ -18,7 +18,7 @@ pub use web_check::{WebDiagnostic, WebMethod, WebResponse, WebSample};
 mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
-pub use postgres::{PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlOutcome, PostgresSqlScope};
+pub use postgres::{PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlOutcome, PostgresSqlScope};
 mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;

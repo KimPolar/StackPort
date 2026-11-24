@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ArrowRight, FileDown, FolderOpen, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
+import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter } from "./PostgresParameterDialog";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
 
 export type PostgresEditorState = {
@@ -20,9 +21,12 @@ type Completed = { status: "completed"; columns: { name: string; data_type: stri
   total_columns: number; more_rows: boolean; elapsed_ms: number };
 type QueryStatus = Completed | { status: "failed"; error: string; position?: number | null } |
   { status: "interrupted"; timed_out: boolean; server_confirmed: boolean };
-type Outcome = QueryStatus & { connection_closed?: boolean };
-type Preview = { id: string; tab: string; source: string; outcome: Outcome };
-type Running = { request: string; session: string; tab: string; title: string };
+type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
+type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
+type Preview = { id: string; tab: string; source: string; outcome: QueryStatus };
+type QueryTarget = { session: string; tab: string; title: string; source: string; scope: Scope };
+type Running = QueryTarget & { request: string };
+type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null };
 const editorId = "postgres-sql-editor";
 const resultPageSize = 25;
 const retainedPreviews = 4;
@@ -38,6 +42,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
   const [cancelStatus, setCancelStatus] = useState("");
   const [selection, setSelection] = useState<{ tab: string; start: number; end: number } | null>(null);
   const [previews, setPreviews] = useState<Preview[]>([]);
+  const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null);
   const { tabs, select, add, close, edit, openFile, saveFile } = editor;
   const draft = tabs.tabs.find(item => item.id === tabs.activeId);
   const preview = previews.find(item => item.tab === tabs.activeId);
@@ -46,21 +51,36 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
     ? source.slice(selection.start, selection.end) : "";
   const busy = running !== null;
 
-  async function run(scope: Scope) {
-    if (!session || !draft || active.current || !source.trim()) return;
-    const operation = { request: crypto.randomUUID(), session, tab: draft.id, title: sqlTabTitle(draft) };
+  async function run(target: QueryTarget, bindings?: PostgresBindings) {
+    if (session !== target.session || active.current || !target.source.trim()) return;
+    const operation: Running = { ...target, request: crypto.randomUUID() };
     active.current = operation;
     setRunning(operation);
     setCancelStatus("");
     let outcome: Outcome;
     try {
-      outcome = await invoke<Outcome>("execute_postgres_sql", { id: session, request: operation.request, source, scope });
-      if (outcome.connection_closed) onClosed(session);
+      outcome = await invoke<Outcome>("execute_postgres_sql", {
+        id: target.session, request: operation.request, source: target.source, scope: target.scope, bindings,
+      });
+      if (outcome.connection_closed) onClosed(target.session);
     } catch (error) { outcome = { status: "failed", error: String(error) }; }
     active.current = null;
     setRunning(null);
     setCancelStatus("");
-    setPreviews(previous => [{ id: operation.request, tab: operation.tab, source, outcome },
+    if (outcome.status === "parameters_required" && !outcome.connection_closed) {
+      const { parameters, error } = outcome;
+      setParameterRequest(previous => {
+        const sameTypes = previous?.parameters.length === parameters.length && parameters.every((item, index) =>
+          item.oid === previous.parameters[index].oid && item.index === previous.parameters[index].index);
+        const id = previous?.target === target && sameTypes ? previous.id : operation.request;
+        return { id, target, parameters, error };
+      });
+      return;
+    }
+    setParameterRequest(null);
+    const result: QueryStatus = outcome.status === "parameters_required"
+      ? { status: "failed", error: "PostgreSQL 연결을 다시 연 뒤 매개변수를 입력하세요." } : outcome;
+    setPreviews(previous => [{ id: operation.request, tab: target.tab, source: target.source, outcome: result },
       ...previous.filter(item => item.tab !== operation.tab)].slice(0, retainedPreviews));
   }
 
@@ -76,10 +96,10 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
   }
 
   function execute(current: boolean, field = input.current) {
-    if (!field) return;
+    if (!field || !session || !draft || parameterRequest) return;
     const { selectionStart: start, selectionEnd: end } = field;
     const scope: Scope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
-    void run(scope);
+    void run({ session, tab: draft.id, title: sqlTabTitle(draft), source, scope });
   }
 
   function closeTab(item: SqlDraft) {
@@ -129,6 +149,11 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
         input.current?.focus();
         input.current?.setSelectionRange(position, position);
       } : undefined} />}
+    {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
+      parameters={parameterRequest.parameters} title={parameterRequest.target.title} error={parameterRequest.error}
+      running={busy} cancelStatus={cancelStatus} onSubmit={bindings => void run(parameterRequest.target, bindings)}
+      onClose={() => { setParameterRequest(null); requestAnimationFrame(() => input.current?.focus()); }}
+      onCancelQuery={() => void stop()} />}
   </div>;
 }
 
@@ -137,7 +162,7 @@ export function PostgresValue({ cell }: { cell: PostgresCell }) {
     <code>{cell.value}{cell.truncated && <span title="512자 미리보기">…</span>}</code>;
 }
 
-function PostgresSqlResult({ outcome, jump }: { outcome: Outcome; jump?: (position: number) => void }) {
+function PostgresSqlResult({ outcome, jump }: { outcome: QueryStatus; jump?: (position: number) => void }) {
   const [page, setPage] = useState(0);
   if (outcome.status === "failed") return <div className="error-banner" role="alert">
     {outcome.error}

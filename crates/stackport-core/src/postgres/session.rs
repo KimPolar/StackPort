@@ -1,4 +1,6 @@
-use super::{sql, sql_range, PostgresProfile, PostgresSqlOutcome, PostgresSqlScope};
+use super::{
+    sql, sql_range, PostgresProfile, PostgresSqlBindings, PostgresSqlOutcome, PostgresSqlScope,
+};
 use crate::{quote_identifier, Result, SshTunnelManager, Store};
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
@@ -33,7 +35,7 @@ const CA_SIZE: u64 = 256 * 1024;
 #[serde(transparent)]
 pub struct PostgresPassword(#[serde(deserialize_with = "secret")] Zeroizing<String>);
 
-fn secret<'de, D: Deserializer<'de>>(
+pub(super) fn secret<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
     String::deserialize(deserializer).map(Zeroizing::new)
@@ -301,16 +303,25 @@ impl PostgresManager {
         request: &str,
         source: &str,
         scope: PostgresSqlScope,
+        bindings: Option<PostgresSqlBindings>,
     ) -> Result<PostgresSqlOutcome> {
         let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
         let span = sql_range::statement(source, scope)?;
+        if let Some(values) = &bindings {
+            values.validate()?;
+        }
         let session = self.session(id)?;
         let (cancel, signal) = watch::channel(false);
         let _running = sql::RunningSql::register(&session.running_sql, request, cancel)?;
         let operation = async {
             let mut client = session.client.lock().await;
+            let query = sql::Request {
+                source,
+                span,
+                bindings: bindings.as_ref(),
+            };
             let (outcome, reusable) =
-                sql::query(&mut client, source, span, signal, session.tls.clone()).await;
+                sql::query(&mut client, query, signal, session.tls.clone()).await;
             if !reusable {
                 session.connection.abort();
             }

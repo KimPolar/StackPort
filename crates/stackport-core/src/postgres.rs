@@ -1,8 +1,10 @@
+mod parameters;
 mod profiles;
 mod session;
 mod sql;
 mod sql_range;
 
+pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{PostgresProfile, PostgresProfileInput};
 pub use session::{

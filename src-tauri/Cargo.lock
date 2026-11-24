@@ -5011,6 +5011,7 @@ name = "stackport-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "native-tls",
  "portable-pty",
  "postgres-native-tls",

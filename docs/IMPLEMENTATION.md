@@ -18,6 +18,8 @@ PostgreSQL에서 **SQL 편집기**를 선택하거나 객체의 **SQL로 열기*
 
 SQL은 읽기 전용 트랜잭션 안에서 단일 조회로 준비해 실행한 뒤 롤백하고 세션 상태를 정리합니다. 연결당 한 쿼리가 실행되며 서버의 문장 제한은 8초입니다. 취소는 기존 연결과 같은 검증 TLS 경로를 사용하고 실행 중인 쿼리가 서버 중단을 반환하면 확인 상태를 표시합니다. 연결을 다시 열어야 하는 경우에도 작성 중인 SQL 탭은 메모리에 유지합니다. 탭의 마지막 실행 결과는 최대 100행·24열로 가져오고, 25행씩 다시 실행 없이 표시합니다. 마지막으로 실행한 최대 네 탭의 결과를 현재 작업 공간에서 유지합니다. [PostgreSQL 확장 프로토콜과 취소](https://www.postgresql.org/docs/18/protocol-flow.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/18/sql-set-transaction.html)
 
+조회 SQL에 `$1` 같은 변수가 있으면 PostgreSQL이 추론한 타입을 표시합니다. 타입이 모호한 경우 `$1::numeric`처럼 캐스트를 지정할 수 있습니다. 값은 UTF-8 바인딩으로 전달하므로 숫자의 정밀도를 유지하고, 빈 문자열과 NULL을 구분합니다. 최대 32개 변수에 값당 16 KiB까지 입력할 수 있습니다. 잘못된 값을 서버가 거부하면 입력한 값을 유지해 수정할 수 있으며 앱의 오류 메시지는 원본 값을 표시하지 않습니다. **숨기기**는 입력 필드를 가립니다. 서버가 조회 결과로 반환한 값은 그리드에 표시됩니다. 실행 입력값은 로컬 기록이나 파일에 저장하지 않습니다. [PostgreSQL 매개변수 타입 추론](https://www.postgresql.org/docs/18/sql-prepare.html) · [Parse·Bind 메시지](https://www.postgresql.org/docs/18/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY)
+
 SQLite 연결 헤더의 **관계도** 또는 명령 팔레트에서 읽기 전용 ERD를 엽니다. 한 번의 SQLite 읽기 스냅샷으로 기본 스키마의 테이블·열·외래 키를 가져옵니다. 캔버스에서 선택한 테이블과 직접 연결된 테이블을 표시하고, 화살표는 외래 키를 선언한 테이블에서 참조 대상으로 향합니다. 복합 외래 키는 하나로 묶고 암시 참조는 대상 기본 키 순서로 해석합니다. 참조 테이블·열을 찾을 수 없거나 암시 참조의 열 수가 맞지 않으면 표시합니다. 테이블 이름 및 관계 유형으로 목록을 좁히고, 확대/축소하거나 **테이블 열기**로 열·인덱스·생성 SQL을 확인합니다. 테이블 512개와 열·외래 키 열 대응 30,000개까지 읽으며 한 페이지에 외래 키 16개를 표시합니다. [SQLite 외래 키](https://www.sqlite.org/foreignkeys.html)
 
 관계도나 명령 팔레트의 **SQLite 데이터 사전**에서 선택한 스키마 객체 또는 기본 스키마의 전체 테이블·뷰를 UTF-8 Markdown 또는 단일 HTML 파일로 저장합니다. 열 유형·기본값·생성 열 특성, 선언된 키와 외래 키 대응, 인덱스와 트리거를 문서화합니다. SQLite에 저장된 생성 SQL을 함께 실으므로 해당 정의의 제약식과 주석을 읽을 수 있습니다. 한 읽기 스냅샷에서 최대 512개 객체의 스키마 메타데이터를 가져와 최대 16 MiB의 새 파일로 저장합니다. 작업 기록에는 연결과 객체 수가 남습니다. [SQLite 스키마](https://www.sqlite.org/fileformat2.html) · [SQLite 메타데이터 PRAGMA](https://www.sqlite.org/pragma.html)
@@ -278,7 +280,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한을 확인합니다. PostgreSQL 18.6에서 조회 제한, 쓰기 차단, 서버 취소·응답 시간 제한, SQL 초안과 파일·결과 탭을 검증합니다.
+PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한을 확인합니다. PostgreSQL 18.6에서 조회 제한, 쓰기 차단, 타입별 매개변수 바인딩과 Latin-1 인코딩 변환 오류, 서버 취소·응답 시간 제한, SQL 초안과 파일·결과 탭을 검증합니다.
 
 ```powershell
 $env:STACKPORT_TEST_ROOT = '<출력된 테스트 폴더>'

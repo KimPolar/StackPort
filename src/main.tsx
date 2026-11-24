@@ -5,10 +5,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
   Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, X, Play,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
+import { Dialog } from "./Dialog";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
@@ -122,16 +123,6 @@ const hasDirtySqlTabs = (groups: Record<string, SqlTabSet>) => Object.values(gro
 const emptySqlQueryView: SqlQueryView = { result: null, plan: null, batch: null, pins: [], pinId: null };
 const maxResultPins = 8;
 const maxPinnedResultBytes = 8 * 1024 * 1024;
-
-function Dialog({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const titleId = React.useId();
-  useEffect(() => { ref.current?.showModal(); }, []);
-  return <dialog ref={ref} className="dialog" aria-labelledby={titleId} onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
-    <div className="dialog-heading"><h2 id={titleId}>{title}</h2><button className="icon-button" aria-label="닫기" disabled={busy} onClick={onClose}><X size={18} /></button></div>
-    {children}
-  </dialog>;
-}
 
 function App() {
   const [theme, setTheme] = useState(initialTheme);

@@ -39,6 +39,7 @@ async function startPostgres() {
     'CREATE SCHEMA report;',
     'CREATE SCHEMA restricted;',
     'GRANT USAGE ON SCHEMA report TO fixture_reader;',
+    "CREATE TYPE report.grade AS ENUM ('silver', 'gold');",
     `CREATE TABLE report."quoted table" (id integer PRIMARY KEY, note text, precise numeric(30,3), ${extra});`,
     `INSERT INTO report."quoted table" (id, note, precise, extra_23)
        SELECT i, CASE i WHEN 1 THEN NULL WHEN 2 THEN repeat('한', 513) WHEN 3 THEN '' ELSE '행 ' || i END,
@@ -48,6 +49,7 @@ async function startPostgres() {
     'CREATE TABLE report.write_probe (id integer);',
     'GRANT SELECT ON report."quoted table", report.visible TO fixture_reader;',
     'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
+    "CREATE DATABASE fixture_latin ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;",
   ].join('\n') + '\n';
   const postgres = path.join(bin, 'postgres.exe');
   const initialized = spawnSync(postgres, ['--single', '-D', data, 'postgres'], {
@@ -168,8 +170,9 @@ async function verify(browser, fixture, gateway) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
-  const query = (sql, scope = { kind: 'document' }, request = randomUUID()) =>
-    command('execute_postgres_sql', { id: session.id, request, source: sql, scope });
+  const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null) =>
+    command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings });
+  const textValue = value => ({ kind: 'text', value });
   const content = await query("/* outer /* nested ; */ end */ SELECT $tag$한;글$tag$ AS duplicate, 9007199254740993.123::numeric AS duplicate, NULL::text; -- tail");
   assert.equal(content.status, 'completed', JSON.stringify(content));
   assert.equal(content.connection_closed, false);
@@ -185,6 +188,7 @@ async function verify(browser, fixture, gateway) {
   await assert.rejects(query('SELECT 1; SELECT 2;'), /한 번에 한 문장/);
   for (const write of [
     "INSERT INTO report.write_probe VALUES (1) RETURNING id",
+    "INSERT INTO report.write_probe VALUES ($1) RETURNING id",
     "WITH inserted AS (INSERT INTO report.write_probe VALUES (2) RETURNING id) SELECT id FROM inserted",
     "SET TRANSACTION READ WRITE",
     "CREATE TEMP TABLE fixture_scratch (value integer)",
@@ -205,6 +209,48 @@ async function verify(browser, fixture, gateway) {
   assert.equal(setting.rows[0][0].value, 'public');
   const defaults = await query("SELECT current_setting('search_path'), current_setting('transaction_read_only')");
   assert.deepEqual(defaults.rows[0].map(value => value.value), ['pg_catalog', 'on']);
+
+  const parameterized = "SELECT $1::numeric AS amount, $2::date, $3::report.grade, $4::int[], $5::text, length($6::text), coalesce($7::text, 'fallback')";
+  const required = await query(parameterized);
+  assert.equal(required.status, 'parameters_required', JSON.stringify(required));
+  assert.deepEqual(required.parameters.map(parameter => [parameter.index, parameter.data_type]), [
+    [1, 'numeric'], [2, 'date'], [3, 'report.grade'], [4, 'int4[]'], [5, 'text'], [6, 'text'], [7, 'text'],
+  ]);
+  const literal = "'; SELECT '한글 🧪'\n두 번째 줄";
+  const values = ['9007199254740993.123000', '2024-02-29', 'gold', '{1,2,3}', literal, ''].map(textValue);
+  values.push({ kind: 'null' });
+  const bindings = { types: required.parameters.map(parameter => parameter.oid), values };
+  const bound = await query(parameterized, undefined, undefined, bindings);
+  assert.equal(bound.status, 'completed', JSON.stringify(bound));
+  assert.deepEqual(bound.rows[0].map(cell => cell.value), ['9007199254740993.123000', '2024-02-29', 'gold', '{1,2,3}', literal, '0', 'fallback']);
+  const rejected = await query(parameterized, undefined, undefined, { ...bindings, values: [textValue('secret-fixture-invalid'), ...values.slice(1)] });
+  assert.equal(rejected.status, 'parameters_required', JSON.stringify(rejected));
+  assert.match(rejected.error, /22P02/);
+  assert.ok(!JSON.stringify(rejected).includes('secret-fixture-invalid'));
+  const stale = await query(parameterized, undefined, undefined, { ...bindings, types: [23, ...bindings.types.slice(1)] });
+  assert.match(stale.error, /타입이 달라졌습니다/);
+  await assert.rejects(query(parameterized, undefined, undefined, { ...bindings, values: values.slice(0, 1) }), /개수/);
+  await assert.rejects(query(parameterized, undefined, undefined, { ...bindings, values: [textValue('\0'), ...values.slice(1)] }), /NUL/);
+  const unknown = await query('SELECT $1 IS NULL');
+  assert.match(unknown.error, /타입 캐스트/);
+  const withLimits = await query('SELECT ' + Array.from({ length: 33 }, (_, index) => '$' + (index + 1) + '::int').join(', '));
+  assert.match(withLimits.error, /32개/);
+
+  const latinProfile = await alternate('Latin-1 database', { database: 'fixture_latin' });
+  const latin = await open(latinProfile);
+  try {
+    assert.equal(latin.encoding, 'LATIN1');
+    const latinQuery = bindings => command('execute_postgres_sql', { id: latin.id, request: randomUUID(),
+      source: 'SELECT $1::text', scope: { kind: 'document' }, bindings });
+    const latinTypes = await latinQuery(null);
+    const types = latinTypes.parameters.map(parameter => parameter.oid);
+    const representable = await latinQuery({ types, values: [textValue('café')] });
+    assert.equal(representable.rows[0][0].value, 'café');
+    const unrepresentable = await latinQuery({ types, values: [textValue('한글')] });
+    assert.equal(unrepresentable.status, 'parameters_required');
+    assert.match(unrepresentable.error, /22P05/);
+  } finally { await close(latin.id); }
+
   const request = randomUUID();
   const slow = query('SELECT pg_sleep(6)', { kind: 'document' }, request);
   await new Promise(resolve => setTimeout(resolve, 350));
@@ -287,6 +333,31 @@ async function verify(browser, fixture, gateway) {
   await page.getByRole('tab', { name: 'postgres-import.sql', exact: true }).waitFor();
   await sql.press('Control+Enter');
   await results.getByText('321', { exact: true }).waitFor();
+  const parameters = page.getByRole('dialog', { name: 'PostgreSQL 매개변수', exact: true });
+  const submitValues = () => parameters.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  const withParameters = "SELECT 1;\nSELECT $1::numeric AS amount, coalesce($2::text, '기본값') AS note;";
+  await sql.fill(withParameters);
+  await sql.evaluate((input, start) => input.setSelectionRange(start, input.value.length), withParameters.indexOf('SELECT $1'));
+  await sql.press('Control+Enter');
+  await parameters.getByRole('group', { name: /\$1.*numeric/ }).waitFor();
+  await parameters.getByLabel('$1 값 숨기기', { exact: true }).check();
+  assert.equal(await parameters.getByLabel('$1 값', { exact: true }).getAttribute('type'), 'password');
+  await parameters.getByLabel('$1 값', { exact: true }).fill('masked-invalid-value');
+  await parameters.getByLabel('$2 형식', { exact: true }).selectOption('null');
+  await submitValues();
+  const bindingError = parameters.getByRole('alert');
+  await parameters.getByText(/SQLSTATE 22P02/).waitFor();
+  assert.ok(!(await bindingError.textContent()).includes('masked-invalid-value'));
+  assert.equal(await parameters.getByLabel('$1 값', { exact: true }).inputValue(), 'masked-invalid-value');
+  await parameters.getByLabel('$1 값', { exact: true }).fill('9007199254740993.123000');
+  await submitValues();
+  await parameters.waitFor({ state: 'detached' });
+  await results.getByText('9007199254740993.123000', { exact: true }).waitFor();
+  await results.getByText('기본값', { exact: true }).waitFor();
+  await sql.press('Control+Enter');
+  await parameters.waitFor();
+  assert.equal(await parameters.getByLabel('$1 값', { exact: true }).inputValue(), '');
+  await parameters.getByRole('button', { name: '취소', exact: true }).click();
   await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
   await data.getByText('4', { exact: true }).waitFor();
   await disconnect();
@@ -312,9 +383,11 @@ async function verify(browser, fixture, gateway) {
     await data.getByText('4', { exact: true }).waitFor();
     assert.equal(gateway.forwarded(), 1);
     await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
-    await sql.fill('SELECT pg_sleep(6)');
+    await sql.fill('SELECT pg_sleep($1::float8)');
     await sql.press('Control+Enter');
-    const cancel = page.getByRole('button', { name: '쿼리 취소', exact: true });
+    await parameters.getByLabel('$1 값', { exact: true }).fill('6');
+    await submitValues();
+    const cancel = parameters.getByRole('button', { name: '쿼리 취소', exact: true });
     await cancel.waitFor();
     await new Promise(resolve => setTimeout(resolve, 350));
     await cancel.click();
@@ -337,7 +410,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (verified TLS, SSH forwarding, catalog, read-only SQL, cancellation and file tabs).');
+    console.log('Windows PostgreSQL E2E passed (TLS, SSH forwarding, catalog, read-only SQL, typed bindings, cancellation and file tabs).');
   } finally {
     await browser?.close();
     gateway?.close();

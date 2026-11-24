@@ -1,3 +1,4 @@
+use super::parameters::{metadata, Parameter, PostgresSqlBindings, Value, MAX_PARAMETERS};
 use super::session::{preview_rows, Cell, COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH};
 use crate::Result;
 use native_tls::TlsConnector;
@@ -9,7 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{sync::watch, time::timeout};
-use tokio_postgres::{error::ErrorPosition, CancelToken, Client, Error, Row, Transaction};
+use tokio_postgres::{
+    error::ErrorPosition, types::Type, CancelToken, Client, Error, Row, Transaction,
+};
 use uuid::Uuid;
 
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(3);
@@ -34,6 +37,10 @@ enum Outcome {
     Failed {
         error: String,
         position: Option<usize>,
+    },
+    ParametersRequired {
+        parameters: Vec<Parameter>,
+        error: Option<String>,
     },
     Interrupted {
         timed_out: bool,
@@ -107,8 +114,7 @@ impl RunningSql {
 
 pub(super) async fn query(
     client: &mut Client,
-    source: &str,
-    span: Range<usize>,
+    request: Request<'_>,
     mut signal: watch::Receiver<bool>,
     tls: TlsConnector,
 ) -> (PostgresSqlOutcome, bool) {
@@ -125,7 +131,7 @@ pub(super) async fn query(
         }
     };
     let (state, sent_cancel, executed) =
-        preview(&tx, source, span, &mut signal, cancel, tls, started).await;
+        preview(&tx, request, &mut signal, cancel, tls, started).await;
     // Roll back even after a successful SELECT. Session-level effects such as
     // advisory locks and LISTEN registrations are cleared before reusing the client.
     let reusable = !sent_cancel
@@ -148,10 +154,15 @@ pub(super) async fn query(
     )
 }
 
+pub(super) struct Request<'a> {
+    pub source: &'a str,
+    pub span: Range<usize>,
+    pub bindings: Option<&'a PostgresSqlBindings>,
+}
+
 async fn preview(
     tx: &Transaction<'_>,
-    source: &str,
-    span: Range<usize>,
+    request: Request<'_>,
     signal: &mut watch::Receiver<bool>,
     cancel: CancelToken,
     tls: TlsConnector,
@@ -160,6 +171,11 @@ async fn preview(
     if *signal.borrow() {
         return (cancelled(false), false, false);
     }
+    let Request {
+        source,
+        span,
+        bindings,
+    } = request;
     let sql = &source[span.clone()];
     // The server parses the original single statement before it can be embedded
     // in a SELECT expression. The extended protocol rejects stacked statements.
@@ -180,9 +196,10 @@ async fn preview(
             false,
         );
     }
-    if !described.params().is_empty() {
+    let types = described.params();
+    if types.len() > MAX_PARAMETERS {
         return (
-            message("이 실행에서는 PostgreSQL 바인딩 변수를 사용할 수 없습니다."),
+            message("PostgreSQL 쿼리의 매개변수는 32개까지 사용할 수 있습니다."),
             false,
             false,
         );
@@ -215,7 +232,7 @@ async fn preview(
         aliases.join(", "),
         ROW_SIZE + 1
     );
-    let statement = match tx.prepare(&bounded).await {
+    let statement = match tx.prepare_typed(&bounded, types).await {
         Ok(statement) => statement,
         Err(error) => {
             let state = if matches!(
@@ -232,7 +249,38 @@ async fn preview(
     if *signal.borrow() {
         return (cancelled(false), false, false);
     }
-    let mut running = std::pin::pin!(tx.query(&statement, &[]));
+    if statement.params() != types {
+        return (
+            message("PostgreSQL 매개변수 형식을 확인할 수 없습니다."),
+            false,
+            false,
+        );
+    }
+    let values = match values_for(bindings, types) {
+        Ok(values) => values,
+        Err(state) => return (state, false, false),
+    };
+    let cancellation = signal.clone();
+    let mut running = std::pin::pin!(async {
+        if values.is_empty() {
+            return tx
+                .query(&statement, &[])
+                .await
+                .map(Some)
+                .map_err(|error| (error, false));
+        }
+        let portal = tx
+            .bind_raw(&statement, values.iter())
+            .await
+            .map_err(|error| (error, true))?;
+        if *cancellation.borrow() {
+            return Ok(None);
+        }
+        tx.query_portal(&portal, (ROW_SIZE + 1) as i32)
+            .await
+            .map(Some)
+            .map_err(|error| (error, false))
+    });
     let (result, sent_cancel) = tokio::select! {
         biased;
         result = &mut running => (result, false),
@@ -242,13 +290,42 @@ async fn preview(
         }
     };
     let state = match result {
-        Ok(rows) => completed(rows, columns, total_columns, started),
-        Err(error) if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") => {
+        Ok(Some(rows)) => completed(rows, columns, total_columns, started),
+        Ok(None) => cancelled(false),
+        Err((error, _)) if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") => {
             cancelled(true)
         }
-        Err(error) => failed(error, None),
+        Err((error, true)) if error.code().is_some_and(|code| code.code().starts_with("22") || code.code().starts_with("23")) => {
+            parameters_required(types, error.code().map(|code| format!(
+                "PostgreSQL이 매개변수 값을 받는 단계에서 오류를 반환했습니다. 표시된 타입과 값을 확인하세요. (SQLSTATE {})", code.code()
+            )))
+        }
+        Err((error, _)) => failed(error, None),
     };
     (state, sent_cancel, true)
+}
+
+fn values_for<'a>(
+    bindings: Option<&'a PostgresSqlBindings>,
+    types: &[Type],
+) -> std::result::Result<&'a [Value], Outcome> {
+    match bindings {
+        Some(bindings) if bindings.matches(types) => Ok(&bindings.values),
+        Some(_) if types.is_empty() => Err(message("이 SQL에는 바인딩할 매개변수가 없습니다.")),
+        Some(_) => Err(parameters_required(
+            types,
+            Some("서버가 확인한 매개변수 타입이 달라졌습니다. 값을 다시 확인하세요.".into()),
+        )),
+        None if types.is_empty() => Ok(&[]),
+        None => Err(parameters_required(types, None)),
+    }
+}
+
+fn parameters_required(types: &[Type], error: Option<String>) -> Outcome {
+    Outcome::ParametersRequired {
+        parameters: metadata(types),
+        error,
+    }
 }
 
 fn completed(
@@ -310,6 +387,9 @@ fn failed(error: Error, submitted: Option<(&str, &str)>) -> Outcome {
         Some("42501") => "PostgreSQL이 조회 권한을 거부했습니다.",
         Some("42P01") => "테이블 또는 뷰를 찾을 수 없습니다. 스키마와 객체 이름을 확인하세요.",
         Some("42703") => "열 이름을 찾을 수 없습니다.",
+        Some("42P08" | "42P18") => {
+            "PostgreSQL 매개변수 타입을 추론할 수 없습니다. 매개변수에 타입 캐스트를 지정하세요."
+        }
         Some("25006") => "PostgreSQL 읽기 전용 트랜잭션에서 허용되지 않는 작업입니다.",
         Some("55P03") => "PostgreSQL 잠금 대기 제한을 초과했습니다.",
         _ => "PostgreSQL 쿼리를 실행할 수 없습니다.",
