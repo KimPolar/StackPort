@@ -4,7 +4,7 @@ use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    SshProfileInput, SshTrustPage, Store, TerminalInfo, TerminalManager, TerminalRead,
+    SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
 };
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -191,6 +191,18 @@ async fn run_query(
 ) -> Result<QueryOutcome, String> {
     let store = store.inner().clone();
     worker(move || store.query_prepared(&token, &profile_id, &sql, page)).await
+}
+
+#[tauri::command]
+async fn run_object_query(
+    store: State<'_, Store>,
+    token: String,
+    profile_id: String,
+    request: TableQuery,
+    page: u32,
+) -> Result<QueryOutcome, String> {
+    let store = store.inner().clone();
+    worker(move || store.query_object_prepared(&token, &profile_id, &request, page)).await
 }
 
 #[tauri::command]
@@ -508,6 +520,7 @@ fn main() {
             prepare_query,
             cancel_query,
             run_query,
+            run_object_query,
             begin_cell_edit,
             preview_cell_edit,
             apply_cell_edit,

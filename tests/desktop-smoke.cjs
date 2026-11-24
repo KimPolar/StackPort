@@ -47,6 +47,46 @@ async function main() {
   await page.getByRole('button', { name: '다음 페이지' }).click();
   await page.getByText('5개 행', { exact: true }).waitFor();
 
+  await page.getByText('필터 및 정렬', { exact: true }).click();
+  await page.getByRole('button', { name: '조건 추가' }).click();
+  await page.getByLabel('필터 1 열').selectOption('note');
+  await page.getByLabel('필터 1 연산자').selectOption('is_null');
+  await page.getByRole('button', { name: '조건 추가' }).click();
+  await page.getByLabel('필터 2 연산자').selectOption('ge');
+  await page.getByLabel('필터 2 값 형식').selectOption('integer');
+  await page.getByLabel('필터 2 값', { exact: true }).fill('90');
+  await page.getByLabel('일치 조건').selectOption('any');
+  await page.getByRole('button', { name: '정렬 열 추가' }).click();
+  await page.getByLabel('정렬 1 열').selectOption('note');
+  await page.getByLabel('정렬 1 NULL 순서').selectOption('first');
+  await page.getByRole('button', { name: '정렬 열 추가' }).click();
+  await page.getByLabel('정렬 2 방향').selectOption('desc');
+  await page.getByRole('button', { name: '정렬 2 위로' }).click();
+  if (await page.getByLabel('정렬 1 열').inputValue() !== 'id') throw new Error('Reordering sort columns did not change their priority.');
+  await page.getByRole('button', { name: '정렬 1 아래로' }).click();
+  await page.getByRole('button', { name: '적용', exact: true }).click();
+  const resultRows = page.locator('.results-card tbody tr');
+  await resultRows.first().getByText('사용자 205', { exact: true }).waitFor();
+  await page.getByText('people · 조회 SQL · 필터 2개 · 정렬 2개', { exact: true }).click();
+  const generatedSql = page.locator('.table-query-sql pre');
+  await generatedSql.getByText(/WHERE sp_source\."note" IS NULL OR sp_source\."id" >= \?/).waitFor();
+  // Editing the form without applying it must not change the next page.
+  await page.getByLabel('필터 2 값', { exact: true }).fill('205');
+  await page.getByRole('button', { name: '다음 페이지' }).click();
+  await resultRows.first().getByText('사용자 5', { exact: true }).waitFor();
+  await resultRows.nth(3).getByText('사용자 204', { exact: true }).waitFor();
+  await page.getByText('61개 행', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '101행 편집', exact: true }).click();
+  await page.getByLabel('변경할 열').selectOption('name');
+  await page.getByLabel('변경할 값').fill('필터에서 수정');
+  await page.getByRole('button', { name: '변경 미리보기' }).click();
+  await page.getByRole('button', { name: '변경 적용' }).click();
+  await resultRows.first().getByText('필터에서 수정', { exact: true }).waitFor();
+  if (scalar('SELECT name FROM people WHERE id=5') !== '필터에서 수정') throw new Error('Filtered grid edited a different row.');
+  await page.getByRole('button', { name: '초기화', exact: true }).click();
+  await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
+  await page.getByText('필터 및 정렬', { exact: true }).click();
+
   await page.getByLabel('SQL 쿼리').fill('DELETE FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('alert').getByText('이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.').waitFor();
@@ -138,7 +178,7 @@ async function main() {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('Desktop query cancellation and timeout, SQLite preview, PROD confirmation, verified backup, and audit history passed.');
+  console.log('SQLite filters, sorting, pagination, query cancellation, editing, PROD confirmation, verified backup, and audit passed.');
   await browser.close();
 }
 

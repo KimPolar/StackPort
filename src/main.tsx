@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
+import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -19,8 +20,9 @@ type IndexInfo = { name: string; unique: boolean; origin: string; partial: boole
 type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from_column: string; to_column: string | null; on_update: string; on_delete: string };
 type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
-type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean };
+type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
 type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "cancelled" | "timed_out" };
+type QueryTarget = { kind: "sql"; sql: string } | { kind: "table"; request: TableQuery };
 type ActiveQuery = { token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
@@ -69,7 +71,7 @@ function App() {
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
-  const [executedSql, setExecutedSql] = useState("");
+  const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
   const [result, setResult] = useState<QueryPage | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [name, setName] = useState("");
@@ -129,7 +131,7 @@ function App() {
     let live = true;
     abandonQuery();
     objectGeneration.current++;
-    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedSql("");
+    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedQuery(null);
     queryGeneration.current++;
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => { if (live) setProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
@@ -142,7 +144,7 @@ function App() {
     let live = true;
     abandonQuery();
     const generation = ++objectGeneration.current;
-    setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedSql(""); setError("");
+    setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
@@ -199,7 +201,7 @@ function App() {
       .catch(e => { if (detailsGeneration.current === generation) setDetailsError(errorText(e)); })
       .finally(() => { if (detailsGeneration.current === generation) setDetailsLoading(false); });
     changeSql(query);
-    void runQuery(query);
+    void executeQuery({ kind: "table", request: defaultTableQuery(object.name) });
   }
 
   async function refreshObjects() {
@@ -239,21 +241,30 @@ function App() {
     void requestCancellation(task);
   }
 
-  async function runQuery(query: string, page = 0) {
-    if (!profileId || !query.trim()) return;
+  function runQuery(query: string) {
+    if (query.trim()) void executeQuery({ kind: "sql", sql: query });
+  }
+
+  async function executeQuery(target: QueryTarget, page = 0) {
+    if (!profileId) return;
     abandonQuery();
     const generation = ++queryGeneration.current;
     const task: ActiveQuery = { token: null, cancelRequested: false, cancellation: null };
     activeQuery.current = task;
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
-    if (query !== executedSql) setResult(null);
+    const sameQuery = target === executedQuery
+      || (target.kind === "sql" && executedQuery?.kind === "sql" && target.sql === executedQuery.sql);
+    if (!sameQuery) setResult(null);
     try {
       task.token = await call<string>("prepare_query");
       if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
-      const response = await call<QueryOutcome>("run_query", { token: task.token, profileId, sql: query, page });
+      const args = { token: task.token, profileId, page };
+      const response = target.kind === "sql"
+        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql })
+        : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
-          setResult(response.result); setExecutedSql(query);
+          setResult(response.result); setExecutedQuery(target);
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
         } else if (response.status === "cancelled") {
           setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
@@ -308,11 +319,15 @@ function App() {
   const tables = filtered.filter(item => item.kind === "table");
   const views = filtered.filter(item => item.kind === "view");
   const primaryKeys = objectDetails?.columns.filter(column => column.primary_key_position > 0).sort((a, b) => a.primary_key_position - b.primary_key_position) ?? [];
-  const canEditRows = Boolean(profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && executedSql === objectSelectSql(selectedObject.name) && sql === executedSql);
+  const resultForObject = selectedObject && (
+    executedQuery?.kind === "table" ? executedQuery.request.object === selectedObject.name
+      : executedQuery?.kind === "sql" && executedQuery.sql === objectSelectSql(selectedObject.name) && sql === executedQuery.sql
+  );
+  const canEditRows = Boolean(profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && resultForObject);
   const editUnavailableReason = selectedObject && objectDetails && result && !canEditRows
     ? selectedObject.kind !== "table" ? "뷰는 편집할 수 없습니다."
       : !primaryKeys.length ? "기본 키가 없는 테이블은 편집할 수 없습니다."
-      : "행 편집은 선택한 테이블의 기본 조회 결과에서 사용할 수 있습니다."
+      : "행 편집은 선택한 테이블의 조회 결과에서 사용할 수 있습니다."
     : null;
   function keysForRow(row: Cell[]): EditKey[] | null {
     if (!result || !canEditRows) return null;
@@ -386,9 +401,15 @@ function App() {
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
             {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
             <div className="results-card"><div className="panel-heading"><div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div><span className="subtle">페이지당 최대 100개 행</span></div>
+              {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
+              {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
+                <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
+                <pre>{result.generated_sql}</pre>
+                {executedQuery.request.filters.length > 0 && <p>물음표에는 필터 값을 매개변수로 전달합니다.</p>}
+              </details>}
               {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
               {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
-                <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => void runQuery(executedSql, result.page - 1)} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => void runQuery(executedSql, result.page + 1)} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
+                <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
             </div>
           </>}
           {!profile && error && <div className="error-banner" role="alert">{error}</div>}
@@ -406,7 +427,7 @@ function App() {
       {formError && <p className="form-error" role="alert">{formError}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
-    {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result) void runQuery(executedSql, result.page); }} />}
+    {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;

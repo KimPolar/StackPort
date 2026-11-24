@@ -10,6 +10,8 @@ mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod query;
 pub use query::QueryOutcome;
+mod table_query;
+pub use table_query::TableQuery;
 mod ssh;
 pub use ssh::{SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
@@ -145,6 +147,8 @@ pub struct QueryPage {
     pub rows: Vec<Vec<Cell>>,
     pub page: u32,
     pub has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generated_sql: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -594,30 +598,8 @@ impl Store {
     }
 
     fn describe_object_on(db: &Connection, name: &str) -> Result<ObjectDetails> {
-        let object = db.query_row(
-            "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
-            [name],
-            |row| Ok(DatabaseObject { name: row.get(0)?, kind: row.get(1)?, ddl: row.get(2)? }),
-        ).optional().map_err(db_error)?.ok_or("테이블 또는 뷰를 찾을 수 없습니다.")?;
-
-        let mut statement = db.prepare(
-            "SELECT cid, name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo(?1) ORDER BY cid",
-        ).map_err(db_error)?;
-        let columns = statement
-            .query_map([name], |row| {
-                Ok(ColumnInfo {
-                    position: row.get(0)?,
-                    name: row.get(1)?,
-                    declared_type: row.get(2)?,
-                    not_null: row.get(3)?,
-                    default_value: row.get(4)?,
-                    primary_key_position: row.get(5)?,
-                    hidden: row.get(6)?,
-                })
-            })
-            .map_err(db_error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_error)?;
+        let object = Self::read_object(db, name)?;
+        let columns = Self::object_columns(db, name)?;
 
         let mut statement = db
             .prepare(
@@ -679,6 +661,36 @@ impl Store {
             indexes,
             foreign_keys,
         })
+    }
+
+    fn read_object(db: &Connection, name: &str) -> Result<DatabaseObject> {
+        db.query_row(
+            "SELECT name, type, sql FROM sqlite_schema WHERE name = ?1 AND type IN ('table', 'view') AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE",
+            [name],
+            |row| Ok(DatabaseObject { name: row.get(0)?, kind: row.get(1)?, ddl: row.get(2)? }),
+        ).optional().map_err(db_error)?.ok_or_else(|| "테이블 또는 뷰를 찾을 수 없습니다.".into())
+    }
+
+    fn object_columns(db: &Connection, name: &str) -> Result<Vec<ColumnInfo>> {
+        let mut statement = db.prepare(
+            "SELECT cid, name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo(?1) ORDER BY cid",
+        ).map_err(db_error)?;
+        let columns = statement
+            .query_map([name], |row| {
+                Ok(ColumnInfo {
+                    position: row.get(0)?,
+                    name: row.get(1)?,
+                    declared_type: row.get(2)?,
+                    not_null: row.get(3)?,
+                    default_value: row.get(4)?,
+                    primary_key_position: row.get(5)?,
+                    hidden: row.get(6)?,
+                })
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        Ok(columns)
     }
 
     /// Create a verified SQLite snapshot without modifying or replacing either
@@ -900,6 +912,11 @@ fn open_user_db_with_schema_access(path: &Path, allow_schema_pragmas: bool) -> R
         10_000,
         Some(move || started.elapsed() > Duration::from_secs(10)),
     );
+    set_read_authorizer(&db, allow_schema_pragmas);
+    Ok(db)
+}
+
+fn set_read_authorizer(db: &Connection, allow_schema_pragmas: bool) {
     db.authorizer(Some(move |ctx: AuthContext<'_>| match ctx.action {
         AuthAction::Select | AuthAction::Read { .. } | AuthAction::Recursive => {
             Authorization::Allow
@@ -925,7 +942,6 @@ fn open_user_db_with_schema_access(path: &Path, allow_schema_pragmas: bool) -> R
         }
         _ => Authorization::Deny,
     }));
-    Ok(db)
 }
 
 fn display_value(value: ValueRef<'_>) -> Cell {

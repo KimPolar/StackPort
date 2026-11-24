@@ -50,6 +50,8 @@ PARTIAL = {
     "SP-DT-005": "SQLite 기본 키 검증과 키 없는 테이블 편집 차단",
     "SP-DT-006": "NULL·빈 문자열·숫자 구분 및 단일 셀 입력",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집",
+    "SP-DT-010": "SQLite 테이블·뷰의 비교·범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시",
+    "SP-DT-011": "SQLite 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
     "SP-DT-020": "단일 셀 변경의 시작·성공·실패 감사 기록",
     "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
@@ -128,6 +130,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id.startswith("SP-TM-") or requirement_id in {"SP-UI-003", "SP-UI-016", "SP-AT-007"}:
                 evidence = "crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
+            elif requirement_id in {"SP-DT-010", "SP-DT-011"}:
+                evidence = "crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/"
             elif (requirement_id.startswith("SP-DT-") and requirement_id != "SP-DT-001") or requirement_id in {"SP-SEC-003", "SP-SEC-015", "SP-AT-010"}:
                 evidence = "crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             else:

@@ -1,7 +1,10 @@
 //! Cancellable, bounded read-only SQLite queries.
 
-use super::{db_error, display_value, open_user_db, QueryPage, Result, Store, PAGE_SIZE};
-use rusqlite::{Connection, InterruptHandle};
+use super::{
+    db_error, display_value, open_schema_db, open_user_db, set_read_authorizer, QueryPage, Result,
+    Store, TableQuery, PAGE_SIZE,
+};
+use rusqlite::{params_from_iter, Connection, InterruptHandle};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -170,6 +173,11 @@ enum QueryFailure {
     Error(String),
 }
 
+enum QuerySource<'a> {
+    Sql(&'a str),
+    Object(&'a TableQuery),
+}
+
 impl Store {
     /// Prepare a one-use request before execution so cancellation cannot race
     /// ahead of registration. No SQL or database data is held by the manager.
@@ -190,8 +198,28 @@ impl Store {
         sql: &str,
         page: u32,
     ) -> Result<QueryOutcome> {
+        self.execute_prepared(token, profile_id, QuerySource::Sql(sql), page)
+    }
+
+    pub fn query_object_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        request: &TableQuery,
+        page: u32,
+    ) -> Result<QueryOutcome> {
+        self.execute_prepared(token, profile_id, QuerySource::Object(request), page)
+    }
+
+    fn execute_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        source: QuerySource<'_>,
+        page: u32,
+    ) -> Result<QueryOutcome> {
         let guard = self.queries.claim(token)?;
-        match self.query_inner(profile_id, sql, page, &guard.control, QUERY_TIMEOUT) {
+        match self.query_inner(profile_id, source, page, &guard.control, QUERY_TIMEOUT) {
             Ok(result) => Ok(QueryOutcome::Completed { result }),
             Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
             Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
@@ -203,7 +231,7 @@ impl Store {
     pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {
         match self.query_inner(
             profile_id,
-            sql,
+            QuerySource::Sql(sql),
             page,
             &Arc::new(QueryControl::default()),
             QUERY_TIMEOUT,
@@ -218,7 +246,7 @@ impl Store {
     fn query_inner(
         &self,
         profile_id: &str,
-        sql: &str,
+        source: QuerySource<'_>,
         page: u32,
         control: &Arc<QueryControl>,
         timeout: Duration,
@@ -227,7 +255,12 @@ impl Store {
         control.check()?;
         let profile = self.profile(profile_id).map_err(QueryFailure::Error)?;
         control.check()?;
-        let db = open_user_db(Path::new(&profile.path)).map_err(QueryFailure::Error)?;
+        let path = Path::new(&profile.path);
+        let db = match source {
+            QuerySource::Sql(_) => open_user_db(path),
+            QuerySource::Object(_) => open_schema_db(path),
+        }
+        .map_err(QueryFailure::Error)?;
         control.attach(&db)?;
         let progress = Arc::clone(control);
         db.progress_handler(
@@ -248,30 +281,43 @@ impl Store {
                 false
             }),
         );
-        let sql = sql.trim().trim_end_matches(';').trim_end();
-        if sql.is_empty() {
-            return Err(QueryFailure::Error("조회할 SQL을 입력하세요.".into()));
-        }
-        control.check()?;
-        // Prepare before pagination to retain the authorizer's useful errors.
-        let original = db.prepare(sql).map_err(|e| control.sqlite_error(e))?;
-        if !original.readonly() || original.column_count() == 0 {
-            return Err(QueryFailure::Error(
-                "이 연결에서는 결과를 반환하는 읽기 전용 쿼리만 실행할 수 있습니다.".into(),
-            ));
-        }
-        if original.parameter_count() != 0 {
-            return Err(QueryFailure::Error(
-                "쿼리 매개변수는 아직 지원하지 않습니다.".into(),
-            ));
-        }
-        drop(original);
         control.check()?;
         let offset = i64::from(page) * PAGE_SIZE as i64;
-        let bounded_sql = format!(
-            "SELECT * FROM (\n{sql}\n) LIMIT {} OFFSET {offset}",
-            PAGE_SIZE + 1
-        );
+        let page_clause = format!("LIMIT {} OFFSET {offset}", PAGE_SIZE + 1);
+        let (bounded_sql, values, show_sql) = match source {
+            QuerySource::Sql(sql) => {
+                let sql = sql.trim().trim_end_matches(';').trim_end();
+                if sql.is_empty() {
+                    return Err(QueryFailure::Error("조회할 SQL을 입력하세요.".into()));
+                }
+                // Prepare before pagination to retain the authorizer's useful errors.
+                let original = db.prepare(sql).map_err(|e| control.sqlite_error(e))?;
+                if !original.readonly() || original.column_count() == 0 {
+                    return Err(QueryFailure::Error(
+                        "이 연결에서는 결과를 반환하는 읽기 전용 쿼리만 실행할 수 있습니다.".into(),
+                    ));
+                }
+                if original.parameter_count() != 0 {
+                    return Err(QueryFailure::Error(
+                        "쿼리 매개변수는 아직 지원하지 않습니다.".into(),
+                    ));
+                }
+                (
+                    format!("SELECT * FROM (\n{sql}\n) {page_clause}"),
+                    Vec::new(),
+                    false,
+                )
+            }
+            QuerySource::Object(request) => {
+                let generated = request.sql(&db);
+                control.check()?;
+                let (sql, values) = generated.map_err(QueryFailure::Error)?;
+                // Schema PRAGMAs are only needed for the fixed metadata queries.
+                set_read_authorizer(&db, false);
+                (format!("{sql}\n{page_clause}"), values, true)
+            }
+        };
+        control.check()?;
         let mut stmt = db
             .prepare(&bounded_sql)
             .map_err(|e| control.sqlite_error(e))?;
@@ -280,7 +326,7 @@ impl Store {
                 "이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.".into(),
             ));
         }
-        if stmt.parameter_count() != 0 {
+        if stmt.parameter_count() != values.len() {
             return Err(QueryFailure::Error(
                 "쿼리 매개변수는 아직 지원하지 않습니다.".into(),
             ));
@@ -290,7 +336,9 @@ impl Store {
             .iter()
             .map(|s| (*s).to_owned())
             .collect();
-        let mut cursor = stmt.query([]).map_err(|e| control.sqlite_error(e))?;
+        let mut cursor = stmt
+            .query(params_from_iter(&values))
+            .map_err(|e| control.sqlite_error(e))?;
         let mut rows = Vec::with_capacity(PAGE_SIZE + 1);
         while let Some(row) = cursor.next().map_err(|e| control.sqlite_error(e))? {
             control.check()?;
@@ -312,6 +360,7 @@ impl Store {
             rows,
             page,
             has_more,
+            generated_sql: show_sql.then_some(bounded_sql),
         })
     }
 }
@@ -336,7 +385,7 @@ mod tests {
         let control = Arc::new(QueryControl::default());
         let result = store.query_inner(
             &profile.id,
-            "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers",
+            QuerySource::Sql("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers"),
             0,
             &control,
             Duration::from_millis(5),
