@@ -43,6 +43,7 @@ async function main() {
 
     await dev.click();
     await verifySqlCompletion(page, editor, dev);
+    await verifySqlDiagnostics(page, editor, dev);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
     await editor.fill(colored);
     const syntax = page.locator('.code-highlight-lines');
@@ -377,6 +378,28 @@ async function verifySqlCompletion(page, editor, dev) {
   await option('web view').getByText('뷰', { exact: true }).waitFor();
   await editor.press('Tab');
   assert.equal(await editor.inputValue(), 'SELECT * FROM main."web view"');
+  await dev.click();
+}
+
+async function verifySqlDiagnostics(page, editor, dev) {
+  const region = page.getByRole('region', { name: 'SQL 실시간 진단', exact: true });
+  const input = "SELECT '한😀';\nSELECT '한😀', FROM people;\nSELECT absent FROM people;\nSELECT * FROM missing;\nDELETE FROM people;\nSELECT abs(-9223372036854775808);";
+  await editor.fill(input);
+  await region.getByRole('status').getByText('6개 문장 검사 · 문제 4개', { exact: true }).waitFor();
+  await region.getByRole('button', { name: /2줄 14열 문법 오류/ }).click();
+  assert.equal(await editor.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), 'FROM');
+  assert.equal(await editor.inputValue(), input);
+  await region.getByRole('button', { name: /객체 참조 오류.*absent/ }).waitFor();
+  await region.getByRole('button', { name: /객체 참조 오류.*missing/ }).waitFor();
+  await region.getByRole('button', { name: /읽기 전용 정책/ }).waitFor();
+
+  await editor.fill('SELECT name FROM people WHERE id = :id;');
+  await region.getByText('1개 문장 검사 · 문제 0개', { exact: true }).waitFor();
+  await editor.fill('SELECT value FROM source;');
+  await region.getByRole('button', { name: /객체 참조 오류.*source/ }).waitFor();
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  await editor.fill('SELECT value FROM source;');
+  await region.getByText('1개 문장 검사 · 문제 0개', { exact: true }).waitFor();
   await dev.click();
 }
 

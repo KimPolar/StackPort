@@ -171,6 +171,14 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .code-completion p { margin: 0; }
 @media (forced-colors: active) { .code-completion li[aria-selected="true"] { outline: 1px solid Highlight; } }
 .code-position { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sql-diagnostics { border-top: 1px solid #e7eee9; padding: 7px 12px; color: #526a5f; font-size: 11px; }
+.sql-diagnostics p { margin: 0; font-variant-numeric: tabular-nums; }
+.sql-diagnostics ul { max-height: 154px; overflow: auto; list-style: none; margin: 4px 0 0; padding: 0; }
+.sql-diagnostics button { width: 100%; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; border: 0; border-radius: 3px; padding: 5px 4px; background: transparent; color: #30473b; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.sql-diagnostics button:hover { background: #f1f7f3; }
+.sql-diagnostics button:focus-visible { outline-offset: -2px; }
+.sql-diagnostics strong { color: #8d443c; margin-inline-end: 4px; }
+.sql-diagnostic-location { color: #526a5f; font-variant-numeric: tabular-nums; }
 .code-find { display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; padding: 6px 9px; border-bottom: 1px solid #e0e9e4; background: #f7faf8; color: #526a5f; font-size: 12px; font-weight: 400; }
 .code-find input[type="search"], .code-replace input[type="text"] { flex: 1 1 140px; min-width: 96px; width: auto; height: 32px; padding: 4px 8px; border: 1px solid #d6e4db; border-radius: 5px; background: #fff; color: #29463b; }
 .code-find-case, .code-find-actions { display: inline-flex; align-items: center; gap: 4px; }

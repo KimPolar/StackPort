@@ -23,6 +23,7 @@ import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { CodeTextarea } from "./CodeTextarea";
 import { sqlCompletionContext, sqlCompletionSuggestions, type SqlCompletionCatalog } from "./sqlCompletion";
+import { SqlDiagnostics } from "./SqlDiagnostics";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -903,6 +904,7 @@ function App() {
                 }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
             </>}
           </div>)}
+          {sqlDraft && <SqlDiagnostics profileId={profile.id} sql={sql} enabled={sqlEditorOpen && toolVisible("workspace")} editorRef={sqlEditor} />}
           {!sqlDraft && <>
             <p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p>
             <div className="editor-footer">{sqlEditorFooter}</div>

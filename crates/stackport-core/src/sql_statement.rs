@@ -1,4 +1,5 @@
 use crate::{text_draft::UTF8_BOM, Result};
+use std::ops::Range;
 
 #[derive(Clone, Copy)]
 enum Token<'a> {
@@ -124,6 +125,46 @@ impl Statement {
     }
 }
 
+pub(crate) fn statement_ranges(sql: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    let mut end = 0;
+    std::iter::from_fn(move || {
+        let mut start = None;
+        let mut statement = Statement::Start;
+        while end < sql.len() {
+            let token_start = end;
+            let (token, len) = next_token(&sql.as_bytes()[end..]);
+            end += len;
+            match token {
+                Token::Trivia => {}
+                Token::Semicolon => {
+                    use Statement::*;
+                    match statement {
+                        Trigger | TriggerAfterSemicolon => statement = TriggerAfterSemicolon,
+                        _ => {
+                            if let Some(start) = start {
+                                return Some(start..end);
+                            }
+                            statement = Start;
+                        }
+                    }
+                }
+                _ => {
+                    start.get_or_insert(token_start);
+                    statement = statement.with(token);
+                }
+            }
+        }
+        start.map(|start| start..end)
+    })
+}
+
+pub(crate) fn token_end_at(sql: &str, start: usize) -> usize {
+    if start == sql.len() {
+        return start;
+    }
+    start + next_token(&sql.as_bytes()[start..]).1
+}
+
 /// Return the SQLite statement at a WebView UTF-16 caret offset.
 /// SQLite still prepares and authorizes the selected statement before execution.
 pub fn sqlite_statement_at(sql: &str, caret: usize) -> Result<Option<&str>> {
@@ -143,45 +184,16 @@ pub fn sqlite_statement_at(sql: &str, caret: usize) -> Result<Option<&str>> {
         return Err("SQL 커서 위치가 문서 범위를 벗어났습니다.".into());
     }
 
-    let mut end = 0;
-    let mut start = None;
     let mut at_previous_end = None;
-    let mut statement = Statement::Start;
-    while end < sql.len() {
-        let token_start = end;
-        let (token, len) = next_token(&sql.as_bytes()[end..]);
-        end += len;
-        match token {
-            Token::Trivia => {}
-            Token::Semicolon => {
-                use Statement::*;
-                match statement {
-                    Trigger | TriggerAfterSemicolon => statement = TriggerAfterSemicolon,
-                    _ => {
-                        if let Some(start) = start.take() {
-                            let slice = &sql[start..end];
-                            if offset < end {
-                                return Ok(Some(slice));
-                            }
-                            if offset == end {
-                                at_previous_end = Some(slice);
-                            }
-                        }
-                        statement = Start;
-                    }
-                }
-            }
-            _ => {
-                if start.is_none() {
-                    if offset < token_start {
-                        return Ok(at_previous_end);
-                    }
-                    start = Some(token_start);
-                    at_previous_end = None;
-                }
-                statement = statement.with(token);
-            }
+    for range in statement_ranges(sql) {
+        if offset < range.start {
+            break;
         }
+        let end = range.end;
+        if offset < end || (offset == end && end == sql.len()) {
+            return Ok(Some(&sql[range]));
+        }
+        at_previous_end = (offset == end).then(|| &sql[range]);
     }
-    Ok(start.map(|start| &sql[start..]).or(at_previous_end))
+    Ok(at_previous_end)
 }

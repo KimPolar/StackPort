@@ -8,7 +8,7 @@ use stackport_core::{
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
-    RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlParameterValue, SshAuthentication,
+    RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument,
@@ -315,6 +315,12 @@ async fn sql_completion_catalog(
 ) -> Result<SqlCompletionCatalog, String> {
     let store = store.inner().clone();
     worker(move || store.sql_completion_catalog(&profile_id, &prefix, sources)).await
+}
+
+#[tauri::command]
+async fn diagnose_sql(store: State<'_, Store>, profile_id: String, sql: String) -> Result<SqlDiagnostics, String> {
+    let store = store.inner().clone();
+    worker(move || store.diagnose_sql(&profile_id, &sql)).await
 }
 
 #[tauri::command]
@@ -1150,6 +1156,7 @@ fn main() {
             list_objects,
             describe_object,
             sql_completion_catalog,
+            diagnose_sql,
             prepare_query,
             current_sql_statement,
             cancel_query,
