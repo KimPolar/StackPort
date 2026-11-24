@@ -903,12 +903,15 @@ async function main() {
 
   await page.getByLabel('SQL 쿼리').fill('WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
+  const queryActivity = page.getByRole('contentinfo', { name: '작업 공간 상태' }).getByRole('status');
+  await queryActivity.getByText('SQLite 쿼리 실행 중', { exact: true }).waitFor();
   await page.getByRole('button', { name: '쿼리 중단' }).waitFor();
   await page.waitForTimeout(250);
   await editorToggle.press('Enter');
   await editor.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '쿼리 중단' }).click();
   await page.getByRole('status').getByText('쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.').waitFor();
+  await queryActivity.getByText(/SQLite 쿼리/).waitFor({ state: 'hidden' });
   await editorToggle.press('Enter');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('status').getByText('쿼리 실행 시간 10초를 초과해 중단되었습니다. 조건을 줄여 다시 실행하세요.').waitFor({ timeout: 20000 });

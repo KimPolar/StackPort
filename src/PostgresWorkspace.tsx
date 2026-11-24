@@ -21,6 +21,7 @@ import { PostgresResultExport, type PostgresExportTarget } from "./PostgresResul
 import type { ExportReport } from "./ResultExportDialog";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { usePostgresRead as useRead } from "./usePostgresRead";
+import type { QueryActivity } from "./WorkspaceStatus";
 import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
@@ -60,11 +61,13 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
   return { types, values: values.map(value => ({ kind: "text", value })) };
 }
 
-export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels }: {
+export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels, onConnectionChange, onQueryActivity }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
   visible: boolean;
   onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   onOpenTunnels: () => void;
+  onConnectionChange: (connected: boolean) => void;
+  onQueryActivity: (activity: QueryActivity) => void;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [view, setView] = useState<"catalog" | "sql" | "monitor">("catalog");
@@ -81,6 +84,10 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
   const online = session !== null && !loss;
 
   useEffect(() => () => { if (active.current) void invoke("close_postgres", { id: active.current }).catch(() => {}); }, []);
+  useEffect(() => {
+    onConnectionChange(online);
+    return () => onConnectionChange(false);
+  }, [online, onConnectionChange]);
 
   useEffect(() => {
     if (!session || loss) return;
@@ -167,7 +174,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
           }} onExport={requestExport} />
       </div>
     </>}
-    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} editor={editor} onExport={requestExport} /></div>
+    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} editor={editor} onExport={requestExport}
+      onQueryActivity={onQueryActivity} /></div>
     {online && <PostgresServerMonitor key={session.id} workspace={session} environment={environment} database={database} visible={visible && view === "monitor"} />}
     {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}

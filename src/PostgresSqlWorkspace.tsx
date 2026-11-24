@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
@@ -8,6 +8,7 @@ import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter 
 import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
 import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
+import type { QueryActivity } from "./WorkspaceStatus";
 
 export type PostgresEditorState = {
   tabs: SqlTabSet;
@@ -40,10 +41,11 @@ const resultViews: ResultView[] = ["data", "plan"];
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석" };
 
-export function PostgresSqlWorkspace({ session, editor, onExport }: {
+export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivity }: {
   session: string | null;
   editor: PostgresEditorState;
   onExport: (target: PostgresExportTarget) => void;
+  onQueryActivity: (activity: QueryActivity) => void;
 }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const active = useRef<Running | null>(null);
@@ -61,6 +63,12 @@ export function PostgresSqlWorkspace({ session, editor, onExport }: {
     ? source.slice(selection.start, selection.end) : "";
   const busy = running !== null;
   const cannotRun = !session || busy || !source.trim();
+  const activity = session && running?.session === session
+    ? cancelStatus === "취소 요청 중…" ? "cancelling" : "running" : null;
+  useEffect(() => {
+    onQueryActivity(activity);
+    return () => onQueryActivity(null);
+  }, [activity, onQueryActivity]);
 
   async function run(target: QueryTarget, bindings?: PostgresBindings) {
     if (session !== target.session || active.current || !target.source.trim()) return;

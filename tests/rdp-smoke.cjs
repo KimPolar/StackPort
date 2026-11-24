@@ -126,8 +126,13 @@ async function main() {
       assert.ok(multiple.profile.lines.includes(expected), expected);
     }
     assert.equal(profiles().length, 2);
+    const status = page.getByRole('contentinfo', { name: '작업 공간 상태' });
+    await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
+    await status.getByRole('button', { name: 'RDP 창 2개', exact: true }).click();
+    await multiple.row.waitFor();
     await window.row.getByRole('button', { name: `${firstAddress} 연결 끊기` }).click();
     await window.row.waitFor({ state: 'detached' });
+    await status.getByRole('button', { name: 'RDP 창 1개', exact: true }).waitFor();
     await waitUntil(() => !processCommand(window.pid), 'The disconnected native RDP process did not exit.');
     assert.equal(fs.existsSync(window.profile.filePath), false);
     assert.ok(fs.existsSync(multiple.profile.filePath));

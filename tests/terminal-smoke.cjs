@@ -115,7 +115,7 @@ async function main() {
   if (await terminalTool.getAttribute('aria-description') !== '열린 세션 2개') throw new Error('Open terminal tabs were not shown across workspace tools.');
   const hiddenActivity = page.locator('[role=tab]').filter({ hasText: 'PowerShell 2' }).getByText('새 출력', { exact: true });
   await hiddenActivity.waitFor({ state: 'attached' });
-  await page.getByRole('button', { name: '터미널', exact: true }).click();
+  await page.getByRole('contentinfo', { name: '작업 공간 상태' }).getByRole('button', { name: '터미널 탭 2개', exact: true }).press('Enter');
   await hiddenActivity.waitFor({ state: 'detached' });
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('STACKPORT_HIDDEN', { exact: false }).last().waitFor();
   const terminalInput = page.locator('[role=tabpanel]:visible .xterm-helper-textarea');

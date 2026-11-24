@@ -54,6 +54,7 @@ import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
 import { WorkspaceExplorer, type ExplorerProjectAction, type ExplorerSshAction } from "./WorkspaceExplorer";
+import { WorkspaceStatus, type QueryActivity } from "./WorkspaceStatus";
 import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
 import {
   editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
@@ -158,6 +159,8 @@ function App() {
   const [terminalTabCount, setTerminalTabCount] = useState(0);
   const [rdpClientCount, setRdpClientCount] = useState(0);
   const [sshTunnelCount, setSshTunnelCount] = useState(0);
+  const [postgresConnected, setPostgresConnected] = useState(false);
+  const [postgresActivity, setPostgresActivity] = useState<QueryActivity>(null);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [loadedPages, setLoadedPages] = useState<ReadonlySet<WorkspacePage>>(() => new Set(["workspace"]));
@@ -972,6 +975,11 @@ function App() {
     else if (next === "workspace") setHistoryOpen(false);
   }
 
+  function openTunnels() {
+    setTunnelViewRequest(request => request + 1);
+    showTool("network");
+  }
+
   function changePaneTool(previous: WorkspacePage, next: WorkspacePage) {
     if (previous === next) return;
     if (next === "workspace" && !toolVisible(next)) setHistoryOpen(false);
@@ -1349,7 +1357,7 @@ function App() {
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
-        onOpenTunnels={() => { setTunnelViewRequest(value => value + 1); showTool("network"); }}
+        onOpenTunnels={openTunnels} onConnectionChange={setPostgresConnected} onQueryActivity={setPostgresActivity}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
         select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
@@ -1703,11 +1711,13 @@ function App() {
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
-      <footer className="statusbar" id="workspace-status" hidden={focusMode}>
-        <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span />
-          {desktop ? runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간" : "브라우저 · 게이트웨이 미연결"}</span>
-        {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
-      </footer>
+      <WorkspaceStatus desktop={desktop} hidden={focusMode} version={runtime?.version}
+        storage={desktop ? runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간" : "브라우저 · 게이트웨이 미연결"}
+        dataPath={runtime ? displayPath(runtime.data_directory) : undefined}
+        terminalTabs={terminalTabCount} rdpWindows={rdpClientCount} tunnels={sshTunnelCount}
+        sqlite={cancelling ? "cancelling" : querying ? "running" : null}
+        postgres={{ connected: postgresConnected, query: postgresActivity }}
+        openTerminal={() => showTool("terminal")} openRdp={() => showTool("rdp")} openTunnels={openTunnels} openPostgres={() => showTool("workspace")} />
     </div>
     {paletteOpen && <CommandPalette commands={workspaceCommands()} recent={recentCommands}
       onClose={() => setPaletteOpen(false)} onRun={runWorkspaceCommand} />}

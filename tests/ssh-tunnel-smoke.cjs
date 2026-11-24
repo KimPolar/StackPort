@@ -190,6 +190,10 @@ async function main() {
     await launch.click();
     const running = page.getByRole('table', { name: '실행 중인 SSH 터널', exact: true });
     await running.waitFor();
+    const status = page.getByRole('contentinfo', { name: '작업 공간 상태' });
+    await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
+    await status.getByRole('button', { name: '활성 SSH 터널 1개', exact: true }).click();
+    await running.waitFor();
     const [first] = await command('ssh_tunnel_status');
     assert.ok(first.listen_port > 0);
     const socket = await connect(first.listen_port);
@@ -208,6 +212,7 @@ async function main() {
     const closed = once(socket, 'close', { signal: AbortSignal.timeout(5_000) });
     await page.getByRole('button', { name: '보고서 전달 중단', exact: true }).click();
     await running.waitFor({ state: 'detached' });
+    await status.getByRole('button', { name: '활성 SSH 터널 0개', exact: true }).waitFor();
     await closed;
     await assert.rejects(connect(first.listen_port), /ECONNREFUSED/);
 

@@ -716,6 +716,8 @@ async function verify(browser, fixture, gateway, jump) {
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
 
   const connection = page.getByRole('dialog', { name: 'PostgreSQL 연결', exact: true });
+  const postgresConnected = page.getByRole('contentinfo', { name: '작업 공간 상태' })
+    .getByRole('button', { name: 'PostgreSQL 연결됨', exact: true });
   async function connect(tunnel, gridEdit = false) {
     await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).click();
     if (tunnel) await connection.getByLabel('연결 경로').selectOption(tunnel.id);
@@ -724,6 +726,7 @@ async function verify(browser, fixture, gateway, jump) {
     if (gridEdit) await connection.getByLabel('이 연결에서 데이터 그리드 편집 허용').check();
     await connection.getByRole('button', { name: '연결', exact: true }).click();
     await connection.waitFor({ state: 'detached' });
+    await postgresConnected.waitFor();
   }
   const data = page.getByRole('table', { name: 'PostgreSQL 데이터', exact: true });
   const disconnect = () => page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
@@ -1634,9 +1637,12 @@ async function verify(browser, fixture, gateway, jump) {
     await submitValues();
     const cancel = parameters.getByRole('button', { name: '쿼리 취소', exact: true });
     await cancel.waitFor();
+    const activity = page.locator('#workspace-status .workspace-activity');
+    await activity.getByText('PostgreSQL 쿼리 실행 중', { exact: true }).waitFor();
     await new Promise(resolve => setTimeout(resolve, 350));
     await cancel.click();
     await page.getByText('PostgreSQL 서버에서 쿼리 중단을 확인했습니다.', { exact: true }).waitFor();
+    await activity.getByText(/PostgreSQL 쿼리/).waitFor({ state: 'hidden' });
     assert.equal(gateway.forwarded(), 2);
     await sql.fill('SELECT 123');
     await sql.press('Control+Enter');
@@ -1663,6 +1669,7 @@ async function verify(browser, fixture, gateway, jump) {
     const loss = page.locator('.postgres-recovery').getByRole('alert').filter({ hasText: lossMessage });
     const reconnect = page.getByRole('button', { name: 'PostgreSQL 다시 연결', exact: true });
     await loss.waitFor();
+    await postgresConnected.waitFor({ state: 'hidden' });
     assert.equal(await monitorButton.isEnabled(), false);
     await parameters.waitFor({ state: 'detached' });
     assert.equal(await sql.inputValue(), draft);

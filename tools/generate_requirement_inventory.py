@@ -18,7 +18,7 @@ PARTIAL = {
     "SP-UI-008": "Windows 상단·단축키에서 SSH·RDP·PostgreSQL 주소와 SQLite 파일 경로 판별, 현재 프로젝트 저장 연결 재사용, 새 대상 양식 채우기와 SSH 등록",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
-    "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
+    "SP-UI-014": "쿼리 실행·중단·시간 초과·오류와 읽기 전용 표시, 하단 상태 표시줄에 터미널·RDP·SSH 터널 수와 PostgreSQL 연결 및 DB 실행 상태 표시",
     "SP-UI-019": "SQLite·PostgreSQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-015": "작업 공간의 라이트·다크·시스템 테마, 컴팩트 밀도, 분할·초안·터미널을 유지하는 집중 모드, 탐색기 펼치기·접기",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
@@ -372,6 +372,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; src/WorkspaceExplorer.tsx; src/workspaceExplorer.css"
                 if requirement_id != "SP-UI-006":
                     evidence += "; tests/desktop-smoke.cjs"
+            if requirement_id == "SP-UI-014":
+                evidence += "; src/WorkspaceStatus.tsx; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs; tests/ssh-tunnel-smoke.cjs"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006"}:
                 evidence += "; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row.rs; src/RowChangeDialog.tsx"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006", "SP-DT-022"}:
