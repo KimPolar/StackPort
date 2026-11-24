@@ -34,9 +34,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .version { font-size: 10px; font-weight: 600; color: #60766e; font-variant-numeric: tabular-nums; }
 .body-layout { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
 .explorer { grid-column: 1; grid-row: 1; width: 263px; background: #f8faf9; border-right: 1px solid #dce6e1; overflow-y: auto; padding: 16px 15px 25px; }
-.workspace-panes { grid-column: 2; grid-row: 1; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-width: 0; min-height: 0; }
-.workspace-panes[data-split="side"] { grid-template-columns: minmax(0, var(--workspace-primary)) 10px minmax(0, var(--workspace-secondary)); }
-.workspace-panes[data-split="stack"] { grid-template-rows: minmax(0, var(--workspace-primary)) 10px minmax(0, var(--workspace-secondary)); }
+.workspace-panes { grid-column: 2; grid-row: 1; position: relative; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-width: 0; min-height: 0; }
+.workspace-pane-slot { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
+.workspace-panes[data-split] > :is(.workspace-pane-slot, .workspace-separator) { position: absolute; }
 .workspace-separator { display: grid; place-items: center; min-width: 0; min-height: 0; background: #e6eeea; touch-action: none; user-select: none; }
 .workspace-separator[aria-orientation="vertical"] { cursor: col-resize; }
 .workspace-separator[aria-orientation="horizontal"] { cursor: row-resize; }
@@ -49,6 +49,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .split-controls .secondary, .split-controls select { white-space: nowrap; }
 .split-controls button[aria-pressed="true"] { color: #155e4e; background: #ddece5; border-color: #abcbbd; }
 .split-controls select { min-width: 0; max-width: 130px; padding: 6px; border: 1px solid #c6d7ce; border-radius: 5px; background: #fff; color: #304e43; font-size: 11px; }
+.split-options { position: relative; }
+.split-options summary { cursor: pointer; white-space: nowrap; border: 1px solid #dbe5df; border-radius: 6px; padding: 7px 8px; color: #405d52; background: #fff; font-size: 11px; font-weight: 700; }
+.split-options[open] summary, .split-options summary:hover { border-color: #abcbbd; background: #e0eee8; }
+.split-options summary:focus-visible { outline: 2px solid #238469; outline-offset: 2px; }
+.split-options-panel { position: absolute; z-index: 2; top: calc(100% + 6px); right: 0; display: grid; justify-items: start; row-gap: 10px; width: 274px; padding: 12px; border: 1px solid #cdded5; border-radius: 8px; background: #fff; box-shadow: 0 8px 20px #243d3030; }
+.split-options-panel .field { width: 100%; margin: 0; }
+.split-options-panel .field select { max-width: none; height: 32px; }
+.split-options-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .main-content, .tool-body { min-width: 0; min-height: 0; container-type: inline-size; }
 .tool-body { display: flex; }
 .explorer-top, .section-heading, .object-toolbar { display: flex; justify-content: space-between; align-items: center; }
@@ -382,4 +390,9 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 @container (max-width: 430px) {
   .content-header { flex-wrap: wrap; gap: 8px; }
   .database-target { flex: 1 1 100%; }
+  .editor-card .panel-heading { height: auto; min-height: 44px; flex-wrap: wrap; gap: 5px; padding-block: 5px; }
+  .sql-editor-toggle { white-space: nowrap; }
+  .editor-card .panel-heading .sql-editor-actions { margin-left: auto; flex-wrap: nowrap; }
+  .session-heading { align-items: start; gap: 6px; }
+  .terminal-actions .small { padding-inline: 7px; gap: 4px; }
 }

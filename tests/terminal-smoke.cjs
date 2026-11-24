@@ -128,6 +128,12 @@ async function main() {
   await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('separator', { name: '데이터베이스 창 크기', exact: true }).waitFor();
   await page.getByRole('tab', { name: 'PowerShell 2', selected: true }).waitFor();
+  await page.getByText('배치 설정', { exact: true }).click();
+  await page.getByRole('button', { name: '2×2 배치', exact: true }).click();
+  await page.getByLabel('편집할 영역', { exact: true }).selectOption('terminal');
+  await page.getByRole('button', { name: '영역 닫기', exact: true }).click();
+  await page.getByRole('tab', { name: 'PowerShell 2' }).waitFor({ state: 'hidden' });
+  await page.getByText('배치 설정', { exact: true }).press('Escape');
   await split.click();
   await page.getByRole('tab', { name: 'PowerShell 2' }).waitFor({ state: 'hidden' });
   await terminalTool.click();

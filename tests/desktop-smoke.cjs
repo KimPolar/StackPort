@@ -168,6 +168,32 @@ async function main() {
   await page.getByLabel('두 번째 도구', { exact: true }).selectOption('network');
   await page.getByRole('heading', { name: '로컬 포트', exact: true }).waitFor();
   await page.getByRole('heading', { name: '터미널', exact: true }).waitFor({ state: 'hidden' });
+  await page.getByText('배치 설정', { exact: true }).click();
+  const editArea = page.getByLabel('편집할 영역', { exact: true });
+  const replaceTool = page.getByLabel('영역에 표시할 도구', { exact: true });
+  await editArea.selectOption('network');
+  await page.getByLabel('새 분할 방향', { exact: true }).selectOption('side');
+  await page.getByRole('button', { name: '영역 나누기', exact: true }).click();
+  await page.getByRole('separator', { name: '네트워크 창 크기', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '터미널', exact: true }).waitFor();
+  await replaceTool.selectOption('files');
+  await page.locator('#workspace-pane-files').waitFor();
+  await page.locator('#workspace-pane-network').waitFor({ state: 'hidden' });
+  await replaceTool.selectOption('terminal');
+  const idsInPaneOrder = () => page.locator('#workspace-panes > .workspace-pane-slot:visible > div')
+    .evaluateAll(nodes => nodes.map(node => node.id.replace('workspace-pane-', '')).join(','));
+  if (await idsInPaneOrder() !== 'workspace,terminal,files') throw new Error('Selecting an existing tool did not swap pane positions.');
+  await page.getByRole('button', { name: '영역 닫기', exact: true }).click();
+  if (await idsInPaneOrder() !== 'workspace,files') throw new Error('Closing a pane affected another tool.');
+  await page.getByRole('button', { name: '2×2 배치', exact: true }).click();
+  if (await idsInPaneOrder() !== 'workspace,files,terminal,rdp') throw new Error('The four-pane preset did not preserve the visible tools.');
+  await page.getByText('배치 설정', { exact: true }).press('Escape');
+  const topDivider = page.getByRole('separator', { name: '데이터베이스 창 크기', exact: true });
+  const bottomDivider = page.getByRole('separator', { name: '터미널 창 크기', exact: true });
+  await bottomDivider.press('ArrowRight');
+  if (await bottomDivider.getAttribute('aria-valuenow') !== '55' || await topDivider.getAttribute('aria-valuenow') !== '50') {
+    throw new Error('A nested divider changed the size of another row.');
+  }
   if (!(await editor.inputValue()).startsWith('SELECT name FROM people')) throw new Error('Splitting the workspace changed the SQL draft.');
   await split.click();
   await separator.waitFor({ state: 'hidden' });
@@ -361,7 +387,7 @@ async function main() {
   await page.getByRole('button', { name: 'SSH 연결 추가' }).click();
   await page.getByLabel('연결 이름').fill('복제할 SSH');
   await page.getByLabel('호스트 또는 IP', { exact: true }).fill('example.test');
-  await page.getByLabel('사용자 이름').fill('stackport');
+  await page.getByLabel('사용자 이름', { exact: true }).fill('stackport');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
   await page.keyboard.press('Control+Shift+P');

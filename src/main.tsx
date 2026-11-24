@@ -21,7 +21,11 @@ import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
-import { WorkspaceSeparator, WorkspaceSplitControls, type SplitDirection } from "./WorkspaceSplit";
+import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
+import {
+  editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
+  type SplitDirection, type WorkspaceLayout,
+} from "./WorkspaceLayout";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -69,10 +73,11 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
-  const [page, setPage] = useState<WorkspacePage>("workspace");
-  const [splitPage, setSplitPage] = useState<WorkspacePage | null>(null);
-  const [splitDirection, setSplitDirection] = useState<SplitDirection>("side");
-  const [splitSize, setSplitSize] = useState(50);
+  const [layout, setLayout] = useState<WorkspaceLayout>(() => toolPane("workspace"));
+  const toolsInLayout = paneTools(layout);
+  const page = toolsInLayout[0];
+  const lastPair = useRef<{ direction: SplitDirection; size: number }>({ direction: "side", size: 50 });
+  const nextSplit = useRef(0);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
@@ -362,36 +367,65 @@ function App() {
     setPath(""); setEnvironment("DEV"); setModal(next);
   }
 
-  function loadPage(next: WorkspacePage) {
-    setLoadedPages(current => current.has(next) ? current : new Set([...current, next]));
+  function applyLayout(next: WorkspaceLayout) {
+    const tools = paneTools(next);
+    setLoadedPages(current => tools.every(tool => current.has(tool)) ? current : new Set([...current, ...tools]));
+    setLayout(next);
   }
 
   function openPage(next: WorkspacePage) {
     if (next === "workspace") setHistoryOpen(false);
-    loadPage(next);
-    if (next === splitPage) setSplitPage(page);
-    setPage(next);
+    if (next !== page) applyLayout(replacePaneTool(layout, page, next));
   }
 
   function showTool(next: WorkspacePage) {
-    if (next !== splitPage) openPage(next);
+    if (!toolVisible(next)) openPage(next);
     else if (next === "workspace") setHistoryOpen(false);
   }
 
-  function selectSplitPage(next: WorkspacePage) {
-    if (next === page) return;
-    if (next === "workspace") setHistoryOpen(false);
-    loadPage(next);
-    setSplitPage(next);
+  function changePaneTool(previous: WorkspacePage, next: WorkspacePage) {
+    if (previous === next) return;
+    if (next === "workspace" && !toolVisible(next)) setHistoryOpen(false);
+    applyLayout(replacePaneTool(layout, previous, next));
   }
 
   function toggleSplit() {
-    if (splitPage) setSplitPage(null);
-    else selectSplitPage(page === "workspace" ? "terminal" : "workspace");
+    if (layout.kind === "split") {
+      if (toolsInLayout.length === 2) lastPair.current = { direction: layout.direction, size: layout.size };
+      applyLayout(toolPane(page));
+      return;
+    }
+    const second = page === "workspace" ? "terminal" : "workspace";
+    if (second === "workspace") setHistoryOpen(false);
+    const pair = splitPane(++nextSplit.current, lastPair.current.direction, layout, toolPane(second));
+    applyLayout({ ...pair, size: lastPair.current.size });
+  }
+
+  function addPane(target: WorkspacePage, direction: SplitDirection) {
+    if (toolsInLayout.length >= 4) return;
+    const next = workspaceTools.find(tool => !toolVisible(tool.id))?.id;
+    if (!next) return;
+    if (next === "workspace") setHistoryOpen(false);
+    const divider = splitPane(++nextSplit.current, direction, toolPane(target), toolPane(next));
+    applyLayout(editTool(layout, tool => tool === target ? divider : toolPane(tool)));
+  }
+
+  function closePane(target: WorkspacePage) {
+    const next = removePaneTool(layout, target);
+    if (next) applyLayout(next);
+  }
+
+  function openGrid() {
+    if (!toolVisible("workspace")) setHistoryOpen(false);
+    const available = workspaceTools.map(tool => tool.id).filter(tool => !toolVisible(tool));
+    const [first, second, third, fourth] = [...toolsInLayout, ...available].slice(0, 4).map(toolPane);
+    const top = splitPane(++nextSplit.current, "side", first, second);
+    const bottom = splitPane(++nextSplit.current, "side", third, fourth);
+    applyLayout(splitPane(++nextSplit.current, "stack", top, bottom));
   }
 
   function toolVisible(tool: WorkspacePage) {
-    return page === tool || splitPage === tool;
+    return toolsInLayout.includes(tool);
   }
 
   function selectSqliteProfile(id: string) {
@@ -420,7 +454,7 @@ function App() {
     if (desktop) {
       commands.push(
         { id: "open:history", title: "작업 기록", group: "작업", keywords: "audit history", Icon: History, run: showHistory },
-        { id: "toggle:split", title: splitPage ? "화면 분할 해제" : "화면 분할", group: "작업", keywords: "split pane", Icon: PanelsTopLeft, run: toggleSplit },
+        { id: "toggle:split", title: layout.kind === "split" ? "화면 분할 해제" : "화면 분할", group: "작업", keywords: "split pane", Icon: PanelsTopLeft, run: toggleSplit },
         { id: "create:project", title: "새 프로젝트", group: "작업", Icon: Plus, run: () => openModal("project") },
         { id: "open:archived", title: "보관된 프로젝트", group: "작업", Icon: Archive, run: () => setArchivedProjectsOpen(true) },
       );
@@ -521,7 +555,7 @@ function App() {
     return keys;
   }
 
-  const databasePane = <div id="workspace-pane-workspace" key="workspace" className="main-content" hidden={!toolVisible("workspace")}>
+  const databasePane = <div id="workspace-pane-workspace" className="main-content">
     {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
       <strong>SQLite 복원 완료 · 검증 통과</strong>
       <span>{displayPath(restoreReport.path)}</span>
@@ -590,19 +624,15 @@ function App() {
 
   const toolPanes: Record<WorkspacePage, React.ReactNode> = {
     workspace: databasePane,
-    terminal: <div id="workspace-pane-terminal" key="terminal" className="tool-body terminal-body" hidden={!toolVisible("terminal")}>
+    terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
         <TerminalWorkspace visible={toolVisible("terminal")} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} />
       </React.Suspense>
     </div>,
-    network: <div id="workspace-pane-network" key="network" className="tool-body network-body" hidden={!toolVisible("network")}><NetworkWorkspace /></div>,
-    rdp: <div id="workspace-pane-rdp" key="rdp" className="tool-body network-body" hidden={!toolVisible("rdp")}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
-    files: <div id="workspace-pane-files" key="files" className="tool-body network-body" hidden={!toolVisible("files")}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>,
+    network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body"><NetworkWorkspace /></div>,
+    rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
+    files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body"><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>,
   };
-  const paneOrder = [page, ...(splitPage ? [splitPage] : []), ...workspaceTools.map(tool => tool.id).filter(tool => !toolVisible(tool))];
-  const panes = paneOrder.filter(tool => loadedPages.has(tool)).flatMap(tool => tool === page && splitPage
-    ? [toolPanes[tool], <WorkspaceSeparator key="split" primary={page} direction={splitDirection} size={splitSize} onResize={setSplitSize} />]
-    : [toolPanes[tool]]);
 
   return <div className="app-shell">
     <div className="workspace">
@@ -624,8 +654,9 @@ function App() {
           onClick={() => setExplorerOpen(open => !open)}>{explorerOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
         <WorkspaceNavigation page={page} desktop={desktop} historyOpen={page === "workspace" && historyOpen}
           terminalCount={terminalTabCount} rdpCount={rdpClientCount} onSelect={openPage} />
-        {desktop && <WorkspaceSplitControls primary={page} secondary={splitPage} direction={splitDirection}
-          onToggle={toggleSplit} onSelect={selectSplitPage} onDirectionChange={setSplitDirection} />}
+        {desktop && <WorkspaceSplitControls layout={layout} tools={toolsInLayout} onToggle={toggleSplit} onSelect={changePaneTool}
+          onDirectionChange={direction => setLayout(current => current.kind === "split" ? { ...current, direction } : current)}
+          onAdd={addPane} onRemove={closePane} onGrid={openGrid} />}
       </div>
       <div className="body-layout">
         <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={!explorerOpen}>
@@ -664,10 +695,7 @@ function App() {
             <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
           </div>)}</div>
         </aside>
-        <main id="workspace-panes" className="workspace-panes" aria-label="작업 공간" data-split={splitPage ? splitDirection : undefined}
-          style={splitPage ? { "--workspace-primary": `${splitSize}fr`, "--workspace-secondary": `${100 - splitSize}fr` } as React.CSSProperties : undefined}>
-          {panes}
-        </main>
+        <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
       <footer className="statusbar">
         <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span />
