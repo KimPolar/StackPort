@@ -1,5 +1,13 @@
 export type Cell = { kind: string; display: string; truncated: boolean };
-export type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
+export type QueryMetrics = {
+  elapsed_micros: number;
+  rows_read: number;
+  fullscan_steps: number | null;
+  sort_operations: number | null;
+  autoindex_rows: number | null;
+  vm_steps: number | null;
+};
+export type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string; metrics?: QueryMetrics };
 
 type ResultDifference =
   | { kind: "cell"; row: number; column: number; before: Cell; after: Cell; uncertain: boolean }

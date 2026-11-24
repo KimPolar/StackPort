@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { compareResultPages, type Cell, type QueryPage } from "./sqlResults";
+import { SqlQueryMetricsComparison } from "./SqlQueryMetrics";
 
 export type ResultComparisonSource = { id: number; label: string; page: QueryPage };
 
@@ -46,6 +47,7 @@ export function SqlResultComparison({ sources, initial, onClose }: {
       </div>
       {comparison.kind === "different_page" ? <p role="status" className="form-note">같은 페이지 번호를 선택하면 결과를 비교할 수 있습니다.</p> : <>
         <p className="form-note">{before.page + 1}페이지의 행·열 순서로 비교합니다. 행 순서는 <code>ORDER BY</code>로 고정할 수 있습니다.</p>
+        {before.metrics && after.metrics && <SqlQueryMetricsComparison before={before.metrics} after={after.metrics} />}
         {before.has_more !== after.has_more && <p className="form-note">두 결과의 다음 페이지 유무가 다릅니다.</p>}
         {comparison.kind === "columns" ? <>
           <p role="status">열 순서 또는 이름 {comparison.total}곳이 다릅니다.</p>

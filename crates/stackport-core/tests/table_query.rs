@@ -58,6 +58,10 @@ fn typed_filters_and_global_sort_apply_before_pagination() {
     assert_eq!(first.rows.len(), 100);
     assert_eq!(first.rows[0][0].display, "205");
     assert_eq!(first.rows[99][0].display, "7");
+    assert_eq!(first.metrics.rows_read, 101);
+    assert!(first.metrics.fullscan_steps.is_some_and(|count| count > 0));
+    assert!(first.metrics.sort_operations.is_some_and(|count| count > 0));
+    assert!(first.metrics.vm_steps.is_some_and(|count| count > 0));
     let second = browse(&store, &profile.id, request, 1).unwrap();
     assert!(second.has_more);
     assert_eq!(second.rows[0][0].display, "5");
@@ -93,6 +97,16 @@ fn typed_filters_and_global_sort_apply_before_pagination() {
     ).unwrap();
     assert_eq!(view.rows.len(), 1);
     assert_eq!(view.rows[0][0].display, "205");
+    let lookup = store
+        .query(
+            &profile.id,
+            r#"SELECT id FROM "measure""ments" WHERE id = 205"#,
+            0,
+        )
+        .unwrap();
+    assert_eq!(lookup.metrics.rows_read, 1);
+    assert_eq!(lookup.metrics.fullscan_steps, Some(0));
+    assert_eq!(lookup.metrics.sort_operations, Some(0));
     for object in ["sqlite_schema", "measurement_view; DROP TABLE x;"] {
         assert!(browse(
             &store,

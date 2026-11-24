@@ -307,6 +307,13 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-result-differences td { overflow-wrap: anywhere; white-space: normal; }
 .sql-result-differences td code { white-space: pre-wrap; }
 .sql-result-differences td small { display: block; margin-top: 3px; color: #526a5f; }
+.sql-query-metrics { padding: 8px 14px; border-bottom: 1px solid #e4ece7; background: #f8fbf9; color: #435e50; font-size: 12px; }
+.sql-query-metrics summary, .sql-query-metrics-comparison summary { cursor: pointer; }
+.sql-query-metrics summary span { margin-inline-start: 6px; font-variant-numeric: tabular-nums; }
+.sql-query-metrics dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr)); gap: 8px 12px; margin: 10px 0; }
+.sql-query-metrics dd { margin: 2px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sql-query-metrics p { margin: 8px 0 0; }
+.sql-query-metrics-comparison .table-wrap { margin-top: 8px; font-variant-numeric: tabular-nums; }
 .dialog.sql-template-library { width: min(820px, calc(100vw - 32px)); }
 .sql-template-library-body { padding: 0 21px 21px; color: #435e50; font-size: 12px; }
 .sql-template-controls, .sql-template-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }

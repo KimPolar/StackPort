@@ -196,11 +196,22 @@ pub struct Cell {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct QueryMetrics {
+    pub elapsed_micros: u64,
+    pub rows_read: usize,
+    pub fullscan_steps: Option<u32>,
+    pub sort_operations: Option<u32>,
+    pub autoindex_rows: Option<u32>,
+    pub vm_steps: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct QueryPage {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Cell>>,
     pub page: u32,
     pub has_more: bool,
+    pub metrics: QueryMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_sql: Option<String>,
 }

@@ -5,10 +5,10 @@ use super::{
     result_export::{ExportFile, ExportFormat},
     set_read_authorizer,
     sql_statement::statement_ranges,
-    AuditRecord, CsvOptions, ExportQuery, ExportReport, QueryPage, Result, Store, TableQuery,
-    PAGE_SIZE,
+    AuditRecord, CsvOptions, ExportQuery, ExportReport, QueryMetrics, QueryPage, Result, Store,
+    TableQuery, PAGE_SIZE,
 };
-use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle};
+use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle, StatementStatus};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -720,6 +720,7 @@ impl Store {
         control: &QueryControl,
         deadline: Instant,
     ) -> std::result::Result<QueryOutput, QueryFailure> {
+        let started = Instant::now();
         control.check_deadline(deadline)?;
         let page = match &delivery {
             QueryDelivery::Page(page) => Some(*page),
@@ -881,15 +882,26 @@ impl Store {
             rows.push(cells);
         }
         control.check_deadline(deadline)?;
-        let has_more = rows.len() > PAGE_SIZE;
+        drop(cursor);
+        let rows_read = rows.len();
+        let has_more = rows_read > PAGE_SIZE;
         if has_more {
             rows.pop();
         }
+        let count = |status| u32::try_from(stmt.get_status(status)).ok();
         Ok(QueryOutput::Rows(QueryPage {
             columns,
             rows,
             page: page.unwrap_or_default(),
             has_more,
+            metrics: QueryMetrics {
+                elapsed_micros: started.elapsed().as_micros() as u64,
+                rows_read,
+                fullscan_steps: count(StatementStatus::FullscanStep),
+                sort_operations: count(StatementStatus::Sort),
+                autoindex_rows: count(StatementStatus::AutoIndex),
+                vm_steps: count(StatementStatus::VmStep),
+            },
             generated_sql: show_sql.then_some(bounded_sql),
         }))
     }

@@ -739,6 +739,10 @@ async function verifySqlResultPins(page, editor, sqlTabs, add, exportJson) {
   const changes = comparison.getByRole('table', { name: '결과 값 차이', exact: true });
   await changes.getByText('사용자 101', { exact: true }).waitFor();
   await changes.getByText('고정 이후 이름', { exact: true }).waitFor();
+  await comparison.getByText('실행 통계 비교', { exact: true }).click();
+  const metrics = comparison.getByRole('table', { name: 'SQLite 실행 통계 비교', exact: true });
+  const rowsRead = metrics.getByRole('row').filter({ hasText: '읽은 결과 행' });
+  assert.deepEqual(await rowsRead.getByRole('cell').allTextContents(), ['101', '101', '0']);
   await comparison.getByRole('button', { name: '비교 닫기', exact: true }).click();
   const exported = await exportJson(grid, '고정 쿼리 재실행 결과.json');
   assert.deepEqual(exported.columns, ['name', 'label']);
@@ -970,6 +974,11 @@ async function verifySqlQueryBuilder(page, editor, sqlTabs) {
   const grid = page.locator('.database-results');
   assert.equal(await grid.getByRole('cell', { name: '기획', exact: true }).count(), 0);
   await grid.getByRole('cell', { name: '2', exact: true }).waitFor();
+  await grid.locator('.sql-query-metrics summary').click();
+  const metrics = grid.getByLabel('SQLite 실행 통계', { exact: true });
+  assert.equal(await metrics.locator('div').filter({ hasText: '읽은 결과 행' }).locator('dd').textContent(), '1');
+  const vmSteps = await metrics.locator('div').filter({ hasText: '가상 머신 단계' }).locator('dd').textContent();
+  assert.ok(Number(vmSteps.replaceAll(',', '')) > 0, `예상한 SQLite VM 실행 단계가 없습니다: ${vmSteps}`);
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

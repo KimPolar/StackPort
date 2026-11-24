@@ -105,6 +105,7 @@ PARTIAL = {
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
     "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
+    "SP-SQ-016": "SQLite 결과 페이지의 조회 시간·읽은 행·스캔 단계·정렬·자동 인덱스 행·가상 머신 단계, 같은 페이지의 고정 결과와 비교",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "1 MiB 이하 UTF-8 SQL 파일 열기와 새 파일 저장, BOM·LF/CRLF 유지 및 편집기에서 명시 실행",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
@@ -262,6 +263,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/main.tsx; src/SqlResultComparison.tsx; src/sqlResults.ts; tests/sql-results.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-012":
                 evidence = "src/SqlQueryBuilderDialog.tsx; src/SqlBuilderClauses.tsx; src/sqlQueryBuilder.ts; tests/sql-query-builder.test.mjs; tests/sql-file-smoke.cjs"
+            elif requirement_id == "SP-SQ-016":
+                evidence = "crates/stackport-core/src/query.rs; crates/stackport-core/tests/table_query.rs; src/SqlQueryMetrics.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-017":
                 evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; src/SqlHistoryDialog.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-023":

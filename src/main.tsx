@@ -32,6 +32,7 @@ import { revealEditorRange } from "./editorSearch";
 import type { EditorHoverInfo } from "./editorHover";
 import { addSqlHistoryEntry, createSqlHistoryEntry, type SqlHistoryEntry, type SqlHistoryOutcome, type SqlHistoryScope } from "./sqlHistory";
 import type { ResultComparisonSource } from "./SqlResultComparison";
+import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
@@ -52,7 +53,7 @@ type Project = { id: string; name: string };
 type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portable"; data_directory: string };
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
 type BatchStop = SqlReferenceRange & { status: "error" | "cancelled" | "timed_out" | "parameters_required"; message: string };
-type SqlBatchOutcome = { status: "batch"; total: number; items: (SqlReferenceRange & { elapsed_ms: number; result: QueryPage })[]; stopped: BatchStop | null };
+type SqlBatchOutcome = { status: "batch"; total: number; items: (SqlReferenceRange & { result: QueryPage })[]; stopped: BatchStop | null };
 type QueryOutcome = SqlBatchOutcome | { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
 type SqlDocumentRange = { source: string; offset: number };
 type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string; document?: SqlDocumentRange; batchIndex?: number; replayedFrom?: number };
@@ -62,7 +63,7 @@ type SqlBatchView = {
   profileId: string;
   document: SqlDocumentRange;
   total: number;
-  items: { elapsedMs: number; query: QueryResult }[];
+  items: QueryResult[];
   stopped: BatchStop | null;
   active: number;
 };
@@ -236,7 +237,7 @@ function App() {
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
   const batch = resultMode === "sql" && sqlView.batch?.profileId === profileId ? sqlView.batch : null;
   const pinned = resultMode === "sql" ? sqlView.pins.find(pin => pin.id === sqlView.pinId && pin.profileId === profileId) : undefined;
-  const visibleQueryResult = resultMode === "table" ? tableQueryResult : batch ? batch.items[batch.active]?.query : sqlView.result;
+  const visibleQueryResult = resultMode === "table" ? tableQueryResult : batch ? batch.items[batch.active] : sqlView.result;
   const liveQueryResult = visibleQueryResult?.profileId === profileId ? visibleQueryResult : null;
   const queryResult = pinned ?? liveQueryResult;
   const result = queryResult?.page ?? null;
@@ -843,17 +844,16 @@ function App() {
             const result = { profileId, page: response.result, target: { ...target, document: undefined } };
             const batch = sqlView.batch;
             if (target.batchIndex !== undefined && batch) {
-              const items = batch.items.map((item, index) => index === target.batchIndex ? { ...item, query: result } : item);
+              const items = batch.items.map((item, index) => index === target.batchIndex ? result : item);
               editSqlQueryView(target.tabId, { batch: { ...batch, items } });
             } else editSqlQueryView(target.tabId, { result, batch: null, pinId: null });
           } else setTableQueryResult({ profileId, page: response.result, target });
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
         } else if (response.status === "batch" && target.kind === "sql" && target.document) {
           const items = response.items.map((item, batchIndex) => ({
-            elapsedMs: item.elapsed_ms,
-            query: { profileId, page: item.result, target: {
+            profileId, page: item.result, target: {
               kind: "sql" as const, tabId: target.tabId, sql: target.sql.slice(item.start, item.end), batchIndex,
-            } },
+            },
           }));
           editSqlQueryView(target.tabId, { result: null, pinId: null, batch: {
             profileId, document: target.document, total: response.total, stopped: response.stopped, items, active: 0,
@@ -1248,11 +1248,10 @@ function App() {
           <details><summary>고정된 SQL</summary><pre aria-label="고정된 SQL">{pinned.target.sql}</pre></details>
         </div>}
         {!pinned && batch && sqlDraft && <div className="sql-batch-results" aria-label="일괄 실행 결과" role="group">
-          <p>{batch.total}개 문장 중 {batch.items.length}개 완료
-            {batch.items[batch.active] && ` · 선택한 문장 ${batch.items[batch.active].elapsedMs} ms`}</p>
+          <p>{batch.total}개 문장 중 {batch.items.length}개 완료</p>
           {!!batch.items.length && <div className="sql-batch-statements" aria-label="문장별 결과" role="group">
             {batch.items.map((item, index) => <button key={index} type="button" className="secondary small"
-              aria-pressed={batch.active === index} disabled={querying} title={item.query.page.columns.join(", ")}
+              aria-pressed={batch.active === index} disabled={querying} title={item.page.columns.join(", ")}
               onClick={() => { editSqlQueryView(sqlDraft.id, { batch: { ...batch, active: index } }); setExportReport(null); }}>
               문장 {index + 1}
             </button>)}
@@ -1281,6 +1280,7 @@ function App() {
           <pre>{result.generated_sql}</pre>
           {executedQuery.request.filters.length > 0 && <p>물음표에는 필터 값을 매개변수로 전달합니다.</p>}
         </details>}
+        {result?.metrics && <SqlQueryMetrics metrics={result.metrics} />}
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
         {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
           {!pinned && <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div>}</> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
