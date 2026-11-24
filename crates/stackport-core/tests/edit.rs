@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use stackport_core::{EditInput, EditKey, RowChange, RowInsertField, Store};
+use stackport_core::{EditCellChange, EditInput, EditKey, RowChange, RowInsertField, Store};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -34,6 +34,161 @@ fn input(kind: &str, value: &str) -> EditInput {
         kind: kind.into(),
         value: value.into(),
     }
+}
+
+#[test]
+fn several_cells_share_one_approved_update_and_rollback_together() {
+    let (dir, store, profile) = setup("PROD");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE multi_cells (id INTEGER PRIMARY KEY, note TEXT NOT NULL,
+        amount INTEGER NOT NULL, other TEXT, CHECK(note <> 'paired' OR amount = 8));
+        INSERT INTO multi_cells VALUES (1, 'old', 3, 'original');",
+    )
+    .unwrap();
+    let start = || {
+        store
+            .begin_cell_edit(&profile, "multi_cells", key())
+            .unwrap()
+    };
+    let change = |column: &str, kind, value| EditCellChange {
+        column: column.into(),
+        input: input(kind, value),
+    };
+    let stored = || {
+        db.query_row("SELECT note, amount, other FROM multi_cells", [], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+    };
+    let condition = start();
+    let preview = store
+        .preview_row_edit(&condition.token, vec![change("note", "text", "paired")])
+        .unwrap();
+    assert!(store
+        .apply_row_edit(&condition.token, &preview.approval, "PROD")
+        .is_err());
+    assert_eq!(stored(), ("old".into(), 3, "original".into()));
+
+    let edit = start();
+    assert_eq!(edit.max_changes, 16);
+    let fields = || {
+        vec![
+            change("note", "text", "paired"),
+            change("amount", "integer", "8"),
+            change("other", "text", "original"),
+        ]
+    };
+    let previous = store.preview_row_edit(&edit.token, fields()).unwrap();
+    assert_eq!(
+        previous
+            .changes
+            .iter()
+            .map(|field| field.column.as_str())
+            .collect::<Vec<_>>(),
+        ["note", "amount"]
+    );
+    assert_eq!(previous.changes[1].before.display, "3");
+    assert_eq!(previous.changes[1].after.display, "8");
+    assert!(store
+        .preview_row_edit(
+            &edit.token,
+            vec![change("note", "text", "one"), change("note", "text", "two")]
+        )
+        .is_err());
+    assert!(store
+        .apply_row_edit(&edit.token, &previous.approval, "PROD")
+        .is_err());
+    let current = store.preview_row_edit(&edit.token, fields()).unwrap();
+    assert!(store.apply_cell_edit(&edit.token, "PROD").is_err());
+    assert!(store
+        .apply_row_edit(&edit.token, &current.approval, "prod")
+        .is_err());
+    assert_eq!(stored(), ("old".into(), 3, "original".into()));
+    let applied = store
+        .apply_row_edit(&edit.token, &current.approval, "PROD")
+        .unwrap();
+    assert_eq!(
+        applied
+            .cells
+            .iter()
+            .map(|saved| (saved.column.as_str(), saved.actual.display.as_str()))
+            .collect::<Vec<_>>(),
+        [("note", "paired"), ("amount", "8")]
+    );
+    assert!(store
+        .apply_row_edit(&edit.token, &current.approval, "PROD")
+        .is_err());
+    assert_eq!(stored(), ("paired".into(), 8, "original".into()));
+
+    let affine = start();
+    let proposal = store
+        .preview_row_edit(
+            &affine.token,
+            vec![
+                change("note", "text", "should roll back"),
+                change("amount", "text", "8"),
+            ],
+        )
+        .unwrap();
+    let error = store
+        .apply_row_edit(&affine.token, &proposal.approval, "PROD")
+        .unwrap_err();
+    assert!(
+        error.contains("amount") && error.contains("롤백"),
+        "{error}"
+    );
+    assert_eq!(stored(), ("paired".into(), 8, "original".into()));
+
+    let stale = start();
+    let proposal = store
+        .preview_row_edit(
+            &stale.token,
+            vec![
+                change("note", "text", "stale"),
+                change("amount", "integer", "9"),
+            ],
+        )
+        .unwrap();
+    db.execute("UPDATE multi_cells SET other='changed elsewhere'", [])
+        .unwrap();
+    assert!(store
+        .apply_row_edit(&stale.token, &proposal.approval, "PROD")
+        .unwrap_err()
+        .contains("행이 변경"));
+    assert_eq!(stored(), ("paired".into(), 8, "changed elsewhere".into()));
+    let fresh = start();
+    assert!(store
+        .preview_row_edit(
+            &fresh.token,
+            (0..17)
+                .map(|_| change("note", "text", "over limit"))
+                .collect()
+        )
+        .is_err());
+    let proposal = store
+        .preview_row_edit(&fresh.token, vec![change("note", "text", "cancelled")])
+        .unwrap();
+    store.cancel_cell_edit(&fresh.token).unwrap();
+    assert!(store
+        .apply_row_edit(&fresh.token, &proposal.approval, "PROD")
+        .is_err());
+    assert_eq!(stored(), ("paired".into(), 8, "changed elsewhere".into()));
+
+    let history = store.list_audit_events(None).unwrap().events;
+    assert!(history
+        .iter()
+        .any(|event| event.operation == "sqlite.row.update"
+            && event.outcome == "succeeded"
+            && event.policy == "sqlite-row-update-prod-confirmed"
+            && event.affected_count == Some(1)));
+    assert!(!serde_json::to_string(&history)
+        .unwrap()
+        .contains("should roll back"));
 }
 
 #[test]

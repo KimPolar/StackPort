@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Trash2, X } from "lucide-react";
-import { PostgresEditDialog, type PostgresEditExitGuard, type PostgresRowStamp } from "./PostgresEditDialog";
+import { PostgresEditDialog, type PostgresRowStamp } from "./PostgresEditDialog";
+import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
@@ -58,7 +59,7 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
 export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
   visible: boolean;
-  onEditExitGuard: (guard: PostgresEditExitGuard | null) => void;
+  onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   onOpenTunnels: () => void;
 }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -245,7 +246,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
   onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
   onEditUnknown: () => void;
-  onEditExitGuard: (guard: PostgresEditExitGuard | null) => void;
+  onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   unavailable: string;
   onReconnectFocus: () => void;
 }) {

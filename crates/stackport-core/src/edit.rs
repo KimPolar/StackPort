@@ -1,4 +1,4 @@
-//! A short-lived, preview-before-apply SQLite cell edit session.
+//! A short-lived, preview-before-apply SQLite row edit session.
 //!
 //! Only ordinary tables with stable non-NULL primary keys and without triggers
 //! or generated columns are editable. Key/unique columns and large/BLOB values
@@ -34,6 +34,7 @@ use uuid::Uuid;
 use zeroize::Zeroize;
 
 const SESSION_LIFETIME: Duration = Duration::from_secs(300);
+const MAX_CHANGES: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditKey {
@@ -65,6 +66,7 @@ pub struct EditSession {
     pub keys: Vec<EditKey>,
     pub fields: Vec<EditField>,
     pub expires_seconds: u64,
+    pub max_changes: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -80,6 +82,31 @@ pub struct EditResult {
     pub audit_warning: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditCellChange {
+    pub column: String,
+    pub input: EditInput,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditRowPreview {
+    pub approval: String,
+    pub changes: Vec<EditPreview>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SavedEditCell {
+    pub column: String,
+    pub actual: Cell,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EditRowResult {
+    pub cells: Vec<SavedEditCell>,
+    pub audit_warning: Option<String>,
+}
+
 struct FieldValue {
     name: String,
     value: Option<Value>,
@@ -88,15 +115,18 @@ struct FieldValue {
 
 struct Change {
     column: String,
-    before: Value,
     after: Value,
 }
 
 impl Drop for Change {
     fn drop(&mut self) {
-        wipe_value(&mut self.before);
         wipe_value(&mut self.after);
     }
+}
+
+struct ApprovedChanges {
+    approval: Option<String>,
+    cells: Vec<Change>,
 }
 
 struct PendingEdit {
@@ -107,7 +137,7 @@ struct PendingEdit {
     keys: Vec<(String, Value)>,
     fingerprint: [u8; 32],
     fields: Vec<FieldValue>,
-    change: Option<Change>,
+    changes: Option<ApprovedChanges>,
     created: Instant,
 }
 
@@ -134,8 +164,10 @@ struct EditState {
 
 impl EditState {
     fn expire(&mut self) {
-        self.pending.retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
-        self.rows.retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
+        self.pending
+            .retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
+        self.rows
+            .retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
     }
 }
 
@@ -197,7 +229,7 @@ impl Store {
         let schema_version = schema_version(&db)?;
         let details = editable_table(&db, table)?;
         let parsed_keys = validate_keys(&details, &keys)?;
-        let snapshot = read_row(&db, table, &parsed_keys, None)?;
+        let snapshot = read_row(&db, table, &parsed_keys, &[])?;
         let unique_columns: HashSet<&str> = details
             .indexes
             .iter()
@@ -251,6 +283,7 @@ impl Store {
             keys,
             fields,
             expires_seconds: SESSION_LIFETIME.as_secs(),
+            max_changes: MAX_CHANGES,
         };
         self.edits.active_state()?.pending.insert(
             token,
@@ -262,20 +295,48 @@ impl Store {
                 keys: parsed_keys,
                 fingerprint: snapshot.fingerprint,
                 fields: plan_fields,
-                change: None,
+                changes: None,
                 created: Instant::now(),
             },
         );
         Ok(session)
     }
 
-    /// Re-read the entire row before preparing a proposed single-cell change.
     pub fn preview_cell_edit(
         &self,
         token: &str,
         column: &str,
         input: EditInput,
     ) -> Result<EditPreview> {
+        self.stage_cell_changes(
+            token,
+            vec![EditCellChange {
+                column: column.into(),
+                input,
+            }],
+            None,
+        )?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "미리 볼 변경이 없습니다.".into())
+    }
+
+    pub fn preview_row_edit(
+        &self,
+        token: &str,
+        cells: Vec<EditCellChange>,
+    ) -> Result<EditRowPreview> {
+        let approval = Uuid::new_v4().to_string();
+        let changes = self.stage_cell_changes(token, cells, Some(approval.clone()))?;
+        Ok(EditRowPreview { approval, changes })
+    }
+
+    fn stage_cell_changes(
+        &self,
+        token: &str,
+        cells: Vec<EditCellChange>,
+        approval: Option<String>,
+    ) -> Result<Vec<EditPreview>> {
         let mut state = self.edits.lock()?;
         let plan = state
             .pending
@@ -287,7 +348,12 @@ impl Store {
         }
         // A failed or superseded preview must never leave an older approved
         // change available for application.
-        plan.change = None;
+        plan.changes = None;
+        if cells.is_empty() || cells.len() > MAX_CHANGES {
+            return Err(format!(
+                "한 행에서 변경할 열을 1~{MAX_CHANGES}개 선택하세요."
+            ));
+        }
         verify_profile(self, &plan.profile)?;
         ensure_identity(&plan.identity, &plan.profile.path)?;
         let db = open_schema_db(Path::new(&plan.profile.path))?;
@@ -296,42 +362,51 @@ impl Store {
             return Err("테이블 구조가 변경되었습니다. 행을 다시 선택하세요.".into());
         }
         let details = editable_table(&db, &plan.table)?;
-        let snapshot = read_row(&db, &plan.table, &plan.keys, None)?;
+        let snapshot = read_row(&db, &plan.table, &plan.keys, &[])?;
         if snapshot.fingerprint != plan.fingerprint {
             return Err(
                 "편집을 시작한 뒤 행이 변경되었습니다. 새로고침 후 다시 선택하세요.".into(),
             );
         }
-        let field = plan
-            .fields
-            .iter()
-            .find(|field| field.name == column && field.editable)
-            .ok_or("선택한 열은 편집할 수 없습니다.")?;
-        ensure_column_allowed(&details, column)?;
-        let before = field
-            .value
-            .as_ref()
-            .ok_or("이 값은 편집할 수 없습니다.")?
-            .clone();
-        let after = parse_input(input)?;
-        if values_equal(&before, &after) {
+        let mut seen = HashSet::with_capacity(cells.len());
+        let mut previews = Vec::with_capacity(cells.len());
+        let mut changes = Vec::with_capacity(cells.len());
+        for EditCellChange { column, input } in cells {
+            if !seen.insert(column.clone()) {
+                return Err(format!("{column} 열이 중복되었습니다."));
+            }
+            let field = plan
+                .fields
+                .iter()
+                .find(|field| field.name == column && field.editable)
+                .ok_or("선택한 열은 편집할 수 없습니다.")?;
+            ensure_column_allowed(&details, &column)?;
+            let before = field.value.as_ref().ok_or("이 값은 편집할 수 없습니다.")?;
+            let after = parse_input(input).map_err(|error| format!("{column} · {error}"))?;
+            if values_equal(before, &after) {
+                continue;
+            }
+            let rendered = display_value(ValueRef::from(&after));
+            if rendered.truncated {
+                return Err(format!(
+                    "{column} 열의 전체 값을 미리 볼 수 있도록 길이를 줄이세요."
+                ));
+            }
+            previews.push(EditPreview {
+                column: column.clone(),
+                before: display_value(ValueRef::from(before)),
+                after: rendered,
+            });
+            changes.push(Change { column, after });
+        }
+        if changes.is_empty() {
             return Err("변경할 값이 기존 값과 같습니다.".into());
         }
-        let rendered = display_value(ValueRef::from(&after));
-        if rendered.truncated {
-            return Err("전체 변경 내용을 미리 볼 수 없는 긴 값은 아직 편집할 수 없습니다.".into());
-        }
-        let preview = EditPreview {
-            column: column.into(),
-            before: display_value(ValueRef::from(&before)),
-            after: rendered,
-        };
-        plan.change = Some(Change {
-            column: column.into(),
-            before,
-            after,
+        plan.changes = Some(ApprovedChanges {
+            approval,
+            cells: changes,
         });
-        Ok(preview)
+        Ok(previews)
     }
 
     /// Apply a previously previewed change once. PROD requires an additional
@@ -341,6 +416,33 @@ impl Store {
         token: &str,
         production_confirmation: &str,
     ) -> Result<EditResult> {
+        let report = self.apply_staged_cells(token, None, production_confirmation)?;
+        let saved = report
+            .cells
+            .into_iter()
+            .next()
+            .ok_or("변경 결과를 확인할 수 없습니다.")?;
+        Ok(EditResult {
+            actual: saved.actual,
+            audit_warning: report.audit_warning,
+        })
+    }
+
+    pub fn apply_row_edit(
+        &self,
+        token: &str,
+        approval: &str,
+        production_confirmation: &str,
+    ) -> Result<EditRowResult> {
+        self.apply_staged_cells(token, Some(approval), production_confirmation)
+    }
+
+    fn apply_staged_cells(
+        &self,
+        token: &str,
+        approval: Option<&str>,
+        production_confirmation: &str,
+    ) -> Result<EditRowResult> {
         let plan = {
             let mut state = self.edits.lock()?;
             let item = state
@@ -354,21 +456,29 @@ impl Store {
             if item.profile.environment == "PROD" && production_confirmation != "PROD" {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
-            if item.change.is_none() {
-                return Err("변경 내용을 먼저 미리보세요.".into());
+            if !item
+                .changes
+                .as_ref()
+                .is_some_and(|staged| staged.approval.as_deref() == approval)
+            {
+                return Err("현재 변경 내용을 다시 미리보세요.".into());
             }
             state.pending.remove(token).expect("checked pending edit")
         };
         verify_profile(self, &plan.profile)?;
         let correlation_id = Uuid::new_v4().to_string();
-        let target = format!(
-            "{} · {}",
-            plan.table,
-            plan.change.as_ref().expect("preview checked").column
-        );
+        let changes = &plan.changes.as_ref().expect("preview checked").cells;
+        let (operation, target) = if let [change] = changes.as_slice() {
+            (
+                "sqlite.cell.update",
+                format!("{} · {}", plan.table, change.column),
+            )
+        } else {
+            ("sqlite.row.update", plan.table.clone())
+        };
         let audit = |outcome, affected_count| AuditRecord {
             correlation_id: &correlation_id,
-            operation: "sqlite.cell.update",
+            operation,
             project_id: Some(&plan.profile.project_id),
             profile_id: Some(&plan.profile.id),
             environment: Some(&plan.profile.environment),
@@ -377,7 +487,7 @@ impl Store {
             affected_count,
         };
         insert_audit(&self.connect()?, audit("started", None))?;
-        let result = apply_change(self, &plan);
+        let result = apply_changes(self, &plan, changes);
         let outcome = if result.is_ok() {
             "succeeded"
         } else {
@@ -387,12 +497,12 @@ impl Store {
             .connect()
             .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
         match (result, audit_result) {
-            (Ok(actual), Ok(())) => Ok(EditResult {
-                actual,
+            (Ok(cells), Ok(())) => Ok(EditRowResult {
+                cells,
                 audit_warning: None,
             }),
-            (Ok(actual), Err(_)) => Ok(EditResult {
-                actual,
+            (Ok(cells), Err(_)) => Ok(EditRowResult {
+                cells,
                 audit_warning: Some(
                     "변경은 저장됐지만 완료 감사 기록을 저장하지 못했습니다.".into(),
                 ),
@@ -408,8 +518,11 @@ impl Store {
     }
 }
 
-fn apply_change(store: &Store, plan: &PendingEdit) -> Result<Cell> {
-    let change = plan.change.as_ref().ok_or("변경 내용을 먼저 미리보세요.")?;
+fn apply_changes(
+    store: &Store,
+    plan: &PendingEdit,
+    changes: &[Change],
+) -> Result<Vec<SavedEditCell>> {
     ensure_identity(&plan.identity, &plan.profile.path)?;
     let mut db = open_edit_db(&plan.profile.path)?;
     let tx = db
@@ -420,47 +533,76 @@ fn apply_change(store: &Store, plan: &PendingEdit) -> Result<Cell> {
         return Err("테이블 구조가 변경되었습니다. 행을 다시 선택하세요.".into());
     }
     let details = editable_table(&tx, &plan.table)?;
-    ensure_column_allowed(&details, &change.column)?;
-    let before = read_row(&tx, &plan.table, &plan.keys, Some(&change.column))?;
+    for change in changes {
+        ensure_column_allowed(&details, &change.column)?;
+    }
+    let columns: Vec<_> = changes
+        .iter()
+        .map(|change| change.column.as_str())
+        .collect();
+    let before = read_row(&tx, &plan.table, &plan.keys, &columns)?;
     if before.fingerprint != plan.fingerprint {
         return Err("편집을 시작한 뒤 행이 변경되어 적용하지 않았습니다.".into());
     }
-    let (predicate, mut values) = key_predicate(&plan.keys);
-    values.insert(0, change.after.clone());
+    let (predicate, keys) = key_predicate(&plan.keys);
+    let assignments = columns
+        .iter()
+        .map(|name| format!("{} = ?", quote(name)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let values = changes
+        .iter()
+        .map(|change| &change.after)
+        .chain(keys.iter());
     let sql = format!(
-        "UPDATE main.{} SET {} = ? WHERE {predicate}",
-        quote(&plan.table),
-        quote(&change.column)
+        "UPDATE OR ABORT main.{} SET {assignments} WHERE {predicate}",
+        quote(&plan.table)
     );
+    let total_before = tx.total_changes();
     let changed = tx
-        .execute(&sql, params_from_iter(values.iter()))
+        .execute(&sql, params_from_iter(values))
         .map_err(super::db_error)?;
-    if changed != 1 {
+    if changed != 1 || tx.total_changes() != total_before + 1 {
         return Err("변경 대상이 한 행이 아니어서 적용하지 않았습니다.".into());
     }
-    let after = read_row(&tx, &plan.table, &plan.keys, Some(&change.column))?;
-    let actual = after
-        .fields
-        .iter()
-        .find(|field| field.name == change.column)
-        .and_then(|field| field.value.as_ref())
-        .ok_or("변경 결과를 검증하지 못해 롤백했습니다.")?;
-    if !values_equal(actual, &change.after) || before.other_fingerprint != after.other_fingerprint {
-        return Err(
-            "SQLite가 값을 변환했거나 다른 열이 변경되어 롤백했습니다. 값의 형식을 확인하세요."
-                .into(),
-        );
+    let after = read_row(&tx, &plan.table, &plan.keys, &columns)?;
+    if before.other_fingerprint != after.other_fingerprint {
+        return Err("선택한 열 외의 값이 변경되어 롤백했습니다.".into());
     }
-    let rendered = display_value(ValueRef::from(actual));
+    let mut saved = Vec::with_capacity(changes.len());
+    for change in changes {
+        let actual = after
+            .fields
+            .iter()
+            .find(|field| field.name == change.column)
+            .and_then(|field| field.value.as_ref())
+            .ok_or("변경 결과를 검증하지 못해 롤백했습니다.")?;
+        if !values_equal(actual, &change.after) {
+            return Err(format!(
+                "SQLite가 {} 열의 값 형식을 변환해 롤백했습니다. 값의 형식을 확인하세요.",
+                change.column
+            ));
+        }
+        saved.push(SavedEditCell {
+            column: change.column.clone(),
+            actual: display_value(ValueRef::from(actual)),
+        });
+    }
     ensure_identity(&plan.identity, &plan.profile.path)?;
     verify_profile(store, &plan.profile)?;
     tx.commit().map_err(|error| {
+        if error.sqlite_error_code() == Some(rusqlite::ErrorCode::ConstraintViolation) {
+            return format!(
+                "제약조건 위반으로 변경을 롤백했습니다. {}",
+                super::db_error(error)
+            );
+        }
         format!(
             "커밋 결과를 확정하지 못했습니다. 재시도 전에 원본을 다시 조회하세요: {}",
             super::db_error(error)
         )
     })?;
-    Ok(rendered)
+    Ok(saved)
 }
 
 fn open_edit_db(path: &str) -> Result<Connection> {
@@ -469,9 +611,12 @@ fn open_edit_db(path: &str) -> Result<Connection> {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(super::db_error)?;
-    db.busy_timeout(Duration::from_secs(5)).map_err(super::db_error)?;
-    db.pragma_update(None, "foreign_keys", true).map_err(super::db_error)?;
-    db.pragma_update(None, "trusted_schema", false).map_err(super::db_error)?;
+    db.busy_timeout(Duration::from_secs(5))
+        .map_err(super::db_error)?;
+    db.pragma_update(None, "foreign_keys", true)
+        .map_err(super::db_error)?;
+    db.pragma_update(None, "trusted_schema", false)
+        .map_err(super::db_error)?;
     Ok(db)
 }
 
@@ -607,7 +752,7 @@ fn read_row(
     db: &Connection,
     table: &str,
     keys: &[(String, Value)],
-    exclude: Option<&str>,
+    exclude: &[&str],
 ) -> Result<RowSnapshot> {
     let (predicate, values) = key_predicate(keys);
     let sql = format!(
@@ -633,7 +778,7 @@ fn read_row(
     for (index, name) in names.iter().enumerate() {
         let value = row.get_ref(index).map_err(super::db_error)?;
         hash_value(&mut all, name, value);
-        if exclude != Some(name.as_str()) {
+        if !exclude.contains(&name.as_str()) {
             hash_value(&mut others, name, value);
         }
         let display = display_value(value);

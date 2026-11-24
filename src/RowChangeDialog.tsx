@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Dialog } from "./Dialog";
-import type { PostgresEditExitGuard, PostgresRowStamp } from "./PostgresEditDialog";
+import { Dialog, type GridEditExitGuard } from "./Dialog";
+import type { PostgresRowStamp } from "./PostgresEditDialog";
 
 type Key = { name: string; kind: string; value: string };
 type Insert = { kind: "insert" };
@@ -47,7 +47,7 @@ export function RowChangeFields({ fields, autoLabel = "자동 기본 키" }: { f
 
 export function RowChangeDialog({ request, onClose, onApplied, onUnknown, onBusy, onExitGuard, unavailable = "" }: {
   request: RowChangeRequest; onClose: () => void; onApplied: (result: RowChangeResult) => void;
-  onUnknown?: () => void; onBusy?: (busy: boolean) => void; onExitGuard?: (guard: PostgresEditExitGuard | null) => void;
+  onUnknown?: () => void; onBusy?: (busy: boolean) => void; onExitGuard?: (guard: GridEditExitGuard | null) => void;
   unavailable?: string;
 }) {
   const [session, setSession] = useState<Session | null>(null);

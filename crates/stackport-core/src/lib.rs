@@ -8,7 +8,7 @@ mod result_export;
 pub use result_export::{CsvOptions, ExportQuery, ExportReport};
 pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
-pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
+pub use edit::{EditCellChange, EditField, EditInput, EditKey, EditPreview, EditResult, EditRowPreview, EditRowResult, EditSession, SavedEditCell};
 pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField};
 pub use postgres::{PostgresRowChange, PostgresRowChangeOutcome};
 mod network;
@@ -226,6 +226,8 @@ pub struct Cell {
     pub kind: &'static str,
     pub display: String,
     pub truncated: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lossy_text: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -930,6 +932,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "sqlite-cell-update-prod-confirmed"
         }
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
+        "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
+        "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.row.insert" | "sqlite.row.delete" if record.environment == Some("PROD") => {
             "sqlite-row-change-prod-confirmed"
         }
@@ -1157,12 +1161,14 @@ fn display_value(value: ValueRef<'_>) -> Cell {
         ValueRef::Text(value) => {
             // Avoid copying an entire large value just to render its preview.
             let text = String::from_utf8_lossy(value);
+            let lossy_text = matches!(text, std::borrow::Cow::Owned(_));
             let mut chars = text.chars();
             let display = chars.by_ref().take(CELL_MAX_CHARS).collect();
             return Cell {
                 kind: "text",
                 display,
                 truncated: chars.next().is_some(),
+                lossy_text,
             };
         }
         ValueRef::Blob(value) => ("blob", format!("[BLOB · {} bytes]", value.len())),
@@ -1171,5 +1177,6 @@ fn display_value(value: ValueRef<'_>) -> Cell {
         kind,
         display: text,
         truncated: false,
+        lossy_text: false,
     }
 }

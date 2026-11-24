@@ -1,4 +1,4 @@
-export type Cell = { kind: string; display: string; truncated: boolean };
+export type Cell = { kind: string; display: string; truncated: boolean; lossy_text?: boolean };
 export type QueryMetrics = {
   elapsed_micros: number;
   rows_read: number;

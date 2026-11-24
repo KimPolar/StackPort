@@ -9,12 +9,13 @@ import {
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
-import { Dialog } from "./Dialog";
+import { Dialog, type GridEditExitGuard } from "./Dialog";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout";
 import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
+import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
 import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
@@ -41,7 +42,6 @@ import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction } from "./PostgresWorkspace";
-import type { PostgresEditExitGuard } from "./PostgresEditDialog";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -99,12 +99,6 @@ type AuditEvent = { sequence: number; id: string; correlation_id: string; occurr
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 type SshTrustEvent = { sequence: number; id: string; host: string; port: number; action: "accepted" | "replaced"; previous_fingerprint: string | null; fingerprint: string; occurred_at: string };
 type SshTrustPage = { events: SshTrustEvent[]; next_cursor: number | null };
-type EditKey = { name: string; kind: string; value: string };
-type EditField = { name: string; declared_type: string; current: Cell; editable: boolean; reason: string | null };
-type EditSession = { token: string; table: string; environment: string; keys: EditKey[]; fields: EditField[]; expires_seconds: number };
-type EditPreview = { column: string; before: Cell; after: Cell };
-type EditResult = { actual: Cell; audit_warning: string | null };
-type EditRequest = { profile: Profile; object: DatabaseObject; keys: EditKey[] };
 type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
 
 const desktop = isTauri();
@@ -230,8 +224,8 @@ function App() {
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [editRequest, setEditRequest] = useState<EditRequest | null>(null);
-  const [editReport, setEditReport] = useState<EditResult | null>(null);
+  const [editRequest, setEditRequest] = useState<SqliteEditRequest | null>(null);
+  const [editReport, setEditReport] = useState<SqliteEditResult | null>(null);
   const [rowChange, setRowChange] = useState<Extract<RowChangeRequest, { engine: "sqlite" }> | null>(null);
   const [rowReport, setRowReport] = useState<{ profile: string; table: string; result: RowChangeResult } | null>(null);
   const rowChangeTrigger = useRef<HTMLButtonElement | null>(null);
@@ -252,7 +246,7 @@ function App() {
   const exitPromptOpen = useRef(exitPrompt);
   exitPromptOpen.current = exitPrompt;
   const sftpExitGuard = useRef<(() => void) | null>(null);
-  const postgresEditExitGuard = useRef<PostgresEditExitGuard | null>(null);
+  const gridEditExitGuard = useRef<GridEditExitGuard | null>(null);
   const localFileBusy = useRef(false);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
@@ -269,7 +263,7 @@ function App() {
   }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
   const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
-  const setPostgresEditExitGuard = useCallback((guard: PostgresEditExitGuard | null) => { postgresEditExitGuard.current = guard; }, []);
+  const setGridEditExitGuard = useCallback((guard: GridEditExitGuard | null) => { gridEditExitGuard.current = guard; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef(sqlTabSets);
@@ -430,7 +424,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (localFileBusy.current || postgresEditExitGuard.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || tunnelCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
+      if (!closeApproved.current && (localFileBusy.current || gridEditExitGuard.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || tunnelCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -460,8 +454,8 @@ function App() {
 
   const requestAppClose: () => void = useCallback(() => {
     if (closeApproved.current || closePending.current || localFileBusy.current || exitPromptOpen.current) return;
-    if (postgresEditExitGuard.current) {
-      postgresEditExitGuard.current(requestAppClose);
+    if (gridEditExitGuard.current) {
+      gridEditExitGuard.current(requestAppClose);
       return;
     }
     if (sftpExitGuard.current) {
@@ -780,6 +774,7 @@ function App() {
 
   function openObject(object: DatabaseObject, revealSchema = false) {
     setPostgresId("");
+    setEditReport(null);
     showTool("workspace");
     setSqlEditorOpen(false);
     if (revealSchema || selectedObject?.name !== object.name) setSchemaDetailsOpen(revealSchema);
@@ -1222,7 +1217,7 @@ function App() {
     for (const column of primaryKeys) {
       const index = result.columns.indexOf(column.name);
       const cell = row[index];
-      if (index < 0 || !cell || cell.truncated || !["integer", "real", "text"].includes(cell.kind)) return null;
+      if (index < 0 || !cell || cell.truncated || cell.lossy_text || !["integer", "real", "text"].includes(cell.kind)) return null;
       keys.push({ name: column.name, kind: cell.kind, value: cell.display });
     }
     return keys;
@@ -1255,7 +1250,7 @@ function App() {
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
-      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setPostgresEditExitGuard}
+      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
         onOpenTunnels={() => { setTunnelViewRequest(value => value + 1); showTool("network"); }}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
@@ -1289,7 +1284,15 @@ function App() {
         {exportReport.protected_fields > 0 && <span>수식처럼 보이는 텍스트 {exportReport.protected_fields.toLocaleString("ko-KR")}개를 보호했습니다.</span>}
         {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
       </div>}
-      {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
+      {editReport && <div className="sqlite-edit-report">
+        <div className="success-banner" role="status">
+          <strong>{editReport.cells.length === 1 ? "셀 변경 완료" : `${editReport.cells.length}개 셀 변경 완료`} · 저장 값 검증됨</strong>
+          {editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}
+        </div>
+        <details><summary>저장된 값 보기</summary><dl className="row-change-values">
+          {editReport.cells.map(({ column, actual }) => <div key={column}><dt>{column}</dt><dd>{sqliteEditValue(actual)}</dd></div>)}
+        </dl></details>
+      </div>}
       <div className="editor-card">
         <div className="panel-heading">
           <button type="button" className="sql-editor-toggle" aria-expanded={sqlEditorOpen} aria-controls="sql-editor-panel"
@@ -1489,12 +1492,16 @@ function App() {
               })}
               {canEditRows && <td>{keys && profile && selectedObject ? <span className="sqlite-row-actions">
                 <button className="row-edit" disabled={querying}
-                  aria-label={`${rowNumber}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button>
-                {rowChangeTable && !keys.some(key => key.kind === "text" && key.value.includes("\uFFFD")) &&
+                  aria-label={`${rowNumber}행 편집`} onClick={() => {
+                    setEditReport(null);
+                    setEditRequest({ profileId: profile.id, profileName: profile.name, table: selectedObject.name,
+                      location: displayPath(profile.path), environment: profile.environment, keys });
+                  }}>편집</button>
+                {rowChangeTable &&
                   <button type="button" className="icon-button" disabled={querying} aria-label={`${rowNumber}행 삭제`} title="행 삭제"
                     onClick={event => openRowChange({ kind: "delete", keys }, event.currentTarget)}><Trash2 size={14} aria-hidden /></button>}
                 </span>
-                : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}
+                : <span className="subtle" title="편집할 행을 식별하려면 원본 기본 키가 필요합니다.">지원 안 됨</span>}</td>}
             </tr>;
           })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
           {!pinned && <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div>}</> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
@@ -1684,8 +1691,12 @@ function App() {
       })}
       onApply={(range, update) => replaceSqlDraftRange(aliasRename, range, update.text,
         { start: update.first, end: update.first + update.spelling.length })} />}
-    {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
-    {rowChange && <RowChangeDialog request={rowChange} onClose={() => closeRowChange()} onApplied={report => {
+    {editRequest && <SqliteEditDialog request={editRequest} onClose={() => setEditRequest(null)} onExitGuard={setGridEditExitGuard}
+      onBusy={busy => { localFileBusy.current = busy; }} onApplied={report => {
+        setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page);
+      }} />}
+    {rowChange && <RowChangeDialog request={rowChange} onClose={() => closeRowChange()} onExitGuard={setGridEditExitGuard}
+      onBusy={busy => { localFileBusy.current = busy; }} onApplied={report => {
       setRowReport({ profile: rowChange.profileId, table: rowChange.table, result: report });
       closeRowChange(true);
       if (result && executedQuery) {
@@ -1795,6 +1806,7 @@ const auditOperationNames: Record<string, string> = {
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
+  "sqlite.row.update": "SQLite 행 변경",
   "postgres.row.insert": "PostgreSQL 행 추가", "postgres.row.delete": "PostgreSQL 행 삭제",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.schema.sync": "SQLite 스키마 변경 적용",
@@ -1825,76 +1837,6 @@ const auditOperationNames: Record<string, string> = {
   "sftp.edit.copy": "SFTP 편집본 새 이름 저장", "sftp.edit.copy.cancel": "SFTP 편집본 새 이름 저장",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
-
-function EditDialog({ request, onClose, onApplied }: { request: EditRequest; onClose: () => void; onApplied: (result: EditResult) => void }) {
-  const [session, setSession] = useState<EditSession | null>(null);
-  const [column, setColumn] = useState("");
-  const [kind, setKind] = useState("text");
-  const [value, setValue] = useState("");
-  const [preview, setPreview] = useState<EditPreview | null>(null);
-  const [confirmation, setConfirmation] = useState("");
-  const [busy, setBusy] = useState(true);
-  const [error, setError] = useState("");
-  const [needsRestart, setNeedsRestart] = useState(false);
-  const current = session?.fields.find(field => field.name === column);
-
-  useEffect(() => {
-    let live = true;
-    let token: string | null = null;
-    call<EditSession>("begin_cell_edit", { profileId: request.profile.id, table: request.object.name, keys: request.keys })
-      .then(result => {
-        token = result.token;
-        if (!live) { void call("cancel_cell_edit", { token }).catch(() => {}); return; }
-        setSession(result);
-        const first = result.fields.find(field => field.editable);
-        if (first) { setColumn(first.name); setKind(first.current.kind === "null" ? "text" : first.current.kind); setValue(first.current.kind === "null" ? "" : first.current.display); }
-      })
-      .catch(e => { if (live) setError(errorText(e)); })
-      .finally(() => { if (live) setBusy(false); });
-    return () => { live = false; if (token) void call("cancel_cell_edit", { token }).catch(() => {}); };
-  }, [request]);
-
-  function chooseColumn(name: string) {
-    const field = session?.fields.find(item => item.name === name);
-    setColumn(name); setPreview(null); setError("");
-    if (field) { setKind(field.current.kind === "null" ? "text" : field.current.kind); setValue(field.current.kind === "null" ? "" : field.current.display); }
-  }
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!session || busy || needsRestart) return;
-    if (preview && session.environment === "PROD" && confirmation !== "PROD") { setError("운영 환경을 확인하려면 PROD를 입력하세요."); return; }
-    setBusy(true); setError("");
-    try {
-      if (!preview) {
-        const next = await call<EditPreview>("preview_cell_edit", { token: session.token, column, input: { kind, value } });
-        setPreview(next);
-      } else {
-        const result = await call<EditResult>("apply_cell_edit", { token: session.token, productionConfirmation: confirmation });
-        onApplied(result);
-      }
-    } catch (e) {
-      setError(errorText(e));
-      if (preview) { setNeedsRestart(true); setPreview(null); }
-    } finally { setBusy(false); }
-  }
-
-  return <Dialog title="SQLite 셀 편집" onClose={onClose} busy={busy}><form onSubmit={submit} aria-busy={busy}>
-    <p className="confirm-copy">대상: <strong>{request.profile.name} · {request.object.name}</strong> <span className={`environment ${request.profile.environment.toLowerCase()}`}>{request.profile.environment}</span><br />{displayPath(request.profile.path)}</p>
-    {busy && !session && <p className="form-note" role="status">현재 행을 읽는 중…</p>}
-    {session && <><p className="form-note">기본 키: {session.keys.map(key => `${key.name} = ${key.value}`).join(", ")}</p><p className="form-note">현재 DB에서 다시 읽은 행입니다. 전체 행이 바뀌면 적용을 중단합니다. 한 번에 한 셀만 변경할 수 있으며 편집 세션은 {session.expires_seconds / 60}분 후 만료됩니다.</p>
-      {!needsRestart && <><label className="field">변경할 열<select value={column} disabled={busy || Boolean(preview)} onChange={event => chooseColumn(event.target.value)}>{session.fields.map(field => <option key={field.name} value={field.name} disabled={!field.editable}>{field.name}{field.editable ? "" : ` — ${field.reason}`}</option>)}</select></label>
-        {current && <div className="edit-current"><span>현재 값 · {current.current.kind}</span><pre>{current.current.kind === "null" ? "NULL" : current.current.display || "(빈 문자열)"}</pre></div>}
-        <label className="field">새 값의 형식<select value={kind} disabled={busy || Boolean(preview)} onChange={event => { setKind(event.target.value); setPreview(null); }}><option value="text">문자열</option><option value="integer">정수</option><option value="real">실수</option><option value="null">NULL</option></select></label>
-        {kind !== "null" && <label className="field">변경할 값<textarea className="edit-value" value={value} disabled={busy || Boolean(preview)} onChange={event => { setValue(event.target.value); setPreview(null); }} /></label>}
-      </>}
-      {preview && <div className="edit-preview"><strong>변경 미리보기 · 1행 / 1열</strong><div><span>이전 · {preview.before.kind}</span><pre>{preview.before.kind === "null" ? "NULL" : preview.before.display || "(빈 문자열)"}</pre></div><div><span>변경 · {preview.after.kind}</span><pre>{preview.after.kind === "null" ? "NULL" : preview.after.display || "(빈 문자열)"}</pre></div><p>제약 조건 위반이나 값 형식 변환이 발생하면 롤백합니다. 적용 후 자동 되돌리기는 제공되지 않으므로 필요하면 먼저 백업하세요.</p></div>}
-      {preview && session.environment === "PROD" && <label className="field">운영 환경 확인: PROD 입력<input value={confirmation} disabled={busy} autoComplete="off" onChange={event => setConfirmation(event.target.value)} /></label>}
-    </>}
-    {error && <p className="form-error" role="alert">{error}{needsRestart && " 닫은 뒤 행을 다시 조회하고 선택하세요."}</p>}
-    <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>닫기</button>{preview && !needsRestart && <button type="button" className="secondary" disabled={busy} onClick={() => { setPreview(null); setConfirmation(""); }}>다시 편집</button>}{session && !needsRestart && <button type="submit" className={preview ? "danger" : "primary"} disabled={busy}>{busy ? "처리 중…" : preview ? "변경 적용" : "변경 미리보기"}</button>}</div>
-  </form></Dialog>;
-}
 
 function AuditPanel({ onBack }: { onBack: () => void }) {
   const [cursors, setCursors] = useState<(number | null)[]>([null]);

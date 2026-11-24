@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
+export type GridEditExitGuard = (after: () => void) => void;
+
 export function Dialog({ title, children, onClose, busy, interceptEscape = false, className = "" }: {
   title: string;
   children: ReactNode;

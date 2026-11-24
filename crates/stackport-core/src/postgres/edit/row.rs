@@ -418,11 +418,13 @@ fn display_cell(value: Option<String>, truncated: bool) -> Cell {
             kind: "text",
             display,
             truncated,
+            lossy_text: false,
         },
         None => Cell {
             kind: "null",
             display: "NULL".into(),
             truncated: false,
+            lossy_text: false,
         },
     }
 }

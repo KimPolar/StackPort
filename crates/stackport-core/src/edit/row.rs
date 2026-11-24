@@ -149,7 +149,7 @@ impl Store {
             RowChange::Delete { keys } => {
                 ensure_delete_scope(&db, table)?;
                 let keys = Values(validate_keys(&details, &keys)?);
-                let snapshot = read_row(&db, table, &keys.0, None)?;
+                let snapshot = read_row(&db, table, &keys.0, &[])?;
                 let fields = snapshot
                     .fields
                     .into_iter()
@@ -376,7 +376,7 @@ fn apply(store: &Store, plan: &Plan) -> Result<Vec<RowChangeField>> {
         Action::Insert(values) => execute_insert(&tx, &details, &values.0)?,
         Action::Delete { keys, fingerprint } => {
             ensure_delete_scope(&tx, &plan.table)?;
-            let snapshot = read_row(&tx, &plan.table, &keys.0, None)?;
+            let snapshot = read_row(&tx, &plan.table, &keys.0, &[])?;
             if &snapshot.fingerprint != fingerprint {
                 return Err(
                     "미리보기 이후 행이 변경되어 삭제하지 않았습니다. 다시 조회하세요.".into(),

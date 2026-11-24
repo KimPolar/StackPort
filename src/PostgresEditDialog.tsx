@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Dialog } from "./Dialog";
+import { Dialog, type GridEditExitGuard } from "./Dialog";
 import type { PostgresCell } from "./PostgresSqlWorkspace";
 
 export type PostgresRowStamp = { tuple: string; version: string; keys: string[] };
@@ -15,7 +15,6 @@ type Outcome = { status: "applied"; affected_cells: number; audit_warning: boole
 type InputKind = "text" | "null" | "default";
 type Draft = { field: EditField; kind: InputKind; value: string };
 type Discard = { after?: () => void };
-export type PostgresEditExitGuard = (after: () => void) => void;
 const maxCells = 16;
 
 const fromField = (field: EditField): Draft => ({
@@ -35,7 +34,7 @@ export function PostgresEditDialog({ id, object, stamp, column, profile, unavail
   onClose: () => void;
   onApplied: (cells: number, auditWarning: boolean) => void;
   onUnknown: () => void;
-  onExitGuard: (guard: PostgresEditExitGuard | null) => void;
+  onExitGuard: (guard: GridEditExitGuard | null) => void;
 }) {
   const [session, setSession] = useState<EditSession | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
