@@ -46,6 +46,8 @@ import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { PostgresWorkspace, type PostgresProfile, type PostgresProfileAction, type PostgresConnection } from "./PostgresWorkspace";
+import { RedisProfileDialog, type RedisProfile, type RedisProfileAction } from "./RedisProfileDialog";
+import { RedisWorkspace } from "./RedisWorkspace";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -181,6 +183,11 @@ function App() {
   const [postgresId, setPostgresId] = useState("");
   const [postgresAction, setPostgresAction] = useState<PostgresProfileAction | null>(null);
   const postgresProfile = postgresProfiles.find(item => item.id === postgresId && item.project_id === projectId);
+  const [redisProfiles, setRedisProfiles] = useState<RedisProfile[]>([]);
+  const [redisId, setRedisId] = useState("");
+  const [redisAction, setRedisAction] = useState<RedisProfileAction | null>(null);
+  const redisProfile = redisProfiles.find(item => item.id === redisId && item.project_id === projectId);
+  const sqliteWorkspace = !postgresProfile && !redisProfile;
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
@@ -402,6 +409,7 @@ function App() {
     resetActiveQuery();
     objectGeneration.current++;
     setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null); setPostgresObjectRequest(null);
+    setRedisProfiles([]); setRedisId(""); setRedisAction(null);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -416,6 +424,7 @@ function App() {
       }).catch(e => { if (live) setError(errorText(e)); });
       call<SshProfile[]>("list_ssh_profiles", { projectId }).then(items => { if (live) setSshProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
       call<PostgresProfile[]>("list_postgres_profiles", { projectId }).then(items => { if (live) setPostgresProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      if (desktop) call<RedisProfile[]>("list_redis_profiles", { projectId }).then(items => { if (live) setRedisProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
   }, [projectId]);
@@ -803,6 +812,7 @@ function App() {
   function openObject(object: DatabaseObject, revealSchema = false) {
     setFavoriteObject(null);
     setPostgresId("");
+    setRedisId("");
     setEditReport(null);
     showTool("workspace");
     setSqlEditorOpen(false);
@@ -1071,6 +1081,7 @@ function App() {
     setFavoriteObject(null);
     setPostgresObjectRequest(null);
     setPostgresId("");
+    setRedisId("");
     setProfileId(id);
     showTool("workspace");
   }
@@ -1079,6 +1090,7 @@ function App() {
     setFavoriteObject(null);
     setPostgresObjectRequest(null);
     setPostgresId(id);
+    setRedisId("");
     setHistoryOpen(false);
     showTool("workspace");
   }
@@ -1100,6 +1112,25 @@ function App() {
       if (previous === postgresId) setPostgresId("");
     }
     setPostgresAction(null);
+  }
+
+  function selectRedisProfile(id: string) {
+    setFavoriteObject(null);
+    setPostgresObjectRequest(null);
+    setPostgresId("");
+    setRedisId(id);
+    setHistoryOpen(false);
+    showTool("workspace");
+  }
+
+  function saveRedisProfile(saved: RedisProfile | null) {
+    if (!redisAction) return;
+    const previous = redisAction.kind === "create" ? null : redisAction.profile.id;
+    setRedisProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
+      .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
+    if (redisAction.kind === "create" && saved) selectRedisProfile(saved.id);
+    if (!saved && previous === redisId) setRedisId("");
+    setRedisAction(null);
   }
 
   function openSavedSsh(item: SshProfile) {
@@ -1198,9 +1229,10 @@ function App() {
       commands.push(
         { id: "create:sqlite", title: "SQLite 연결 추가", group: "작업", Icon: Database, run: () => openModal("profile") },
         { id: "create:postgres", title: "PostgreSQL 연결 추가", group: "작업", Icon: Database, run: () => setPostgresAction({ kind: "create" }) },
+        { id: "create:redis", title: "Redis 연결 추가", group: "작업", Icon: Database, run: () => setRedisAction({ kind: "create" }) },
         { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
       );
-      if (desktop && !postgresProfile) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
+      if (desktop && sqliteWorkspace) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
     for (const item of projects) commands.push({
@@ -1215,20 +1247,24 @@ function App() {
       id: `postgres:${item.id}`, title: item.settings.name, group: "PostgreSQL 연결", detail: item.settings.environment,
       Icon: Database, run: () => selectPostgresProfile(item.id),
     });
+    for (const item of redisProfiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `redis:${item.id}`, title: item.settings.name, group: "Redis 연결", detail: `DB ${item.settings.database} · ${item.settings.environment}`,
+      Icon: Database, run: () => selectRedisProfile(item.id),
+    });
     for (const item of sshProfiles.filter(item => item.project_id === projectId)) commands.push({
       id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
       Icon: TerminalSquare, run: () => openSavedSsh(item),
     });
-    if (desktop && profile && !postgresProfile) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
+    if (desktop && profile && sqliteWorkspace) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
       keywords: "query history recent sql", Icon: History, run: openSqlHistory });
-    if (desktop && profile && !postgresProfile) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
+    if (desktop && profile && sqliteWorkspace) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
       keywords: "query builder join group select sql", Icon: Table2, run: openSqlBuilder });
-    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
+    if (desktop && profile && sqliteWorkspace) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
       keywords: "erd schema diagram foreign key 외래 키", Icon: Workflow, run: () => setDiagramProfile(profile.id) });
-    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
+    if (desktop && profile && sqliteWorkspace) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
       keywords: "schema data dictionary markdown html 구조 문서", Icon: FileDown,
       run: () => setSchemaDocumentRequest({ profileId: profile.id, object: selectedObject?.name ?? null }) });
-    if (desktop && profile && !postgresProfile) commands.push({ id: "open:schema-comparison", title: "SQLite 스키마 비교", group: "작업",
+    if (desktop && profile && sqliteWorkspace) commands.push({ id: "open:schema-comparison", title: "SQLite 스키마 비교", group: "작업",
       keywords: "schema compare diff 구조 차이", Icon: ArrowLeftRight, run: () => setSchemaComparisonSource(profile.id) });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
@@ -1265,6 +1301,7 @@ function App() {
       } else if (modal === "profile" && project) {
         const created = await call<Profile>("create_sqlite_profile", { projectId: project.id, name, path, environment });
         setPostgresId("");
+        setRedisId("");
         await reloadProfiles(project.id, created.id);
       } else if (modal === "deleteProject" && project) {
         await call("delete_project", { id: project.id });
@@ -1392,12 +1429,15 @@ function App() {
   </>;
 
   const databasePane = <div id="workspace-pane-workspace" className="main-content">
-    {restoreReport && !historyOpen && !postgresProfile && <div className="success-banner restore-result" role="status">
+    {restoreReport && !historyOpen && sqliteWorkspace && <div className="success-banner restore-result" role="status">
       <strong>SQLite 복원 완료 · 검증 통과</strong>
       <span>{displayPath(restoreReport.path)}</span>
       <span>{restoreCounts(restoreReport)} · 무결성 및 SHA-256 일치</span>
       <code>{restoreReport.sha256}</code>
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
+    </div>}
+    {redisProfile && <div hidden={historyOpen}>
+      <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile} />
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
@@ -1421,8 +1461,8 @@ function App() {
       }} />
     </div>}
     {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
-    !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite, PostgreSQL과 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
-    postgresProfile ? null :
+    !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite, PostgreSQL, Redis와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
+    !sqliteWorkspace ? null :
     !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
       <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
         <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span>
@@ -1752,11 +1792,12 @@ function App() {
         <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects} favorites={favorites}
           favoriteScope={favoriteScope} onFavoriteScope={setFavoriteScope}
           onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction}
-          sqlite={{ profiles, loadedId: profileId, active: !postgresProfile, objects, selected: postgresProfile ? undefined : selectedObject?.name,
+          sqlite={{ profiles, loadedId: profileId, active: sqliteWorkspace, objects, selected: sqliteWorkspace ? selectedObject?.name : undefined,
             loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
             add: () => openModal("profile"), restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
           postgres={{ profiles: postgresProfiles, activeId: postgresId, connection: postgresConnection,
             open: selectPostgresProfile, openObject: openPostgresObject, action: setPostgresAction }}
+          redis={{ profiles: redisProfiles, activeId: redisId, open: selectRedisProfile, action: setRedisAction }}
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
@@ -1911,6 +1952,7 @@ function App() {
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} initial={sshProfileDialog.initial}
       projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
     {postgresAction && project && <PostgresProfileDialog action={postgresAction} projectId={project.id} onClose={() => setPostgresAction(null)} onSaved={savePostgresProfile} />}
+    {redisAction && project && <RedisProfileDialog action={redisAction} projectId={project.id} onClose={() => setRedisAction(null)} onSaved={saveRedisProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
@@ -1980,6 +2022,7 @@ const auditOperationNames: Record<string, string> = {
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
+  "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.edit.row": "PostgreSQL 행 변경",
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",

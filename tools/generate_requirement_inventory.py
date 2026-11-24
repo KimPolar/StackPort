@@ -10,7 +10,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
-    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·SSH 연결 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
+    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·Redis·SSH 연결 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "탐색기에서 연결과 즐겨찾기·SQLite 객체 필터링, 연결된 PostgreSQL에 이름·스키마 객체 검색 제출 및 명령 팔레트 검색",
@@ -23,9 +23,9 @@ PARTIAL = {
     "SP-UI-019": "SQLite·PostgreSQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-015": "작업 공간의 라이트·다크·시스템 테마, 컴팩트 밀도, 분할·초안·터미널을 유지하는 집중 모드, 탐색기 펼치기·접기",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
-    "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL 호스트·포트·사용자·이름·환경 저장",
+    "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL·Redis 호스트·포트·사용자·이름·환경 저장과 Redis DB 번호·TLS 설정",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
-    "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL 연결 정의 생성·수정·삭제와 세션 열기·닫기",
+    "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기",
     "SP-CN-005": "선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
     "SP-CN-008": "Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력",
@@ -78,7 +78,7 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집",
+    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집, Redis 단독 서버 읽기 전용 어댑터",
     "SP-DB-004": "PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
     "SP-DB-005": "PostgreSQL TLS 인증서 검증과 점프 호스트를 지원하는 로컬 SSH 터널 경유",
     "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
@@ -162,6 +162,10 @@ PARTIAL = {
     "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인",
     "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수 표시, 통합 테스트로 행·복합 외래 키·롤백 확인",
     "SP-BK-017": "PostgreSQL 백업의 로컬 파일 저장 경로와 복원할 서버·새 DB를 각각 표시하고 복원 시 CREATEDB 권한 확인",
+    "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
+    "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
+    "SP-NS-011": "String·Hash·List·Set·Sorted Set·Stream의 읽기 전용 값 탐색과 바이너리 HEX 표시",
+    "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, 지원 키 타입의 읽기 명령 선택과 미지원 타입 표시",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
@@ -180,6 +184,7 @@ PARTIAL = {
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
+    "SP-AT-018": "실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN·여섯 타입과 바이너리 값 열람, 연결 단절 검증",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
@@ -211,7 +216,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         subset = PARTIAL.get(requirement_id, "")
         evidence = ""
         if subset:
-            if requirement_id in {"SP-BK-013", "SP-BK-014", "SP-AT-016"}:
+            if requirement_id.startswith("SP-NS-") or requirement_id == "SP-AT-018":
+                evidence = "crates/stackport-core/src/redis.rs; crates/stackport-core/src/redis/keys.rs; src/RedisWorkspace.tsx; tests/redis-smoke.cjs"
+            elif requirement_id in {"SP-BK-013", "SP-BK-014", "SP-AT-016"}:
                 evidence = "crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/"
             elif requirement_id in {"SP-BK-005", "SP-BK-011", "SP-BK-017"}:
                 evidence = "crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs"
@@ -445,5 +452,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx"
                 if requirement_id == "SP-BK-013":
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-DB-001"}:
+                evidence += "; src/RedisProfileDialog.tsx; crates/stackport-core/tests/redis_profiles.rs; tests/redis-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

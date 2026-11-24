@@ -10,6 +10,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
 
+탐색기의 **Redis 연결 추가**에서 Redis 6.2 이상과 호환되는 단독 서버의 호스트·포트, DB 번호, ACL 사용자와 환경을 프로젝트에 저장합니다. TLS는 시스템 신뢰 저장소와 선택한 PEM CA를 사용해 TLS 1.2 이상에서 호스트 이름과 인증서를 검증합니다. 일반 TCP도 연결 설정에서 명시적으로 선택할 수 있습니다. 연결마다 암호를 입력하며 `PROD` 연결에는 운영 환경 확인이 필요합니다. `INFO server`와 `INFO cluster`로 접속한 서버의 버전과 단독 구성을 확인합니다. DB 0 이외의 번호는 `SELECT` 권한이 필요합니다. 메타데이터 v14에서 Redis 프로필을 보관하며 프로젝트 복제 시 연결 설정을 복사합니다. [Redis 프로토콜](https://redis.io/docs/latest/develop/reference/protocol-spec/)
+
+**키 탐색**은 `SCAN`으로 서버 패턴과 타입 필터를 실행합니다. `COUNT 100`은 서버에 전달하는 탐색 힌트입니다. 비어 있는 페이지에도 다음 커서가 있을 수 있고, 조회 중 키가 바뀌면 결과에 반영될 수 있습니다. 역할에 해당 권한이 있으면 `DBSIZE`, `PTTL`, `MEMORY USAGE`로 DB 전체 키 수와 선택한 키의 만료 시간 및 메모리를 표시합니다. String은 512바이트 구간, List와 Sorted Set은 순서 범위, Hash와 Set은 커서, Stream은 메시지 ID로 값을 탐색합니다. 바이너리 키와 값은 HEX로 표시합니다. 코어는 고정 조회 명령만 보내며 응답 하나가 4 MiB 또는 8,192개 항목을 초과하면 연결을 닫습니다. Windows 통합 테스트는 실제 Redis 서버와 로컬 TLS 연결로 인증·DB 번호·타입별 읽기 및 단절 감지를 확인합니다. [Redis SCAN](https://redis.io/docs/latest/commands/scan/)
+
 탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.

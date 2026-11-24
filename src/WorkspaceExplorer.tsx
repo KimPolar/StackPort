@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive, ChevronDown, ChevronRight, Copy, Database, Ellipsis, FileDown, FileUp, FolderOpen,
-  Pencil, Plus, RefreshCw, RotateCcw, Search, Star, Table2, TerminalSquare, Trash2, X, type LucideIcon,
+  KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Search, Star, Table2, TerminalSquare, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import type { DatabaseObject } from "./SqlSchemaDetails";
 import type { PostgresProfile, PostgresProfileAction, PostgresConnection } from "./PostgresWorkspace";
+import type { RedisProfile, RedisProfileAction } from "./RedisProfileDialog";
 import type { PostgresSearchPage } from "./PostgresSearchDialog";
 import { postgresObjectLabels } from "./PostgresObjectStructure";
 import { PostgresPager } from "./PostgresPager";
@@ -38,6 +39,7 @@ type ExplorerProps = {
     profiles: PostgresProfile[]; activeId: string; connection: PostgresConnection | null;
     open: (id: string) => void; openObject: (object: PostgresFavorite) => void; action: (action: PostgresProfileAction) => void;
   };
+  redis: { profiles: RedisProfile[]; activeId: string; open: (id: string) => void; action: (action: RedisProfileAction) => void };
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
@@ -113,7 +115,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
+  sqlite, postgres, redis, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -150,7 +152,9 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     ? postgresProfiles.filter(item => item === activePostgres || postgresMatches.includes(item)) : postgresMatches;
   const sshMatches = sshProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.name, item.host, item.port, item.environment, "SSH 서버"));
-  const connections = sqliteMatches.length + postgresMatches.length + sshMatches.length;
+  const redisMatches = redis.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스"));
+  const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + sshMatches.length;
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
   function favoriteEntry(target: FavoriteTarget) {
@@ -330,6 +334,16 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
             </div>}
           </div>)}
         </ExplorerGroup>
+        {desktop && <ExplorerGroup id="explorer-redis" name="Redis" Icon={KeyRound} count={redisMatches.length} filtering={filtering}
+          actions={<ExplorerButton label="Redis 연결 추가" Icon={Plus} onClick={() => redis.action({ kind: "create" })} />}>
+          {!redisMatches.length && <p className="sidebar-empty">저장된 Redis 연결이 없습니다.</p>}
+          {redisMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
+            detail={`${networkAddressText(item.settings)} / DB ${item.settings.database}`} label={`Redis ${item.settings.name} 열기`}
+            Icon={KeyRound} selected={item.id === redis.activeId} onOpen={() => redis.open(item.id)}>
+            <ExplorerButton label={`${item.settings.name} Redis 연결 수정`} Icon={Pencil} onClick={() => redis.action({ kind: "edit", profile: item })} />
+            <ExplorerButton label={`${item.settings.name} Redis 연결 삭제`} Icon={Trash2} onClick={() => redis.action({ kind: "delete", profile: item })} />
+          </ExplorerProfile>)}
+        </ExplorerGroup>}
         <ExplorerGroup id="explorer-ssh" name="SSH" Icon={TerminalSquare} count={sshMatches.length} filtering={filtering} actions={<>
           <ExplorerButton label="SSH 연결 가져오기" Icon={FileUp} onClick={() => ssh.action("import")} />
           <ExplorerButton label="SSH 연결 내보내기" Icon={FileDown} onClick={() => ssh.action("export")}

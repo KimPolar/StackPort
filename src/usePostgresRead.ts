@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-export function usePostgresRead<T>(command: string, args: Record<string, unknown> | null, revision = 0, retainWhileRefreshing = false) {
+export function useNativeRead<T>(command: string, args: Record<string, unknown> | null, revision = 0, retainWhileRefreshing = false) {
   const [result, setResult] = useState<{ args: Record<string, unknown>; revision: number; data: T | null; error: string } | null>(null);
   useEffect(() => {
     if (!args) return;
@@ -14,3 +14,5 @@ export function usePostgresRead<T>(command: string, args: Record<string, unknown
   if (retainWhileRefreshing && result?.args === args && result.data !== null) return { ...result, loading: true };
   return { data: null, error: "", loading: args !== null };
 }
+
+export { useNativeRead as usePostgresRead };
