@@ -285,7 +285,11 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-pane .panel-heading span { color: #526a5f; font-size: 11px; }
 .files-empty { display: grid; flex: 1; place-items: center; padding: 14px; color: #526a5f; font-size: 12px; text-align: center; }
 .files-empty p { margin: 0; }
-.files-path { display: flex; align-items: center; gap: 8px; padding: 9px 12px 4px; }
+.files-path { display: flex; flex-wrap: wrap; align-items: center; column-gap: 7px; row-gap: 4px; padding: 9px 12px 4px; }
+.files-path-history, .files-path-address { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.files-path-history { flex-shrink: 0; }
+.files-path-history .icon-button { width: 26px; height: 28px; }
+.files-path-address { flex: 1 1 155px; gap: 7px; }
 .files-path input { flex: 1; min-width: 0; padding: 6px; border: 1px solid #d6e4db; border-radius: 4px; }
 .files-check { display: flex; align-items: center; gap: 6px; margin: 8px 12px; font-size: 12px; color: #526a5f; }
 .files-list-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 5px 12px 8px; }

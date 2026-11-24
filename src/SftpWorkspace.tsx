@@ -1,6 +1,6 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDown, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
@@ -14,6 +14,8 @@ type Directory = { path: string; location: string; parent: string | null; entrie
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
 type BrowsePath = { kind: "text" | "token"; value: string };
+type DirectoryLocation = Pick<Directory, "path" | "location">;
+type DirectoryHistory = { visits: DirectoryLocation[]; index: number };
 type FileSort = { key: "name" | "size" | "modified"; direction: "ascending" | "descending" };
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
@@ -316,6 +318,10 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
+function directoryLocation({ path, location }: Directory): DirectoryLocation {
+  return { path, location };
+}
+
 function compareEntries(left: Entry, right: Entry, { key, direction }: FileSort) {
   if ((left.kind === "directory") !== (right.kind === "directory")) return left.kind === "directory" ? -1 : 1;
   const byName = names.compare(left.name, right.name) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
@@ -340,6 +346,9 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
   const [value, setValue] = useState(initial ? displayPath(initial.path) : "");
+  const [history, setHistory] = useState<DirectoryHistory>(() => ({
+    visits: initial ? [directoryLocation(initial)] : [], index: initial ? 0 : -1,
+  }));
   const [hidden, setHidden] = useState(false);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<FileSort>({ key: "name", direction: "ascending" });
@@ -347,6 +356,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   const [error, setError] = useState("");
   const pending = useRef(false);
   const filterInput = useRef<HTMLInputElement>(null);
+  const pathInput = useRef<HTMLInputElement>(null);
   const { shown, available } = useMemo(() => {
     const entries = directory?.entries.filter(entry => hidden || !entry.hidden) ?? [];
     const query = filter.normalize("NFC").toLocaleLowerCase("ko-KR");
@@ -355,7 +365,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   }, [directory, filter, hidden, sort]);
   const actionLabel = action?.kind === "upload" ? "업로드" : "다운로드";
 
-  async function navigate(path: BrowsePath | null) {
+  async function navigate(path: BrowsePath | null, historyIndex?: number) {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
@@ -368,6 +378,15 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
       }
       const next = await load(path);
       if (next.location !== directory?.location) setFilter("");
+      setHistory(current => {
+        if (historyIndex !== undefined) {
+          const visits = current.visits.slice();
+          visits[historyIndex] = directoryLocation(next);
+          return { visits, index: historyIndex };
+        }
+        if (current.visits[current.index]?.location === next.location) return current;
+        return { visits: [...current.visits.slice(0, current.index + 1), directoryLocation(next)], index: current.index + 1 };
+      });
       setDirectory(next);
       setValue(displayPath(next.path));
       onFolder?.(next);
@@ -389,8 +408,26 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
     void navigate(directory && value === displayPath(directory.path) ? { kind: "token", value: directory.location } : { kind: "text", value });
   }
 
+  function travel(offset: -1 | 1) {
+    const index = history.index + offset;
+    const target = history.visits[index];
+    if (target) void navigate({ kind: "token", value: target.location }, index);
+  }
+
+  const previous = history.visits[history.index - 1];
+  const next = history.visits[history.index + 1];
   const PaneIcon = chooseFolder ? HardDrive : Server;
-  return <section className="results-card files-pane" id={id} data-active={active} aria-label={title}>
+  return <section className="results-card files-pane" id={id} data-active={active} aria-label={title} onKeyDown={event => {
+    if (event.defaultPrevented || event.nativeEvent.isComposing) return;
+    if (event.altKey && !event.ctrlKey && !event.metaKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      travel(event.key === "ArrowLeft" ? -1 : 1);
+    } else if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "l") {
+      event.preventDefault();
+      pathInput.current?.focus();
+      pathInput.current?.select();
+    }
+  }}>
     <div className="panel-heading"><div><PaneIcon size={15} aria-hidden /><strong>{title}</strong>
       {directory && <span aria-live="polite">{numbers.format(shown.length)}{filter ? ` / ${numbers.format(available)}` : ""}개 항목</span>}</div>
       {chooseFolder && <button type="button" className="secondary small" disabled={busy} onClick={() => void navigate(null)}>폴더 선택</button>}
@@ -398,12 +435,23 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
         onClick={() => onNameAction({ kind: "create", parent: directory })}><FolderPlus size={14} /> 새 폴더</button>}
     </div>
     <form className="files-path" onSubmit={go}>
-      <button type="button" className="icon-button" aria-label={`${title} 상위 폴더`} disabled={busy || !directory?.parent}
-        onClick={() => directory?.parent && void navigate({ kind: "token", value: directory.parent })}><ArrowUp size={15} /></button>
-      <input required aria-label={`${title} 경로`} value={value} maxLength={4096} disabled={busy} onChange={event => setValue(event.target.value)} />
-      <button type="submit" className="secondary small" disabled={busy}>이동</button>
-      <button type="button" className="icon-button" aria-label={`${title} 새로고침`} disabled={busy || !directory}
-        onClick={() => directory && void navigate({ kind: "token", value: directory.location })}><RefreshCw size={14} /></button>
+      <div className="files-path-history">
+        <button type="button" className="icon-button" aria-label={`${title} 뒤로`} aria-keyshortcuts="Alt+ArrowLeft"
+          title={previous ? displayPath(previous.path) : "뒤로"} disabled={busy || !previous}
+          onClick={() => travel(-1)}><ArrowLeft size={15} aria-hidden /></button>
+        <button type="button" className="icon-button" aria-label={`${title} 앞으로`} aria-keyshortcuts="Alt+ArrowRight"
+          title={next ? displayPath(next.path) : "앞으로"} disabled={busy || !next}
+          onClick={() => travel(1)}><ArrowRight size={15} aria-hidden /></button>
+        <button type="button" className="icon-button" aria-label={`${title} 상위 폴더`} title="상위 폴더" disabled={busy || !directory?.parent}
+          onClick={() => directory?.parent && void navigate({ kind: "token", value: directory.parent })}><ArrowUp size={15} aria-hidden /></button>
+      </div>
+      <div className="files-path-address">
+        <input ref={pathInput} required aria-label={`${title} 경로`} aria-keyshortcuts="Control+L" value={value} maxLength={4096} disabled={busy}
+          onChange={event => setValue(event.target.value)} />
+        <button type="submit" className="secondary small" disabled={busy}>이동</button>
+        <button type="button" className="icon-button" aria-label={`${title} 새로고침`} title="새로고침" disabled={busy || !directory}
+          onClick={() => directory && void navigate({ kind: "token", value: directory.location })}><RefreshCw size={14} aria-hidden /></button>
+      </div>
     </form>
     {directory && <div className="files-list-controls">
       <div className="files-filter">

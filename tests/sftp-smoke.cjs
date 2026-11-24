@@ -85,7 +85,7 @@ function sftpChannel(channel, uploads) {
   }
   channel.on('REALPATH', (id, requested) => {
     const resolved = requested === '.' ? '/home/stackport' : uploads.aliases.get(requested) ?? requested;
-    if (directories.has(resolved)) channel.name(id, [directory(resolved)]);
+    if (directories.has(resolved) && !uploads.unavailableDirectories.has(resolved)) channel.name(id, [directory(resolved)]);
     else channel.status(id, code.NO_SUCH_FILE);
   });
   channel.on('OPENDIR', (id, requested) => {
@@ -269,7 +269,7 @@ function makeHost() {
 async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
-  const uploads = { files: new Map(), behavior: '', aliases: new Map(), moves: 0, moveCollision: false,
+  const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), moves: 0, moveCollision: false,
     deletions: 0, edits: 0, editRace: null, advertiseEdit: true };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
@@ -373,7 +373,13 @@ async function main() {
     await confirm.fill('PROD');
     await connect.click();
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
-    assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), '/home/stackport');
+    const remotePath = remote.getByLabel('원격 파일 경로', { exact: true });
+    const remoteBack = remote.getByRole('button', { name: '원격 파일 뒤로', exact: true });
+    const remoteForward = remote.getByRole('button', { name: '원격 파일 앞으로', exact: true });
+    const remoteFilter = remote.getByRole('searchbox', { name: '원격 파일 이름으로 찾기' });
+    assert.equal(await remotePath.inputValue(), '/home/stackport');
+    assert.equal(await remoteBack.isDisabled(), true);
+    assert.equal(await remoteForward.isDisabled(), true);
     await remote.getByRole('row').filter({ has: page.getByRole('cell', { name: '대시보드.txt', exact: true }) })
       .getByText('0640 · 42/9', { exact: true }).waitFor();
     assert.equal(await remote.getByText('.숨김', { exact: true }).count(), 0);
@@ -381,9 +387,31 @@ async function main() {
     await remote.getByText('.숨김', { exact: true }).waitFor();
     await remote.getByRole('button', { name: '문서', exact: true }).click();
     await remote.getByText('보고서.txt', { exact: true }).waitFor();
+    await remoteBack.click();
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    assert.equal(await remoteBack.isDisabled(), true);
+    await remoteForward.click();
+    await remote.getByText('보고서.txt', { exact: true }).waitFor();
     await remote.getByRole('button', { name: '원격 파일 상위 폴더' }).click();
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
-    await remote.getByLabel('원격 파일 경로').fill('/missing');
+    server.uploads.unavailableDirectories.add('/home/stackport/문서');
+    await remoteBack.click();
+    await remote.getByRole('alert').getByText(/경로가 없거나/).waitFor();
+    assert.equal(await remotePath.inputValue(), '/home/stackport');
+    assert.equal(await remoteForward.isDisabled(), true);
+    server.uploads.unavailableDirectories.clear();
+    await remoteFilter.press('Alt+ArrowLeft');
+    await remote.getByText('보고서.txt', { exact: true }).waitFor();
+    assert.equal(await remoteForward.isEnabled(), true);
+    await remoteFilter.press('Control+l');
+    assert.equal(await remotePath.evaluate(input => input === document.activeElement && input.selectionStart === 0 && input.selectionEnd === input.value.length), true);
+    await remotePath.fill('/home');
+    await remotePath.press('Enter');
+    await remote.getByRole('button', { name: 'stackport', exact: true }).waitFor();
+    assert.equal(await remoteForward.isDisabled(), true);
+    await remote.getByRole('button', { name: 'stackport', exact: true }).click();
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    await remotePath.fill('/missing');
     await remote.getByRole('button', { name: '이동', exact: true }).click();
     await remote.getByRole('alert').getByText(/경로가 없거나/).waitFor();
     await remote.getByRole('button', { name: '원격 파일 새로고침' }).click();
@@ -395,8 +423,17 @@ async function main() {
     await localPane.getByLabel('로컬 파일 경로').fill(local);
     await localPane.getByRole('button', { name: '이동', exact: true }).click();
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+    const localBack = localPane.getByRole('button', { name: '로컬 파일 뒤로', exact: true });
+    const localForward = localPane.getByRole('button', { name: '로컬 파일 앞으로', exact: true });
+    assert.equal(await localBack.isDisabled(), true);
     await localPane.getByRole('button', { name: '하위 폴더' }).click();
     await localPane.getByText('표시할 파일이 없습니다.').waitFor();
+    await localBack.click();
+    await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+    assert.equal(await localBack.isDisabled(), true);
+    await localForward.click();
+    await localPane.getByText('표시할 파일이 없습니다.').waitFor();
+    assert.equal(await remotePath.inputValue(), '/home/stackport');
     await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
 
@@ -404,7 +441,6 @@ async function main() {
     const column = (pane, name) => pane.getByRole('columnheader', { name, exact: true });
     const sort = (pane, name) => column(pane, name).getByRole('button', { name, exact: true }).click();
     const localFilter = localPane.getByRole('searchbox', { name: '로컬 파일 이름으로 찾기' });
-    const remoteFilter = remote.getByRole('searchbox', { name: '원격 파일 이름으로 찾기' });
     await localFilter.fill('SORT-');
     assert.deepEqual(await fileNames(localPane), ['sort-2.txt', 'sort-10.txt']);
     assert.equal(await column(localPane, '이름').getAttribute('aria-sort'), 'ascending');
@@ -451,6 +487,10 @@ async function main() {
     assert.equal(await localFilter.inputValue(), 'SORT-');
     await localFilter.press('Escape');
     await page.getByRole('button', { name: '원격 파일 보기', exact: true }).press('Enter');
+    await remoteBack.click();
+    await remote.getByRole('button', { name: 'stackport', exact: true }).waitFor();
+    await remoteForward.click();
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await verifyPreviews(page, remote, localPane);

@@ -86,7 +86,7 @@ SP-RG-016,직렬 터미널,"HEX/텍스트 보기, CR/LF 변환, 바이트 송수
 SP-RG-017,장비 연결 충돌,포트 사용 중·장치 제거·권한 부족·드라이버 오류를 구분해서 표시.,not_started,,
 SP-RG-018,프로토콜별 기능 가용성,OS·하드웨어·권한·라이선스에 따라 미지원 기능을 숨기지 말고 이유를 표시.,partial,Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시,crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/
 SP-FL-001,자동 파일 탐색,SSH 접속 직후 허용된 SFTP/SCP 브라우저를 같은 프로젝트에 자동 표시(설정 가능).,partial,현재 프로젝트의 저장된 SSH 연결과 동일한 호스트 키 저장소로 SFTP 탐색 시작,crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
-SP-FL-002,이중 패널 탐색,"로컬·원격·원격 간 디렉터리 트리, 파일 목록, 경로 이동, 탭, 새로고침.",partial,"로컬·SFTP 이중 패널, 이름 검색과 독립 정렬, 경로·하위/상위 폴더 이동과 새로고침, 좁은 창에서 패널 전환",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
+SP-FL-002,이중 패널 탐색,"로컬·원격·원격 간 디렉터리 트리, 파일 목록, 경로 이동, 탭, 새로고침.",partial,"로컬·SFTP 이중 패널, 이름 검색과 독립 정렬·방문 기록, 경로·상위/하위 폴더 이동과 새로고침, 좁은 창에서 패널 전환",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-003,파일 작업,"생성, 읽기, 이름 변경, 이동, 복사, 삭제, 폴더 생성, 다중 선택, 드래그앤드롭.",partial,"SFTP 원격 폴더 생성, 일반 파일·폴더 이름 변경·이동, 일반 파일 복사와 단일 파일·빈 폴더 삭제",crates/stackport-core/src/sftp/mutation.rs; crates/stackport-core/src/sftp/copy.rs; crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-004,프로토콜,"SFTP, SCP, FTP(Active/Passive), FTPS(명시적/암시적·지원 범위), rsync 기반 동기화.",partial,"확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/
 SP-FL-005,FTP 전송 설정,"제어/데이터 채널 TLS 옵션, 바이너리/ASCII 모드, 인코딩, 프록시, 보안 경고.",not_started,,
