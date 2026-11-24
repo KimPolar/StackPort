@@ -19,7 +19,7 @@ use super::{
     PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
-    edit::{RowChangePreview, RowChangeSession},
+    edit::{RowChangePreview, RowChangeSession, RowPastePreview},
     insert_audit, quote_identifier,
     ssh_tunnel::DatabaseTunnel,
     table_query::bounded_filter_text,
@@ -161,6 +161,7 @@ pub struct PostgresPage {
     value_rows: Option<Vec<PostgresValueRow>>,
     edit_reason: Option<&'static str>,
     row_insert: bool,
+    row_paste: bool,
     row_delete: bool,
     row_delete_reason: Option<&'static str>,
 }
@@ -945,13 +946,57 @@ impl PostgresManager {
         approval: &str,
         confirmation: &str,
     ) -> Result<row_edit::PostgresRowChangeOutcome> {
+        self.apply_row_plan(id, token, approval, confirmation, false)
+            .await
+    }
+
+    pub async fn preview_row_paste(
+        &self,
+        id: &str,
+        token: &str,
+        columns: Vec<String>,
+        rows: Vec<Vec<PostgresCellChange>>,
+    ) -> Result<RowPastePreview> {
+        let session = self.edit_session(id)?;
+        let mut pending = session.row_edit.lock().await;
+        let token = edit_token(token)?;
+        checked_row_change(&mut pending, token)?.clear_paste_preview()?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let plan = checked_row_change(&mut pending, token)?;
+            row_edit::paste::preview(&mut client, plan, columns, rows).await
+        })
+        .await
+        .map_err(|_| "붙여넣기 미리보기 시간이 초과되었습니다.")?
+    }
+
+    pub async fn apply_row_paste(
+        &self,
+        id: &str,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+    ) -> Result<row_edit::PostgresRowChangeOutcome> {
+        self.apply_row_plan(id, token, approval, confirmation, true)
+            .await
+    }
+
+    async fn apply_row_plan(
+        &self,
+        id: &str,
+        token: &str,
+        approval: &str,
+        confirmation: &str,
+        paste: bool,
+    ) -> Result<row_edit::PostgresRowChangeOutcome> {
         let session = self.edit_session(id)?;
         let token = edit_token(token)?;
         if session.profile.settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
         let mut pending = session.row_edit.lock().await;
-        if !checked_row_change(&mut pending, token)?.approved(edit_token(approval)?) {
+        let plan = checked_row_change(&mut pending, token)?;
+        if plan.is_paste() != paste || !plan.approved(edit_token(approval)?) {
             return Err("현재 행 작업을 다시 미리 보세요.".into());
         }
         let mut client = timeout(QUERY_TIMEOUT, session.client.lock())
@@ -1077,6 +1122,9 @@ async fn browse(
     let row_insert = edit_table
         .as_ref()
         .is_some_and(edit::EditTable::allow_insert);
+    let row_paste = edit_table
+        .as_ref()
+        .is_some_and(edit::EditTable::allow_paste);
     let row_delete = edit_table
         .as_ref()
         .is_some_and(edit::EditTable::allow_delete);
@@ -1238,6 +1286,7 @@ async fn browse(
         value_rows,
         edit_reason,
         row_insert,
+        row_paste,
         row_delete,
         row_delete_reason,
     })

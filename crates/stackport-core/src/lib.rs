@@ -938,10 +938,10 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "sqlite-row-change-prod-confirmed"
         }
         "sqlite.row.insert" | "sqlite.row.delete" | "sqlite.row.paste" => "sqlite-row-change-confirmed",
-        "postgres.row.insert" | "postgres.row.delete" if record.environment == Some("PROD") => {
+        "postgres.row.insert" | "postgres.row.delete" | "postgres.row.paste" if record.environment == Some("PROD") => {
             "postgres-row-change-prod-confirmed"
         }
-        "postgres.row.insert" | "postgres.row.delete" => "postgres-row-change-confirmed",
+        "postgres.row.insert" | "postgres.row.delete" | "postgres.row.paste" => "postgres-row-change-confirmed",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

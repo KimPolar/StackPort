@@ -8,7 +8,7 @@ use super::{
 use crate::{
     edit::{
         InsertColumn, RowChangeField, RowChangePreview, RowChangeResult, RowChangeSession,
-        RowChangeValue,
+        RowChangeValue, RowPasteResult,
     },
     quote_identifier as quote, Cell,
 };
@@ -16,10 +16,13 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, time::Instant};
 use tokio::time::timeout;
 
+pub(in crate::postgres) mod paste;
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PostgresRowChange {
     Insert,
+    Paste,
     Delete { stamp: PostgresRowStamp },
 }
 
@@ -27,6 +30,7 @@ pub enum PostgresRowChange {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum PostgresRowChangeOutcome {
     Applied { result: RowChangeResult },
+    Pasted { result: RowPasteResult },
     Unknown,
 }
 
@@ -38,6 +42,7 @@ struct FieldChange {
 
 enum Action {
     Insert(Vec<FieldChange>),
+    Paste(Option<paste::PasteRows>),
     Delete(PostgresRowStamp),
 }
 
@@ -61,6 +66,19 @@ impl Plan {
         self.approval == Some(approval)
     }
 
+    pub(in crate::postgres) fn is_paste(&self) -> bool {
+        matches!(self.action, Action::Paste(_))
+    }
+
+    pub(in crate::postgres) fn clear_paste_preview(&mut self) -> Result<()> {
+        if !self.is_paste() {
+            return Err("붙여넣기 작업을 다시 여세요.".into());
+        }
+        self.approval = None;
+        self.action = Action::Paste(None);
+        Ok(())
+    }
+
     pub(in crate::postgres) fn clear_insert_preview(&mut self) -> Result<()> {
         if !matches!(self.action, Action::Insert(_)) {
             return Err("행 추가 세션을 다시 여세요.".into());
@@ -80,7 +98,7 @@ impl Plan {
             return Err("테이블 구조가 변경되었습니다. 다시 조회하세요.".into());
         }
         match self.action {
-            Action::Insert(_) => check_insert(&current),
+            Action::Insert(_) | Action::Paste(_) => check_insert(&current),
             Action::Delete(_) => check_delete(&current),
         }
     }
@@ -96,8 +114,11 @@ pub(in crate::postgres) async fn begin(
     let table = format!("{}.{}", quote(&relation.schema), quote(&relation.name));
     let edit = access(&tx, object, relation.kind).await?.allowed()?;
     let (action, columns, preview) = match change {
-        PostgresRowChange::Insert => {
+        PostgresRowChange::Insert | PostgresRowChange::Paste => {
             check_insert(&edit)?;
+            if matches!(change, PostgresRowChange::Paste) && !edit.allow_paste() {
+                return Err("이 테이블에는 붙여넣을 수 있는 대상 열이 없습니다.".into());
+            }
             let columns = edit
                 .shape
                 .iter()
@@ -111,7 +132,12 @@ pub(in crate::postgres) async fn begin(
                     editable: column.insertable(),
                 })
                 .collect();
-            (Action::Insert(Vec::new()), columns, None)
+            let action = if matches!(change, PostgresRowChange::Paste) {
+                Action::Paste(None)
+            } else {
+                Action::Insert(Vec::new())
+            };
+            (action, columns, None)
         }
         PostgresRowChange::Delete { stamp } => {
             check_delete(&edit)?;
@@ -250,9 +276,11 @@ pub(in crate::postgres) async fn apply(
     profile: &PostgresProfile,
     plan: Plan,
 ) -> Result<PostgresRowChangeOutcome> {
-    let operation = match plan.action {
-        Action::Insert(_) => "postgres.row.insert",
-        Action::Delete(_) => "postgres.row.delete",
+    let (operation, count) = match &plan.action {
+        Action::Insert(_) => ("postgres.row.insert", 1),
+        Action::Delete(_) => ("postgres.row.delete", 1),
+        Action::Paste(Some(batch)) => ("postgres.row.paste", batch.count()),
+        Action::Paste(None) => return Err("붙여넣을 행을 먼저 미리 보세요.".into()),
     };
     let record = |status| {
         audit(
@@ -262,6 +290,7 @@ pub(in crate::postgres) async fn apply(
             operation,
             Some(&plan.table),
             status,
+            count,
         )
     };
     record("started").await?;
@@ -278,12 +307,21 @@ pub(in crate::postgres) async fn apply(
     match commit(tx).await {
         Ok(true) => {
             let audit_warning = record("succeeded").await.err();
-            Ok(PostgresRowChangeOutcome::Applied {
-                result: RowChangeResult {
-                    fields,
-                    audit_warning,
-                },
-            })
+            if plan.is_paste() {
+                Ok(PostgresRowChangeOutcome::Pasted {
+                    result: RowPasteResult {
+                        rows: count,
+                        audit_warning,
+                    },
+                })
+            } else {
+                Ok(PostgresRowChangeOutcome::Applied {
+                    result: RowChangeResult {
+                        fields,
+                        audit_warning,
+                    },
+                })
+            }
         }
         Ok(false) => {
             let _ = record("unknown").await;
@@ -291,7 +329,11 @@ pub(in crate::postgres) async fn apply(
         }
         Err(error) => {
             let _ = record("failed").await;
-            Err(error)
+            if plan.is_paste() {
+                Err(format!("붙여넣기 전체를 롤백했습니다. {error}"))
+            } else {
+                Err(error)
+            }
         }
     }
 }
@@ -316,6 +358,13 @@ async fn write<'a>(
     plan.recheck(&tx).await?;
     let fields = match &plan.action {
         Action::Insert(changes) => execute_insert(&tx, plan, changes).await?,
+        Action::Paste(Some(batch)) => {
+            paste::apply(&tx, &plan.table, batch)
+                .await
+                .map_err(|error| format!("붙여넣기 전체를 롤백했습니다. {error}"))?;
+            Vec::new()
+        }
+        Action::Paste(None) => return Err("붙여넣을 행을 먼저 미리 보세요.".into()),
         Action::Delete(stamp) => {
             let mut values = stamp.values();
             let predicate = key_predicate(plan.object, &plan.key);

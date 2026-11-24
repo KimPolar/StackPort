@@ -114,7 +114,7 @@ async function startPostgres(preloadStats = true) {
     'CREATE POLICY edit_allowed ON report."edit demo" FOR UPDATE TO fixture_reader USING ("tenant key" = 1);',
     'GRANT SELECT, UPDATE ON report."edit demo" TO fixture_reader;',
     'CREATE TABLE report."row actions" (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "row label" text NOT NULL UNIQUE, ' +
-      "empty_text text DEFAULT 'default text', optional text DEFAULT 'not null', amount numeric(12,2) DEFAULT 7, due date DEFAULT DATE '2026-01-02');",
+      "empty_text text DEFAULT 'default text', optional text DEFAULT 'not null', amount numeric(30,2) DEFAULT 7, due date DEFAULT DATE '2026-01-02', observed timestamptz);",
     'ALTER TABLE report."row actions" ENABLE ROW LEVEL SECURITY;',
     'CREATE POLICY row_action_read ON report."row actions" FOR SELECT TO fixture_reader USING (true);',
     'CREATE POLICY row_action_insert ON report."row actions" FOR INSERT TO fixture_reader WITH CHECK ("row label" <> \'deny\');',
@@ -122,6 +122,8 @@ async function startPostgres(preloadStats = true) {
     'GRANT SELECT, INSERT, DELETE ON report."row actions" TO fixture_reader;',
     "CREATE TABLE report.row_guard (id integer PRIMARY KEY, label text); INSERT INTO report.row_guard VALUES (1, 'before');",
     'GRANT SELECT, UPDATE, DELETE ON report.row_guard TO fixture_reader;',
+    'CREATE TABLE report.paste_refs (id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, parent_id integer NOT NULL REFERENCES report.row_guard(id) DEFERRABLE INITIALLY DEFERRED);',
+    'GRANT SELECT, INSERT ON report.paste_refs TO fixture_reader;',
     'CREATE TABLE report.row_cascade (id integer PRIMARY KEY); INSERT INTO report.row_cascade VALUES (1);',
     'CREATE TABLE report.row_cascade_child (parent integer REFERENCES report.row_cascade(id) ON DELETE CASCADE);',
     'GRANT SELECT, DELETE ON report.row_cascade TO fixture_reader;',
@@ -1213,6 +1215,47 @@ async function verify(browser, fixture, gateway, jump) {
   await page.getByText('행 1개 삭제 완료', { exact: true }).waitFor();
   await data.getByText('화면 추가 행', { exact: true }).waitFor({ state: 'detached' });
 
+  const pasteRows = page.getByRole('button', { name: '행 붙여넣기', exact: true });
+  const pasteDialog = page.getByRole('dialog', { name: 'PostgreSQL 행 붙여넣기', exact: true });
+  const pasteText = pasteDialog.getByLabel('붙여넣을 범위', { exact: true });
+  const mapPaste = pasteDialog.getByRole('button', { name: '열 매핑', exact: true });
+  const previewPaste = pasteDialog.getByRole('button', { name: '붙여넣기 미리보기', exact: true });
+  const applyPaste = pasteDialog.getByRole('button', { name: '붙여넣기 적용', exact: true });
+  await pasteRows.click();
+  await pasteText.fill('이름\tempty_text\toptional\tamount\n"테스트\t붙여넣기"\t\t\t9007199254740993.125\n다음 붙여넣기\t\t\t\n');
+  await pasteDialog.getByLabel('첫 행에 열 이름이 있음').check();
+  await mapPaste.click();
+  await pasteDialog.getByLabel('원본 열 1 대상', { exact: true }).selectOption('column:row label');
+  await pasteDialog.getByLabel('원본 열 3 빈 셀', { exact: true }).selectOption('null');
+  await previewPaste.click();
+  const pasteTable = pasteDialog.getByRole('table', { name: '붙여넣기 미리보기', exact: true });
+  await pasteTable.getByText('9007199254740993.13', { exact: true }).waitFor();
+  await pasteTable.getByText('(빈 문자열)', { exact: true }).first().waitFor();
+  await pasteTable.getByText('NULL', { exact: true }).first().waitFor();
+  await pasteTable.getByText('DB 기본값', { exact: true }).waitFor();
+  await applyPaste.click();
+  await pasteDialog.getByRole('alert').getByText(/PROD를 입력/).waitFor();
+  await pasteDialog.getByLabel('운영 환경 확인 · PROD 입력').fill('PROD');
+  await applyPaste.click();
+  await pasteDialog.waitFor({ state: 'detached' });
+  await page.getByText('행 2개 붙여넣기 완료', { exact: true }).waitFor();
+  await data.getByText('9007199254740993.13', { exact: true }).waitFor();
+  await data.getByRole('row').filter({ hasText: '다음 붙여넣기' }).getByText('7.00', { exact: true }).waitFor();
+  await pasteRows.click();
+  await pasteText.fill('남으면 안 되는 행\n다음 붙여넣기');
+  await mapPaste.click();
+  await previewPaste.click();
+  await pasteTable.getByText('남으면 안 되는 행', { exact: true }).waitFor();
+  await pasteDialog.getByLabel('운영 환경 확인 · PROD 입력').fill('PROD');
+  await applyPaste.click();
+  await pasteDialog.getByRole('alert').getByText(/전체를 롤백.*23505/).waitFor();
+  await pasteDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await pasteDialog.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await pasteDialog.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '다시 조회', exact: true }).click();
+  await data.getByText('다음 붙여넣기', { exact: true }).waitFor();
+  assert.equal(await data.getByText('남으면 안 되는 행', { exact: true }).count(), 0);
+
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
   const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });
   const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });
@@ -1744,6 +1787,7 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
     assert.deepEqual(rows.map(event => event.outcome).sort(), ['failed', 'started', 'started', 'succeeded']);
     assert.equal(rows.find(event => event.outcome === 'succeeded').affected_count, 1);
     await verifyRowActions({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
+    await verifyRowPastes({ command, page, id, peer: peer.id, findObject, readOnly: session.id });
   } finally {
     await close(writer.id);
     await close(peer.id);
@@ -1780,7 +1824,7 @@ async function verifyRowActions({ command, page, id, peer, findObject, readOnly 
   assert.equal(added.result.fields.find(field => field.name === 'due').cell.display, '2026-01-02');
   await assert.rejects(apply(insert, approved.approval), /만료/);
   const stored = await page(peer, target);
-  assert.deepEqual(stored.rows[0].slice(1).map(cell => cell.value), ['native row action', '', null, '0.00', '2026-01-02']);
+  assert.deepEqual(stored.rows[0].slice(1, 6).map(cell => cell.value), ['native row action', '', null, '0.00', '2026-01-02']);
   const denied = await begin({ kind: 'insert' });
   const rejected = await preview(denied.token, [text('row label', 'deny')]);
   await assert.rejects(apply(denied, rejected.approval), /권한/);
@@ -1810,6 +1854,61 @@ async function verifyRowActions({ command, page, id, peer, findObject, readOnly 
   assert.ok(entries.some(event => event.operation === 'postgres.row.delete' && event.outcome === 'succeeded'
     && event.policy === 'postgres-row-change-prod-confirmed' && event.affected_count === 1));
   assert.doesNotMatch(JSON.stringify(entries), /native row action|concurrent/);
+}
+
+async function verifyRowPastes({ command, page, id, peer, findObject, readOnly }) {
+  const target = findObject('row actions');
+  const begin = (object = target, connection = id) => command('begin_postgres_row_change', { id: connection, object, change: { kind: 'paste' } });
+  const preview = (token, columns, rows) => command('preview_postgres_row_paste', { id, token, columns, rows });
+  const apply = (session, approval, confirmation = 'PROD') => command('apply_postgres_row_paste', { id, token: session.token, approval, confirmation });
+  const text = (column, value) => ({ column, input: { kind: 'text', value } });
+  assert.equal((await page(id, target)).row_paste, true);
+  assert.equal((await page(readOnly, target)).row_paste, false);
+  await assert.rejects(begin(target, readOnly), /편집을 허용/);
+
+  const bad = await begin();
+  const rejected = await preview(bad.token, ['row label'], [[text('row label', 'valid before policy')], [text('row label', 'deny')]]);
+  await assert.rejects(apply(bad, rejected.approval), /전체를 롤백.*권한/);
+  assert.equal((await page(peer, target)).rows.length, 0);
+
+  const session = await begin();
+  const names = ['row label', 'empty_text', 'optional', 'amount', 'observed'];
+  const input = [[text('row label', 'native paste row'), text('empty_text', ''), { column: 'optional', input: { kind: 'null' } },
+    text('amount', '9007199254740993.125'), text('observed', 'now')], [text('row label', 'native paste defaults')]];
+  const old = await preview(session.token, names, input);
+  await assert.rejects(preview(session.token, ['row label', 'row label'], input), /두 번/);
+  await assert.rejects(apply(session, old.approval), /미리/);
+  const ready = await preview(session.token, names, input);
+  assert.equal(ready.rows[0][3].display, '9007199254740993.13');
+  assert.equal(ready.rows[1][3], null);
+  assert.equal((await page(peer, target)).rows.length, 0);
+  await assert.rejects(command('apply_postgres_row_change', { id, token: session.token, approval: ready.approval, confirmation: 'PROD' }), /미리/);
+  await assert.rejects(apply(session, ready.approval, ''), /PROD/);
+  const paused = await command('execute_postgres_sql', { id: peer, request: randomUUID(), source: 'SELECT pg_catalog.pg_sleep(0.05)', scope: { kind: 'document' } });
+  assert.equal(paused.status, 'completed');
+  const saved = await apply(session, ready.approval);
+  assert.equal(saved.status, 'pasted');
+  assert.equal(saved.result.rows, 2);
+  await assert.rejects(apply(session, ready.approval), /만료/);
+  const stored = await page(peer, target);
+  assert.deepEqual(stored.rows.map(row => row.slice(1).map(cell => cell.value)), [
+    ['native paste row', '', null, '9007199254740993.13', '2026-01-02', ready.rows[0][4].display],
+    ['native paste defaults', 'default text', 'not null', '7.00', '2026-01-02', null],
+  ]);
+
+  const deferred = findObject('paste_refs');
+  const pending = await begin(deferred);
+  const blocked = await preview(pending.token, ['parent_id'], [[text('parent_id', '1')], [text('parent_id', '999')]]);
+  await assert.rejects(apply(pending, blocked.approval), /전체를 롤백.*23503/);
+  assert.equal((await page(peer, deferred)).rows.length, 0);
+  const history = await command('list_audit_events', { before: null });
+  const entries = history.events.filter(event => event.operation === 'postgres.row.paste');
+  assert.ok(entries.some(event => event.outcome === 'succeeded' && event.affected_count === 2));
+  assert.doesNotMatch(JSON.stringify(entries), /native paste row|valid before policy/);
+  for (const stamp of stored.row_stamps) {
+    const deletion = await command('begin_postgres_row_change', { id, object: target, change: { kind: 'delete', stamp } });
+    await command('apply_postgres_row_change', { id, token: deletion.token, approval: deletion.preview.approval, confirmation: 'PROD' });
+  }
 }
 
 async function main() {

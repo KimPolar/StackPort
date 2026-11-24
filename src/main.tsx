@@ -16,7 +16,7 @@ import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from 
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
-import { SqlitePasteDialog, type SqlitePasteRequest, type SqlitePasteResult } from "./SqlitePasteDialog";
+import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
 import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
@@ -228,8 +228,8 @@ function App() {
   const [editRequest, setEditRequest] = useState<SqliteEditRequest | null>(null);
   const [editReport, setEditReport] = useState<SqliteEditResult | null>(null);
   const [rowChange, setRowChange] = useState<Extract<RowChangeRequest, { engine: "sqlite" }> | null>(null);
-  const [pasteRequest, setPasteRequest] = useState<SqlitePasteRequest | null>(null);
-  const [pasteReport, setPasteReport] = useState<{ profile: string; table: string; result: SqlitePasteResult } | null>(null);
+  const [pasteRequest, setPasteRequest] = useState<Extract<GridPasteRequest, { engine: "sqlite" }> | null>(null);
+  const [pasteReport, setPasteReport] = useState<{ profile: string; table: string; result: GridPasteResult } | null>(null);
   const [rowReport, setRowReport] = useState<{ profile: string; table: string; result: RowChangeResult } | null>(null);
   const rowChangeTrigger = useRef<HTMLButtonElement | null>(null);
   const rowAddButton = useRef<HTMLButtonElement>(null);
@@ -1218,7 +1218,7 @@ function App() {
     setRowReport(null);
     setPasteReport(null);
     setEditReport(null);
-    setPasteRequest({ profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
+    setPasteRequest({ engine: "sqlite", profileId: profile.id, profileName: profile.name, location: displayPath(profile.path),
       environment: profile.environment, table: rowChangeTable });
   }
   function closeRowPaste() {
@@ -1731,7 +1731,7 @@ function App() {
         void executeQuery(executedQuery, previous ? result.page - 1 : result.page);
       }
     }} />}
-    {pasteRequest && <SqlitePasteDialog request={pasteRequest} onClose={closeRowPaste} onExitGuard={setGridEditExitGuard}
+    {pasteRequest && <GridPasteDialog request={pasteRequest} onClose={closeRowPaste} onExitGuard={setGridEditExitGuard}
       onBusy={busy => { localFileBusy.current = busy; }} onApplied={report => {
         setPasteReport({ profile: pasteRequest.profileId, table: pasteRequest.table, result: report });
         closeRowPaste();
@@ -1842,6 +1842,7 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.row.paste": "SQLite 행 붙여넣기",
   "sqlite.row.update": "SQLite 행 변경",
   "postgres.row.insert": "PostgreSQL 행 추가", "postgres.row.delete": "PostgreSQL 행 삭제",
+  "postgres.row.paste": "PostgreSQL 행 붙여넣기",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.schema.sync": "SQLite 스키마 변경 적용",
   "sqlite.restore": "SQLite 복원",

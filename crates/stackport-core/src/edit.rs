@@ -11,6 +11,10 @@ pub use row::{
     RowChangeValue, RowInsertField, RowPastePreview, RowPasteResult,
 };
 
+pub(crate) const PASTE_ROWS: usize = 100;
+pub(crate) const PASTE_COLUMNS: usize = 64;
+pub(crate) const PASTE_BYTES: usize = 256 * 1024;
+
 use super::quote_identifier as quote;
 use super::{
     display_value, insert_audit, open_schema_db, AuditRecord, Cell, ObjectDetails, Profile, Result,

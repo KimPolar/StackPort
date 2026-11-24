@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::timeout;
+use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client, Error, IsolationLevel, Row, Transaction};
 use uuid::Uuid;
 use zeroize::{Zeroize, Zeroizing};
@@ -230,6 +231,10 @@ impl EditTable {
                 .shape
                 .iter()
                 .any(|column| column.required_for_insert() && !column.insertable())
+    }
+
+    pub(super) fn allow_paste(&self) -> bool {
+        self.allow_insert() && self.shape.iter().any(Attribute::insertable)
     }
 
     pub(super) fn allow_delete(&self) -> bool {
@@ -596,6 +601,20 @@ fn preview_expression(
     input: &PostgresEditInput,
     values: &mut Vec<Value>,
 ) -> Result<String> {
+    Ok(match cast_input(column, input, values)? {
+        Some(expression) => format!(
+            "pg_catalog.left(({expression})::pg_catalog.text, {})",
+            VALUE_LIMIT + 1
+        ),
+        None => "NULL::pg_catalog.text".into(),
+    })
+}
+
+fn cast_input(
+    column: &Attribute,
+    input: &PostgresEditInput,
+    values: &mut Vec<Value>,
+) -> Result<Option<String>> {
     let fail = |reason: &str| format!("{} · {reason}", column.name);
     match input {
         PostgresEditInput::Null if !column.nullable => {
@@ -604,7 +623,7 @@ fn preview_expression(
         PostgresEditInput::Default if visible_default(column).is_none() => {
             Err(fail("확인할 수 있는 서버 기본값이 없습니다."))
         }
-        PostgresEditInput::Null | PostgresEditInput::Default => Ok("NULL::pg_catalog.text".into()),
+        PostgresEditInput::Null | PostgresEditInput::Default => Ok(None),
         PostgresEditInput::Text { value } => {
             let chars = value.chars().take(VALUE_LIMIT + 1).count();
             if chars > VALUE_LIMIT || value.contains('\0') {
@@ -617,12 +636,7 @@ fn preview_expression(
                 return Err(fail("문자열이 열의 길이 제한을 초과합니다."));
             }
             values.push(bind(value.to_string()));
-            Ok(format!(
-                "pg_catalog.left((${}::{})::pg_catalog.text, {})",
-                values.len(),
-                column.data_type,
-                VALUE_LIMIT + 1
-            ))
+            Ok(Some(format!("${}::{}", values.len(), column.data_type)))
         }
     }
 }
@@ -644,12 +658,12 @@ pub(super) async fn apply(
     } else {
         "postgres.edit.row"
     };
-    audit(store, profile, plan.token, operation, None, "started").await?;
+    audit(store, profile, plan.token, operation, None, "started", 1).await?;
     let attempted = timeout(DEADLINE, update(client, &plan)).await;
     let (tx, actual) = match attempted {
         Ok(Ok(result)) => result,
         other => {
-            let _ = audit(store, profile, plan.token, operation, None, "failed").await;
+            let _ = audit(store, profile, plan.token, operation, None, "failed", 1).await;
             return match other {
                 Ok(Err(error)) => Err(error),
                 _ => Err("행 변경 시간이 초과되었습니다. 다시 조회하세요.".into()),
@@ -660,12 +674,12 @@ pub(super) async fn apply(
         Ok(true) => Ok(PostgresEditOutcome::Applied {
             actual,
             affected_cells,
-            audit_warning: audit(store, profile, plan.token, operation, None, "succeeded")
+            audit_warning: audit(store, profile, plan.token, operation, None, "succeeded", 1)
                 .await
                 .is_err(),
         }),
         Err(error) => {
-            let _ = audit(store, profile, plan.token, operation, None, "failed").await;
+            let _ = audit(store, profile, plan.token, operation, None, "failed", 1).await;
             Err(error)
         }
         Ok(false) => Ok(PostgresEditOutcome::Unknown),
@@ -861,7 +875,7 @@ fn exactly_one(rows: &mut Vec<Row>) -> Result<Row> {
     rows.pop().ok_or_else(|| STALE.into())
 }
 
-async fn query(tx: &Transaction<'_>, sql: &str, values: &[Value]) -> Result<Vec<Row>> {
+async fn query(tx: &Transaction<'_>, sql: &str, values: &[impl ToSql + Sync]) -> Result<Vec<Row>> {
     let stmt = tx.prepare(sql).await.map_err(write_error)?;
     let portal = tx
         .bind_raw(&stmt, values.iter())
@@ -891,6 +905,7 @@ async fn audit(
     operation: &'static str,
     object: Option<&str>,
     outcome: &'static str,
+    rows: usize,
 ) -> Result<()> {
     let store = store.clone();
     let profile = profile.clone();
@@ -915,7 +930,7 @@ async fn audit(
                 environment: Some(&profile.settings.environment),
                 object_name: object.as_deref(),
                 outcome,
-                affected_count: (outcome == "succeeded").then_some(1),
+                affected_count: (outcome == "succeeded").then_some(rows as i64),
             },
         )
         .map_err(|_| "PostgreSQL 변경의 작업 기록을 저장할 수 없습니다.".into())

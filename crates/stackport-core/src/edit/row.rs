@@ -3,7 +3,7 @@ use super::{
     open_edit_db, open_schema_db, parse_input, quote, read_row, schema_version, validate_keys,
     verify_profile, wipe_value, AuditRecord, Cell, Connection, EditInput, EditKey, Handle,
     ObjectDetails, Path, Profile, Result, Store, TransactionBehavior, Uuid, Value, ValueRef,
-    SESSION_LIFETIME,
+    PASTE_BYTES, PASTE_COLUMNS, PASTE_ROWS, SESSION_LIFETIME,
 };
 use crate::db_error;
 use rusqlite::{params_from_iter, OptionalExtension, Transaction};
@@ -15,9 +15,6 @@ use std::{
 use zeroize::Zeroize;
 
 const EXPIRED: &str = "행 작업이 만료되었습니다. 테이블을 다시 조회하세요.";
-const PASTE_ROWS: usize = 100;
-const PASTE_COLUMNS: usize = 64;
-const PASTE_BYTES: usize = 256 * 1024;
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

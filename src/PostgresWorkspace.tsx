@@ -11,6 +11,7 @@ import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, t
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
+import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
 import { gridDisplay, gridTypeLabels, postgresGridValueType } from "./gridValuePresentation";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
@@ -37,7 +38,7 @@ type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: s
   has_next: boolean; has_next_columns: boolean; primary_key_order: boolean;
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null;
   value_rows: PostgresValueRow[] | null; edit_reason: string | null;
-  row_insert: boolean; row_delete: boolean; row_delete_reason: string | null };
+  row_insert: boolean; row_paste: boolean; row_delete: boolean; row_delete_reason: string | null };
 type PostgresRowChangeRequest = Extract<RowChangeRequest, { engine: "postgres" }>;
 const rowActionWidth = 56;
 type Route = { id: string; name: string; port: number };
@@ -270,6 +271,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
   const [rowChange, setRowChange] = useState<{ request: PostgresRowChangeRequest; trigger: HTMLButtonElement } | null>(null);
   const [rowReport, setRowReport] = useState<RowChangeResult | null>(null);
+  const [paste, setPaste] = useState<{ request: GridPasteRequest; trigger: HTMLButtonElement } | null>(null);
+  const [pasteReport, setPasteReport] = useState<GridPasteResult | null>(null);
   const [value, setValue] = useState<{ target: PostgresValueTarget; title: string; format: PostgresValueFormat | null; trigger: HTMLButtonElement } | null>(null);
   const [editNotice, setEditNotice] = useState("");
   const dataPanel = useRef<HTMLElement>(null);
@@ -303,6 +306,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
     setEditNotice("");
     setRowReport(null);
+    setPasteReport(null);
   }
 
   function chooseSchema(next: Schema | null) {
@@ -351,6 +355,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
     if (!object || !result || unavailable) return;
     const settings = profile.settings;
     setRowReport(null);
+    setPasteReport(null);
     setEditNotice("");
     setRowChange({ trigger, request: { engine: "postgres", id, object: object.id,
       table: `${result.schema}.${result.name}`, profileName: settings.name, environment: settings.environment,
@@ -365,6 +370,26 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       if (!report.fields.length && rowPage > 0 && result?.rows.length === 1) setRowPage(rowPage - 1);
       else setRefresh(value => value + 1);
     }
+    requestAnimationFrame(() => {
+      if (unavailable) onReconnectFocus();
+      else if (!report && trigger?.isConnected) trigger.focus();
+      else dataPanel.current?.focus();
+    });
+  }
+
+  function openRowPaste(trigger: HTMLButtonElement) {
+    if (!object || !result || unavailable) return;
+    const settings = profile.settings;
+    setRowReport(null); setPasteReport(null); setEditNotice("");
+    setPaste({ trigger, request: { engine: "postgres", id, object: object.id,
+      table: `${result.schema}.${result.name}`, profileName: settings.name, environment: settings.environment,
+      location: `${settings.username}@${endpoint(settings.host, settings.port)}/${settings.database}` } });
+  }
+
+  function closeRowPaste(report?: GridPasteResult) {
+    const trigger = paste?.trigger;
+    setPaste(null);
+    if (report) { setPasteReport(report); setRefresh(value => value + 1); }
     requestAnimationFrame(() => {
       if (unavailable) onReconnectFocus();
       else if (!report && trigger?.isConnected) trigger.focus();
@@ -407,6 +432,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <div className="sql-editor-actions">
           {result?.row_insert && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
+          {result?.row_paste && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
+            onClick={event => openRowPaste(event.currentTarget)}>행 붙여넣기</button>}
           <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
           {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && exportPage(page.data)}>결과 내보내기</button>}
           {!structureOpen && !!filterColumns?.length && <button ref={columnSettings} type="button" className="secondary small"
@@ -433,6 +460,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       <div hidden={structureOpen}>
         {grid.error && <p className="form-note" role="status">{grid.error}</p>}
         {editNotice && <p className="success-banner" role="status">{editNotice}</p>}
+        {pasteReport && <p className="success-banner" role="status">행 {pasteReport.rows}개 붙여넣기 완료
+          {pasteReport.audit_warning && <strong className="audit-warning">{pasteReport.audit_warning}</strong>}</p>}
         {rowReport && <div className="row-change-report">
           <p className="success-banner" role="status">{rowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}
             {rowReport.audit_warning && <strong className="audit-warning">{rowReport.audit_warning}</strong>}</p>
@@ -493,6 +522,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                     onClick={event => {
                       setEditNotice("");
                       setRowReport(null);
+                      setPasteReport(null);
                       setEdit({ object: object.id, stamp, column: field.name, trigger: event.currentTarget });
                     }}><Pencil size={14} aria-hidden /></button>}
                 </div> : <PostgresValue cell={cell} display={display} />}</td>;
@@ -534,5 +564,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         }} />}
       {rowChange && <RowChangeDialog request={rowChange.request} unavailable={unavailable} onClose={() => closeRowChange()}
         onApplied={closeRowChange} onUnknown={onEditUnknown} onBusy={onFileBusy} onExitGuard={onEditExitGuard} />}
+      {paste && <GridPasteDialog request={paste.request} unavailable={unavailable} onClose={() => closeRowPaste()}
+        onApplied={closeRowPaste} onUnknown={onEditUnknown} onBusy={onFileBusy} onExitGuard={onEditExitGuard} />}
   </>;
 }

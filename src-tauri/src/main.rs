@@ -989,6 +989,16 @@ async fn cancel_postgres_row_change(postgres: State<'_, PostgresManager>, id: St
 }
 
 #[tauri::command]
+async fn preview_postgres_row_paste(postgres: State<'_, PostgresManager>, id: String, token: String, columns: Vec<String>, rows: Vec<Vec<PostgresCellChange>>) -> Result<RowPastePreview, String> {
+    postgres.preview_row_paste(&id, &token, columns, rows).await
+}
+
+#[tauri::command]
+async fn apply_postgres_row_paste(postgres: State<'_, PostgresManager>, id: String, token: String, approval: String, confirmation: String) -> Result<PostgresRowChangeOutcome, String> {
+    postgres.apply_row_paste(&id, &token, &approval, &confirmation).await
+}
+
+#[tauri::command]
 async fn execute_postgres_sql(
     postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
     bindings: Option<PostgresSqlBindings>,
@@ -1695,6 +1705,8 @@ fn main() {
             preview_postgres_row_insert,
             apply_postgres_row_change,
             cancel_postgres_row_change,
+            preview_postgres_row_paste,
+            apply_postgres_row_paste,
             execute_postgres_sql,
             postgres_export_progress,
             cancel_postgres_sql,
