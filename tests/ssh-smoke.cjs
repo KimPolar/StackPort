@@ -277,6 +277,18 @@ async function main() {
   await page.keyboard.type(password);
   await page.keyboard.press('Enter');
   await waitForRows(page, 'STACKPORT_REMOTE_READY');
+  const manage = page.getByRole('button', { name: '터미널 탭 관리', exact: true });
+  const tabsDialog = page.getByRole('dialog', { name: '터미널 탭 관리', exact: true });
+  const beforeDuplicate = instance.stats.connections;
+  await manage.click();
+  await tabsDialog.getByRole('button', { name: '탭 복제', exact: true }).click();
+  const duplicateDialog = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await duplicateDialog.getByText('운영 SSH', { exact: true }).waitFor();
+  await duplicateDialog.getByRole('button', { name: '지문 확인', exact: true }).waitFor();
+  if (instance.stats.connections !== beforeDuplicate || !await duplicateDialog.getByLabel('호스트 또는 IP').isDisabled()) {
+    throw new Error('Duplicating the saved profile opened an unchecked connection.');
+  }
+  await duplicateDialog.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('button', { name: '운영 SSH SSH 연결 삭제' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '삭제', exact: true }).click();
@@ -290,6 +302,10 @@ async function main() {
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: /SSH 6 .*터미널 닫기/ }).click();
   await page.getByRole('tab', { name: /SSH 6/ }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '최근 닫은 탭', exact: true }).click();
+  await tabsDialog.getByRole('button', { name: /SSH 6 .*다시 열기/ }).click();
+  await page.getByRole('alert').getByText('저장된 SSH 연결을 찾을 수 없습니다.', { exact: true }).waitFor();
+  if (instance.stats.connections !== beforeDuplicate) throw new Error('A deleted SSH profile was reopened.');
   if (fs.readFileSync(path.join(root, 'workspace', 'workspace.sqlite')).includes(Buffer.from(password))) throw new Error('Password was saved in the workspace database.');
 
   const trustDb = new DatabaseSync(trustFile, { readOnly: true });

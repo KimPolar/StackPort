@@ -11,11 +11,18 @@ import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from ".
 import { TerminalTabDialog } from "./TerminalTabDialog";
 import "@xterm/xterm/css/xterm.css";
 
-type Shell = "powershell" | "cmd" | "ssh";
+type LocalShell = "powershell" | "cmd";
+type Shell = LocalShell | "ssh";
 type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
-type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean; pinned: boolean };
+type DirectSshTarget = { host: string; port: number; username: string };
+type TerminalLaunch = { kind: "local"; shell: LocalShell }
+  | { kind: "saved_ssh"; projectId: string; profileId: string; authentication: SshAuthenticationMode }
+  | { kind: "direct_ssh"; target: DirectSshTarget; authentication: SshAuthenticationMode };
+type ClosedTab = { number: number; name: string; launch: TerminalLaunch };
+type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean; pinned: boolean; launch: TerminalLaunch };
+type SshDialogRequest = { profile: SshProfile | null; target?: DirectSshTarget; authentication?: SshAuthenticationMode; reopen?: number };
 type SshKey = { algorithm: string; fingerprint: string };
 type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
@@ -27,21 +34,21 @@ const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target
 
 export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled }: { visible: boolean; onCountChange: (count: number) => void; request: SshOpenRequest | null; onRequestHandled: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
-  const [activeId, setActiveId] = useState("");
+  const [selectedId, setActiveId] = useState("");
+  const [recentTabs, setRecentTabs] = useState<ClosedTab[]>([]);
   const [tabDialogOpen, setTabDialogOpen] = useState(false);
   const [dropTarget, setDropTarget] = useState("");
   const [opening, setOpening] = useState(false);
-  const [sshDialog, setSshDialog] = useState(false);
-  const [dialogProfile, setDialogProfile] = useState<SshProfile | null>(null);
+  const [sshDialog, setSshDialog] = useState<SshDialogRequest | null>(null);
   const [sshOpening, setSshOpening] = useState(false);
   const [closing, setClosing] = useState<string[]>([]);
   const [error, setError] = useState("");
-  const tabsRef = useRef(tabs);
   const closingRef = useRef(new Set<string>());
   const openingRef = useRef(false);
   const draggedTab = useRef("");
   const nextNumber = useRef(1);
-  tabsRef.current = tabs;
+  const sshRequestGeneration = useRef(0);
+  const activeId = tabs.some(tab => tab.id === selectedId) ? selectedId : tabs.at(-1)?.id ?? "";
   const activeIndex = tabs.findIndex(tab => tab.id === activeId);
   const activeTab = tabs[activeIndex];
 
@@ -54,41 +61,74 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   }, [visible, activeId]);
   useEffect(() => {
     if (!request) return;
-    setDialogProfile(request.profile);
-    setSshDialog(true);
+    sshRequestGeneration.current++;
+    setSshDialog({ profile: request.profile });
     onRequestHandled();
   }, [request, onRequestHandled]);
 
-  function addTerminal(terminal: TerminalInfo) {
+  function addTerminal(terminal: TerminalInfo, launch: TerminalLaunch, reopened?: number) {
     const number = nextNumber.current++;
-    setTabs(current => [...current, { ...terminal, number, exit: null, unreadOutput: false, pinned: false }]);
+    setTabs(current => [...current, { ...terminal, launch, number, exit: null, unreadOutput: false, pinned: false }]);
+    if (reopened !== undefined) setRecentTabs(current => current.filter(tab => tab.number !== reopened));
     setActiveId(terminal.id);
   }
 
-  async function openTerminal(shell: "powershell" | "cmd") {
+  async function openTerminal(launch: TerminalLaunch, reopened?: number) {
     if (openingRef.current) return;
-    openingRef.current = true; setOpening(true); setError("");
+    setTabDialogOpen(false);
+    setError("");
+    if (launch.kind === "direct_ssh") {
+      setSshDialog({ profile: null, target: launch.target, authentication: launch.authentication, reopen: reopened });
+      return;
+    }
+    const generation = ++sshRequestGeneration.current;
+    openingRef.current = true; setOpening(true);
     try {
-      const terminal = await call<TerminalInfo>("open_terminal", { shell, rows: 24, cols: 80 });
-      addTerminal(terminal);
-    } catch (e) { setError(errorText(e)); }
+      if (launch.kind === "local") {
+        const terminal = await call<TerminalInfo>("open_terminal", { shell: launch.shell, rows: 24, cols: 80 });
+        addTerminal(terminal, launch, reopened);
+      } else {
+        const profiles = await call<SshProfile[]>("list_ssh_profiles", { projectId: launch.projectId });
+        if (generation !== sshRequestGeneration.current) return;
+        const profile = profiles.find(item => item.id === launch.profileId);
+        if (!profile) throw "저장된 SSH 연결을 찾을 수 없습니다.";
+        setSshDialog({ profile, authentication: launch.authentication, reopen: reopened });
+      }
+    } catch (e) { if (launch.kind === "local" || generation === sshRequestGeneration.current) setError(errorText(e)); }
     finally { openingRef.current = false; setOpening(false); }
   }
 
-  async function closeTerminal(tab: Tab) {
-    if (closingRef.current.has(tab.id)) return;
+  async function closeTabs(targets: Tab[], warning: string) {
+    const available = targets.filter(tab => !closingRef.current.has(tab.id));
+    if (!available.length || !window.confirm(warning)) return;
+    setTabDialogOpen(false);
+    setError("");
+    for (const tab of available) closingRef.current.add(tab.id);
+    setClosing([...closingRef.current]);
+    const results = await Promise.allSettled(available.map(tab => call("close_terminal", { id: tab.id })));
+    const closed = available.filter((_, index) => results[index].status === "fulfilled");
+    const closedIds = new Set(closed.map(tab => tab.id));
+    setTabs(current => current.filter(tab => !closedIds.has(tab.id)));
+    setRecentTabs(current => [...closed.map(tab => ({ number: tab.number, name: tabName(tab), launch: tab.launch })), ...current].slice(0, 12));
+    const failures = results.flatMap((result, index) => result.status === "rejected"
+      ? [`${tabName(available[index])} · ${errorText(result.reason)}`] : []);
+    if (failures.length) setError(failures.join(" · "));
+    for (const tab of available) closingRef.current.delete(tab.id);
+    setClosing([...closingRef.current]);
+  }
+
+  function closeTerminal(tab: Tab) {
     const warning = tab.exit ? `${tabName(tab)} 셸은 종료되었습니다. 남아 있는 연결된 프로세스가 종료될 수 있습니다. 닫으시겠습니까?`
       : `${tabName(tab)} 터미널을 닫으면 실행 중인 작업과 연결된 하위 프로세스가 종료됩니다. 닫으시겠습니까?`;
-    if (!window.confirm(warning)) return;
-    closingRef.current.add(tab.id);
-    setClosing(current => [...current, tab.id]); setError("");
-    try {
-      await call("close_terminal", { id: tab.id });
-      const remaining = tabsRef.current.filter(item => item.id !== tab.id);
-      setTabs(current => current.filter(item => item.id !== tab.id));
-      setActiveId(current => current === tab.id ? remaining.at(-1)?.id ?? "" : current);
-    } catch (e) { setError(errorText(e)); }
-    finally { closingRef.current.delete(tab.id); setClosing(current => current.filter(id => id !== tab.id)); }
+    return closeTabs([tab], warning);
+  }
+
+  const unpinnedTabs = tabs.filter(tab => !tab.pinned && !closing.includes(tab.id));
+
+  function closeUnpinned() {
+    const names = unpinnedTabs.slice(0, 8).map(tabName).join("\n");
+    const remaining = unpinnedTabs.length > 8 ? `\n그 외 ${unpinnedTabs.length - 8}개` : "";
+    return closeTabs(unpinnedTabs, `고정하지 않은 터미널 ${unpinnedTabs.length}개를 닫으면 실행 중인 작업과 하위 프로세스가 종료됩니다.\n\n${names}${remaining}\n\n닫으시겠습니까?`);
   }
 
   function reportExit(id: string, exit: TerminalExit) {
@@ -158,15 +198,19 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
     <header className="terminal-heading session-heading">
       <h1><TerminalSquare size={20} aria-hidden /> 터미널</h1>
       <div className="terminal-actions" role="group" aria-label="새 터미널">
-        <button type="button" className="primary small" disabled={opening} onClick={() => void openTerminal("powershell")}><Plus size={14} aria-hidden /> PowerShell 열기</button>
-        <button type="button" className="secondary small" disabled={opening} onClick={() => void openTerminal("cmd")}><Plus size={14} aria-hidden /> CMD 열기</button>
+        <button type="button" className="primary small" disabled={opening} onClick={() => void openTerminal({ kind: "local", shell: "powershell" })}><Plus size={14} aria-hidden /> PowerShell 열기</button>
+        <button type="button" className="secondary small" disabled={opening} onClick={() => void openTerminal({ kind: "local", shell: "cmd" })}><Plus size={14} aria-hidden /> CMD 열기</button>
         <button type="button" className="secondary small" disabled={opening}
-          onClick={() => { setDialogProfile(null); setSshDialog(true); }}><Plug size={14} aria-hidden /> SSH 연결</button>
+          onClick={() => setSshDialog({ profile: null })}><Plug size={14} aria-hidden /> SSH 연결</button>
       </div>
     </header>
     {opening && <p className="terminal-hint" role="status">터미널을 여는 중…</p>}
     {error && <div className="error-banner" role="alert">{error}</div>}
-    {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} aria-hidden /><strong>열린 터미널이 없습니다</strong><span>상단에서 새 터미널을 열거나 탐색기에서 저장된 SSH 연결을 선택하세요.</span></div> : <div className="terminal-card">
+    {tabs.length === 0 ? <div className="terminal-empty">
+      <TerminalSquare size={30} aria-hidden /><strong>열린 터미널이 없습니다</strong>
+      <span>상단에서 새 터미널을 열거나 탐색기에서 저장된 SSH 연결을 선택하세요.</span>
+      {recentTabs.length > 0 && <button type="button" className="secondary small" aria-haspopup="dialog" onClick={() => setTabDialogOpen(true)}>최근 닫은 탭</button>}
+    </div> : <div className="terminal-card">
       <div className="terminal-tab-strip">
         <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div
           className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} data-drop-target={tab.id === dropTarget || undefined} key={tab.id}>
@@ -206,10 +250,21 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
       </div>
       {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} onActivity={reportActivity} />)}
     </div>}
-    {tabDialogOpen && activeTab && <TerminalTabDialog name={tabName(activeTab)} pinned={activeTab.pinned}
-      canMoveLeft={tabs[activeIndex - 1]?.pinned === activeTab.pinned} canMoveRight={tabs[activeIndex + 1]?.pinned === activeTab.pinned}
-      onPin={() => togglePinned(activeTab.id)} onMove={offset => reorderTab(activeTab.id, tabs[activeIndex + offset].id)} onClose={() => setTabDialogOpen(false)} />}
-    {sshDialog && <SshDialog profile={dialogProfile} onClose={() => setSshDialog(false)} onOpeningChange={setSshOpening} onOpened={terminal => { addTerminal(terminal); setSshDialog(false); }} />}
+    {tabDialogOpen && <TerminalTabDialog name={activeTab && tabName(activeTab)} pinned={activeTab?.pinned ?? false}
+      canMoveLeft={Boolean(activeTab && tabs[activeIndex - 1]?.pinned === activeTab.pinned)}
+      canMoveRight={Boolean(activeTab && tabs[activeIndex + 1]?.pinned === activeTab.pinned)}
+      recent={recentTabs} opening={opening} unpinnedCount={unpinnedTabs.length} onCloseUnpinned={() => void closeUnpinned()}
+      onPin={() => { if (activeTab) togglePinned(activeTab.id); }}
+      onMove={offset => { if (activeTab) reorderTab(activeTab.id, tabs[activeIndex + offset].id); }}
+      onDuplicate={() => { if (activeTab) void openTerminal(activeTab.launch); }}
+      onReopen={number => {
+        const item = recentTabs.find(tab => tab.number === number);
+        if (item) void openTerminal(item.launch, number);
+      }}
+      onClose={() => setTabDialogOpen(false)} />}
+    {sshDialog && <SshDialog profile={sshDialog.profile} target={sshDialog.target} initialAuthentication={sshDialog.authentication}
+      onClose={() => setSshDialog(null)} onOpeningChange={setSshOpening}
+      onOpened={(terminal, launch) => { addTerminal(terminal, launch, sshDialog.reopen); setSshDialog(null); }} />}
   </section>;
 }
 
@@ -385,12 +440,19 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
   </div>;
 }
 
-function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: SshProfile | null; onClose: () => void; onOpened: (terminal: TerminalInfo) => void; onOpeningChange: (opening: boolean) => void }) {
+function SshDialog({ profile, target, initialAuthentication = "automatic", onClose, onOpened, onOpeningChange }: {
+  profile: SshProfile | null;
+  target?: DirectSshTarget;
+  initialAuthentication?: SshAuthenticationMode;
+  onClose: () => void;
+  onOpened: (terminal: TerminalInfo, launch: TerminalLaunch) => void;
+  onOpeningChange: (opening: boolean) => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [host, setHost] = useState(profile?.host ?? "");
-  const [port, setPort] = useState(String(profile?.port ?? 22));
-  const [username, setUsername] = useState(profile?.username ?? "");
-  const [authentication, setAuthentication] = useState<SshAuthenticationMode>("automatic");
+  const [host, setHost] = useState(profile?.host ?? target?.host ?? "");
+  const [port, setPort] = useState(String(profile?.port ?? target?.port ?? 22));
+  const [username, setUsername] = useState(profile?.username ?? target?.username ?? "");
+  const [authentication, setAuthentication] = useState(initialAuthentication);
   const [identityPaths, setIdentityPaths] = useState([""]);
   const [info, setInfo] = useState<SshHost | null>(null);
   const [fingerprint, setFingerprint] = useState("");
@@ -461,7 +523,10 @@ function SshDialog({ profile, onClose, onOpened, onOpeningChange }: { profile: S
       const terminal = profile
         ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, authentication: selectedAuthentication, rows: 24, cols: 80 })
         : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, authentication: selectedAuthentication, rows: 24, cols: 80 });
-      onOpened(terminal);
+      const launch: TerminalLaunch = profile
+        ? { kind: "saved_ssh", projectId: profile.project_id, profileId: profile.id, authentication }
+        : { kind: "direct_ssh", target: { host: info.host, port: info.port, username }, authentication };
+      onOpened(terminal, launch);
     } catch (e) { setError(errorText(e)); }
     finally { onOpeningChange(false); setBusy(""); }
   }

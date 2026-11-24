@@ -189,6 +189,36 @@ async function main() {
   await page.getByRole('tab', { name: 'CMD 1' }).waitFor({ state: 'detached' });
   await page.getByRole('tab', { name: 'PowerShell 2' }).waitFor();
 
+  const manageTabs = page.getByRole('button', { name: '터미널 탭 관리', exact: true });
+  await manageTabs.click();
+  await tabManager.getByRole('button', { name: 'CMD 1 다시 열기', exact: true }).click();
+  await page.getByRole('tab', { name: 'CMD 3', exact: true, selected: true }).waitFor();
+  const reopenedRows = page.locator('[role=tabpanel]:visible .xterm-rows');
+  await reopenedRows.getByText(/Microsoft Windows/).waitFor();
+  if ((await reopenedRows.innerText()).includes('26441')) throw new Error('Reopening restored the closed shell output.');
+  await manageTabs.click();
+  if (await tabManager.getByRole('button', { name: 'CMD 1 다시 열기', exact: true }).count()) throw new Error('A reopened entry stayed in recent history.');
+  await tabManager.getByRole('button', { name: '탭 복제', exact: true }).click();
+  await page.getByRole('tab', { name: 'CMD 4', exact: true, selected: true }).waitFor();
+  await powershellTab.press('Shift+F10');
+  await tabManager.getByRole('button', { name: '탭 고정', exact: true }).click();
+  const closeUnpinned = tabManager.getByRole('button', { name: '고정하지 않은 탭 닫기 (2)', exact: true });
+  const dismissBulk = page.waitForEvent('dialog').then(async dialog => {
+    if (!dialog.message().includes('CMD 3') || !dialog.message().includes('CMD 4') || dialog.message().includes('PowerShell 2')) {
+      await dialog.dismiss();
+      throw new Error('Bulk close preview did not match the unpinned tabs.');
+    }
+    await dialog.dismiss();
+  });
+  await closeUnpinned.click();
+  await dismissBulk;
+  if (await tabOrder() !== 'PowerShell 2,CMD 3,CMD 4') throw new Error('Canceling bulk close removed tabs.');
+  page.once('dialog', dialog => dialog.accept());
+  await closeUnpinned.click();
+  await page.getByRole('tab', { name: 'CMD 4', exact: true }).waitFor({ state: 'detached' });
+  await powershellTab.waitFor();
+  if (await tabOrder() !== 'PowerShell 2') throw new Error('Bulk close did not leave exactly the pinned tab.');
+
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   if (process.env.STACKPORT_TEST_WINDOW_PID) {
     let dialogText = '';

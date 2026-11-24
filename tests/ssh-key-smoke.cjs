@@ -101,6 +101,17 @@ async function main() {
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: /SSH 1 .*터미널 닫기/ }).click();
   await page.getByRole('tab', { name: /SSH 1/ }).waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '최근 닫은 탭', exact: true }).click();
+  const tabs = page.getByRole('dialog', { name: '터미널 탭 관리', exact: true });
+  await tabs.getByRole('button', { name: /SSH 1 .*다시 열기/ }).click();
+  const reopened = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await reopened.getByRole('button', { name: '지문 확인', exact: true }).waitFor();
+  if (await reopened.getByLabel('호스트 또는 IP').inputValue() !== '127.0.0.1'
+    || await reopened.getByLabel('포트', { exact: true }).inputValue() !== String(port)
+    || await reopened.getByLabel('SSH 인증 방식').inputValue() !== 'key_files'
+    || await reopened.getByLabel('SSH 키 파일 1 경로').inputValue() !== ''
+    || stats.sessions !== 1) throw new Error('Reopening did not preserve the host and authentication mode without key paths.');
+  await reopened.getByRole('button', { name: '닫기', exact: true }).click();
 
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');

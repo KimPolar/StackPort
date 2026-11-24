@@ -334,6 +334,13 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .terminal-tab-settings { padding: 0 21px 21px; font-size: 13px; }
 .terminal-tab-settings p { margin: 5px 0 11px; overflow-wrap: anywhere; }
 .terminal-tab-settings-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.terminal-close-group { margin-top: 12px; color: #8a483e; }
+.terminal-tab-history { margin-top: 14px; padding-top: 12px; border-top: 1px solid #dce8e0; }
+.terminal-tab-history h3 { margin: 0 0 6px; font-size: 12px; }
+.terminal-tab-history ul { display: grid; gap: 3px; max-height: 230px; overflow: auto; list-style: none; margin: 0; padding: 0 4px 0 0; }
+.terminal-tab-history li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; }
+.terminal-tab-history li span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-tab-history li button { flex-shrink: 0; }
 .ssh-identity-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 8px; }
 .ssh-identity-row .field { flex: 1; min-width: 0; margin: 0; }
 .ssh-identity-row .icon-button { margin-bottom: 5px; }
