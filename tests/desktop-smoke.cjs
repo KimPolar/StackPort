@@ -58,6 +58,34 @@ async function main() {
     throw new Error('Selecting an object in another tool did not activate its database workspace.');
   }
   await page.getByText('100개 행', { exact: true }).waitFor();
+  const palette = page.getByRole('dialog', { name: '명령 팔레트', exact: true });
+  const commandSearch = palette.getByRole('combobox', { name: '명령 검색', exact: true });
+  const paletteTrigger = page.getByRole('button', { name: '명령 팔레트', exact: true });
+  await page.keyboard.press('Control+Shift+P');
+  await commandSearch.waitFor();
+  if (!(await commandSearch.evaluate(input => input === document.activeElement))) throw new Error('Command search did not receive focus.');
+  await commandSearch.fill(database);
+  await palette.getByText(/일치하는 명령이 없습니다/).waitFor();
+  await commandSearch.fill('NETWORK');
+  await palette.getByRole('option', { name: /네트워크/ }).waitFor();
+  await commandSearch.dispatchEvent('keydown', { key: 'Enter', isComposing: true });
+  await palette.waitFor({ state: 'visible' });
+  await commandSearch.press('Enter');
+  await page.getByRole('heading', { name: '로컬 포트', exact: true }).waitFor();
+  await page.keyboard.press('Control+Shift+P');
+  await commandSearch.fill('table ＰＥＯＰＬＥ');
+  await palette.getByRole('option', { name: /people.*테이블/ }).waitFor();
+  await commandSearch.press('Enter');
+  await page.getByText('100개 행', { exact: true }).waitFor();
+  await paletteTrigger.click();
+  if ((await palette.getByRole('option', { selected: true }).textContent()).includes('people') === false) {
+    throw new Error('The most recent command was not selected by default.');
+  }
+  await commandSearch.press('ArrowDown');
+  await palette.getByRole('option', { name: /네트워크/, selected: true }).waitFor();
+  await commandSearch.press('Escape');
+  await palette.waitFor({ state: 'hidden' });
+  if (!(await paletteTrigger.evaluate(button => button === document.activeElement))) throw new Error('Closing the palette did not restore focus.');
   const editorToggle = page.getByRole('button', { name: 'SQL 편집기', exact: true });
   const editor = page.getByLabel('SQL 쿼리');
   await editor.waitFor({ state: 'hidden' });
@@ -316,6 +344,14 @@ async function main() {
   await page.getByLabel('사용자 이름').fill('stackport');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
+  await page.keyboard.press('Control+Shift+P');
+  await commandSearch.fill('복제할 ssh');
+  await palette.getByRole('option', { name: /복제할 SSH/ }).click();
+  const sshDialog = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await sshDialog.getByRole('button', { name: '지문 확인', exact: true }).waitFor();
+  await page.keyboard.press('Control+Shift+P');
+  await palette.waitFor({ state: 'hidden' });
+  await sshDialog.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '복제', exact: true }).click();
   await page.getByLabel('이름', { exact: true }).fill('E2E 복제본');
   await page.getByRole('button', { name: '프로젝트 복제', exact: true }).click();
@@ -354,12 +390,22 @@ async function main() {
   const expectedDigest = createHash('sha256').update(backupBytes).digest('hex');
   await copyDialog.getByText('SHA-256 ' + expectedDigest, { exact: true }).waitFor();
   await copyDialog.getByRole('button', { name: '완료', exact: true }).click();
+  await copyDialog.waitFor({ state: 'hidden' });
   const { DatabaseSync } = require('node:sqlite');
   const copiedMetadata = new DatabaseSync(path.join(copiedWorkspace, 'workspace.sqlite'), { readOnly: true });
   if (copiedMetadata.prepare('SELECT count(*) AS count FROM projects WHERE id IN (?, ?)').get(sourceProject, copyProject).count !== 2) {
     throw new Error('Copied workspace lost project definitions.');
   }
   copiedMetadata.close();
+
+  await page.keyboard.press('Control+Shift+P');
+  await commandSearch.fill('E2E 테스트');
+  await palette.getByRole('option', { name: /E2E 테스트.*프로젝트/ }).click();
+  if (await projectSelector.inputValue() !== sourceProject) throw new Error('The palette opened a different project.');
+  await page.keyboard.press('Control+Shift+P');
+  await commandSearch.fill('복원 검증');
+  await palette.getByRole('option', { name: /복원 검증.*SQLite 연결/ }).click();
+  await page.getByRole('heading', { name: /복원 검증/ }).waitFor();
 
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   console.log('SQLite browsing, cancellation, editing, CSV/JSON, restore, audit, project lifecycle and workspace copy passed.');

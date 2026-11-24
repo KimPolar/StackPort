@@ -15,11 +15,12 @@ import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from ".
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { ResultExportDialog, type ExportReport, type ExportSource } from "./ResultExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
+import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
-import { WorkspaceNavigation, type WorkspacePage } from "./WorkspaceNavigation";
+import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -69,6 +70,8 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 function App() {
   const [page, setPage] = useState<WorkspacePage>("workspace");
   const [explorerOpen, setExplorerOpen] = useState(true);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [recentCommands, setRecentCommands] = useState<string[]>([]);
   const [terminalTabCount, setTerminalTabCount] = useState(0);
   const [rdpClientCount, setRdpClientCount] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
@@ -162,6 +165,18 @@ function App() {
   useEffect(() => {
     if (desktop) reloadProjects().catch(e => setError(errorText(e)));
   }, [reloadProjects]);
+
+  useEffect(() => {
+    function openCommandPalette(event: globalThis.KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey || event.isComposing
+        || event.key.toLowerCase() !== "p" || document.querySelector("dialog[open]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPaletteOpen(true);
+    }
+    window.addEventListener("keydown", openCommandPalette, true);
+    return () => window.removeEventListener("keydown", openCommandPalette, true);
+  }, []);
 
   useEffect(() => {
     if (!desktop) return;
@@ -355,6 +370,69 @@ function App() {
     setPage(next);
   }
 
+  function selectSqliteProfile(id: string) {
+    setProfileId(id);
+    openPage("workspace");
+  }
+
+  function openSavedSsh(item: SshProfile) {
+    setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current });
+    openPage("terminal");
+  }
+
+  function showHistory() {
+    setPage("workspace");
+    setHistoryOpen(true);
+  }
+
+  function workspaceCommands(): WorkspaceCommand[] {
+    const commands: WorkspaceCommand[] = workspaceTools.filter(tool => desktop || !("native" in tool)).map(tool => ({
+      id: `tool:${tool.id}`, title: tool.label, group: "도구", keywords: tool.keywords, Icon: tool.Icon, run: () => openPage(tool.id),
+    }));
+    commands.push({
+      id: "toggle:explorer", title: explorerOpen ? "탐색기 접기" : "탐색기 펼치기", group: "작업",
+      keywords: "explorer sidebar", Icon: explorerOpen ? PanelLeftClose : PanelLeftOpen, run: () => setExplorerOpen(open => !open),
+    });
+    if (desktop) {
+      commands.push(
+        { id: "open:history", title: "작업 기록", group: "작업", keywords: "audit history", Icon: History, run: showHistory },
+        { id: "create:project", title: "새 프로젝트", group: "작업", Icon: Plus, run: () => openModal("project") },
+        { id: "open:archived", title: "보관된 프로젝트", group: "작업", Icon: Archive, run: () => setArchivedProjectsOpen(true) },
+      );
+    }
+    if (project) {
+      commands.push(
+        { id: "create:sqlite", title: "SQLite 연결 추가", group: "작업", Icon: Database, run: () => openModal("profile") },
+        { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
+      );
+    }
+    for (const item of projects) commands.push({
+      id: `project:${item.id}`, title: item.name, group: "프로젝트",
+      Icon: FolderOpen, run: () => setProjectId(item.id),
+    });
+    for (const item of profiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `sqlite:${item.id}`, title: item.name, group: "SQLite 연결", detail: item.environment,
+      Icon: Database, run: () => selectSqliteProfile(item.id),
+    });
+    for (const item of sshProfiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
+      Icon: TerminalSquare, run: () => openSavedSsh(item),
+    });
+    if (profile?.project_id === projectId && !loading) {
+      for (const item of objects) commands.push({
+        id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
+        detail: profile.name, keywords: `sqlite ${item.kind}`, Icon: Table2, run: () => openObject(item),
+      });
+    }
+    return commands;
+  }
+
+  function runWorkspaceCommand(command: WorkspaceCommand) {
+    setPaletteOpen(false);
+    setRecentCommands(current => [command.id, ...current.filter(id => id !== command.id)].slice(0, 12));
+    command.run();
+  }
+
   async function submitForm(event: React.FormEvent) {
     event.preventDefault();
     if (saving) return;
@@ -426,7 +504,10 @@ function App() {
           <span className="brand-name">StackPort</span>
           <span className="workspace-context" title={project?.name}><FolderOpen size={14} aria-hidden /><span>{project?.name ?? "프로젝트 없음"}</span></span>
         </div>
-        <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
+        <div className="top-right">
+          <button className="history-button palette-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+P Meta+Shift+P"
+            title="명령 팔레트 (Ctrl+Shift+P)" onClick={() => setPaletteOpen(true)}><Search size={15} aria-hidden /> 명령 팔레트 <kbd aria-hidden>Ctrl+Shift+P</kbd></button>
+          <button className="history-button" disabled={!desktop} onClick={() => { if (page === "workspace" && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
         </div>
       </header>
       <div className="workspace-toolbar">
@@ -454,7 +535,7 @@ function App() {
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
           </div></div>
           {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
-          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => { setProfileId(item.id); openPage("workspace"); }}>
+          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => selectSqliteProfile(item.id)}>
             {item.id === profileId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Database size={15} /><span>{item.name}</span><small>{item.environment}</small>
           </button>)}</div>
           {profile && <div className="object-list">
@@ -468,7 +549,7 @@ function App() {
           <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => setSshExchange("import")} disabled={!project} aria-label="SSH 연결 가져오기" title="SSH 연결 가져오기"><FileUp size={14} /></button><button className="icon-button" onClick={() => setSshExchange("export")} disabled={!project || !sshProfiles.length} aria-label="SSH 연결 내보내기" title="SSH 연결 내보내기"><FileDown size={14} /></button><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
           {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
           <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
-            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); openPage("terminal"); }}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
+            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => openSavedSsh(item)}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
             <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
             <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
           </div>)}</div>
@@ -550,6 +631,8 @@ function App() {
         {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
       </footer>
     </div>
+    {paletteOpen && <CommandPalette commands={workspaceCommands()} recent={recentCommands}
+      onClose={() => setPaletteOpen(false)} onRun={runWorkspaceCommand} />}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
       {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite 및 SSH 연결 정의를 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}

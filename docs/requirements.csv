@@ -4,8 +4,8 @@ SP-UI-002,통합 탐색기,"좌측 탐색 트리에서 호스트, 세션, DB 연
 SP-UI-003,무제한 탭,서로 다른 유형의 탭을 동시에 열고 순서 변경·고정·복제·일괄 닫기·최근 닫은 탭 복원.,partial,"여러 Windows 터미널 탭 열기·전환·닫기, 도구 전환 후 열린 터미널·RDP 세션 표시",src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs
 SP-UI-004,화면 분할,"2분할 수평/수직, 4분할, 자유 분할 및 크기 조절. 터미널과 SQL 편집기 등을 교차 배치.",not_started,,
 SP-UI-005,탭 분리,데스크톱에서 탭을 별도 창으로 분리·재결합하고 전체 화면을 제공.,not_started,,
-SP-UI-006,통합 검색,"연결 이름, 경로, 즐겨찾기, DB 객체, 저장 쿼리, 로그, 도구를 검색. 민감 정보는 색인 제외.",not_started,,
-SP-UI-007,명령 팔레트,단축키로 기능·명령·호스트·DB를 빠르게 열고 최근 항목을 우선 표시.,not_started,,
+SP-UI-006,통합 검색,"연결 이름, 경로, 즐겨찾기, DB 객체, 저장 쿼리, 로그, 도구를 검색. 민감 정보는 색인 제외.",partial,명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결·선택한 SQLite 연결의 테이블과 뷰 검색,src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
+SP-UI-007,명령 팔레트,단축키로 기능·명령·호스트·DB를 빠르게 열고 최근 항목을 우선 표시.,partial,"Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-008,빠른 연결,"호스트/IP/URL/연결 문자열 입력에서 프로토콜 추론, 유효성 검사 및 신규 프로필 저장 제안.",partial,Windows SSH 호스트·포트·사용자 빠른 연결,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-UI-009,즐겨찾기,연결·쿼리·테이블·스크립트·폴더·작업을 고정하고 개인 즐겨찾기 및 프로젝트 공유 구분.,not_started,,
 SP-UI-010,가상 그룹,같은 연결·DB 객체를 실제 위치를 바꾸지 않고 태그/논리 그룹으로 분류.,not_started,,
@@ -14,7 +14,7 @@ SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
 SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-UI-015,테마·레이아웃,"라이트/다크/시스템, 크기·아이콘·글꼴·색상, 컴팩트/집중 모드 및 패널 숨김.",not_started,,
-SP-UI-016,키보드 중심,"키보드 탐색, 명령 검색, 사용자 지정 단축키, 탭 전환, 컨텍스트 메뉴 대체 동작.",partial,"작업 도구와 터미널 탭의 키보드 이동, Ctrl+Shift+F 터미널 출력 검색",src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs
+SP-UI-016,키보드 중심,"키보드 탐색, 명령 검색, 사용자 지정 단축키, 탭 전환, 컨텍스트 메뉴 대체 동작.",partial,"작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, Ctrl+Shift+F 터미널 출력 검색",src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-017,도움말,"문맥형 설명, 연결 진단, 프로토콜별 오류 가이드, 키보드 단축키 검색.",not_started,,
 SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자로 특정 프로젝트/세션/쿼리/작업 열기.,not_started,,
 SP-UI-019,입력 보존,미저장 SQL/모델/원격 파일은 탭 닫기·창 닫기 시 변경분과 복구 옵션을 제공.,partial,연결별 SQL 초안을 실행 중 메모리에 유지,crates/stackport-core/tests/workspace.rs; src/; src-tauri/

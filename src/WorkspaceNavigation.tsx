@@ -3,12 +3,12 @@ import { Database, FolderOpen, Monitor, Network, TerminalSquare } from "lucide-r
 
 export type WorkspacePage = "workspace" | "terminal" | "files" | "rdp" | "network";
 
-const tools = [
-  { id: "workspace", label: "데이터베이스", Icon: Database },
-  { id: "terminal", label: "터미널", Icon: TerminalSquare, native: true },
-  { id: "files", label: "파일 탐색", Icon: FolderOpen, native: true },
-  { id: "rdp", label: "원격 화면", Icon: Monitor },
-  { id: "network", label: "네트워크", Icon: Network, native: true },
+export const workspaceTools = [
+  { id: "workspace", label: "데이터베이스", keywords: "database sqlite sql db", Icon: Database },
+  { id: "terminal", label: "터미널", keywords: "terminal powershell cmd ssh", Icon: TerminalSquare, native: true },
+  { id: "files", label: "파일 탐색", keywords: "files sftp 원격 파일", Icon: FolderOpen, native: true },
+  { id: "rdp", label: "원격 화면", keywords: "rdp remote desktop 원격 데스크톱", Icon: Monitor },
+  { id: "network", label: "네트워크", keywords: "network 포트 연결 진단 ping dns tcp http", Icon: Network, native: true },
 ] as const;
 
 export function WorkspaceNavigation({ page, desktop, historyOpen, terminalCount, rdpCount, onSelect }: {
@@ -31,7 +31,7 @@ export function WorkspaceNavigation({ page, desktop, historyOpen, terminalCount,
   }
 
   return <nav className="tool-strip" aria-label="작업 도구" onKeyDown={moveFocus}>
-    {tools.map(tool => {
+    {workspaceTools.map(tool => {
       const current = !historyOpen && page === tool.id;
       const count = tool.id === "terminal" ? terminalCount : tool.id === "rdp" ? rdpCount : 0;
       return <button key={tool.id} type="button" className="tool-tab" aria-current={current ? "page" : undefined}

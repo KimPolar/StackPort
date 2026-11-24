@@ -8,6 +8,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 공통 작업 공간의 상단에는 현재 프로젝트와 작업 기록, 도구 전환을 배치합니다. 어느 도구에서든 프로젝트 탐색기를 펼치거나 접을 수 있습니다. 탐색기에서 SQLite 연결·객체를 선택하면 데이터베이스 화면이 열리고, 저장된 SSH 연결을 선택하면 해당 연결 설정과 터미널로 이동합니다. 도구 버튼에 초점이 있을 때 좌우 화살표와 Home·End로 이동하고 Enter로 엽니다. 열려 있는 터미널과 RDP 작업 수는 다른 도구에서도 표시합니다. 원격 파일 화면의 연결 표시는 연결할 때의 프로젝트와 서버를 계속 보여줍니다. [PuTTY의 저장된 세션](https://the.earth.li/~sgtatham/putty/latest/htmldoc/Chapter4.html#config-saving) · [Navicat의 객체 탐색](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html) · [MobaXterm의 세션 관리](https://mobaxterm.mobatek.net/documentation.html)
 
+상단의 **명령 팔레트**나 `Ctrl+Shift+P`로 도구, 활성 프로젝트, 현재 프로젝트의 SQLite·SSH 연결, 선택된 SQLite 연결의 테이블·뷰를 검색합니다. ↑·↓로 결과를 이동하고 Enter로 엽니다. 최근에 실행한 명령 최대 12개는 현재 실행의 메모리에 두고 검색어가 없을 때 먼저 표시합니다. 검색 대상은 이름·유형·환경과 도구 키워드입니다. 파일 경로, 호스트 주소, 자격 증명, SQL 본문, 쿼리 값과 터미널 출력은 검색 대상에 포함하지 않습니다. 저장된 SSH를 선택하면 기존 호스트 키 확인 화면이 열립니다. [WAI-ARIA 콤보 상자](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/) · [모달 대화 상자](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/)
+
 Windows 로컬 터미널은 ConPTY와 xterm.js를 사용하며 PowerShell(`-NoProfile`) 또는 CMD(`/D`) 세션을 별도 탭으로 엽니다. 출력은 메모리에 유지하며 파일 저장은 사용자 요청으로 시작합니다. 셸과 실행 프로그램은 자체 기록 설정을 사용합니다. 화면을 숨겨도 세션을 유지하며 출력 대기열은 유한한 크기로 제한하고 밀리면 프로세스에 역압을 적용합니다. 창 크기는 PTY에 전달하고, 여러 줄 붙여넣기 및 탭·앱 종료 시 확인합니다. Windows 작업 개체에 연결된 프로세스는 탭이나 앱을 닫을 때 정리합니다. Windows 10 1809 이상의 ConPTY가 필요하며 WSL·사용자 지정 셸, 재연결, 명령 기록 관리와 다른 OS 검증은 아직 없습니다.
 
 터미널 상단에 PowerShell·CMD 열기와 SSH 연결을 배치합니다. 직접 입력하는 SSH 연결은 별도 창에서 호스트·포트, 사용자·인증 방식을 각각 나란히 보여줍니다. 탐색기에서 저장된 SSH 연결을 열면 해당 서버와 환경을 연결 창에 표시합니다.
