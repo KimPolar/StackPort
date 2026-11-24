@@ -1,6 +1,6 @@
-import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, HardDrive, Link, Pencil, RefreshCw, Server, Trash2, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
@@ -14,8 +14,11 @@ type Directory = { path: string; location: string; parent: string | null; entrie
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
 type BrowsePath = { kind: "text" | "token"; value: string };
+type FileSort = { key: "name" | "size" | "modified"; direction: "ascending" | "descending" };
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
+const names = new Intl.Collator("ko-KR", { numeric: true, sensitivity: "base" });
+const fileColumns = [["name", "이름"], ["size", "크기"], ["modified", "수정"]] as const;
 const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료", edit: "원격 파일 저장 완료" };
 
@@ -313,6 +316,19 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
+function compareEntries(left: Entry, right: Entry, { key, direction }: FileSort) {
+  if ((left.kind === "directory") !== (right.kind === "directory")) return left.kind === "directory" ? -1 : 1;
+  const byName = names.compare(left.name, right.name) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  const order = direction === "ascending" ? 1 : -1;
+  if (key === "name") return byName * order;
+  const a = key === "size" && left.kind === "directory" ? null : left[key];
+  const b = key === "size" && right.kind === "directory" ? null : right[key];
+  if (a === null || b === null) return a === b ? byName : a === null ? 1 : -1;
+  const sizeOrTimeA = key === "size" ? BigInt(a) : a;
+  const sizeOrTimeB = key === "size" ? BigInt(b) : b;
+  return (sizeOrTimeA < sizeOrTimeB ? -order : sizeOrTimeA > sizeOrTimeB ? order : byName);
+}
+
 function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, onEdit, action, refresh }: {
   id: string; active: boolean; title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
@@ -325,10 +341,18 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
   const [value, setValue] = useState(initial ? displayPath(initial.path) : "");
   const [hidden, setHidden] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [sort, setSort] = useState<FileSort>({ key: "name", direction: "ascending" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
-  const shown = directory?.entries.filter(entry => hidden || !entry.hidden) ?? [];
+  const filterInput = useRef<HTMLInputElement>(null);
+  const { shown, available } = useMemo(() => {
+    const entries = directory?.entries.filter(entry => hidden || !entry.hidden) ?? [];
+    const query = filter.normalize("NFC").toLocaleLowerCase("ko-KR");
+    const shown = query ? entries.filter(entry => entry.name.normalize("NFC").toLocaleLowerCase("ko-KR").includes(query)) : entries;
+    return { available: entries.length, shown: shown.sort((left, right) => compareEntries(left, right, sort)) };
+  }, [directory, filter, hidden, sort]);
   const actionLabel = action?.kind === "upload" ? "업로드" : "다운로드";
 
   async function navigate(path: BrowsePath | null) {
@@ -343,6 +367,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
         path = { kind: "text", value: picked };
       }
       const next = await load(path);
+      if (next.location !== directory?.location) setFilter("");
       setDirectory(next);
       setValue(displayPath(next.path));
       onFolder?.(next);
@@ -366,7 +391,8 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
 
   const PaneIcon = chooseFolder ? HardDrive : Server;
   return <section className="results-card files-pane" id={id} data-active={active} aria-label={title}>
-    <div className="panel-heading"><div><PaneIcon size={15} aria-hidden /><strong>{title}</strong>{directory && <span>{numbers.format(shown.length)}개 항목</span>}</div>
+    <div className="panel-heading"><div><PaneIcon size={15} aria-hidden /><strong>{title}</strong>
+      {directory && <span aria-live="polite">{numbers.format(shown.length)}{filter ? ` / ${numbers.format(available)}` : ""}개 항목</span>}</div>
       {chooseFolder && <button type="button" className="secondary small" disabled={busy} onClick={() => void navigate(null)}>폴더 선택</button>}
       {directory && onNameAction && <button type="button" className="secondary small" disabled={busy}
         onClick={() => onNameAction({ kind: "create", parent: directory })}><FolderPlus size={14} /> 새 폴더</button>}
@@ -379,12 +405,34 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
       <button type="button" className="icon-button" aria-label={`${title} 새로고침`} disabled={busy || !directory}
         onClick={() => directory && void navigate({ kind: "token", value: directory.location })}><RefreshCw size={14} /></button>
     </form>
-    {directory && <label className="files-check"><input type="checkbox" checked={hidden} onChange={event => setHidden(event.target.checked)} /> 숨김 파일 표시</label>}
+    {directory && <div className="files-list-controls">
+      <div className="files-filter">
+        <Search size={14} aria-hidden />
+        <input ref={filterInput} type="search" aria-label={`${title} 이름으로 찾기`} placeholder="이름으로 찾기" spellCheck={false} autoComplete="off"
+          value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => {
+            if (event.key === "Escape" && filter) {
+              event.preventDefault();
+              setFilter("");
+            }
+          }} />
+        {filter && <button type="button" className="icon-button" aria-label={`${title} 이름 검색 지우기`}
+          onClick={() => { setFilter(""); filterInput.current?.focus(); }}><X size={14} aria-hidden /></button>}
+      </div>
+      <label className="files-check"><input type="checkbox" checked={hidden} onChange={event => setHidden(event.target.checked)} /> 숨김 파일 표시</label>
+    </div>}
     {busy && <p className="form-note files-note" role="status">폴더를 읽는 중…</p>}
     {error && <p className="form-error files-note" role="alert">{error}</p>}
     {directory?.truncated && <p className="form-note files-note">처음 2,000개 항목을 표시합니다. 하위 폴더는 경로를 입력해 열 수 있습니다.</p>}
     {directory && <div className="files-table-wrap"><table className="files-table" aria-label={`${title} 목록`}>
-      <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}<th scope="col"><span className="sr-only">파일 작업</span></th></tr></thead>
+      <thead><tr>{fileColumns.map(([key, label]) => {
+        const active = sort.key === key;
+        const SortIcon = active ? sort.direction === "ascending" ? ArrowUp : ArrowDown : ArrowUpDown;
+        return <th scope="col" key={key} aria-sort={active ? sort.direction : undefined}>
+          <button type="button" className="files-sort" onClick={() => setSort(current => ({
+            key, direction: current.key === key && current.direction === "ascending" ? "descending" : "ascending",
+          }))}>{label}<SortIcon size={12} aria-hidden /></button>
+        </th>;
+      })}{!chooseFolder && <th scope="col">권한 · UID/GID</th>}<th scope="col"><span className="sr-only">파일 작업</span></th></tr></thead>
       <tbody>{shown.map((entry, index) => {
         const location = entry.location;
         const kind = entry.kind;
@@ -424,6 +472,6 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
       })}</tbody>
     </table></div>}
     {!directory && !busy && !error && <div className="files-empty"><p>폴더를 선택하거나 경로를 입력하세요.</p></div>}
-    {directory && !shown.length && <p className="form-note files-note">표시할 파일이 없습니다.</p>}
+    {directory && !shown.length && <p className="form-note files-note">{filter ? "이름이 일치하는 항목이 없습니다." : "표시할 파일이 없습니다."}</p>}
   </section>;
 }

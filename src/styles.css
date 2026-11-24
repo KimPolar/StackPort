@@ -288,11 +288,23 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-path { display: flex; align-items: center; gap: 8px; padding: 9px 12px 4px; }
 .files-path input { flex: 1; min-width: 0; padding: 6px; border: 1px solid #d6e4db; border-radius: 4px; }
 .files-check { display: flex; align-items: center; gap: 6px; margin: 8px 12px; font-size: 12px; color: #526a5f; }
+.files-list-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 5px 12px 8px; }
+.files-list-controls .files-check { margin: 0; white-space: nowrap; }
+.files-filter { display: flex; flex: 1 1 155px; min-width: 0; align-items: center; gap: 6px; padding: 0 6px; border: 1px solid #d6e4db; border-radius: 5px; color: #526a5f; background: white; }
+.files-filter:focus-within { border-color: #189979; }
+.files-filter > svg { flex-shrink: 0; }
+.files-filter input { flex: 1; min-width: 0; height: 30px; border: 0; color: #39594b; background: transparent; font-size: 12px; }
+.files-filter input::-webkit-search-cancel-button { appearance: none; }
+.files-filter .icon-button { width: 23px; height: 23px; flex-shrink: 0; }
 .files-note { margin-inline: 12px; }
 .files-table-wrap { flex: 1; min-height: 0; overflow: auto; }
 .files-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .files-table th, .files-table td { text-align: start; padding: 7px 8px; white-space: nowrap; border-top: 1px solid #e7eee9; }
 .files-table th { position: sticky; top: 0; background: #eef4f0; }
+.files-sort { display: inline-flex; align-items: center; gap: 5px; padding: 2px 3px; margin: -2px -3px; border: 0; border-radius: 4px; color: inherit; background: transparent; font-size: inherit; font-weight: inherit; }
+.files-sort:hover { background: #e0eee8; }
+.files-sort svg { color: #60786b; }
+.files-table th[aria-sort] .files-sort { color: #155e4e; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }
