@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "re
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
+import { editorLanguageForFile } from "./editorSyntax";
 import { SftpExternalEditor } from "./SftpExternalEditor";
 import { SftpTransferStatus, useSftpTransfer } from "./SftpTransferStatus";
 import type { TransferResult } from "./SftpTransferDialog";
@@ -202,7 +203,7 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onDr
       {doc && <>
         <div className="field sftp-code-field">
           <label htmlFor="sftp-editor-text">파일 내용</label>
-          <CodeTextarea editorRef={editor} id="sftp-editor-text" className="sftp-editor-text" value={text}
+          <CodeTextarea editorRef={editor} id="sftp-editor-text" className="sftp-editor-text" value={text} language={editorLanguageForFile(selection.name)}
             spellCheck={false} readOnly={editingLocked} onChange={event => setText(event.target.value)}
             footer={<span>UTF-8{doc.bom && " BOM"} · {doc.line_ending.toUpperCase()} · {numbers.format(bytes)} B</span>} />
         </div>

@@ -873,7 +873,7 @@ function App() {
             aria-labelledby={sqlTabButtonId(draft.id)} hidden={draft.id !== sqlTabs.activeId}>
             {draft.id === sqlTabs.activeId && <>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label>
-              <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql}
+              <CodeTextarea id="sql-editor" editorRef={sqlEditor} spellCheck={false} value={sql} language="sqlite"
                 footer={sqlEditorFooter} onChange={event => changeSql(event.target.value)}
                 onSelect={event => {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;

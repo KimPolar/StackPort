@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject, type TextareaHTMLAttributes } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { findEditorMatches, firstAtOrAfter, replaceEditorMatches, revealEditorMatch } from "./editorSearch";
+import { editorSyntaxLine, editorSyntaxTokens, type EditorLanguage } from "./editorSyntax";
 
 const lineHeight = 21;
 const formatNumber = new Intl.NumberFormat("ko-KR");
@@ -11,11 +12,14 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "value" | "wrap">
   editorRef: RefObject<HTMLTextAreaElement | null>;
   value: string;
   footer: ReactNode;
+  language?: EditorLanguage;
 };
 
-export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onFocus, onScroll, ...props }: Props) {
+export function CodeTextarea({ editorRef, value, footer, language, onChange, onSelect, onFocus, onScroll,
+  onCompositionStart, onCompositionEnd, ...props }: Props) {
   const [selection, setSelection] = useState({ start: 0, end: 0, backward: false });
-  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  const [viewport, setViewport] = useState({ top: 0, left: 0, height: 0, width: 0 });
+  const [composing, setComposing] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -36,11 +40,12 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
     return starts;
   }, [value]);
   const matches = useMemo(() => findEditorMatches(value, query, matchCase), [value, query, matchCase]);
+  const syntax = useMemo(() => language && !composing ? editorSyntaxTokens(value, language) : null, [value, language, composing]);
 
   function syncViewport(editor: HTMLTextAreaElement) {
-    const top = editor.scrollTop;
-    const height = editor.clientHeight;
-    setViewport(previous => previous.top === top && previous.height === height ? previous : { top, height });
+    const { scrollTop: top, scrollLeft: left, clientHeight: height, clientWidth: width } = editor;
+    setViewport(previous => previous.top === top && previous.left === left && previous.height === height && previous.width === width
+      ? previous : { top, left, height, width });
   }
 
   useLayoutEffect(() => {
@@ -149,6 +154,14 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
   const first = Math.max(0, Math.min(lineStarts.length - 1, Math.floor(viewport.top / lineHeight) - 1));
   const visible = Math.min(lineStarts.length - first, Math.ceil(viewport.height / lineHeight) + 3);
   const shift = first * lineHeight - viewport.top;
+  const highlightedLines = useMemo(() => syntax?.length ? Array.from({ length: visible }, (_, row) => {
+    const index = first + row;
+    const start = lineStarts[index];
+    const end = index + 1 < lineStarts.length ? lineStarts[index + 1] - 1 : value.length;
+    return <div key={index}>{editorSyntaxLine(value, syntax, start, end).map((part, column) => part.kind
+      ? <span key={column} data-syntax={part.kind}>{part.text}</span> : part.text)}</div>;
+  }) : null, [first, lineStarts, syntax, value, visible]);
+  const showHighlight = !!highlightedLines && viewport.height > 0 && viewport.width > 0;
   const style = {
     "--code-line-height": `${lineHeight}px`,
     "--code-gutter-digits": Math.max(2, String(lineStarts.length).length),
@@ -222,11 +235,18 @@ export function CodeTextarea({ editorRef, value, footer, onChange, onSelect, onF
           </div>
         </div>
       </div>
-      <textarea {...props} ref={editorRef} wrap="off" value={value}
-        onChange={event => { syncCaret(event.currentTarget); setReplaceReport(null); onChange?.(event); }}
-        onSelect={event => { syncCaret(event.currentTarget); onSelect?.(event); }}
-        onFocus={event => { syncCaret(event.currentTarget); onFocus?.(event); }}
-        onScroll={event => { syncViewport(event.currentTarget); onScroll?.(event); }} />
+      <div className="code-editor-surface" data-highlight={showHighlight}>
+        {showHighlight && <div className="code-highlight" aria-hidden="true" style={{ height: viewport.height, width: viewport.width }}>
+          <div className="code-highlight-lines" style={{ transform: `translate(${-viewport.left}px, ${shift}px)` }}>{highlightedLines}</div>
+        </div>}
+        <textarea {...props} ref={editorRef} wrap="off" value={value}
+          onChange={event => { syncCaret(event.currentTarget); syncViewport(event.currentTarget); setReplaceReport(null); onChange?.(event); }}
+          onSelect={event => { syncCaret(event.currentTarget); onSelect?.(event); }}
+          onFocus={event => { syncCaret(event.currentTarget); onFocus?.(event); }}
+          onScroll={event => { syncViewport(event.currentTarget); onScroll?.(event); }}
+          onCompositionStart={event => { setComposing(true); onCompositionStart?.(event); }}
+          onCompositionEnd={event => { setComposing(false); onCompositionEnd?.(event); }} />
+      </div>
     </div>
     <div className="editor-footer">
       {footer}

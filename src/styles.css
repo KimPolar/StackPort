@@ -138,6 +138,24 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .code-editor { --code-padding: 12px; min-width: 0; }
 .code-editor-input { display: grid; grid-template-columns: auto minmax(0, 1fr); }
 .code-editor-input textarea { min-width: 0; padding: var(--code-padding); line-height: var(--code-line-height); white-space: pre; overflow: auto; }
+.code-editor-surface { position: relative; min-width: 0; background: #fff; }
+.code-editor-surface textarea, .code-highlight { font: 13px/var(--code-line-height) Consolas, "Cascadia Code", monospace; font-kerning: none; font-variant-ligatures: none; tab-size: 8; }
+.code-editor-surface textarea { position: relative; caret-color: #29463b; }
+.code-editor-surface[data-highlight="true"] textarea { color: transparent; background: transparent; }
+.code-editor-surface[data-highlight="true"] textarea::selection { color: #183d30; background: #c5e7d9; }
+.code-highlight { position: absolute; inset: 0 auto auto 0; overflow: hidden; pointer-events: none; color: #29463b; white-space: pre; }
+.code-highlight-lines { padding: var(--code-padding); }
+.code-highlight-lines > div { height: var(--code-line-height); unicode-bidi: plaintext; }
+.code-highlight [data-syntax="keyword"], .code-highlight [data-syntax="tag"] { color: #5e3194; }
+.code-highlight [data-syntax="string"] { color: #8c401c; }
+.code-highlight [data-syntax="number"] { color: #275e96; }
+.code-highlight [data-syntax="property"], .code-highlight [data-syntax="identifier"] { color: #146151; }
+.code-highlight [data-syntax="parameter"] { color: #83570c; }
+.code-highlight [data-syntax="comment"] { color: #566960; }
+@media (forced-colors: active) {
+  .code-highlight { display: none; }
+  .code-editor-surface[data-highlight="true"] textarea { color: CanvasText; background: Canvas; caret-color: CanvasText; }
+}
 .code-gutter { position: relative; width: calc(var(--code-gutter-digits) * 1ch + 20px); border-inline-end: 1px solid #e7eee9; background: #f7faf8; color: #526a5f; font: 12px/var(--code-line-height) Consolas, monospace; font-variant-numeric: tabular-nums; text-align: end; user-select: none; }
 .code-gutter-window { position: absolute; inset: 0 0 auto; overflow: hidden; }
 .code-gutter-lines { padding-top: var(--code-padding); }

@@ -1166,6 +1166,11 @@ async function verifyEditor(page, remote, uploads, local) {
   uploads.files.set(`${folder}/편집 불가.bin`, { data: Buffer.from([0, 255]), attrs: { ...file('').attrs, size: 2 } });
   const tooBig = Buffer.alloc(512 * 1024 + 1, 65);
   uploads.files.set(`${folder}/편집 큰 파일.txt`, { data: tooBig, attrs: { ...file('').attrs, size: tooBig.length } });
+  const highlighted = new Map([['편집 설정.JSON', '{"경로":"한글", "enabled":true}'], ['편집 문서.xml', '<보고서 id="1">내용</보고서>']]);
+  for (const [name, value] of highlighted) {
+    const data = Buffer.from(value);
+    uploads.files.set(`${folder}/${name}`, { data, attrs: { ...file('').attrs, size: data.length } });
+  }
   await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
   const open = name => remote.getByRole('button', { name: `${name} 편집`, exact: true }).click();
   const error = pattern => dialog.getByRole('alert').getByText(pattern).waitFor();
@@ -1181,9 +1186,22 @@ async function verifyEditor(page, remote, uploads, local) {
     await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
     await dialog.waitFor({ state: 'detached' });
   }
+  const syntax = dialog.locator('.code-highlight-lines');
+  for (const [name, value] of highlighted) {
+    await open(name);
+    const token = name.endsWith('.JSON') ? ['property', '"경로"'] : ['tag', '<보고서 id="1">'];
+    await syntax.locator(`[data-syntax="${token[0]}"]`).getByText(token[1], { exact: true }).waitFor();
+    assert.equal(await text.inputValue(), value);
+    assert.equal(await syntax.textContent(), value);
+    assert.equal(await syntax.locator('보고서').count(), 0);
+    await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+    await dialog.waitFor({ state: 'detached' });
+    uploads.files.delete(`${folder}/${name}`);
+  }
 
   await open(fileName);
   await text.waitFor();
+  assert.equal(await syntax.count(), 0);
   assert.equal(await text.inputValue(), 'alpha\nstart\n');
   await dialog.getByText(/UTF-8 BOM · CRLF/).waitFor();
   await text.press('Control+Home');
