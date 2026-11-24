@@ -59,13 +59,34 @@ async function main() {
   await page.getByRole('button', { name: '포트 새로고침' }).click();
   await rowAt(udpEndpoint).waitFor({ state: 'detached' });
   await page.getByText('표시할 포트가 없습니다.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '연결 진단', exact: true }).click();
+  const tool = page.getByLabel('진단 유형');
+  const target = page.getByLabel('대상 호스트 또는 IP');
+  const run = page.getByRole('button', { name: '진단 실행', exact: true });
+  await target.fill('127.0.0.1');
+  await page.getByLabel('대상 포트').fill(String(tcp.address().port));
+  await run.click();
+  await page.getByRole('status', { name: '연결 진단 결과' }).getByText(/TCP 연결 성공/).waitFor();
+  const route = page.getByRole('status', { name: '경로 진단 결과' });
+  await tool.selectOption('ping');
+  await target.fill('::1');
+  await page.getByLabel('진단 IP 버전').selectOption('ipv6');
+  await run.click();
+  await route.getByText(/종료 코드 0/).waitFor();
+  if (!(await route.locator('pre').first().innerText()).includes('::1')) throw new Error('IPv6 ping output was not displayed.');
+  await tool.selectOption('trace');
+  await target.fill('127.0.0.1');
+  await page.getByLabel('진단 IP 버전').selectOption('ipv4');
+  await run.click();
+  await route.getByText(/종료 코드 0/).waitFor();
+  if (!(await route.locator('pre').first().innerText()).includes('127.0.0.1')) throw new Error('IPv4 route output was not displayed.');
   if (errors.length) throw new Error(errors.join('\n'));
   await browser.close();
   client.destroy();
   accepted?.destroy();
   tcp.close();
   tcp6.close();
-  console.log('Local TCP listening and established sockets, IPv6 UDP, PID/process names, filtering and refresh passed.');
+  console.log('Local TCP and UDP ports, filtering, refresh, DNS/TCP, IPv6 ping and IPv4 route tracing passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

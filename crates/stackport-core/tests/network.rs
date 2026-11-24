@@ -54,3 +54,24 @@ fn invalid_targets_and_unavailable_tcp_ports_do_not_look_connected() {
     ));
     assert!(report.connected_address.is_none());
 }
+#[cfg(windows)]
+#[test]
+fn windows_echo_and_route_use_validated_loopback_targets() {
+    use stackport_core::{NetworkManager, RouteFamily, RouteTool};
+    let network = NetworkManager::default();
+    assert!(network
+        .probe_route("-t", RouteTool::Ping, RouteFamily::Auto)
+        .is_err());
+    let ping = network
+        .probe_route("127.0.0.1", RouteTool::Ping, RouteFamily::Ipv4)
+        .unwrap();
+    assert_eq!(ping.exit_code, Some(0));
+    assert!(!ping.timed_out && !ping.truncated);
+    assert!(ping.output.contains("127.0.0.1"));
+    let route = network
+        .probe_route("127.0.0.1", RouteTool::Trace, RouteFamily::Ipv4)
+        .unwrap();
+    assert_eq!(route.exit_code, Some(0));
+    assert!(!route.timed_out);
+    assert!(route.output.contains("127.0.0.1"));
+}

@@ -152,6 +152,12 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .network-filters input, .network-filters select { min-height: 31px; min-width: 0; border: 1px solid #d6e4db; border-radius: 4px; padding: 4px 6px; background: white; color: #39594b; }
 .network-card .table-wrap { max-height: min(55vh, 600px); overflow: auto; }
 .network-card th { position: sticky; top: 0; z-index: 1; }
+.network-navigation { display: flex; gap: 8px; margin-bottom: 16px; }
+.network-navigation button[aria-pressed="true"] { color: #156b55; background: #e7f3eb; border-color: #c4ddd0; }
+.network-diagnostic-form { margin: 12px 0; }
+.network-diagnostic-form fieldset { border: 0; align-items: end; }
+.route-result { margin-top: 12px; }
+.route-result pre { margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: #30473b; }
 .error-banner { margin: 16px 0; padding: 12px 14px; border: 1px solid #f1d5cf; background: #fff5f3; color: #91463d; border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
 .query-notice { margin: 16px 0; padding: 12px 14px; border: 1px solid #d9eade; background: #f1f8f3; color: #426a55; border-radius: 6px; font-size: 12px; }
 .terminal-body { overflow: auto; }.terminal-loading { margin: 30px; color: #71877c; font-size: 12px; }.terminal-workspace { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; padding: 26px 32px 28px; }.terminal-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }.terminal-heading h1 { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; color: #1f3531; font-size: 20px; }.terminal-heading h1 svg { color: #268971; }.terminal-heading p, .terminal-hint { color: #71877c; font-size: 12px; line-height: 1.6; }.terminal-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }.terminal-actions label { color: #657b70; font-size: 12px; }.terminal-actions select { height: 35px; padding: 0 8px; border: 1px solid #dbe5df; border-radius: 6px; color: #30473b; background: white; font-size: 12px; }.terminal-hint { margin: 8px 0 16px; }.terminal-empty { flex: 1; min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: #82978b; font-size: 12px; }.terminal-empty svg { color: #79a58d; }.terminal-empty strong { color: #506c5b; font-size: 14px; }

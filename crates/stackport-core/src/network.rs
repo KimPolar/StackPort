@@ -1,6 +1,6 @@
 //! Explicit, bounded DNS and TCP diagnostics without authentication.
 
-use crate::{ssh, Result};
+use crate::{network_tools, ssh, Result, RouteDiagnostic, RouteFamily, RouteTool};
 use serde::Serialize;
 use std::{
     collections::HashSet,
@@ -106,6 +106,18 @@ fn elapsed_ms(start: Instant) -> u64 {
 }
 
 impl NetworkManager {
+    pub fn probe_route(
+        &self,
+        target: &str,
+        tool: RouteTool,
+        family: RouteFamily,
+    ) -> Result<RouteDiagnostic> {
+        let target = ssh::normalize_host(target)?;
+        let _probe = reserve(&self.active, MAX_PROBES)
+            .ok_or("동시에 실행할 수 있는 연결 진단 수를 초과했습니다.")?;
+        network_tools::run(&target, tool, family)
+    }
+
     pub fn diagnose(&self, host: &str, port: u16) -> Result<NetworkDiagnostics> {
         let host = ssh::normalize_host(host)?;
         ssh::validate_port(port)?;

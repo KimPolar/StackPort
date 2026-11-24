@@ -10,6 +10,8 @@ mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
+mod network_tools;
+pub use network_tools::{RouteDiagnostic, RouteFamily, RouteTool};
 mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod project_lifecycle;

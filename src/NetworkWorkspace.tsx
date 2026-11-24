@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ArrowRight, Network, RefreshCw } from "lucide-react";
+import { NetworkDiagnosticsPanel } from "./NetworkDiagnosticsPanel";
 
 type Endpoint = { address: string; port: number };
 type LocalPort = {
@@ -21,6 +22,18 @@ function address(endpoint: Endpoint) {
 }
 
 export function NetworkWorkspace() {
+  const [mode, setMode] = useState<"ports" | "diagnostics">("ports");
+  return <section className="network-workspace" aria-label="네트워크 도구">
+    <nav className="network-navigation" aria-label="네트워크 화면">
+      <button className="secondary small" aria-pressed={mode === "ports"} onClick={() => setMode("ports")}>로컬 포트</button>
+      <button className="secondary small" aria-pressed={mode === "diagnostics"} onClick={() => setMode("diagnostics")}>연결 진단</button>
+    </nav>
+    <div hidden={mode !== "ports"}><LocalPorts /></div>
+    <div hidden={mode !== "diagnostics"}><NetworkDiagnosticsPanel /></div>
+  </section>;
+}
+
+function LocalPorts() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,7 +79,7 @@ export function NetworkWorkspace() {
   });
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
 
-  return <section className="network-workspace" aria-label="네트워크 도구">
+  return <section aria-label="Windows 로컬 포트">
     <div className="terminal-heading">
       <div><h1><Network size={20} /> 로컬 포트</h1><p>이 장치에서 Windows가 보고한 TCP 연결과 UDP 바인딩입니다.</p></div>
       <button className="secondary" onClick={() => void refresh()} disabled={busy}><RefreshCw size={15} /> 포트 새로고침</button>

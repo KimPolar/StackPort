@@ -3,7 +3,7 @@
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
-    RestorePreview, RestoreReport, SqlParameterValue, SshAuthentication,
+    RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
 };
@@ -29,6 +29,17 @@ async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> 
 #[tauri::command]
 async fn list_local_ports() -> Result<PortSnapshot, String> {
     worker(local_ports).await
+}
+
+#[tauri::command]
+async fn run_route_diagnostic(
+    network: State<'_, Arc<NetworkManager>>,
+    target: String,
+    tool: RouteTool,
+    family: RouteFamily,
+) -> Result<RouteDiagnostic, String> {
+    let network = Arc::clone(network.inner());
+    worker(move || network.probe_route(&target, tool, family)).await
 }
 
 #[tauri::command]
@@ -607,6 +618,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_local_ports,
+            run_route_diagnostic,
             list_archived_projects,
             archive_project,
             unarchive_project,

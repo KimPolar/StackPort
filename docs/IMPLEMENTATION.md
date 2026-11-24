@@ -18,7 +18,9 @@ SSH는 현재 Windows OpenSSH와 영문 호스트/IP·영문 사용자 이름만
 
 서버 대화형 인증 또는 암호를 선택하면 해당 방식으로만 접속합니다. 대화형 인증은 서버 안내와 여러 단계의 질문을 터미널에 전달하며, 각 답변의 표시 여부는 서버가 지정합니다. 질문이 여러 개여도 한 번의 인증 시도에 해당합니다. 입력 응답은 저장하지 않고 실패 후 다른 방식으로 전환하지 않습니다. 자동 모드에서는 OpenSSH가 기본 키·에이전트, 대화형 인증, 암호 순서로 시도합니다. 키와 대화형 인증을 함께 요구하는 실제 서버 구성은 별도 검증이 필요합니다.
 
-SSH 연결 화면의 선택적 네트워크 진단은 DNS 결과와 TCP 연결 성공·거부·시간 초과를 구분하고 시도한 주소별 결과를 표시합니다. 최대 8개 주소를 대상으로 DNS 4초, TCP 전체 4초와 주소별 1초를 적용합니다. 연결은 즉시 닫고 데이터를 전송하지 않으며 호스트 키·SSH 핸드셰이크·인증·서버 권한을 검사하지 않습니다. 서버에 접속 시도 기록이 남을 수 있습니다. OS의 DNS 조회는 중단할 수 없으므로 시간 초과 뒤에도 최대 4개의 조회 스레드가 남을 수 있습니다. 이 한도에 도달하면 추가 조회를 시작하지 않고 이전 조회가 진행 중이라고 표시합니다. 진단 요청은 동시에 최대 4개로 제한합니다. ping·경로 추적과 다른 프로토콜의 진단은 아직 없습니다.
+SSH 연결 화면과 네트워크 도구의 DNS·TCP 진단은 DNS 결과와 TCP 연결 성공·거부·시간 초과를 구분하고 시도한 주소별 결과를 표시합니다. 최대 8개 주소를 대상으로 DNS 4초, TCP 전체 4초와 주소별 1초를 적용합니다. 연결은 즉시 닫고 애플리케이션 데이터를 전송하지 않으며 호스트 키·SSH 핸드셰이크·인증·서버 권한을 검사하지 않습니다. 서버에 접속 시도 기록이 남을 수 있습니다. OS의 DNS 조회는 중단할 수 없으므로 시간 초과 뒤에도 최대 4개의 조회 스레드가 남을 수 있습니다. 이 한도에 도달하면 추가 조회를 시작하지 않고 이전 조회가 진행 중이라고 표시합니다. 진단 요청은 동시에 최대 4개로 제한합니다.
+
+네트워크 도구는 사용자가 지정한 단일 대상에 Windows [Ping](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ping)과 [tracert](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tracert)를 실행합니다. 자동·IPv4·IPv6를 선택할 수 있습니다. Ping은 요청 4회와 전체 12초, 경로 추적은 역방향 조회를 끄고 최대 12홉과 전체 24초를 적용합니다. 종료 코드·경과 시간과 운영체제 출력을 표시하며 각 출력 스트림의 처음 16 KiB만 보관합니다. ICMP 결과는 서비스 인증이나 애플리케이션의 가용성을 검증하지 않습니다.
 
 네트워크 화면의 로컬 포트 목록은 [Windows IP Helper TCP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedtcptable)와 [UDP](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-getextendedudptable) 테이블을 읽습니다. IPv4·IPv6의 로컬 주소·포트·PID, TCP 원격 주소와 연결 상태, UDP 바인딩을 표시합니다. 프로세스 조회 권한이 있으면 실행 파일 이름을 표시하고 파일 경로는 반환하지 않습니다. 소켓과 프로세스는 조회 사이에 바뀔 수 있습니다. 일부 테이블이 실패하면 읽은 목록과 원인을 함께 표시합니다. 조회는 수동 새로고침을 지원하며 연결 시도나 트래픽 전송을 수행하지 않습니다.
 
@@ -66,7 +68,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/src/ssh.rs` 단위 테스트: 대상 검증, 지문 선택·만료, 신뢰 키의 동시 변경 차단, 이력 저장 실패 시 롤백과 손상된 저장소 거부를 검사합니다.
 - `crates/stackport-core/tests/table_query.rs`: 실제 SQLite 파일에서 바인딩 값, 스키마 확인, NULL과 다중 열 정렬, 날짜 범위, 페이지 이동을 검사합니다.
 - `crates/stackport-core/tests/csv_export.rs`: 여러 페이지 분량의 결과, 필터·정렬·매개변수 보존, CSV 인코딩, 취소·오류 시 정리와 감사 기록의 값 제외를 검사합니다.
-- `crates/stackport-core/tests/ports.rs`와 `tests/ports-smoke.cjs`: Windows에서 직접 연 루프백 TCP·UDP 소켓의 주소·상태·PID·프로세스와 UI 필터·새로고침을 검사합니다.
+- `crates/stackport-core/tests/ports.rs`, `crates/stackport-core/tests/network.rs`, `tests/ports-smoke.cjs`: Windows에서 직접 연 루프백 소켓으로 포트 주소·상태·PID·프로세스, 필터·새로고침, DNS·TCP, Ping과 경로 추적을 검사합니다.
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
 - `crates/stackport-core/tests/restore.rs`: 백업 복원 후 객체·행 수·체크섬 검증, 미리보기 이후 백업 변경, 기존 대상·저널 충돌과 작업 기록의 민감 정보 제외를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에서 그리드 필터·정렬·페이지 이동, 조회 중단·재조회, 단일 셀 편집, 운영 환경 확인, 별도 파일 복원 후 원본 보존·재조회 및 작업 기록을 검사합니다.
