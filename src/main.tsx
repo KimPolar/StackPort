@@ -15,6 +15,7 @@ import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout"
 import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
+import { SqliteRowChangeDialog, SqliteRowFields, type RowChangeRequest, type RowChangeResult } from "./SqliteRowChangeDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { SqlFileDialog } from "./SqlFileDialog";
@@ -231,6 +232,10 @@ function App() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editRequest, setEditRequest] = useState<EditRequest | null>(null);
   const [editReport, setEditReport] = useState<EditResult | null>(null);
+  const [rowChange, setRowChange] = useState<RowChangeRequest | null>(null);
+  const [rowReport, setRowReport] = useState<{ profile: string; table: string; result: RowChangeResult } | null>(null);
+  const rowChangeTrigger = useRef<HTMLButtonElement | null>(null);
+  const rowAddButton = useRef<HTMLButtonElement>(null);
   const [saving, setSaving] = useState(false);
   const queryGeneration = useRef(0);
   const activeQuery = useRef<ActiveQuery | null>(null);
@@ -412,6 +417,7 @@ function App() {
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
+    setRowReport(null);
     if (profileId) {
       setLoading(true);
       call<DatabaseObject[]>("list_objects", { profileId })
@@ -1170,6 +1176,10 @@ function App() {
   const canEditRows = Boolean(!pinned && profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && resultForObject);
   const tableLayoutTarget = profile && resultForObject && result && !pinned && executedQuery?.kind === "table"
     ? { engine: "sqlite" as const, profile: profile.id, object: executedQuery.request.object } : null;
+  const rowChangeTable = canEditRows && tableLayoutTarget && !objectDetails?.columns.some(column => column.hidden !== 0)
+    ? tableLayoutTarget.object : null;
+  const currentRowReport = rowReport && tableLayoutTarget?.profile === rowReport.profile && tableLayoutTarget.object === rowReport.table
+    ? rowReport.result : null;
   const tableLayoutKey = tableLayoutTarget ? JSON.stringify([tableLayoutTarget.profile, tableLayoutTarget.object]) : null;
   const sqliteGrid = useGridLayout(tableLayoutTarget);
   const sourceColumns = new Map(result?.columns.map((name, index) => [name, index]));
@@ -1185,6 +1195,20 @@ function App() {
   function closeSqliteLayout() {
     setSqliteLayoutDialog(null);
     requestAnimationFrame(() => sqliteLayoutButton.current?.focus());
+  }
+  function openRowChange(change: RowChangeRequest["change"], trigger: HTMLButtonElement) {
+    if (!profile || !rowChangeTable) return;
+    rowChangeTrigger.current = trigger;
+    setRowReport(null);
+    setRowChange({ profile: { ...profile, path: displayPath(profile.path) }, table: rowChangeTable, change });
+  }
+  function closeRowChange(applied = false) {
+    const trigger = rowChangeTrigger.current;
+    setRowChange(null);
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected && !applied) trigger.focus();
+      else rowAddButton.current?.focus();
+    });
   }
   const editUnavailableReason = !pinned && selectedObject && objectDetails && result && !canEditRows
     ? selectedObject.kind !== "table" ? "뷰는 편집할 수 없습니다."
@@ -1356,6 +1380,8 @@ function App() {
           {result && <span className="result-count">{result.rows.length}개 행</span>}
         </div>
         <div className="results-actions">
+          {rowChangeTable && <button type="button" ref={rowAddButton} className="secondary small" disabled={querying}
+            onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {tableLayoutKey && !!result?.columns.length && <button ref={sqliteLayoutButton} type="button" className="secondary small"
             onClick={() => setSqliteLayoutDialog(tableLayoutKey)}>열 설정</button>}
           {!pinned && liveQueryResult?.target.kind === "sql" && <button type="button" className="secondary small"
@@ -1432,6 +1458,11 @@ function App() {
         </details>}
         {result?.metrics && <SqlQueryMetrics metrics={result.metrics} />}
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
+        {currentRowReport && <div className="sqlite-row-report">
+          <p className="success-banner" role="status">{currentRowReport.fields.length ? "행 1개 추가 완료" : "행 1개 삭제 완료"}
+            {currentRowReport.audit_warning && <strong className="audit-warning">{currentRowReport.audit_warning}</strong>}</p>
+          {!!currentRowReport.fields.length && <details><summary>저장된 행 보기</summary><SqliteRowFields fields={currentRowReport.fields} /></details>}
+        </div>}
         {sqliteGrid.error && <p className="form-note" role="status">{sqliteGrid.error}</p>}
         {result ? <><div className="table-wrap"><table style={sqliteGeometry ? { tableLayout: "fixed", width: sqliteGeometry.total } : undefined}>
           {sqliteGeometry && <colgroup><col style={{ width: rowNumberWidth }} />
@@ -1455,8 +1486,13 @@ function App() {
                   data-grid-value-type={type} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다."
                     : display !== cell.display ? `원본 ${cell.display}` : type ? gridTypeLabels[type] : undefined}>{display}{cell.truncated ? "…" : ""}</td>;
               })}
-              {canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying}
-                aria-label={`${rowNumber}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button>
+              {canEditRows && <td>{keys && profile && selectedObject ? <span className="sqlite-row-actions">
+                <button className="row-edit" disabled={querying}
+                  aria-label={`${rowNumber}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button>
+                {rowChangeTable && !keys.some(key => key.kind === "text" && key.value.includes("\uFFFD")) &&
+                  <button type="button" className="icon-button" disabled={querying} aria-label={`${rowNumber}행 삭제`} title="행 삭제"
+                    onClick={event => openRowChange({ kind: "delete", keys }, event.currentTarget)}><Trash2 size={14} aria-hidden /></button>}
+                </span>
                 : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}
             </tr>;
           })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
@@ -1648,6 +1684,14 @@ function App() {
       onApply={(range, update) => replaceSqlDraftRange(aliasRename, range, update.text,
         { start: update.first, end: update.first + update.spelling.length })} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
+    {rowChange && <SqliteRowChangeDialog request={rowChange} onClose={() => closeRowChange()} onApplied={report => {
+      setRowReport({ profile: rowChange.profile.id, table: rowChange.table, result: report });
+      closeRowChange(true);
+      if (result && executedQuery) {
+        const previous = rowChange.change.kind === "delete" && result.rows.length === 1 && result.page > 0;
+        void executeQuery(executedQuery, previous ? result.page - 1 : result.page);
+      }
+    }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
     {resultComparison && resultComparison.tabId === sqlDraft?.id && <React.Suspense fallback={null}>
@@ -1749,6 +1793,7 @@ const auditOperationNames: Record<string, string> = {
   "sql_template.delete": "SQL 템플릿 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
+  "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.schema.sync": "SQLite 스키마 변경 적용",
   "sqlite.restore": "SQLite 복원",

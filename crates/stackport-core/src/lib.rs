@@ -9,6 +9,7 @@ pub use result_export::{CsvOptions, ExportQuery, ExportReport};
 pub use result_export::{ExportQuery as CsvQuery, ExportReport as CsvReport};
 mod edit;
 pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSession};
+pub use edit::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField};
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod network_tools;
@@ -928,6 +929,10 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "sqlite-cell-update-prod-confirmed"
         }
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
+        "sqlite.row.insert" | "sqlite.row.delete" if record.environment == Some("PROD") => {
+            "sqlite-row-change-prod-confirmed"
+        }
+        "sqlite.row.insert" | "sqlite.row.delete" => "sqlite-row-change-confirmed",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

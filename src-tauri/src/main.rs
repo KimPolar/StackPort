@@ -9,6 +9,7 @@ use stackport_core::{
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport, SchemaSyncPreview, SchemaSyncReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
+    RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
@@ -514,6 +515,30 @@ async fn apply_cell_edit(
 async fn cancel_cell_edit(store: State<'_, Store>, token: String) -> Result<(), String> {
     let store = store.inner().clone();
     worker(move || store.cancel_cell_edit(&token)).await
+}
+
+#[tauri::command]
+async fn begin_row_change(store: State<'_, Store>, profile_id: String, table: String, change: RowChange) -> Result<RowChangeSession, String> {
+    let store = store.inner().clone();
+    worker(move || store.begin_row_change(&profile_id, &table, change)).await
+}
+
+#[tauri::command]
+async fn preview_row_insert(store: State<'_, Store>, token: String, fields: Vec<RowInsertField>) -> Result<RowChangePreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_row_insert(&token, fields)).await
+}
+
+#[tauri::command]
+async fn apply_row_change(store: State<'_, Store>, token: String, approval: String, confirmation: String) -> Result<RowChangeResult, String> {
+    let store = store.inner().clone();
+    worker(move || store.apply_row_change(&token, &approval, &confirmation)).await
+}
+
+#[tauri::command]
+async fn cancel_row_change(store: State<'_, Store>, token: String) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.cancel_row_change(&token)).await
 }
 
 #[tauri::command]
@@ -1573,6 +1598,10 @@ fn main() {
             preview_cell_edit,
             apply_cell_edit,
             cancel_cell_edit,
+            begin_row_change,
+            preview_row_insert,
+            apply_row_change,
+            cancel_row_change,
             open_terminal,
             read_terminal,
             write_terminal,

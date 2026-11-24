@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use stackport_core::{EditInput, EditKey, Store};
+use stackport_core::{EditInput, EditKey, RowChange, RowInsertField, Store};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -34,6 +34,82 @@ fn input(kind: &str, value: &str) -> EditInput {
         kind: kind.into(),
         value: value.into(),
     }
+}
+
+#[test]
+fn row_insert_preserves_defaults_and_explicit_values_and_cannot_replace_a_row() {
+    let (dir, store, profile) = setup("PROD");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE additions (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE ON CONFLICT REPLACE,
+         label TEXT NOT NULL, empty_value TEXT DEFAULT 'nonempty', optional TEXT DEFAULT 'nonnull',
+         amount INTEGER DEFAULT 7, created TEXT DEFAULT (date('2026-01-02')));",
+    ).unwrap();
+    let session = store.begin_row_change(&profile, "additions", RowChange::Insert).unwrap();
+    assert!(session.columns[0].auto_key);
+    assert!(session.columns[2].required);
+    assert!(store.preview_row_insert(&session.token, vec![]).is_err());
+    let inputs = || vec![
+        RowInsertField { column: "code".into(), input: input("text", "private code") },
+        RowInsertField { column: "label".into(), input: input("text", "private label") },
+        RowInsertField { column: "empty_value".into(), input: input("text", "") },
+        RowInsertField { column: "optional".into(), input: input("null", "") },
+        RowInsertField { column: "amount".into(), input: input("integer", "0") },
+    ];
+    let old = store.preview_row_insert(&session.token, inputs()).unwrap();
+    let approved = store.preview_row_insert(&session.token, inputs()).unwrap();
+    assert!(store.apply_row_change(&session.token, &old.approval, "PROD").is_err());
+    assert!(store.apply_row_change(&session.token, &approved.approval, "prod").is_err());
+    let count = |table| db.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get::<_, i64>(0)).unwrap();
+    assert_eq!(count("additions"), 0);
+    let added = store.apply_row_change(&session.token, &approved.approval, "PROD").unwrap();
+    assert_eq!(added.fields.len(), 7);
+    assert!(store.apply_row_change(&session.token, &approved.approval, "PROD").is_err());
+    let stored = db.query_row("SELECT id, empty_value, optional, amount, created FROM additions", [], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?))
+    }).unwrap();
+    assert_eq!(stored, (1, "".into(), None, 0, "2026-01-02".into()));
+    let duplicate = store.begin_row_change(&profile, "additions", RowChange::Insert).unwrap();
+    let approval = store.preview_row_insert(&duplicate.token, inputs()).unwrap();
+    assert!(store.apply_row_change(&duplicate.token, &approval.approval, "PROD").is_err());
+    assert_eq!(count("additions"), 1);
+    assert_eq!(db.query_row("SELECT id FROM additions", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    let events = store.list_audit_events(None).unwrap().events;
+    assert!(events.iter().any(|event| event.operation == "sqlite.row.insert" && event.outcome == "succeeded"
+        && event.affected_count == Some(1) && event.policy == "sqlite-row-change-prod-confirmed"));
+    let serialized = serde_json::to_string(&events).unwrap();
+    assert!(!serialized.contains("private code") && !serialized.contains("private label"));
+}
+
+#[test]
+fn row_delete_rejects_stale_rows_cascades_and_deferred_fk_violations() {
+    let (dir, store, profile) = setup("DEV");
+    let db = Connection::open(dir.path().join("data.sqlite")).unwrap();
+    let open = || store.begin_row_change(&profile, "records", RowChange::Delete { keys: key() });
+    let cancelled = open().unwrap();
+    store.cancel_row_change(&cancelled.token).unwrap();
+    assert!(store.apply_row_change(&cancelled.token, &cancelled.preview.unwrap().approval, "").is_err());
+    let stale = open().unwrap();
+    db.execute("UPDATE records SET payload=x'0102' WHERE id=1", []).unwrap();
+    let error = store.apply_row_change(&stale.token, &stale.preview.unwrap().approval, "").err().unwrap();
+    assert!(error.contains("행이 변경"), "{error}");
+
+    db.execute_batch("CREATE TABLE cascade_child (parent INTEGER REFERENCES ReCoRdS(id) ON DELETE CASCADE);
+        INSERT INTO cascade_child VALUES (1);").unwrap();
+    let error = open().err().unwrap();
+    assert!(error.contains("연쇄 변경"), "{error}");
+    db.execute_batch("DROP TABLE cascade_child;
+        CREATE TABLE restrict_child (parent INTEGER REFERENCES records(id) DEFERRABLE INITIALLY DEFERRED);
+        INSERT INTO restrict_child VALUES (1);").unwrap();
+    let referenced = open().unwrap();
+    assert!(store.apply_row_change(&referenced.token, &referenced.preview.unwrap().approval, "").is_err());
+    assert_eq!(value(&dir.path().join("data.sqlite"), "note"), "before");
+    db.execute("DELETE FROM restrict_child", []).unwrap();
+
+    let ready = open().unwrap();
+    let report = store.apply_row_change(&ready.token, &ready.preview.unwrap().approval, "").unwrap();
+    assert!(report.fields.is_empty());
+    assert_eq!(db.query_row("SELECT count(*) FROM records", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
 }
 fn value(path: &Path, column: &str) -> String {
     Connection::open(path)

@@ -181,6 +181,59 @@ async function main() {
   assert.equal(await layoutDialog.getByLabel('amount 소수 자릿수').inputValue(), '2');
   await layoutDialog.getByRole('button', { name: '취소', exact: true }).click();
   await layoutDialog.waitFor({ state: 'detached' });
+  mutateFixture(`CREATE TABLE row_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL,
+    empty_text TEXT DEFAULT 'default text', optional TEXT DEFAULT 'default optional', amount INTEGER DEFAULT 7,
+    created TEXT DEFAULT (date('2026-01-02')))`);
+  await refreshObjects.click();
+  const rowActions = explorer.getByRole('button', { name: 'row_actions', exact: true });
+  await rowActions.click();
+  await page.getByRole('button', { name: '행 추가', exact: true }).click();
+  const rowInsert = page.getByRole('dialog', { name: 'SQLite 행 추가', exact: true });
+  await rowInsert.getByLabel('label 값', { exact: true }).fill('새 행');
+  await rowInsert.getByLabel('empty_text 값 형식', { exact: true }).selectOption('text');
+  await rowInsert.getByLabel('optional 값 형식', { exact: true }).selectOption('null');
+  await rowInsert.getByLabel('amount 값 형식', { exact: true }).selectOption('integer');
+  await rowInsert.getByLabel('amount 값', { exact: true }).fill('0');
+  await rowInsert.getByRole('button', { name: '행 추가 미리보기', exact: true }).click();
+  const insertPreview = rowInsert.getByRole('region', { name: '추가할 행', exact: true });
+  await insertPreview.getByText('빈 문자열', { exact: true }).waitFor();
+  await insertPreview.getByText('NULL', { exact: true }).waitFor();
+  await insertPreview.getByText('0', { exact: true }).waitFor();
+  await insertPreview.getByText('자동 기본 키', { exact: true }).waitFor();
+  await insertPreview.getByText(/DB 기본값.*2026-01-02/).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM row_actions'), '0');
+  await rowInsert.getByRole('button', { name: '행 추가 적용', exact: true }).click();
+  await page.getByRole('status').getByText('행 1개 추가 완료', { exact: true }).waitFor();
+  await gridTable.getByText('새 행', { exact: true }).waitFor();
+  await page.getByText('저장된 행 보기', { exact: true }).click();
+  await page.locator('.sqlite-row-report').getByText('2026-01-02', { exact: true }).waitFor();
+  assert.equal(scalar("SELECT id || '|' || length(empty_text) || '|' || (optional IS NULL) || '|' || amount || '|' || created FROM row_actions"),
+    '1|0|1|0|2026-01-02');
+
+  const deleteRow = gridTable.getByRole('button', { name: '1행 삭제', exact: true });
+  const rowDelete = page.getByRole('dialog', { name: 'SQLite 행 삭제', exact: true });
+  await deleteRow.click();
+  await rowDelete.getByText('새 행', { exact: true }).waitFor();
+  await rowDelete.getByRole('button', { name: '취소', exact: true }).click();
+  await rowDelete.waitFor({ state: 'detached' });
+  assert.equal(scalar('SELECT count(*) FROM row_actions'), '1');
+  await deleteRow.click();
+  await rowDelete.getByText('새 행', { exact: true }).waitFor();
+  mutateFixture("UPDATE row_actions SET label = '다른 연결에서 변경'");
+  const deleteApply = rowDelete.getByRole('button', { name: '행 삭제 적용', exact: true });
+  await deleteApply.click();
+  await rowDelete.getByRole('alert').getByText(/미리보기 이후 행이 변경/).waitFor();
+  assert.equal(scalar('SELECT label FROM row_actions'), '다른 연결에서 변경');
+  await rowDelete.getByRole('button', { name: '취소', exact: true }).click();
+  await rowDelete.waitFor({ state: 'detached' });
+  await deleteRow.click();
+  await rowDelete.getByText('다른 연결에서 변경', { exact: true }).waitFor();
+  await deleteApply.click();
+  await page.getByRole('status').getByText('행 1개 삭제 완료', { exact: true }).waitFor();
+  await page.getByText('조회된 행이 없습니다.', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM row_actions'), '0');
+
+  mutateFixture('DROP TABLE row_actions');
   mutateFixture('DROP TABLE display_examples');
   await refreshObjects.click();
   await displayObject.waitFor({ state: 'detached' });

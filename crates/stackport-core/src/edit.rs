@@ -5,6 +5,9 @@
 //! remain read-only. These restrictions avoid hidden cascading changes until a
 //! full impact planner exists.
 
+mod row;
+pub use row::{RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField};
+
 use super::quote_identifier as quote;
 use super::{
     display_value, insert_audit, open_schema_db, AuditRecord, Cell, ObjectDetails, Profile, Result,
@@ -122,7 +125,15 @@ impl Drop for PendingEdit {
 #[derive(Default)]
 struct EditState {
     pending: HashMap<String, PendingEdit>,
+    rows: HashMap<String, row::Plan>,
     reaper_started: bool,
+}
+
+impl EditState {
+    fn expire(&mut self) {
+        self.pending.retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
+        self.rows.retain(|_, plan| plan.created.elapsed() < SESSION_LIFETIME);
+    }
 }
 
 #[derive(Default)]
@@ -137,11 +148,9 @@ impl EditManager {
             .map_err(|_| "편집 세션 상태를 사용할 수 없습니다. 앱을 다시 시작하세요.".into())
     }
 
-    fn insert(self: &Arc<Self>, token: String, plan: PendingEdit) -> Result<()> {
+    fn active_state(self: &Arc<Self>) -> Result<MutexGuard<'_, EditState>> {
         let mut state = self.lock()?;
-        state
-            .pending
-            .retain(|_, item| item.created.elapsed() < SESSION_LIFETIME);
+        state.expire();
         if !state.reaper_started {
             let weak = Arc::downgrade(self);
             std::thread::Builder::new()
@@ -152,16 +161,13 @@ impl EditManager {
                         break;
                     };
                     if let Ok(mut state) = manager.state.lock() {
-                        state
-                            .pending
-                            .retain(|_, item| item.created.elapsed() < SESSION_LIFETIME);
+                        state.expire();
                     };
                 })
                 .map_err(|e| format!("편집 세션 정리 작업을 시작할 수 없습니다: {e}"))?;
             state.reaper_started = true;
         }
-        state.pending.insert(token, plan);
-        Ok(())
+        Ok(state)
     }
 }
 
@@ -243,7 +249,7 @@ impl Store {
             fields,
             expires_seconds: SESSION_LIFETIME.as_secs(),
         };
-        self.edits.insert(
+        self.edits.active_state()?.pending.insert(
             token,
             PendingEdit {
                 profile,
@@ -256,7 +262,7 @@ impl Store {
                 change: None,
                 created: Instant::now(),
             },
-        )?;
+        );
         Ok(session)
     }
 
@@ -279,7 +285,7 @@ impl Store {
         // A failed or superseded preview must never leave an older approved
         // change available for application.
         plan.change = None;
-        verify_profile(self, plan)?;
+        verify_profile(self, &plan.profile)?;
         ensure_identity(&plan.identity, &plan.profile.path)?;
         let db = open_schema_db(Path::new(&plan.profile.path))?;
         ensure_identity(&plan.identity, &plan.profile.path)?;
@@ -350,7 +356,7 @@ impl Store {
             }
             state.pending.remove(token).expect("checked pending edit")
         };
-        verify_profile(self, &plan)?;
+        verify_profile(self, &plan.profile)?;
         let correlation_id = Uuid::new_v4().to_string();
         let target = format!(
             "{} · {}",
@@ -402,17 +408,7 @@ impl Store {
 fn apply_change(store: &Store, plan: &PendingEdit) -> Result<Cell> {
     let change = plan.change.as_ref().ok_or("변경 내용을 먼저 미리보세요.")?;
     ensure_identity(&plan.identity, &plan.profile.path)?;
-    let mut db = Connection::open_with_flags(
-        &plan.profile.path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(super::db_error)?;
-    db.busy_timeout(Duration::from_secs(5))
-        .map_err(super::db_error)?;
-    db.pragma_update(None, "foreign_keys", true)
-        .map_err(super::db_error)?;
-    db.pragma_update(None, "trusted_schema", false)
-        .map_err(super::db_error)?;
+    let mut db = open_edit_db(&plan.profile.path)?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(super::db_error)?;
@@ -454,7 +450,7 @@ fn apply_change(store: &Store, plan: &PendingEdit) -> Result<Cell> {
     }
     let rendered = display_value(ValueRef::from(actual));
     ensure_identity(&plan.identity, &plan.profile.path)?;
-    verify_profile(store, plan)?;
+    verify_profile(store, &plan.profile)?;
     tx.commit().map_err(|error| {
         format!(
             "커밋 결과를 확정하지 못했습니다. 재시도 전에 원본을 다시 조회하세요: {}",
@@ -462,6 +458,18 @@ fn apply_change(store: &Store, plan: &PendingEdit) -> Result<Cell> {
         )
     })?;
     Ok(rendered)
+}
+
+fn open_edit_db(path: &str) -> Result<Connection> {
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(super::db_error)?;
+    db.busy_timeout(Duration::from_secs(5)).map_err(super::db_error)?;
+    db.pragma_update(None, "foreign_keys", true).map_err(super::db_error)?;
+    db.pragma_update(None, "trusted_schema", false).map_err(super::db_error)?;
+    Ok(db)
 }
 
 fn editable_table(db: &Connection, table: &str) -> Result<ObjectDetails> {
@@ -721,11 +729,11 @@ fn ensure_identity(expected: &Handle, path: &str) -> Result<()> {
         Ok(())
     }
 }
-fn verify_profile(store: &Store, plan: &PendingEdit) -> Result<()> {
-    let current = store.profile(&plan.profile.id)?;
-    if current.project_id != plan.profile.project_id
-        || current.path != plan.profile.path
-        || current.environment != plan.profile.environment
+fn verify_profile(store: &Store, profile: &Profile) -> Result<()> {
+    let current = store.profile(&profile.id)?;
+    if current.project_id != profile.project_id
+        || current.path != profile.path
+        || current.environment != profile.environment
     {
         return Err("연결 설정이 변경되어 편집을 중단했습니다.".into());
     }

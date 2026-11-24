@@ -750,5 +750,20 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .app-shell[data-density="compact"] .database-results > .panel-heading { min-height: 36px; }
 .app-shell[data-density="compact"] .workspace :is(.table-wrap, .files-table) :is(th, td) { padding-block: 4px; }
 .app-shell[data-density="compact"] .row-edit { min-height: 24px; }
+
+.sqlite-row-actions { display: inline-flex; align-items: center; gap: 4px; }
+.sqlite-row-actions .icon-button { width: 28px; height: 28px; }
+.sqlite-row-dialog { width: min(640px, calc(100vw - 32px)); }
+.sqlite-row-inputs { display: grid; gap: 10px; margin-block: 12px; }
+.sqlite-row-inputs fieldset { display: flex; flex-wrap: wrap; gap: 8px 14px; min-width: 0; padding: 10px; border: 1px solid var(--border); border-radius: 5px; }
+.sqlite-row-inputs .field { flex: 1 1 170px; margin: 0; }
+.sqlite-row-inputs legend { overflow-wrap: anywhere; padding-inline: 4px; }
+.sqlite-row-inputs legend small { margin-inline-start: 8px; font-weight: normal; color: var(--text-muted); }
+.sqlite-row-inputs code { align-self: end; overflow-wrap: anywhere; }
+.sqlite-row-values { margin: 8px 0 0; }
+.sqlite-row-values > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 8px; padding-block: 4px; border-bottom: 1px solid var(--border); }
+.sqlite-row-values dt { overflow-wrap: anywhere; font-weight: 600; }
+.sqlite-row-values dd { margin: 0; color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.sqlite-row-report { margin-block: 8px; }
 .app-shell[data-density="compact"] .terminal-tab [role="tab"] { min-height: 28px; padding-block: 4px; }
 .app-shell[data-density="compact"] .terminal-screen { padding: 8px; }
