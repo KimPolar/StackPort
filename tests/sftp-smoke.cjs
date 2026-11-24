@@ -373,6 +373,7 @@ async function main() {
     await confirm.fill('PROD');
     await connect.click();
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '폴더 비교', exact: true }).isDisabled(), true);
     const remotePath = remote.getByLabel('원격 파일 경로', { exact: true });
     const remoteBack = remote.getByRole('button', { name: '원격 파일 뒤로', exact: true });
     const remoteForward = remote.getByRole('button', { name: '원격 파일 앞으로', exact: true });
@@ -493,6 +494,7 @@ async function main() {
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
     await page.setViewportSize({ width: 1440, height: 900 });
 
+    await verifyFolderComparison(page, local, server.uploads);
     await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
@@ -1229,6 +1231,70 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
   assert.ok(fileEvents.some(event => event.operation === 'sftp.edit.copy' && event.outcome === 'succeeded'));
 }
 
+async function verifyFolderComparison(page, local, uploads) {
+  const rootPath = '/home/stackport';
+  const time = 1700000000;
+  const remoteFixtures = [];
+  function localFile(name, data) {
+    const destination = path.join(local, name);
+    fs.writeFileSync(destination, data);
+    fs.utimesSync(destination, time, time);
+  }
+  function remoteEntry(name, entry) {
+    const destination = `${rootPath}/${name}`;
+    remoteFixtures.push(destination);
+    uploads.files.set(destination, entry);
+  }
+  function remoteFile(name, data, modified = time) {
+    const bytes = Buffer.from(data);
+    remoteEntry(name, { data: bytes, attrs: { ...file('').attrs, size: bytes.length, mtime: modified } });
+  }
+  localFile('비교 일치.txt', 'abcd');
+  remoteFile('비교 일치.txt', 'wxyz');
+  localFile('비교 차이.txt', 'a');
+  remoteFile('비교 차이.txt', 'long', time + 1);
+  localFile('속성 확인.txt', 'test');
+  remoteEntry('속성 확인.txt', { data: Buffer.from('test'), attrs: { mode: 0o100640 } });
+  localFile('정리', 'directory mismatch');
+  fs.mkdirSync(path.join(local, '문서'));
+  localFile('Case.txt', 'local case');
+  remoteFile('case.txt', 'remote case');
+
+  const compare = page.getByRole('dialog', { name: '폴더 비교', exact: true });
+  const table = compare.getByRole('table', { name: '폴더 비교 결과', exact: true });
+  const row = name => table.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
+  const filter = compare.getByLabel('비교 결과 필터');
+  const refresh = compare.getByRole('button', { name: '다시 비교', exact: true });
+  const before = { edits: uploads.edits, moves: uploads.moves, deletions: uploads.deletions };
+  await page.getByRole('button', { name: '폴더 비교', exact: true }).click();
+  await compare.getByText(local, { exact: true }).waitFor();
+  await compare.getByText(rootPath, { exact: true }).waitFor();
+  await row('비교 차이.txt').getByText('크기 다름 · 원격 수정 시각이 더 최근', { exact: true }).waitFor();
+  await row('속성 확인.txt').getByText('크기 또는 수정 시각 미확인', { exact: true }).waitFor();
+  await row('정리').getByText('유형 다름', { exact: true }).waitFor();
+  assert.equal(await row('비교 일치.txt').count(), 0);
+  await filter.selectOption('all');
+  await row('비교 일치.txt').getByText('크기·수정 시각 일치', { exact: true }).waitFor();
+  await row('문서').getByText('양쪽 폴더', { exact: true }).waitFor();
+  await filter.selectOption('local');
+  await row('Case.txt').getByText('로컬에만 있음', { exact: true }).waitFor();
+  assert.equal(await row('case.txt').count(), 0);
+  await filter.selectOption('remote');
+  await row('case.txt').getByText('원격에만 있음', { exact: true }).waitFor();
+  assert.equal(await row('Case.txt').count(), 0);
+  uploads.unavailableDirectories.add(rootPath);
+  await refresh.click();
+  await compare.getByRole('alert').getByText(/원격 폴더.*경로가 없거나/).waitFor();
+  assert.equal(await table.count(), 0);
+  uploads.unavailableDirectories.clear();
+  remoteFile('다시 읽은 파일.txt', 'fresh');
+  await refresh.click();
+  await row('다시 읽은 파일.txt').getByText('원격에만 있음', { exact: true }).waitFor();
+  await compare.getByRole('button', { name: '닫기', exact: true }).click();
+  assert.deepEqual({ edits: uploads.edits, moves: uploads.moves, deletions: uploads.deletions }, before);
+  for (const name of remoteFixtures) uploads.files.delete(name);
+}
+
 async function verifyPreviews(page, remote, local) {
   const dialog = page.getByRole('dialog', { name: '파일 미리보기' });
   const open = async (pane, name) => {
@@ -1384,10 +1450,22 @@ async function verifyUploads(page, remote, localPane, local, uploads) {
 
   await open();
   await filename.fill('중단.bin');
-  uploads.behavior = 'slow';
+  let releaseWrite;
+  uploads.holdWrite = respond => {
+    uploads.holdWrite = next => { releaseWrite = next; };
+    setTimeout(respond, 240);
+  };
   await start.click();
-  await dialog.getByText(/KiB\/s/).waitFor();
-  await dialog.getByRole('button', { name: '업로드 중단' }).click();
+  try {
+    await dialog.getByText(/KiB\/s/).waitFor();
+    for (let retries = 0; retries < 40 && !releaseWrite; retries++) await new Promise(resolve => setTimeout(resolve, 25));
+    assert.ok(releaseWrite, 'The synthetic server did not pause the upload write.');
+    await dialog.getByRole('button', { name: '업로드 중단' }).click();
+    await dialog.getByText('업로드 중단을 요청했습니다.', { exact: true }).waitFor();
+  } finally {
+    uploads.holdWrite = null;
+    releaseWrite?.();
+  }
   await dialog.getByText('업로드가 중단되었습니다.', { exact: true }).waitFor();
   assert.equal(uploads.files.has(`${directoryPath}/중단.bin`), false);
   noPartials();

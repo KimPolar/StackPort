@@ -259,7 +259,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-workspace > :not(.files-panes) { flex-shrink: 0; }
 .files-header, .files-title { display: flex; align-items: center; gap: 12px; }
 .files-header { justify-content: space-between; }
-.files-header > button { flex-shrink: 0; }
+.files-header-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.files-header-actions button { white-space: nowrap; }
 .files-title { min-width: 0; flex-wrap: wrap; column-gap: 18px; }
 .files-title h1 { display: flex; align-items: center; gap: 8px; margin: 0; color: #1f3531; font-size: 20px; }
 .files-title h1 svg { color: #268971; }
@@ -309,6 +310,18 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-sort:hover { background: #e0eee8; }
 .files-sort svg { color: #60786b; }
 .files-table th[aria-sort] .files-sort { color: #155e4e; }
+.dialog.files-compare { width: min(920px, calc(100vw - 32px)); }
+.files-compare-body { padding: 0 21px 21px; }
+.files-compare-paths { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 8px; margin: 0; }
+.files-compare-paths > div { padding: 8px 10px; border: 1px solid #dce9e1; border-radius: 6px; background: #f7faf8; }
+.files-compare-paths dt { color: #526a5f; font-size: 11px; font-weight: 600; }
+.files-compare-paths dd { margin: 4px 0 0; color: #30473b; font-size: 12px; overflow-wrap: anywhere; }
+.files-compare-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; font-size: 12px; color: #526a5f; }
+.files-compare-tools select { padding: 5px; margin-inline-start: 3px; border: 1px solid #d6e4db; border-radius: 5px; background: white; color: #39594b; }
+.files-compare-tools button { margin-inline-start: auto; }
+.files-compare-results { max-height: 50vh; overflow: auto; }
+.files-compare-results th[scope="row"] { position: static; max-width: 260px; overflow: hidden; text-overflow: ellipsis; background: transparent; }
+.files-compare-date { margin-top: 3px; color: #526a5f; font-size: 11px; font-variant-numeric: tabular-nums; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }

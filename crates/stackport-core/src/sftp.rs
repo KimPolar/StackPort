@@ -110,6 +110,7 @@ pub struct BrowseDirectory {
 #[derive(Serialize)]
 pub struct BrowseEntry {
     name: String,
+    name_is_lossy: bool,
     kind: &'static str,
     location: Option<String>,
     size: Option<String>,
@@ -479,6 +480,7 @@ fn remote_entry(name: &SftpString, attrs: FileAttributes, location: Option<Strin
     };
     BrowseEntry {
         name: name.to_string_lossy().into(),
+        name_is_lossy: std::str::from_utf8(name.as_bytes()).is_err(),
         kind,
         location,
         size: attrs.size.map(|size| size.to_string()),
@@ -532,11 +534,13 @@ pub fn list_local_directory(value: &str) -> Result<BrowseDirectory> {
             .unwrap_or("other");
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy().into_owned();
+        let name_is_lossy = file_name.to_str().is_none();
         let hidden = name.starts_with('.') || metadata.as_ref().is_some_and(local_hidden);
         entries.push(BrowseEntry {
             kind,
             location: entry.path().to_str().map(str::to_owned),
             name,
+            name_is_lossy,
             hidden,
             size: metadata
                 .as_ref()
@@ -638,6 +642,17 @@ mod tests {
         assert_eq!(parent_remote(b"C:/Users"), Some(b"C:/".as_slice()));
         assert_eq!(parent_remote(b"/C:/"), None);
         assert_eq!(parent_remote(b"/"), None);
+    }
+
+    #[test]
+    fn remote_listing_distinguishes_lossy_names_from_literal_replacement_characters() {
+        let raw = SftpString::from(b"file-\xff".to_vec());
+        let valid = SftpString::from("file-�".as_bytes().to_vec());
+        let lossy = remote_entry(&raw, FileAttributes::empty(), None);
+        let exact = remote_entry(&valid, FileAttributes::empty(), None);
+        assert_eq!(lossy.name, exact.name);
+        assert!(lossy.name_is_lossy);
+        assert!(!exact.name_is_lossy);
     }
 
     #[test]

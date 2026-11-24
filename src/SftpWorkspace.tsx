@@ -1,7 +1,9 @@
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, GitCompareArrows, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
+import { displayFilePath, type BrowsePath, type Directory, type DirectoryLocation, type Entry } from "./fileBrowse";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
+import { FolderCompareDialog, loadFolderComparison, type FolderPair } from "./FolderCompareDialog";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
 import { SftpDestinationDialog, type SftpDestinationSelection } from "./SftpDestinationDialog";
@@ -9,12 +11,8 @@ import { SftpEditorDialog, type SftpEditDocument, type SftpEditorSelection } fro
 import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
-type Entry = { name: string; kind: "directory" | "file" | "symlink" | "other"; location: string | null; size: string | null; modified: number | null; mode: number | null; uid: number | null; gid: number | null; hidden: boolean };
-type Directory = { path: string; location: string; parent: string | null; entries: Entry[]; truncated: boolean };
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
-type BrowsePath = { kind: "text" | "token"; value: string };
-type DirectoryLocation = Pick<Directory, "path" | "location">;
 type DirectoryHistory = { visits: DirectoryLocation[]; index: number };
 type FileSort = { key: "name" | "size" | "modified"; direction: "ascending" | "descending" };
 const numbers = new Intl.NumberFormat("ko-KR");
@@ -35,7 +33,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
-  const [localFolder, setLocalFolder] = useState("");
+  const [localFolder, setLocalFolder] = useState<DirectoryLocation | null>(null);
+  const [comparison, setComparison] = useState<{ pair: FolderPair; result: ReturnType<typeof loadFolderComparison> } | null>(null);
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
   const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
@@ -58,6 +57,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       await invoke("close_sftp", { id: remote.id });
       setRemote(null);
       setTransfer(null);
+      setComparison(null);
       setFinished(null);
       setNameAction(null);
       setDestinationSelection(null);
@@ -150,6 +150,15 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     setRemoteRefresh(value => value + 1);
   }
 
+  function compareCurrentFolders() {
+    if (!localFolder || !remote) return;
+    const pair = {
+      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`,
+      local: localFolder, remote: directoryLocation(remote.directory),
+    };
+    setComparison({ pair, result: loadFolderComparison(pair) });
+  }
+
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
     <header className="files-header">
       <div className="files-title">
@@ -160,7 +169,12 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
           <span>{[remote.projectName, `${remote.profile.username}@${remote.profile.host}:${remote.profile.port}`].filter(Boolean).join(" · ")}</span>
         </div>}
       </div>
-      {remote && <button className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>}
+      {remote && <div className="files-header-actions">
+        <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={compareCurrentFolders}>
+          <GitCompareArrows size={14} aria-hidden /> 폴더 비교
+        </button>
+        <button type="button" className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
+      </div>}
     </header>
     {!remote && <div className="results-card files-setup">
       <label className="field">{projectName ? `${projectName}의 SSH 연결` : "SSH 연결"}
@@ -177,7 +191,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     </div>}
     {error && <p className="error-banner" role="alert">{error}</p>}
     {finished && <div className="success-banner files-download-result" role="status">
-      <strong>{transferTitles[finished.kind]}</strong><span>{displayPath(finished.path)} · {numbers.format(BigInt(finished.bytes))} B</span>
+      <strong>{transferTitles[finished.kind]}</strong><span>{displayFilePath(finished.path)} · {numbers.format(BigInt(finished.bytes))} B</span>
       <details><summary>SHA-256</summary><code>{finished.sha256}</code></details>
       {finished.auditWarning && <strong className="audit-warning">{finished.auditWarning}</strong>}
     </div>}
@@ -197,7 +211,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     <div className="files-panes">
       <DirectoryPane id="local-files" active={activePane === "local"} title="로컬 파일"
         load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
-        onFolder={directory => setLocalFolder(displayPath(directory.path))} refresh={localRefresh}
+        onFolder={directory => setLocalFolder(directoryLocation(directory))} refresh={localRefresh}
         onPreview={file => choosePreview(file.name, "로컬 파일", invoke("preview_local_browse_file", { path: file.location }))}
         action={remote ? { kind: "upload", run: file => chooseTransfer({ ...file, kind: "upload", remotePath: remote.directory.path, remoteDirectory: remote.directory.location }) } : undefined} />
       {remote ? <DirectoryPane id="remote-files" active={activePane === "remote"} key={remote.id} title="원격 파일" initial={remote.directory}
@@ -209,7 +223,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         onEdit={chooseEditor}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
-        action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} />
+        action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder ? displayFilePath(localFolder.path) : "" }) }} />
         : <section className="results-card files-pane" id="remote-files" data-active={activePane === "remote"} aria-label="원격 파일">
           <div className="panel-heading"><div><Server size={15} aria-hidden /><strong>원격 파일</strong></div></div>
           <div className="files-empty"><p>{profiles.length ? "위에서 SSH 연결을 확인한 뒤 원격 폴더를 엽니다." : "탐색기에서 SSH 연결을 추가하면 원격 폴더를 열 수 있습니다."}</p></div>
@@ -228,6 +242,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
       onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
+    {comparison && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
   </section>;
 }
 
@@ -313,11 +328,6 @@ function SftpConnect({ profile, onConnecting, onOpened }: { profile: SshProfile;
   </form>;
 }
 
-function displayPath(path: string) {
-  if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
-  return path.startsWith("\\\\?\\") ? path.slice(4) : path;
-}
-
 function directoryLocation({ path, location }: Directory): DirectoryLocation {
   return { path, location };
 }
@@ -345,7 +355,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
-  const [value, setValue] = useState(initial ? displayPath(initial.path) : "");
+  const [value, setValue] = useState(initial ? displayFilePath(initial.path) : "");
   const [history, setHistory] = useState<DirectoryHistory>(() => ({
     visits: initial ? [directoryLocation(initial)] : [], index: initial ? 0 : -1,
   }));
@@ -388,7 +398,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
         return { visits: [...current.visits.slice(0, current.index + 1), directoryLocation(next)], index: current.index + 1 };
       });
       setDirectory(next);
-      setValue(displayPath(next.path));
+      setValue(displayFilePath(next.path));
       onFolder?.(next);
     } catch (error) {
       setError(String(error));
@@ -405,7 +415,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
 
   function go(event: FormEvent) {
     event.preventDefault();
-    void navigate(directory && value === displayPath(directory.path) ? { kind: "token", value: directory.location } : { kind: "text", value });
+    void navigate(directory && value === displayFilePath(directory.path) ? { kind: "token", value: directory.location } : { kind: "text", value });
   }
 
   function travel(offset: -1 | 1) {
@@ -437,10 +447,10 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
     <form className="files-path" onSubmit={go}>
       <div className="files-path-history">
         <button type="button" className="icon-button" aria-label={`${title} 뒤로`} aria-keyshortcuts="Alt+ArrowLeft"
-          title={previous ? displayPath(previous.path) : "뒤로"} disabled={busy || !previous}
+          title={previous ? displayFilePath(previous.path) : "뒤로"} disabled={busy || !previous}
           onClick={() => travel(-1)}><ArrowLeft size={15} aria-hidden /></button>
         <button type="button" className="icon-button" aria-label={`${title} 앞으로`} aria-keyshortcuts="Alt+ArrowRight"
-          title={next ? displayPath(next.path) : "앞으로"} disabled={busy || !next}
+          title={next ? displayFilePath(next.path) : "앞으로"} disabled={busy || !next}
           onClick={() => travel(1)}><ArrowRight size={15} aria-hidden /></button>
         <button type="button" className="icon-button" aria-label={`${title} 상위 폴더`} title="상위 폴더" disabled={busy || !directory?.parent}
           onClick={() => directory?.parent && void navigate({ kind: "token", value: directory.parent })}><ArrowUp size={15} aria-hidden /></button>
