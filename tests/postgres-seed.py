@@ -32,6 +32,8 @@ def seed_fixture(bin_path: Path, seed_path: Path) -> None:
                 seed_path.read_bytes(),
                 b"CREATE DATABASE fixture_latin ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0",
             )
+            if os.environ.get("STACKPORT_POSTGRES_TOOLS_DIR"):
+                statements += (b"CREATE DATABASE fixture_backup_restore TEMPLATE template0",)
             for sql in statements:
                 result = pg.PQexec(connection, sql)
                 try:

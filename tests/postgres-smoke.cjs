@@ -11,6 +11,7 @@ const { Server, utils } = require('ssh2');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const bin = process.env.STACKPORT_POSTGRES_BIN;
+const backupTools = process.env.STACKPORT_POSTGRES_TOOLS_DIR;
 const openssl = process.env.STACKPORT_TEST_OPENSSL || 'openssl';
 const password = 'fixture-reader-password';
 const otherPassword = 'fixture-unrelated-role-password';
@@ -392,6 +393,7 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(denied.readable, false);
   await assert.rejects(command('postgres_page', { id: session.id, object: denied.id, rowPage: 0, columnPage: 0 }), /권한/);
   const findObject = name => objects.objects.find(object => object.name === name).id;
+  if (backupTools) await verifyBackups({ command, open, close, alternate, session, fixture, findObject, archive });
   const structure = (name, section, page = 0) => command('postgres_structure', { id: session.id, object: findObject(name), section, page });
   await assert.rejects(structure('denied', 'overview'), /SELECT 권한/);
   await assert.rejects(command('postgres_structure', { id: session.id, object: 0, section: 'columns', page: 0 }), /객체를 찾을 수/);
@@ -930,6 +932,24 @@ async function verify(browser, fixture, gateway, jump) {
   await page.getByRole('button', { name: /denied SELECT 권한 없음/ }).waitFor();
   await page.getByRole('button', { name: /quoted table/ }).click();
   await data.getByRole('columnheader', { name: /id.*PK 1/ }).waitFor();
+  if (backupTools) {
+    await page.getByRole('button', { name: '테이블 백업', exact: true }).click();
+    const backup = page.getByRole('dialog', { name: 'PostgreSQL 백업', exact: true });
+    await backup.getByText('"report"."quoted table"', { exact: false }).waitFor();
+    const destination = path.join(root, '테이블 백업.backup');
+    await backup.getByLabel('새 백업 파일 경로').fill(destination);
+    await backup.getByLabel('백업 내용').selectOption('data');
+    await backup.getByLabel('PostgreSQL 암호').fill(password);
+    const create = backup.getByRole('button', { name: '백업 만들기', exact: true });
+    assert.equal(await create.isDisabled(), true);
+    await backup.getByLabel('운영 확인 문구 PROD').fill('PROD');
+    await create.click();
+    await backup.waitFor({ state: 'detached' });
+    await page.getByText('백업 저장 완료 · 아카이브 검사 통과', { exact: true }).waitFor();
+    const list = backupList(destination);
+    assert.match(list, /TABLE DATA report quoted table/);
+    assert.doesNotMatch(list, / TABLE report quoted table|TABLE DATA report denied/);
+  }
   const columnButton = page.getByRole('button', { name: '열 설정', exact: true });
   const columnDialog = page.getByRole('dialog', { name: '열 설정', exact: true });
   const applyColumns = async () => {
@@ -1797,6 +1817,72 @@ async function verify(browser, fixture, gateway, jump) {
   assert.deepEqual(errors, []);
 }
 
+function backupList(destination) {
+  return execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--list', destination], {
+    windowsHide: true, encoding: 'utf8', timeout: 15_000,
+  });
+}
+
+async function verifyBackups({ command, open, close, alternate, session, fixture, findObject, archive }) {
+  const adminPassword = 'fixture-administrator-password';
+  const admin = await alternate('백업·복구 검증', { username: 'fixture_admin', environment: 'DEV' });
+  const adminSession = await open(admin, adminPassword);
+  const create = (id, options) => command('create_postgres_backup', {
+    id, request: randomUUID(), target: { kind: 'database' }, contents: 'all',
+    password: adminPassword, confirmation: '', ...options,
+  });
+  const destination = path.join(root, 'database-full.backup');
+  const rejected = path.join(root, 'rejected.backup');
+  try {
+    await assert.rejects(create(session.id, { destination: rejected }), /PROD/);
+    await assert.rejects(create(adminSession.id, { destination: rejected, password: 'wrong-backup-password' }), /pg_dump/);
+    assert.equal(fs.existsSync(rejected), false);
+    assert.equal(fs.readdirSync(root).some(name => name.startsWith('.stackport-postgres-')), false);
+    const schema = path.join(root, 'archive-schema.backup');
+    await create(adminSession.id, { destination: schema, target: { kind: 'schema', schema: archive.id }, contents: 'schema' });
+    const schemaList = backupList(schema);
+    assert.match(schemaList, / TABLE archive meta_child/);
+    assert.doesNotMatch(schemaList, /TABLE DATA| TABLE report meta_parent/);
+    const report = await create(adminSession.id, { destination });
+    const bytes = fs.readFileSync(destination);
+    assert.equal(bytes.subarray(0, 5).toString(), 'PGDMP');
+    assert.equal(report.size_bytes, bytes.length);
+    assert.equal(report.sha256, createHash('sha256').update(bytes).digest('hex'));
+    await assert.rejects(create(adminSession.id, { destination }), /같은 이름/);
+    assert.deepEqual(fs.readFileSync(destination), bytes);
+    const events = (await command('list_audit_events', { before: null })).events.filter(event => event.operation === 'postgres.backup');
+    assert.ok(events.some(event => event.outcome === 'succeeded'));
+    assert.ok(events.some(event => event.outcome === 'failed'));
+    assert.doesNotMatch(JSON.stringify(events), /wrong-backup-password|database-full\.backup/);
+
+    const database = 'fixture_backup_restore';
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^PG/i.test(name)));
+    execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--dbname=' + database, '--single-transaction',
+      '--no-owner', '--no-privileges', '--no-password', destination], {
+      windowsHide: true, stdio: 'pipe', timeout: 45_000, env: { ...env,
+        PGHOST: 'localhost', PGHOSTADDR: '127.0.0.1', PGPORT: String(fixture.port), PGUSER: 'fixture_admin',
+        PGSSLMODE: 'verify-full', PGSSLROOTCERT: fixture.ca, PGPASSWORD: adminPassword,
+      },
+    });
+    const profile = await alternate('격리 복구본 검증', { username: 'fixture_admin', database, environment: 'DEV' });
+    const restored = await open(profile, adminPassword);
+    try {
+      const object = await command('resolve_postgres_catalog_object', {
+        id: restored.id, profileId: profile.id, schema: 'report', name: 'quoted table',
+      });
+      const rows = (id, oid) => command('postgres_page', { id, object: oid, rowPage: 0, columnPage: 0 });
+      const expected = await rows(adminSession.id, findObject('quoted table'));
+      const actual = await rows(restored.id, object.id);
+      assert.deepEqual(actual.rows.map(row => row.map(cell => cell.value)), expected.rows.map(row => row.map(cell => cell.value)));
+      const restoredChild = await command('resolve_postgres_catalog_object', {
+        id: restored.id, profileId: profile.id, schema: 'report', name: 'meta_child',
+      });
+      const { constraints } = await command('postgres_structure', { id: restored.id, object: restoredChild.id, section: 'constraints', page: 0 });
+      assert.deepEqual(constraints.find(value => value.name === 'meta_fk').reference.columns, ['parent_id', 'tenant']);
+    } finally { await close(restored.id); }
+  } finally { await close(adminSession.id); }
+}
+
 async function verifyServerMonitor({ command, open, close, unrelated }) {
   const workspace = await open();
   const waiter = await open();
@@ -2371,6 +2457,7 @@ async function main() {
     jump = await startGateway(gateway.port, '127.0.0.1');
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway, jump);
+    if (backupTools) console.log('PostgreSQL backup scopes, digest, overwrite protection and isolated restore passed.');
     withoutPreload = await startPostgres(false);
     await verifyStatsWithoutPreload(browser, withoutPreload);
     console.log('Windows PostgreSQL E2E passed (column layouts, cell representations, statement stats, grid editing, file import and SSH jump recovery).');

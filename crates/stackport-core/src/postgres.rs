@@ -1,3 +1,4 @@
+mod backup;
 mod catalog;
 mod diagram;
 mod edit;
@@ -14,6 +15,7 @@ mod sql_range;
 mod statement_stats;
 mod value;
 
+pub use backup::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use catalog::{PostgresStructure, PostgresStructureSection};
 pub use diagram::PostgresSchemaDiagram;
 pub use edit::{

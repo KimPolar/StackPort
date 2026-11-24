@@ -1016,6 +1016,20 @@ async fn postgres_schema_diagram(
 }
 
 #[tauri::command]
+async fn create_postgres_backup(
+    postgres: State<'_, PostgresManager>, id: String, request: String,
+    target: stackport_core::PostgresBackupTarget, contents: stackport_core::PostgresBackupContents,
+    password: PostgresPassword, confirmation: String, destination: String,
+) -> Result<stackport_core::PostgresBackupReport, String> {
+    postgres.create_backup(&id, &request, target, contents, password, &confirmation, destination).await
+}
+
+#[tauri::command]
+fn cancel_postgres_backup(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<bool, String> {
+    postgres.cancel_backup(&id, &request)
+}
+
+#[tauri::command]
 async fn begin_postgres_edit(
     postgres: State<'_, PostgresManager>, id: String, object: i64, stamp: PostgresRowStamp, column: String,
 ) -> Result<PostgresEditSession, String> {
@@ -1841,6 +1855,8 @@ fn main() {
             save_postgres_value,
             postgres_structure,
             postgres_schema_diagram,
+            create_postgres_backup,
+            cancel_postgres_backup,
             begin_postgres_edit,
             preview_postgres_edit,
             open_postgres_edit_field,

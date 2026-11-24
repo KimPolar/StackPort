@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useEffectEvent, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
+import { Activity, Archive, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
+import { PostgresBackupDialog, type PostgresBackupReport, type PostgresBackupTarget } from "./PostgresBackupDialog";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
@@ -85,6 +86,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
   const [preferredRoute, setPreferredRoute] = useState<RouteChoice | null>(null);
   const [exportTarget, setExportTarget] = useState<PostgresExportTarget | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
+  const [backup, setBackup] = useState<{ id: string; target: PostgresBackupTarget } | null>(null);
+  const [backupReport, setBackupReport] = useState<PostgresBackupReport | null>(null);
   const active = useRef<string | null>(null);
   const connectButton = useRef<HTMLButtonElement>(null);
   const { name, host, port, database, environment } = profile.settings;
@@ -141,12 +144,20 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
     setExportTarget(target);
   }
 
+  function requestBackup(target: PostgresBackupTarget) {
+    if (!activeId) return;
+    setBackupReport(null);
+    setBackup({ id: activeId, target });
+  }
+
   return <section className="postgres-workspace" aria-label="PostgreSQL 작업 공간">
     <div className="content-header">
       <div className="database-target"><h1><Database size={21} aria-hidden /><span title={name}>{name}</span>
         <span className={`environment ${environment.toLowerCase()}`}>{environment}</span></h1>
         <p className="path"><span>PostgreSQL · {endpoint(host, port)} / {database}</span></p></div>
       <div className="header-actions"><span className="readonly"><ShieldCheck size={15} aria-hidden /> {online && session.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
+        {online && <button type="button" className="secondary" aria-haspopup="dialog" disabled={closing}
+          onClick={() => requestBackup({ selection: { kind: "database" }, label: "전체 데이터베이스" })}><Archive size={14} aria-hidden /> DB 백업</button>}
         {online ? <button type="button" className="secondary" disabled={closing} onClick={() => void disconnect()}>PostgreSQL 연결 끊기</button> :
           <button type="button" className="primary" ref={connectButton} onClick={() => setDialog(true)}>
             <Plug size={15} aria-hidden /> {loss ? "PostgreSQL 다시 연결" : "PostgreSQL 연결"}
@@ -163,6 +174,12 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       <span>{exportReport.path} · {number.format(exportReport.size_bytes)} B</span>
       {exportReport.protected_fields > 0 && <span>수식으로 해석될 수 있는 필드 {number.format(exportReport.protected_fields)}개 보호</span>}
       {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
+    </div>}
+    {backupReport && <div className="success-banner" role="status">
+      <strong>백업 저장 완료 · 아카이브 검사 통과</strong>
+      <span>{backupReport.path} · {number.format(backupReport.size_bytes)} B · pg_dump {backupReport.tool_version}</span>
+      <span>SHA-256 <code>{backupReport.sha256}</code></span>
+      {backupReport.audit_warning && <strong className="audit-warning">작업 기록을 저장할 수 없습니다.</strong>}
     </div>}
     <nav className="postgres-views" aria-label="PostgreSQL 보기">
       <button type="button" className="secondary small" aria-pressed={view === "catalog"} onClick={() => setView("catalog")}>객체 탐색</button>
@@ -186,7 +203,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
           onOpenSql={source => {
             editor.add(source + ";");
             setView("sql");
-          }} onExport={requestExport} />
+          }} onExport={requestExport} onBackup={requestBackup} />
       </div>
     </>}
     <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} editor={editor} onExport={requestExport}
@@ -195,6 +212,10 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
     {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
+    {backup && <PostgresBackupDialog id={backup.id} target={backup.target} connection={name}
+      source={`${endpoint(host, port)} / ${database}`} environment={environment} onBusy={onFileBusy}
+      unavailable={activeId === backup.id ? "" : loss || "PostgreSQL에 다시 연결한 뒤 백업을 시작하세요."}
+      onClose={() => setBackup(null)} onDone={report => { setBackup(null); setBackupReport(report); }} />}
     {dialog && <ConnectDialog profile={profile} preferredRoute={preferredRoute} onOpenTunnels={onOpenTunnels} onClose={() => {
       setDialog(false);
       if (objectRequest) onObjectHandled(objectRequest);
@@ -272,10 +293,11 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
   </dialog>;
 }
 
-function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUnknown, onEditExitGuard, unavailable, onReconnectFocus,
+function PostgresBrowse({ id, profile, onOpenSql, onExport, onBackup, onFileBusy, onEditUnknown, onEditExitGuard, unavailable, onReconnectFocus,
   objectRequest, onObjectHandled, favorites, favoriteScope }: {
   id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
   onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
+  onBackup: (target: PostgresBackupTarget) => void;
   onEditUnknown: () => void;
   onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   unavailable: string;
@@ -501,6 +523,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         </div>
         <form className="postgres-search" onSubmit={searchObjects}><input type="search" aria-label="PostgreSQL 객체 검색" value={search} maxLength={256} onChange={event => setSearch(event.target.value)} />
           <button type="submit" className="secondary small">검색</button></form>
+        <button type="button" className="secondary small" aria-haspopup="dialog"
+          onClick={() => onBackup({ selection: { kind: "schema", schema: schema.id }, label: `스키마 ${quoteIdentifier(schema.name)}` })}>스키마 백업</button>
         {objects.error && <p className="error-banner" role="alert">{objects.error}</p>}
         {objects.loading && <p className="result-empty" role="status">객체 목록을 읽는 중…</p>}
         {objects.data && <>
@@ -545,6 +569,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <div className="postgres-result-views postgres-object-views" role="group" aria-label="객체 보기">
           <button type="button" className="secondary small" aria-pressed={!structureOpen} onClick={() => { setStructureOpen(false); setGridRequested(true); }}>데이터</button>
           <button type="button" className="secondary small" aria-pressed={structureOpen} onClick={() => setStructureOpen(true)}>구조</button>
+          {object.readable && object.kind === "table" && <button type="button" className="secondary small" aria-haspopup="dialog"
+            onClick={() => onBackup({ selection: { kind: "table", object: object.id }, label: `${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` })}>테이블 백업</button>}
           {pinnedObject && <button type="button" className="icon-button postgres-pin-object" aria-pressed={Boolean(isPinned)}
             disabled={!favorites.ready} aria-disabled={favorites.busy || undefined}
             aria-label={`${schema.name}.${object.name} ${favoriteScopeNames[favoriteScope]} 즐겨찾기`}

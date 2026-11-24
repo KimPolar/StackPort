@@ -1,5 +1,6 @@
 use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use super::{
+    backup::{self, PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget},
     catalog::{self, PostgresStructure, PostgresStructureSection},
     diagram::{self, PostgresSchemaDiagram},
     edit::{
@@ -35,8 +36,8 @@ use std::{
     future::pending,
     io::Read,
     net::Ipv4Addr,
-    sync::{atomic::AtomicU64, Arc, Mutex},
-    time::Duration,
+    sync::{atomic::{AtomicBool, AtomicU64, Ordering}, Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::{
     sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
@@ -59,7 +60,7 @@ const TUNNEL_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 
 #[derive(Deserialize)]
 #[serde(transparent)]
-pub struct PostgresPassword(#[serde(deserialize_with = "secret")] Zeroizing<String>);
+pub struct PostgresPassword(#[serde(deserialize_with = "secret")] pub(super) Zeroizing<String>);
 
 pub(super) fn secret<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -192,6 +193,7 @@ struct Session {
     monitor_of: Option<String>,
     tls: TlsConnector,
     running_sql: Mutex<Option<sql::RunningSql>>,
+    backup: Mutex<Option<(Uuid, Arc<AtomicBool>)>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
     grid_update: AsyncMutex<Option<grid_update::Plan>>,
@@ -202,6 +204,45 @@ struct Session {
 struct MonitorOwner {
     id: String,
     connection_ended: watch::Receiver<bool>,
+}
+
+struct BackupJob {
+    session: Arc<Session>,
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
+}
+
+impl BackupJob {
+    fn start(session: Arc<Session>, request: Uuid) -> Result<Self> {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        {
+            let mut running = session.backup.lock().map_err(|_| "백업 상태를 확인할 수 없습니다.")?;
+            if running.is_some() {
+                return Err("이 PostgreSQL 연결에서 이미 백업을 실행하고 있습니다.".into());
+            }
+            *running = Some((request, Arc::clone(&cancelled)));
+        }
+        Ok(Self { session, cancelled, deadline: Instant::now() + backup::TIME_LIMIT })
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err("PostgreSQL 백업을 취소했습니다.".into());
+        }
+        if let Some(reason) = self.session.closed_reason() {
+            return Err(reason.message().into());
+        }
+        if Instant::now() >= self.deadline {
+            return Err("PostgreSQL 백업이 30분 제한을 초과했습니다.".into());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for BackupJob {
+    fn drop(&mut self) {
+        if let Ok(mut running) = self.session.backup.lock() { *running = None; }
+    }
 }
 
 impl Session {
@@ -380,6 +421,7 @@ impl PostgresManager {
             monitor_of: owner.map(|owner| owner.id),
             tls,
             running_sql: Mutex::default(),
+            backup: Mutex::default(),
             grid_edit,
             edit: AsyncMutex::default(),
             grid_update: AsyncMutex::default(),
@@ -817,6 +859,71 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "PostgreSQL 관계도를 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn create_backup(
+        &self, id: &str, request: &str, target: PostgresBackupTarget, contents: PostgresBackupContents,
+        password: PostgresPassword, confirmation: &str, destination: String,
+    ) -> Result<PostgresBackupReport> {
+        let session = self.session(id)?;
+        if session.monitor_of.is_some() {
+            return Err("데이터베이스 작업 공간에서 백업을 시작하세요.".into());
+        }
+        let request = Uuid::parse_str(request).map_err(|_| "올바른 백업 요청 ID가 필요합니다.")?;
+        let job = BackupJob::start(Arc::clone(&session), request)?;
+        self.authorize(&session.profile, &password, confirmation).await?;
+        job.check()?;
+        let source = timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            let tx = client.build_transaction().read_only(true).start().await.map_err(pg_error)?;
+            let row = tx.query_one("SELECT pg_catalog.current_setting('server_version_num')::integer", &[]).await.map_err(pg_error)?;
+            let major = u32::try_from(field::<i32>(&row, 0)? / 10_000).map_err(|_| "PostgreSQL 서버 버전을 확인할 수 없습니다.")?;
+            let selection = match target {
+                PostgresBackupTarget::Database => None,
+                PostgresBackupTarget::Schema { schema } => {
+                    let row = tx.query_opt(
+                        "SELECT nspname::text FROM pg_catalog.pg_namespace WHERE oid::bigint = $1
+                         AND nspname !~ '^pg_' AND nspname <> 'information_schema'
+                         AND pg_catalog.has_schema_privilege(oid, 'USAGE')", &[&schema],
+                    ).await.map_err(pg_error)?.ok_or("백업할 수 있는 PostgreSQL 스키마를 찾을 수 없습니다.")?;
+                    Some(("--schema", quote_identifier(&field::<String>(&row, 0)?)))
+                }
+                PostgresBackupTarget::Table { object } => {
+                    let relation = catalog::relation(&tx, object).await?;
+                    if relation.kind != "table" {
+                        return Err("일반 테이블은 개별 백업할 수 있습니다. 파티션 테이블은 스키마 또는 전체 DB에 포함하세요.".into());
+                    }
+                    Some(("--table", format!("{}.{}", quote_identifier(&relation.schema), quote_identifier(&relation.name))))
+                }
+            };
+            tx.commit().await.map_err(pg_error)?;
+            Ok::<_, String>(backup::Source { major, selection, tunnel_port: session.tunnel.as_ref().map(|route| route.endpoint().port) })
+        }).await.map_err(|_| "백업 원본을 확인하는 시간이 초과되었습니다.")??;
+
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || {
+            let profile = &job.session.profile;
+            let mut result = backup::create(&profile.settings, source, password, contents, destination, || job.check());
+            let correlation_id = request.to_string();
+            let audit_warning = store.connect().and_then(|db| insert_audit(&db, AuditRecord {
+                correlation_id: &correlation_id, operation: "postgres.backup", project_id: Some(&profile.project_id),
+                profile_id: Some(&profile.id), environment: Some(&profile.settings.environment), object_name: None,
+                outcome: if result.is_ok() { "succeeded" } else { "failed" }, affected_count: None,
+            })).is_err();
+            if let Ok(report) = &mut result { report.audit_warning = audit_warning; }
+            result
+        }).await.map_err(|_| "PostgreSQL 백업 결과를 확인할 수 없습니다.")?
+    }
+
+    pub fn cancel_backup(&self, id: &str, request: &str) -> Result<bool> {
+        let session = self.session(id)?;
+        let request = Uuid::parse_str(request).map_err(|_| "올바른 백업 요청 ID가 필요합니다.")?;
+        let running = session.backup.lock().map_err(|_| "백업 상태를 확인할 수 없습니다.")?;
+        if let Some((_, cancelled)) = running.as_ref().filter(|(id, _)| *id == request) {
+            cancelled.store(true, Ordering::Relaxed);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub async fn begin_edit(
