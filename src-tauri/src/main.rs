@@ -16,7 +16,7 @@ use stackport_core::{
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
-    PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage,
+    PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -825,6 +825,11 @@ async fn postgres_server_activity(postgres: State<'_, PostgresManager>, id: Stri
 }
 
 #[tauri::command]
+async fn postgres_statement_stats(postgres: State<'_, PostgresManager>, id: String, input: PostgresStatementStatsInput) -> Result<PostgresStatementStats, String> {
+    postgres.statement_stats(&id, input).await
+}
+
+#[tauri::command]
 async fn postgres_schemas(postgres: State<'_, PostgresManager>, id: String, page: u32) -> Result<PostgresSchemaPage, String> {
     postgres.schemas(&id, page).await
 }
@@ -1574,6 +1579,7 @@ fn main() {
             wait_postgres_disconnect,
             open_postgres_monitor,
             postgres_server_activity,
+            postgres_statement_stats,
             postgres_schemas,
             postgres_objects,
             search_postgres_objects,

@@ -8,7 +8,9 @@ use super::{
     export::EXPORT_TIMEOUT,
     monitor::{self, PostgresActivityInput, PostgresActivitySnapshot},
     parameters::Value,
-    sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
+    sql, sql_range,
+    statement_stats::{self, PostgresStatementStats, PostgresStatementStatsInput},
+    PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
     quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
@@ -495,18 +497,37 @@ impl PostgresManager {
         input: PostgresActivityInput,
     ) -> Result<PostgresActivitySnapshot> {
         input.validate()?;
-        let session = self.session(id)?;
-        let owner = session
-            .monitor_of
-            .as_deref()
-            .ok_or("서버 모니터 연결을 먼저 여세요.")?;
-        self.session(owner)?;
+        let session = self.monitor_session(id)?;
         timeout(QUERY_TIMEOUT, async {
             let mut client = session.client.lock().await;
             monitor::activity(&mut client, input).await
         })
         .await
         .map_err(|_| "PostgreSQL 서버 활동을 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn statement_stats(
+        &self,
+        id: &str,
+        input: PostgresStatementStatsInput,
+    ) -> Result<PostgresStatementStats> {
+        let session = self.monitor_session(id)?;
+        timeout(QUERY_TIMEOUT, async {
+            let client = session.client.lock().await;
+            statement_stats::stats(&client, input).await
+        })
+        .await
+        .map_err(|_| "PostgreSQL 누적 쿼리 통계를 읽는 시간이 초과되었습니다.")?
+    }
+
+    fn monitor_session(&self, id: &str) -> Result<Arc<Session>> {
+        let session = self.session(id)?;
+        let owner = session
+            .monitor_of
+            .as_deref()
+            .ok_or("서버 모니터 연결을 먼저 여세요.")?;
+        self.session(owner)?;
+        Ok(session)
     }
 
     pub async fn page(

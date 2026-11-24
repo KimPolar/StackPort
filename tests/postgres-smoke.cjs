@@ -15,7 +15,10 @@ const password = 'fixture-reader-password';
 const otherPassword = 'fixture-unrelated-role-password';
 if (!root || !bin) throw new Error('Set STACKPORT_TEST_ROOT and STACKPORT_POSTGRES_BIN.');
 
-async function startPostgres() {
+const readStatementStats = (command, id, options = {}) => command('postgres_statement_stats', { id,
+  input: { order: 'maximum', own_only: false, minimum_ms: 0, page: 0, ...options } });
+
+async function startPostgres(preloadStats = true) {
   const directory = fs.mkdtempSync(path.join(root, 'postgres-'));
   const data = path.join(directory, 'data');
   const ca = path.join(directory, 'ca.pem');
@@ -39,9 +42,14 @@ async function startPostgres() {
   const seed = [
     `CREATE ROLE fixture_reader LOGIN PASSWORD '${password}';`,
     `CREATE ROLE fixture_unrelated LOGIN PASSWORD '${otherPassword}';`,
+    'CREATE SCHEMA "monitor ""catalog""";',
+    'CREATE EXTENSION pg_stat_statements WITH SCHEMA "monitor ""catalog""";',
+    'GRANT USAGE ON SCHEMA "monitor ""catalog""" TO fixture_reader;',
     'CREATE SCHEMA report;',
     'CREATE SCHEMA archive;',
     'CREATE SCHEMA restricted;',
+    "CREATE VIEW report.pg_stat_statements AS SELECT 'test shadow view'::text AS marker;",
+    'GRANT SELECT ON report.pg_stat_statements TO fixture_reader;',
     'GRANT USAGE ON SCHEMA report TO fixture_reader;',
     'GRANT USAGE ON SCHEMA archive TO fixture_reader;',
     'CREATE TABLE archive.meta_child (archive_only integer);',
@@ -111,7 +119,8 @@ async function startPostgres() {
   const port = reservation.address().port;
   await new Promise(resolve => reservation.close(resolve));
   const server = spawn(postgres, ['-D', data, '-h', '127.0.0.1', '-p', String(port), '-c', 'ssl=on',
-    '-c', `ssl_cert_file=${path.join(directory, 'server.pem')}`, '-c', `ssl_key_file=${path.join(directory, 'server.key')}`],
+    '-c', `ssl_cert_file=${path.join(directory, 'server.pem')}`, '-c', `ssl_key_file=${path.join(directory, 'server.key')}`,
+    ...(preloadStats ? ['-c', 'shared_preload_libraries=pg_stat_statements'] : [])],
   { cwd: directory, windowsHide: true });
   server.stdout.resume();
   let log = '';
@@ -583,6 +592,15 @@ async function verify(browser, fixture, gateway, jump) {
     const unrepresentable = await latinQuery({ types, values: [textValue('한글')] });
     assert.equal(unrepresentable.status, 'parameters_required');
     assert.match(unrepresentable.error, /22P05/);
+    const latinDelay = await command('execute_postgres_sql', { id: latin.id, request: randomUUID(),
+      source: 'SELECT pg_sleep(0.16), 1 AS other_database_stat', scope: { kind: 'document' } });
+    assert.equal(latinDelay.status, 'completed');
+    const latinMonitor = await command('open_postgres_monitor', { id: latin.id, password, confirmation: 'PROD' });
+    try {
+      assert.deepEqual(await readStatementStats(command, latinMonitor.id), { status: 'unavailable', reason: 'not_installed' });
+      assert.ok((await command('postgres_server_activity', { id: latinMonitor.id,
+        input: { filter: 'all', slow_seconds: 5, page: 0 } })).database_backends >= 2);
+    } finally { await close(latinMonitor.id); }
   } finally { await close(latin.id); }
 
   const request = randomUUID();
@@ -598,6 +616,7 @@ async function verify(browser, fixture, gateway, jump) {
   assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
   const unrelated = await alternate('Unrelated monitor role', { username: 'fixture_unrelated' });
   await verifyServerMonitor({ command, open, close, unrelated });
+  await verifyStatementStats({ command, query, open, close, session, unrelated });
   await verifyGridWrites({ command, open, close, profile, session, findObject });
   await close(session.id);
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
@@ -641,6 +660,20 @@ async function verify(browser, fixture, gateway, jump) {
     return sample?.textContent && sample.textContent !== previous;
   }, sampleLabel, { timeout: 10000 });
   await automatic.uncheck();
+  await monitorPane.getByRole('button', { name: '누적 쿼리', exact: true }).click();
+  const statementsPane = monitorPane.getByRole('region', { name: 'PostgreSQL 누적 쿼리 통계', exact: true });
+  await statementsPane.getByLabel('정렬').selectOption('mean');
+  await statementsPane.getByLabel('최대 실행 시간 하한(ms)').fill('120');
+  await statementsPane.getByLabel('현재 역할의 쿼리만').check();
+  await statementsPane.getByRole('button', { name: '기준 적용', exact: true }).click();
+  const statementRow = statementsPane.getByRole('row').filter({ hasText: 'historical_fixture_marker' });
+  await statementRow.getByText('SQL 보기', { exact: true }).click();
+  await statementRow.getByText(/historical_fixture_marker/).waitFor();
+  await monitorPane.getByRole('button', { name: '활동 세션', exact: true }).click();
+  await monitorPane.getByRole('button', { name: '누적 쿼리', exact: true }).click();
+  assert.equal(await statementsPane.getByLabel('최대 실행 시간 하한(ms)').inputValue(), '120');
+  assert.equal(await statementsPane.getByLabel('정렬').inputValue(), 'mean');
+  await monitorPane.getByRole('button', { name: '활동 세션', exact: true }).click();
   await monitorPane.getByRole('button', { name: '모니터 연결 끊기', exact: true }).click();
   await monitorPane.getByRole('button', { name: '모니터 연결', exact: true }).waitFor();
   await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
@@ -1203,6 +1236,83 @@ async function verifyServerMonitor({ command, open, close, unrelated }) {
   }
 }
 
+async function verifyStatementStats({ command, query, open, close, session, unrelated }) {
+  const benchmark = 'SELECT 1 AS historical_fixture_marker FROM (SELECT pg_sleep(0.18)) AS measured';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.equal((await query(benchmark)).status, 'completed');
+  }
+  const other = await open(unrelated, otherPassword);
+  let monitor;
+  let otherMonitor;
+  try {
+    const otherQuery = await command('execute_postgres_sql', { id: other.id, request: randomUUID(),
+      source: 'SELECT pg_sleep(0.24), 1 AS private_stat_marker', scope: { kind: 'document' } });
+    assert.equal(otherQuery.status, 'completed');
+    await assert.rejects(readStatementStats(command, session.id), /서버 모니터 연결/);
+    monitor = await command('open_postgres_monitor', { id: session.id, password, confirmation: 'PROD' });
+    otherMonitor = await command('open_postgres_monitor', { id: other.id, password: otherPassword, confirmation: 'PROD' });
+    assert.deepEqual(await readStatementStats(command, otherMonitor.id), { status: 'unavailable', reason: 'permission_denied' });
+    const report = await readStatementStats(command, monitor.id, { minimum_ms: 120 });
+    assert.equal(report.status, 'available', JSON.stringify(report));
+    assert.match(report.version, /^1\./);
+    assert.equal(report.tracking, 'top');
+    assert.ok(report.stats_reset_ms > 0 && report.stats_reset_ms <= report.sampled_at_ms);
+    assert.match(report.evictions, /^\d+$/);
+    assert.ok(report.rows.every(row => row.max_ms >= 120));
+    assert.ok(report.rows.every((row, index, all) => index === 0 || all[index - 1].max_ms >= row.max_ms));
+    const observed = report.rows.find(row => row.query?.includes('historical_fixture_marker'));
+    assert.ok(observed, JSON.stringify(report.rows.map(row => [row.username, row.calls, row.max_ms])));
+    assert.equal(observed.username, 'fixture_reader');
+    assert.equal(observed.calls, '2');
+    assert.equal(observed.rows, '2');
+    assert.ok(observed.query_id && observed.mean_ms >= 150 && observed.total_ms >= 300);
+    assert.match(observed.shared_reads, /^\d+$/);
+    const hidden = report.rows.find(row => row.username === 'fixture_unrelated');
+    assert.ok(hidden && hidden.max_ms >= 200);
+    assert.equal(hidden.query, null);
+    assert.equal(hidden.query_id, null);
+    assert.equal(hidden.query_truncated, false);
+    assert.ok(!JSON.stringify(report).includes('private_stat_marker'));
+    assert.ok(!JSON.stringify(report).includes('other_database_stat'));
+    const own = await readStatementStats(command, monitor.id, { minimum_ms: 120, own_only: true, order: 'mean' });
+    assert.ok(own.rows.length > 0 && own.rows.every(row => row.username === 'fixture_reader'));
+    assert.ok(own.rows.every((row, index, all) => index === 0 || all[index - 1].mean_ms >= row.mean_ms));
+    assert.deepEqual((await readStatementStats(command, monitor.id, { minimum_ms: 86_400_000 })).rows, []);
+    for (let width = 1; width <= 43; width++) {
+      const columns = Array.from({ length: width }, (_, index) => String(index + 1));
+      assert.equal((await query(`SELECT ${columns.join(', ')}`)).status, 'completed');
+    }
+    const firstPage = await readStatementStats(command, monitor.id, { own_only: true, order: 'calls' });
+    assert.equal(firstPage.rows.length, 40);
+    assert.equal(firstPage.has_next, true);
+    assert.ok(firstPage.rows.every((row, index, all) => index === 0 || BigInt(all[index - 1].calls) >= BigInt(row.calls)));
+    const secondPage = await readStatementStats(command, monitor.id, { own_only: true, order: 'calls', page: 1 });
+    assert.ok(secondPage.rows.length > 0);
+  } finally {
+    if (otherMonitor) await close(otherMonitor.id);
+    if (monitor) await close(monitor.id);
+    await close(other.id);
+  }
+}
+
+async function verifyStatsWithoutPreload(browser, fixture) {
+  const page = browser.contexts()[0].pages()[0];
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'PostgreSQL 확장 미로드 검증' });
+  const profile = await command('create_postgres_profile', { projectId: project.id, input: {
+    name: '확장 미로드', host: 'localhost', port: fixture.port, database: 'postgres', username: 'fixture_reader', environment: 'DEV', ca_path: fixture.ca,
+  } });
+  const workspace = await command('open_postgres', { profile, password, confirmation: '' });
+  try {
+    const monitor = await command('open_postgres_monitor', { id: workspace.id, password, confirmation: '' });
+    try {
+      assert.deepEqual(await readStatementStats(command, monitor.id), { status: 'unavailable', reason: 'not_loaded' });
+      assert.ok((await command('postgres_server_activity', { id: monitor.id,
+        input: { filter: 'all', slow_seconds: 5, page: 0 } })).database_backends >= 2);
+    } finally { await command('close_postgres', { id: monitor.id }); }
+  } finally { await command('close_postgres', { id: workspace.id }); }
+}
+
 async function verifyGridWrites({ command, open, close, profile, session, findObject }) {
   const object = findObject('edit demo');
   const page = (id, target = object) => command('postgres_page', { id, object: target, rowPage: 0, columnPage: 0 });
@@ -1319,6 +1429,7 @@ async function verifyGridWrites({ command, open, close, profile, session, findOb
 
 async function main() {
   const fixture = await startPostgres();
+  let withoutPreload;
   let gateway;
   let jump;
   let browser;
@@ -1327,9 +1438,12 @@ async function main() {
     jump = await startGateway(gateway.port, '127.0.0.1');
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway, jump);
-    console.log('Windows PostgreSQL E2E passed (server activity, object search, grid editing, SQL, TLS and SSH jump recovery).');
+    withoutPreload = await startPostgres(false);
+    await verifyStatsWithoutPreload(browser, withoutPreload);
+    console.log('Windows PostgreSQL E2E passed (statement stats, server activity, object search, grid editing, TLS and SSH jump recovery).');
   } finally {
     await browser?.close();
+    withoutPreload?.close();
     jump?.close();
     gateway?.close();
     fixture.close();

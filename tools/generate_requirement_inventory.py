@@ -91,7 +91,7 @@ PARTIAL = {
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
     "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계 표시",
-    "SP-DB-024": "PostgreSQL의 독립 읽기 전용 모니터에서 현재 DB 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·누적 지표 조회",
+    "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 객체의 SELECT·UPDATE 권한 확인과 편집 제한 안내",
@@ -123,7 +123,7 @@ PARTIAL = {
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL EXPLAIN·EXPLAIN ANALYZE의 텍스트와 단계 트리",
     "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL 스캔·조인·정렬·인덱스와 비용·예상/실제 행, 긴 리프와 행 오차 표시",
-    "SP-SQ-016": "SQLite 결과 페이지의 조회·스캔·정렬·인덱스·가상 머신 지표와 고정 결과 비교, PostgreSQL 서버 계획·실행 시간 및 공유·임시 버퍼 블록",
+    "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
     "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
@@ -358,6 +358,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id == "SP-DB-021":
                 evidence += "; crates/stackport-core/src/postgres/search.rs; src/PostgresSearchDialog.tsx"
+            if requirement_id in {"SP-DB-024", "SP-SQ-016"}:
+                evidence += "; crates/stackport-core/src/postgres/statement_stats.rs; src/PostgresStatementStats.tsx"
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
                 evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"

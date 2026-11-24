@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
 import { PostgresPager } from "./PostgresPager";
+import { PostgresStatementStats } from "./PostgresStatementStats";
 import { usePostgresRead } from "./usePostgresRead";
 
 type Filter = "all" | "running" | "blocked" | "slow" | "idle_in_transaction";
@@ -37,6 +38,7 @@ export function PostgresServerMonitor({ workspace, environment, database, visibl
   const [login, setLogin] = useState(false);
   const [closing, setClosing] = useState(false);
   const [loss, setLoss] = useState("");
+  const [view, setView] = useState<"activity" | "statements">("activity");
   const [filter, setFilter] = useState<Filter>("all");
   const [slowSeconds, setSlowSeconds] = useState(5);
   const [threshold, setThreshold] = useState("5");
@@ -44,7 +46,8 @@ export function PostgresServerMonitor({ workspace, environment, database, visibl
   const [revision, setRevision] = useState(0);
   const [automatic, setAutomatic] = useState(false);
   const active = useRef<string | null>(null);
-  const args = useMemo(() => id ? { id, input: { filter, slow_seconds: slowSeconds, page } } : null, [id, filter, slowSeconds, page]);
+  const args = useMemo(() => id && view === "activity" ? { id, input: { filter, slow_seconds: slowSeconds, page } } : null,
+    [id, view, filter, slowSeconds, page]);
   const read = usePostgresRead<Snapshot>("postgres_server_activity", args, revision, true);
   const snapshot = read.data;
 
@@ -60,10 +63,10 @@ export function PostgresServerMonitor({ workspace, environment, database, visibl
     return () => { watching = false; };
   }, [id]);
   useEffect(() => {
-    if (!visible || !id || !automatic || read.loading || read.error) return;
+    if (!visible || !args || !automatic || read.loading || read.error) return;
     const timer = window.setTimeout(() => setRevision(value => value + 1), 5000);
     return () => window.clearTimeout(timer);
-  }, [visible, id, automatic, read.loading, read.error, revision]);
+  }, [visible, args, automatic, read.loading, read.error, revision]);
 
   async function stop() {
     if (!id || closing) return;
@@ -79,13 +82,18 @@ export function PostgresServerMonitor({ workspace, environment, database, visibl
     <div className="panel-heading">
       <strong>서버 모니터 · {database}</strong>
       {id ? <div className="sql-editor-actions">
-        <button type="button" className="secondary small" disabled={read.loading || closing} onClick={() => setRevision(value => value + 1)}>새로 고침</button>
+        {view === "activity" && <button type="button" className="secondary small" disabled={read.loading || closing} onClick={() => setRevision(value => value + 1)}>새로 고침</button>}
         <button type="button" className="secondary small" disabled={closing} onClick={() => void stop()}>모니터 연결 끊기</button>
       </div> : <button type="button" className="primary small" onClick={() => setLogin(true)}>모니터 연결</button>}
     </div>
     {loss && <p className="error-banner" role="alert">{loss}</p>}
     {!id && <p className="result-empty">같은 데이터베이스에 별도의 읽기 전용 연결을 열어 실행 중인 쿼리와 잠금 대기를 확인합니다.</p>}
-    {id && <>
+    {id && <nav className="postgres-result-views postgres-monitor-views" aria-label="서버 모니터 보기">
+      <button type="button" className="secondary small" aria-pressed={view === "activity"} onClick={() => setView("activity")}>활동 세션</button>
+      <button type="button" className="secondary small" aria-pressed={view === "statements"} onClick={() => setView("statements")}>누적 쿼리</button>
+    </nav>}
+    {id && <PostgresStatementStats id={id} visible={visible && view === "statements"} />}
+    {id && view === "activity" && <>
       {snapshot && <MonitorTotals snapshot={snapshot} />}
       <form className="postgres-monitor-controls" onSubmit={event => {
         event.preventDefault(); const seconds = Number(threshold);

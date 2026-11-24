@@ -9,6 +9,7 @@ mod search;
 mod session;
 mod sql;
 mod sql_range;
+mod statement_stats;
 
 pub use catalog::{PostgresStructure, PostgresStructureSection};
 pub use edit::{
@@ -27,3 +28,4 @@ pub use session::{
 };
 pub use sql::{PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome};
 pub use sql_range::PostgresSqlScope;
+pub use statement_stats::{PostgresStatementStats, PostgresStatementStatsInput};

@@ -23,6 +23,7 @@ pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, Pos
 pub use postgres::PostgresDisconnect;
 pub use postgres::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use postgres::{PostgresSearchInput, PostgresSearchPage};
+pub use postgres::{PostgresStatementStats, PostgresStatementStatsInput};
 mod project_lifecycle;
 pub use project_lifecycle::ArchivedProject;
 mod query;
