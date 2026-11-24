@@ -40,7 +40,7 @@ pub use sftp::{
     SftpManager, SftpMutationReport, SftpOpened,
     SftpPermissionChange,
     SftpTransferProgress, SftpTransferReport,
-    SyncPlan, SyncProgress, SyncReport,
+    SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
 };
 mod terminal;
@@ -80,7 +80,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -331,6 +331,7 @@ impl Store {
                 tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(workspace_resume::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(sftp::SYNC_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -356,7 +357,10 @@ impl Store {
                 if current < 4 {
                     tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(workspace_resume::SCHEMA).map_err(db_error)?;
+                if current < 5 {
+                    tx.execute_batch(workspace_resume::SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(sftp::SYNC_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

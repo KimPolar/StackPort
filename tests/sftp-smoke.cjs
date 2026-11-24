@@ -1853,6 +1853,7 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   await verifySyncReplacements(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await verifySyncDeletions(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await verifySyncStop(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
+  await saveSyncProfile(comparison, plan);
   await comparison.getByRole('button', { name: '닫기', exact: true }).click();
   await remote.getByRole('button', { name: '송신', exact: true }).waitFor();
   await localPane.getByRole('button', { name: '수신', exact: true }).waitFor();
@@ -1860,8 +1861,53 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   await remote.getByText('대시보드.txt', { exact: true }).waitFor();
   await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
   await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+  await verifySavedSyncProfile(page, comparison, plan, localRoot, rootPath);
   for (const name of [...uploads.files.keys()]) if (name.startsWith(rootPath + '/')) uploads.files.delete(name);
   uploads.comparisonDirectories.clear();
+}
+
+async function saveSyncProfile(comparison, plan) {
+  await comparison.getByRole('button', { name: '동기화 계획', exact: true }).click();
+  await plan.getByRole('combobox', { name: '동기화 방향', exact: true }).selectOption('download');
+  await plan.getByRole('checkbox', { name: '대상에만 있는 항목을 삭제 후보에 포함', exact: true }).check();
+  await plan.getByRole('textbox', { name: '제외 패턴', exact: true }).fill('*.ignored\ncache/**');
+  await plan.getByRole('button', { name: '프로필로 저장', exact: true }).click();
+  await plan.getByLabel('새 동기화 프로필 이름').fill('파일 동기화 시험');
+  await plan.getByRole('button', { name: '프로필 저장', exact: true }).click();
+  await plan.getByRole('status').getByText('동기화 프로필 저장 완료 · 파일 동기화 시험', { exact: true }).waitFor();
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await plan.waitFor({ state: 'detached' });
+}
+
+async function verifySavedSyncProfile(page, comparison, plan, localRoot, remoteRoot) {
+  const relative = '중단 시험/프로필 저장 후 생성.bin';
+  const fresh = path.join(localRoot, relative);
+  fs.writeFileSync(fresh, 'new since profile save');
+  const profiles = page.getByRole('dialog', { name: '동기화 프로필', exact: true });
+  const showProfiles = page.getByRole('button', { name: '동기화 프로필', exact: true });
+  await showProfiles.click();
+  const saved = profiles.getByRole('listitem').filter({ hasText: '파일 동기화 시험' });
+  await saved.getByText(remoteRoot, { exact: true }).waitFor();
+  await saved.getByText('원격 → 로컬 · 하위 폴더 포함', { exact: true }).waitFor();
+  await saved.getByRole('button', { name: '계획 새로 만들기', exact: true }).click();
+  const row = plan.getByRole('table', { name: '동기화 계획', exact: true }).getByRole('row').filter({
+    has: page.getByRole('rowheader', { name: relative, exact: true }),
+  });
+  await row.getByRole('cell', { name: '삭제 후보', exact: true }).waitFor();
+  assert.equal(await plan.getByRole('combobox', { name: '동기화 방향', exact: true }).inputValue(), 'download');
+  assert.equal(await plan.getByRole('checkbox', { name: '대상에만 있는 항목을 삭제 후보에 포함', exact: true }).isChecked(), true);
+  assert.equal(await plan.getByRole('textbox', { name: '제외 패턴', exact: true }).inputValue(), '*.ignored\ncache/**');
+  assert.equal(fs.readFileSync(fresh, 'utf8'), 'new since profile save');
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await comparison.getByRole('button', { name: '닫기', exact: true }).click();
+
+  await showProfiles.click();
+  await saved.getByRole('button', { name: '프로필 삭제', exact: true }).click();
+  await saved.getByRole('button', { name: '취소', exact: true }).click();
+  await saved.getByRole('button', { name: '프로필 삭제', exact: true }).click();
+  await saved.getByRole('button', { name: '프로필 삭제 확인', exact: true }).click();
+  await profiles.getByText('동기화 계획에서 프로필을 저장할 수 있습니다.', { exact: true }).waitFor();
+  await profiles.getByRole('button', { name: '닫기', exact: true }).click();
 }
 
 async function verifySyncReplacements(page, comparison, plan, localRoot, remoteRoot, uploads, remoteFile) {

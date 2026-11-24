@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { displayFilePath } from "./fileBrowse";
 import { compareFileContents, fileComparisonSnapshot, type ContentResult } from "./fileCompare";
 import type { FolderTreeRow } from "./folderComparison";
-import { buildFolderSyncPlan, parseSyncPatterns, syncActionLabels, type SyncAction, type SyncDirection } from "./folderSyncPlan";
+import type { SavedSyncProfile, SyncProfileOptions } from "./FolderSyncProfilesDialog";
+import { buildFolderSyncPlan, parseSyncPatterns, syncActionLabels, syncDirectionLabels, type SyncAction, type SyncDirection } from "./folderSyncPlan";
 
 const numbers = new Intl.NumberFormat("ko-KR");
 const PAGE_SIZE = 100;
@@ -26,7 +27,7 @@ const executionLabels = { applied: "완료", failed: "실패", skipped: "건너�
 const targetLabels = { local: "로컬", remote: "원격" };
 
 export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, target, recursive, incomplete,
-  sessionId, localRoot, remoteRoot, production, onExitGuard, onVerified, onClose }: {
+  sessionId, localRoot, remoteRoot, production, profile, onExitGuard, onVerified, onClose }: {
   rows: readonly FolderTreeRow[];
   content: ReadonlyMap<string, ContentResult>;
   localPath: string;
@@ -38,15 +39,20 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   localRoot: string;
   remoteRoot: string;
   production: boolean;
+  profile?: SavedSyncProfile;
   onExitGuard: (guard: (() => void) | null) => void;
   onVerified: (result: Map<string, ContentResult>) => void;
   onClose: (executed: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const results = useRef<HTMLDivElement>(null);
-  const [direction, setDirection] = useState<SyncDirection>("upload");
-  const [mirrorDeletes, setMirrorDeletes] = useState(false);
-  const [patternText, setPatternText] = useState("");
+  const [direction, setDirection] = useState<SyncDirection>(profile?.options.direction ?? "upload");
+  const [mirrorDeletes, setMirrorDeletes] = useState(profile?.options.mirror_deletes ?? false);
+  const [patternText, setPatternText] = useState(profile?.options.pattern_text ?? "");
+  const [profileName, setProfileName] = useState<string | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [savedName, setSavedName] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(0);
   const running = useRef(false);
@@ -106,7 +112,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   const replacements = executable.filter(item => item.replacement !== null).length;
   const needsProd = production && ((deletionCount > 0 && deleteTarget === "remote") || executable.some(item => item.target === "remote"));
   const executing = progress !== null;
-  const locked = confirming || executing;
+  const locked = confirming || executing || savingProfile;
   const reported = report?.items ?? [];
   const reportPages = Math.ceil(reported.length / PAGE_SIZE);
   const counts = { applied: 0, failed: 0, skipped: 0 };
@@ -122,6 +128,24 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   function goToPage(index: number) {
     setPage(index);
     results.current?.scrollTo({ top: 0 });
+  }
+
+  async function saveProfile(event: FormEvent) {
+    event.preventDefault();
+    const name = profileName?.trim();
+    if (!name || locked || "error" in parsed) return;
+    const options: SyncProfileOptions = { direction, recursive, mirror_deletes: mirrorDeletes, pattern_text: patternText };
+    setSavingProfile(true);
+    setProfileError("");
+    try {
+      await invoke("save_sftp_sync_profile", { id: sessionId, input: { name, local_root: localRoot, remote_root: remoteRoot, options } });
+      setSavedName(name);
+      setProfileName(null);
+    } catch (error) {
+      setProfileError(String(error));
+    } finally {
+      setSavingProfile(false);
+    }
   }
 
   async function execute() {
@@ -233,12 +257,13 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
 
   return <dialog ref={dialog} className="dialog files-compare" aria-labelledby="folder-sync-title" onClose={() => onClose(report !== null)}
     role={confirming && deletionCount > 0 ? "alertdialog" : undefined}
-    onCancel={event => { if (running.current) event.preventDefault(); }}>
+    onCancel={event => { if (running.current || savingProfile) event.preventDefault(); }}>
     <div className="dialog-heading">
       <h2 id="folder-sync-title">동기화 계획 미리보기</h2>
-      <button type="button" className="icon-button" aria-label="닫기" disabled={progress !== null} onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
+      <button type="button" className="icon-button" aria-label="닫기" disabled={progress !== null || savingProfile} onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
     </div>
     <div className="files-compare-body">
+      {profile && <p className="form-note">동기화 프로필 · {profile.name}</p>}
       <dl className="files-compare-paths">
         <div><dt>로컬 폴더</dt><dd>{displayFilePath(localPath)}</dd></div>
         <div><dt>원격 폴더 · {target}</dt><dd>{remotePath}</dd></div>
@@ -279,9 +304,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
               setDeletionReview(null);
               goToPage(0);
             }}>
-              <option value="upload">로컬 → 원격</option>
-              <option value="download">원격 → 로컬</option>
-              <option value="both">양방향</option>
+              {Object.entries(syncDirectionLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           <label className="folder-sync-delete">
@@ -296,6 +319,19 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
           <span id="folder-sync-pattern-hint" className="form-note">한 줄에 하나씩 입력하세요. *는 이름 일부, ?는 한 글자, **는 하위 경로에 대응합니다.</span>
         </label>
       </div>
+      {!confirming && !executing && <div className="sync-profile-save">
+        {profileName !== null ? <form onSubmit={event => void saveProfile(event)}>
+          <label className="field">새 동기화 프로필 이름<input value={profileName} maxLength={80} disabled={savingProfile}
+            onChange={event => { setProfileName(event.target.value); setProfileError(""); }} /></label>
+          <div className="folder-sync-run">
+            <button type="button" className="secondary small" disabled={savingProfile} onClick={() => { setProfileName(null); setProfileError(""); }}>취소</button>
+            <button type="submit" className="primary small" disabled={savingProfile || !profileName.trim() || "error" in parsed}>프로필 저장</button>
+          </div>
+        </form> : <button type="button" className="secondary small" disabled={"error" in parsed}
+          onClick={() => { setProfileName(""); setSavedName(""); }}>프로필로 저장</button>}
+        {profileError && <p className="form-error" role="alert">{profileError}</p>}
+        {savedName && <p className="form-note" role="status">동기화 프로필 저장 완료 · {savedName}</p>}
+      </div>}
       {"error" in parsed ? <p className="form-error" role="alert">{parsed.error}</p> : <>
         <div className="files-compare-tools">
           <label>표시 <select aria-label="동기화 계획 필터" value={filter}
@@ -352,13 +388,13 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
             onClick={() => void execute()}>확인하고 시작</button>
         </div>
       </div> : (executionCount > 0 || uncheckedUpdates.length > 0 || deletionCandidates.length > 0) && <div className="folder-sync-run">
-        {uncheckedUpdates.length > 0 && <button type="button" className="secondary small" onClick={() => void verifyUpdates()}>
+        {uncheckedUpdates.length > 0 && <button type="button" className="secondary small" disabled={savingProfile} onClick={() => void verifyUpdates()}>
           갱신 후보 검증 ({numbers.format(uncheckedUpdates.length)})
         </button>}
-        {deletionCandidates.length > 0 && <button type="button" className="secondary small" onClick={() => void verifyDeletions()}>
+        {deletionCandidates.length > 0 && <button type="button" className="secondary small" disabled={savingProfile} onClick={() => void verifyDeletions()}>
           삭제 후보 검증 ({numbers.format(deletionCandidates.length)})
         </button>}
-        {executionCount > 0 && <button type="button" className="primary small" disabled={reviewRequired}
+        {executionCount > 0 && <button type="button" className="primary small" disabled={reviewRequired || savingProfile}
           onClick={() => { setError(""); setConfirming(true); }}>
           {replacements > 0 || deletionCount > 0 ? "동기화 실행" : "새 항목 실행"} ({numbers.format(executionCount)})
         </button>}

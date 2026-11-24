@@ -13,6 +13,7 @@ mod preview;
 mod remote_stage;
 mod sync;
 mod sync_delete;
+mod sync_profile;
 mod sync_replace;
 mod transfer;
 mod upload;
@@ -26,6 +27,8 @@ pub use permissions::SftpPermissionChange;
 pub use preview::{preview_local_file, FilePreview};
 pub use sync::{SyncPlan, SyncProgress, SyncReport};
 pub use sync_delete::{SyncDeleteInput, SyncDeletePreview};
+pub use sync_profile::{SavedSyncProfile, SyncProfileInput};
+pub(crate) use sync_profile::SCHEMA as SYNC_PROFILE_SCHEMA;
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
 

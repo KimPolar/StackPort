@@ -13,7 +13,7 @@ use stackport_core::{
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
-    SyncPlan, SyncProgress, SyncReport,
+    SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
@@ -843,6 +843,21 @@ async fn browse_sftp_folder_tree(
 }
 
 #[tauri::command]
+async fn list_sftp_sync_profiles(sftp: State<'_, SftpManager>, id: String) -> Result<Vec<SavedSyncProfile>, String> {
+    sftp.saved_sync_profiles(&id).await
+}
+
+#[tauri::command]
+async fn save_sftp_sync_profile(sftp: State<'_, SftpManager>, id: String, input: SyncProfileInput) -> Result<(), String> {
+    sftp.save_sync_profile(&id, input).await
+}
+
+#[tauri::command]
+async fn remove_sftp_sync_profile(sftp: State<'_, SftpManager>, id: String, profile_id: String) -> Result<(), String> {
+    sftp.remove_sync_profile(&id, profile_id).await
+}
+
+#[tauri::command]
 async fn apply_sftp_sync_plan(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1177,6 +1192,9 @@ fn main() {
             browse_local_directory,
             browse_local_folder_tree,
             browse_sftp_folder_tree,
+            list_sftp_sync_profiles,
+            save_sftp_sync_profile,
+            remove_sftp_sync_profile,
             apply_sftp_sync_plan,
             stop_sftp_sync,
             prepare_sftp_sync_deletions,

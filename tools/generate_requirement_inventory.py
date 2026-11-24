@@ -62,6 +62,7 @@ PARTIAL = {
     "SP-FL-018": "활성 Windows PowerShell의 드라이브 경로와 같은 저장된 SSH 연결의 OSC 7 경로를 파일 창별 선택으로 반영",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
     "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
+    "SP-FL-022": "SSH 연결별 폴더 동기화 프로필 저장·삭제, 폴더와 옵션 불러오기 및 최신 목록으로 수동 실행 계획 생성",
     "SP-FL-023": "SFTP 전송·편집·파일 관리·권한 및 소유자 변경·동기화의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
     "SP-FL-024": "SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 열린 클라이언트 목록, 창·전체 화면·다중 모니터, 펼칠 수 있는 해상도·색 깊이 설정",
@@ -216,6 +217,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/FolderSyncPlanDialog.tsx; src/folderSyncPlan.ts; crates/stackport-core/src/sftp/sync.rs; crates/stackport-core/src/sftp/sync_replace.rs; crates/stackport-core/src/sftp/sync_delete.rs; tests/folder-sync-plan.test.mjs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-018":
                 evidence = "crates/stackport-core/src/terminal.rs; crates/stackport-core/tests/terminal.rs; src/terminalDirectory.ts; src/TerminalWorkspace.tsx; src/SftpWorkspace.tsx; tests/terminal-smoke.cjs; tests/sftp-smoke.cjs"
+            elif requirement_id == "SP-FL-022":
+                evidence = "crates/stackport-core/src/sftp/sync_profile.rs; crates/stackport-core/tests/migration.rs; src/FolderSyncProfilesDialog.tsx; src/FolderSyncPlanDialog.tsx; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-019":
                 evidence = "crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx"
             elif requirement_id == "SP-FL-008":

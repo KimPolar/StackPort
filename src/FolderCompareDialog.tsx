@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import { displayFilePath, type Entry } from "./fileBrowse";
 import { asFolderTree, compareFileContents, fileComparisonSnapshot, loadFolderComparison, loadFolderTreeComparison,
-  type ContentResult, type FileSnapshot, type FolderComparison, type FolderPair, type FolderTreeComparison } from "./fileCompare";
+  type ContentResult, type FileSnapshot, type FolderPair, type FolderTreeComparison } from "./fileCompare";
+import type { SavedSyncProfile } from "./FolderSyncProfilesDialog";
 import { FileComparisonResult, FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
 import { compareFolderTrees, relationLabels } from "./folderComparison";
 import { FolderSyncPlanDialog } from "./FolderSyncPlanDialog";
@@ -23,9 +24,10 @@ function Metadata({ entries }: { entries: Entry[] }) {
   </td>;
 }
 
-export function FolderCompareDialog({ pair, initial, production, onExitGuard, onSynced, onClose }: {
+export function FolderCompareDialog({ pair, initial, profile, production, onExitGuard, onSynced, onClose }: {
   pair: FolderPair;
-  initial: Promise<FolderComparison>;
+  initial: Promise<FolderTreeComparison>;
+  profile?: SavedSyncProfile;
   production: boolean;
   onExitGuard: (guard: (() => void) | null) => void;
   onSynced: () => void;
@@ -33,15 +35,15 @@ export function FolderCompareDialog({ pair, initial, production, onExitGuard, on
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const resultList = useRef<HTMLDivElement>(null);
-  const [pending, setPending] = useState(() => initial.then(asFolderTree));
+  const [pending, setPending] = useState(initial);
   const [result, setResult] = useState<FolderTreeComparison | null>(null);
-  const [recursive, setRecursive] = useState(false);
+  const [recursive, setRecursive] = useState(profile?.options.recursive ?? false);
   const [visible, setVisible] = useState<Visible>("issues");
   const [page, setPage] = useState(0);
   const [content, setContent] = useState(new Map<string, ContentResult>());
   const [hashing, setHashing] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ name: string; difference: ViewableDifference } | null>(null);
-  const [showPlan, setShowPlan] = useState(false);
+  const [showPlan, setShowPlan] = useState(profile !== undefined);
   const hashPending = useRef(false);
   const syncChanged = useRef(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
@@ -105,6 +107,7 @@ export function FolderCompareDialog({ pair, initial, production, onExitGuard, on
       <button type="button" className="icon-button" aria-label="닫기" onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
     </div>
     <div className="files-compare-body" aria-busy={!result}>
+      {profile && <p className="form-note">동기화 프로필 · {profile.name}</p>}
       <dl className="files-compare-paths">
         <div><dt>로컬 폴더</dt><dd>{displayFilePath(folders?.local.path ?? pair.local.path)}</dd></div>
         <div><dt>원격 폴더 · {pair.target}</dt><dd>{folders?.remote.path ?? pair.remote.path}</dd></div>
@@ -169,7 +172,7 @@ export function FolderCompareDialog({ pair, initial, production, onExitGuard, on
   </dialog>
     {selection && <FileDifferenceDialog {...selection} onClose={() => setSelection(null)} />}
     {showPlan && folders && <FolderSyncPlanDialog rows={rows} content={content} localPath={folders.local.path} remotePath={folders.remote.path}
-      target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete}
+      target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete} profile={profile}
       sessionId={pair.id} localRoot={pair.local.location} remoteRoot={pair.remote.location} production={production} onExitGuard={onExitGuard}
       onVerified={verified => setContent(current => new Map([...current, ...verified]))}
       onClose={executed => {

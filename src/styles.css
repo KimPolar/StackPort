@@ -342,6 +342,11 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .folder-sync-options .field { margin-bottom: 6px; }
 .folder-sync-options .field textarea { min-width: 0; padding: 8px; border: 1px solid #dce7df; border-radius: 5px; resize: vertical; font: inherit; font-weight: 400; }
 .folder-sync-options .field .form-note { font-weight: 400; }
+.sync-profile-save { margin-bottom: 12px; }
+.sync-profile-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.sync-profile-list > li { padding: 10px 0; border-top: 1px solid #dce7df; }
+.sync-profile-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 12px; }
+.sync-profile-title span { color: #526a5f; font-size: 12px; }
 .folder-sync-delete { display: flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; }
 .folder-sync-table td:last-child { min-width: 160px; white-space: normal; overflow-wrap: anywhere; }
 .folder-sync-result-title { margin: 14px 0 4px; font-size: 14px; }

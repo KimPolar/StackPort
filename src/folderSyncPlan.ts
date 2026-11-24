@@ -4,6 +4,7 @@ import type { FolderTreeRow } from "./folderComparison";
 
 type Side = "local" | "remote";
 export type SyncDirection = "upload" | "download" | "both";
+export const syncDirectionLabels = { upload: "로컬 → 원격", download: "원격 → 로컬", both: "양방향" };
 export const syncActionLabels = {
   mkdir: "폴더 만들기", copy: "파일 복사", update: "파일 갱신", delete: "삭제 후보",
   conflict: "충돌", verify: "내용 확인 필요", keep: "보존", exclude: "제외",

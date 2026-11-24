@@ -4,8 +4,9 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Copy, Download,
 import { displayFilePath, type BrowsePath, type Directory, type DirectoryLocation, type Entry } from "./fileBrowse";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import { FolderCompareDialog } from "./FolderCompareDialog";
+import { FolderSyncProfilesDialog, type SavedSyncProfile } from "./FolderSyncProfilesDialog";
 import { FilePairCompareDialog } from "./FilePairCompareDialog";
-import { loadFolderComparison, type FolderPair } from "./fileCompare";
+import { asFolderTree, loadFolderComparison, loadFolderTreeComparison, type FolderComparison, type FolderPair, type FolderTreeComparison } from "./fileCompare";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
 import { SftpDestinationDialog, type SftpDestinationSelection } from "./SftpDestinationDialog";
@@ -18,6 +19,8 @@ import type { TerminalDirectory } from "./terminalDirectory";
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
 type DirectoryHistory = { visits: DirectoryLocation[]; index: number };
+type ComparisonSelection = { kind: "files"; pair: FolderPair; result: Promise<FolderComparison> }
+  | { kind: "folder"; pair: FolderPair; result: Promise<FolderTreeComparison>; profile?: SavedSyncProfile };
 type FileSort = { key: "name" | "size" | "modified"; direction: "ascending" | "descending" };
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
@@ -39,7 +42,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
   const [localFolder, setLocalFolder] = useState<DirectoryLocation | null>(null);
-  const [comparison, setComparison] = useState<{ kind: "folder" | "files"; pair: FolderPair; result: ReturnType<typeof loadFolderComparison> } | null>(null);
+  const [comparison, setComparison] = useState<ComparisonSelection | null>(null);
+  const [showSyncProfiles, setShowSyncProfiles] = useState(false);
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
   const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
@@ -54,7 +58,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [remoteRefresh, setRemoteRefresh] = useState(0);
   const [error, setError] = useState("");
   const selected = profiles.find(profile => profile.id === selectedId) ?? profiles[0];
-  const followPaused = Boolean(closing || transfer || comparison || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
+  const followPaused = Boolean(closing || transfer || comparison || showSyncProfiles || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
   const remoteTerminalPath = terminalDirectory?.kind === "ssh" && remote && terminalDirectory.profileId === remote.profile.id
     && terminalDirectory.revision === remote.profile.revision ? terminalDirectory.path : null;
 
@@ -67,6 +71,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       setRemote(null);
       setTransfer(null);
       setComparison(null);
+      setShowSyncProfiles(false);
       setFinished(null);
       setNameAction(null);
       setDestinationSelection(null);
@@ -163,10 +168,23 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   function openComparison(kind: "folder" | "files") {
     if (!localFolder || !remote) return;
     const pair = {
-      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`,
+      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`, exactRoots: kind === "folder",
       local: localFolder, remote: directoryLocation(remote.directory),
     };
-    setComparison({ kind, pair, result: loadFolderComparison(pair) });
+    const result = loadFolderComparison(pair);
+    setComparison(kind === "folder" ? { kind, pair, result: result.then(asFolderTree) } : { kind, pair, result });
+  }
+
+  function openSyncProfile(profile: SavedSyncProfile) {
+    if (!remote || !profile.available) return;
+    const pair = {
+      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`, exactRoots: true,
+      local: { path: profile.local_root, location: profile.local_root },
+      remote: { path: profile.remote_path, location: profile.remote_root },
+    };
+    const result = profile.options.recursive ? loadFolderTreeComparison(pair) : loadFolderComparison(pair).then(asFolderTree);
+    setShowSyncProfiles(false);
+    setComparison({ kind: "folder", pair, result, profile });
   }
 
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
@@ -184,6 +202,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={() => openComparison("folder")}>
           <GitCompareArrows size={14} aria-hidden /> 폴더 비교
         </button>
+        <button type="button" className="secondary small" disabled={closing} onClick={() => setShowSyncProfiles(true)}>동기화 프로필</button>
         <button type="button" className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
       </div>}
     </header>
@@ -259,7 +278,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       production={remote.profile.environment === "PROD"} selection={permissionSelection} onClose={() => setPermissionSelection(null)}
       onRefresh={() => setRemoteRefresh(value => value + 1)} onSaved={(name, warning) => mutationSaved("permissions", name, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
-    {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result}
+    {remote && showSyncProfiles && <FolderSyncProfilesDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.environment}`}
+      onOpen={openSyncProfile} onClose={() => setShowSyncProfiles(false)} />}
+    {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} profile={comparison.profile}
       production={remote?.profile.environment === "PROD"} onExitGuard={onExitGuard} onClose={() => setComparison(null)}
       onSynced={() => { setLocalRefresh(value => value + 1); setRemoteRefresh(value => value + 1); }} />}
     {comparison?.kind === "files" && <FilePairCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}

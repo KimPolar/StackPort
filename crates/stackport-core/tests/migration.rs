@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use stackport_core::Store;
+use stackport_core::{ResumeLayout, ResumeTool, Store, WorkspaceResume};
 use std::path::{Path, PathBuf};
 
 fn create_v1(path: &Path, conflict: bool) {
@@ -81,7 +81,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -135,7 +135,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        6
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);
@@ -287,6 +287,33 @@ fn version_four_migration_backs_up_the_previous_format_before_adding_resume() {
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn version_five_migration_preserves_workspace_resume_and_creates_sftp_profiles() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    let store = Store::open(&path).unwrap();
+    let project = store.create_project("existing").unwrap();
+    store.save_workspace_resume(0, WorkspaceResume {
+        project_id: Some(project.id.clone()), profile_id: None, explorer_open: true,
+        layout: ResumeLayout::Tool { tool: ResumeTool::Files },
+    }).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
+    drop(db);
+
+    let migrated = Store::open(&path).unwrap();
+    let resume = migrated.workspace_resume().unwrap();
+    assert_eq!(resume.revision, 1);
+    assert_eq!(resume.state.unwrap().project_id.as_deref(), Some(project.id.as_str()));
+    assert_eq!(migrated.list_projects().unwrap(), vec![project]);
+    let db = Connection::open(&path).unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM sftp_sync_profiles", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+    let backup_path = std::fs::read_dir(directory.path()).unwrap().map(|entry| entry.unwrap().path())
+        .find(|path| path.file_name().unwrap().to_string_lossy().contains(".v5-")).unwrap();
+    let backup = Connection::open(backup_path).unwrap();
+    assert_eq!(backup.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 5);
 }
 
 #[test]
