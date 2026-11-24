@@ -20,7 +20,7 @@ type BatchItem = { path: string; target: Target; deletion: boolean } & (
   | { status: "applied"; bytes: string | null; sha256: string | null; warning: string | null }
   | { status: "failed" | "skipped"; reason: string }
 );
-type BatchReport = { items: BatchItem[]; audit_warning: string | null };
+type BatchReport = { items: BatchItem[]; audit_warning: string | null; stopped: boolean };
 type DeletionReview = { token: string | null; ready: string[]; conflicts: { path: string; reason: string }[]; expires_seconds: number };
 const executionLabels = { applied: "완료", failed: "실패", skipped: "건너뜀" };
 const targetLabels = { local: "로컬", remote: "원격" };
@@ -50,6 +50,8 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(0);
   const running = useRef(false);
+  const activeRun = useRef<string | null>(null);
+  const [stopState, setStopState] = useState<"waiting" | "ready" | "requesting" | "requested">("waiting");
   const stopVerification = useRef(false);
   const [verifying, setVerifying] = useState<"updates" | "deletions" | null>(null);
   const [deletionReview, setDeletionReview] = useState<DeletionReview | null>(null);
@@ -126,13 +128,20 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
     if (!confirming || running.current || !executionCount || reviewRequired || (needsProd && confirmation !== "PROD") ||
       (deletionCount > 0 && deletionConfirmation !== "삭제")) return;
     running.current = true;
+    const runId = crypto.randomUUID();
+    activeRun.current = runId;
+    setStopState("waiting");
     setProgress({ completed: 0, total: executionCount, path: "" });
     setError("");
     setExitNotice(false);
-    const channel = new Channel<BatchProgress>(setProgress);
+    const channel = new Channel<BatchProgress>(value => {
+      if (activeRun.current !== runId) return;
+      setProgress(value);
+      setStopState(current => current === "waiting" ? "ready" : current);
+    });
     try {
       setReport(await invoke<BatchReport>("apply_sftp_sync_plan", {
-        id: sessionId, input: { local_root: localRoot, remote_root: remoteRoot, confirmation,
+        id: sessionId, runId, input: { local_root: localRoot, remote_root: remoteRoot, confirmation,
           deletion_confirmation: deletionConfirmation, delete_token: deletionReview?.token ?? null, items: executable }, progress: channel,
       }));
       goToPage(0);
@@ -145,7 +154,24 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
       setConfirming(false);
       setConfirmation("");
       setDeletionConfirmation("");
+      activeRun.current = null;
+      setStopState("waiting");
       running.current = false;
+    }
+  }
+
+  async function stopExecution() {
+    const runId = activeRun.current;
+    if (!runId || stopState !== "ready") return;
+    setStopState("requesting");
+    try {
+      const accepted = await invoke<boolean>("stop_sftp_sync", { id: sessionId, runId });
+      if (activeRun.current === runId) setStopState(accepted ? "requested" : "waiting");
+    } catch (error) {
+      if (activeRun.current === runId) {
+        setError(String(error));
+        setStopState("ready");
+      }
     }
   }
 
@@ -219,6 +245,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
       </dl>
       {report ? <>
         <h3 className="folder-sync-result-title">동기화 실행 결과</h3>
+        {report.stopped && <p role="status" className="form-note">진행 중이던 항목을 마친 뒤 남은 작업을 중단했습니다.</p>}
         <p role="status" className="form-note">완료 {numbers.format(counts.applied)}개 · 실패 {numbers.format(counts.failed)}개 · 건너뜀 {numbers.format(counts.skipped)}개</p>
         {report.audit_warning && <p role="alert" className="form-error">{report.audit_warning}</p>}
         <div ref={results} className="files-compare-results" role="region" aria-label="동기화 실행 결과 스크롤 영역" tabIndex={0}>
@@ -304,6 +331,10 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
         <progress aria-label={verifying === "deletions" ? "삭제 후보 검증 진행률" : verifying ? "갱신 대상 검증 진행률" : "동기화 진행률"} max={progress.total} value={progress.completed} />
         <span>{numbers.format(progress.completed)} / {numbers.format(progress.total)} · {progress.path || "준비 중"}</span>
         {verifying === "updates" && <button type="button" className="secondary small" onClick={() => { stopVerification.current = true; }}>검증 중단</button>}
+        {!verifying && <button type="button" className="secondary small" disabled={stopState !== "ready"} onClick={() => void stopExecution()}>
+          남은 작업 중단
+        </button>}
+        {!verifying && stopState === "requested" && <span>현재 항목을 마친 뒤 중단합니다.</span>}
       </div> : confirming ? <div className="folder-sync-confirm">
         <p className="form-note">새 항목 {numbers.format(executable.length - replacements)}개를 추가하고, SHA-256을 확인한 기존 파일 {numbers.format(replacements)}개를 갱신합니다.</p>
         {deletionCount > 0 && <label className="field">

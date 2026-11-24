@@ -816,10 +816,17 @@ async fn browse_sftp_folder_tree(
 async fn apply_sftp_sync_plan(
     sftp: State<'_, SftpManager>,
     id: String,
+    run_id: String,
     input: SyncPlan,
     progress: Channel<SyncProgress>,
 ) -> Result<SyncReport, String> {
-    sftp.apply_sync_plan(&id, input, |update| { let _ = progress.send(update); }).await
+    let run_id = run_id.parse().map_err(|_| "동기화 실행 ID를 확인하세요.")?;
+    sftp.apply_sync_plan(&id, run_id, input, |update| { let _ = progress.send(update); }).await
+}
+
+#[tauri::command]
+fn stop_sftp_sync(sftp: State<'_, SftpManager>, id: String, run_id: String) -> bool {
+    run_id.parse().is_ok_and(|run_id| sftp.stop_sync(&id, run_id))
 }
 
 #[tauri::command]
@@ -1125,6 +1132,7 @@ fn main() {
             browse_local_folder_tree,
             browse_sftp_folder_tree,
             apply_sftp_sync_plan,
+            stop_sftp_sync,
             prepare_sftp_sync_deletions,
             compare_sftp_file_contents,
             save_merged_file,

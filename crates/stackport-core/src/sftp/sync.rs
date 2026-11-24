@@ -15,6 +15,7 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 use uuid::Uuid;
 
@@ -123,6 +124,40 @@ struct ItemReport {
 pub struct SyncReport {
     items: Vec<ItemReport>,
     audit_warning: Option<&'static str>,
+    stopped: bool,
+}
+
+pub(super) struct SyncRun {
+    id: Uuid,
+    stop: bool,
+}
+
+struct SyncRunGuard<'a>(&'a Mutex<Option<SyncRun>>);
+
+impl<'a> SyncRunGuard<'a> {
+    fn start(slot: &'a Mutex<Option<SyncRun>>, id: Uuid) -> Result<Self> {
+        let mut active = slot.lock().map_err(|_| "동기화 상태를 열 수 없습니다.")?;
+        if active.is_some() {
+            return Err("다른 동기화가 진행 중입니다.".into());
+        }
+        *active = Some(SyncRun { id, stop: false });
+        Ok(Self(slot))
+    }
+
+    fn stopped(&self) -> bool {
+        self.0
+            .lock()
+            .map_or(true, |active| active.as_ref().is_none_or(|run| run.stop))
+    }
+}
+
+impl Drop for SyncRunGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
+    }
 }
 
 pub(super) fn ensure_local_parent(path: &Path) -> Result<()> {
@@ -230,9 +265,24 @@ fn resolve_items(input: SyncPlan, remote_root: &SftpString) -> Result<Vec<Resolv
 }
 
 impl SftpManager {
+    pub fn stop_sync(&self, id: &str, run_id: Uuid) -> bool {
+        let Ok(session) = self.session(id) else {
+            return false;
+        };
+        let Ok(mut active) = session.active_sync.lock() else {
+            return false;
+        };
+        let Some(run) = active.as_mut().filter(|run| run.id == run_id) else {
+            return false;
+        };
+        run.stop = true;
+        true
+    }
+
     pub async fn apply_sync_plan(
         &self,
         id: &str,
+        run_id: Uuid,
         input: SyncPlan,
         progress: impl Fn(SyncProgress),
     ) -> Result<SyncReport> {
@@ -321,6 +371,7 @@ impl SftpManager {
                 }
             }
         }
+        let run = SyncRunGuard::start(&session.active_sync, run_id)?;
         let correlation = Uuid::new_v4().to_string();
         let audit = FileAudit::start(
             &self.store,
@@ -334,21 +385,36 @@ impl SftpManager {
         )
         .await?;
 
+        progress(SyncProgress {
+            completed: 0,
+            total,
+            path: String::new(),
+        });
         let mut prepared_deletions = Vec::with_capacity(deletions.len());
         for item in deletions {
-            let checked = item.verify_directory(&session.files).await;
+            let checked = if run.stopped() {
+                Ok(())
+            } else {
+                item.verify_directory(&session.files).await
+            };
             prepared_deletions.push((item, checked));
         }
         let mut items = Vec::with_capacity(total);
         let mut failed_folders = HashSet::new();
         let mut applied = 0;
+        let mut stopped = false;
         for item in additions {
             progress(SyncProgress {
                 completed: items.len(),
                 total,
                 path: item.relative.clone(),
             });
-            let outcome = if session.ssh.is_closed() {
+            let outcome = if run.stopped() {
+                stopped = true;
+                ItemOutcome::Skipped {
+                    reason: "남은 동기화 작업을 중단했습니다.",
+                }
+            } else if session.ssh.is_closed() {
                 ItemOutcome::Skipped {
                     reason: "SFTP 연결이 종료되었습니다.",
                 }
@@ -382,33 +448,40 @@ impl SftpManager {
                 total,
                 path: item.relative.clone(),
             });
-            let outcome = match checked {
-                Ok(()) if session.ssh.is_closed() => ItemOutcome::Skipped {
-                    reason: "SFTP 연결이 종료되었습니다.",
-                },
-                Ok(()) => match item
-                    .apply(
-                        &session.files,
-                        &local_root,
-                        &remote_root,
-                        changed_parents.contains(&item.relative),
-                    )
-                    .await
-                {
-                    Ok(()) => {
-                        applied += 1;
-                        if let Some((parent, _)) = item.relative.rsplit_once('/') {
-                            changed_parents.insert(parent.to_owned());
+            let outcome = if run.stopped() {
+                stopped = true;
+                ItemOutcome::Skipped {
+                    reason: "남은 동기화 작업을 중단했습니다.",
+                }
+            } else {
+                match checked {
+                    Ok(()) if session.ssh.is_closed() => ItemOutcome::Skipped {
+                        reason: "SFTP 연결이 종료되었습니다.",
+                    },
+                    Ok(()) => match item
+                        .apply(
+                            &session.files,
+                            &local_root,
+                            &remote_root,
+                            changed_parents.contains(&item.relative),
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            applied += 1;
+                            if let Some((parent, _)) = item.relative.rsplit_once('/') {
+                                changed_parents.insert(parent.to_owned());
+                            }
+                            ItemOutcome::Applied {
+                                bytes: None,
+                                sha256: None,
+                                warning: None,
+                            }
                         }
-                        ItemOutcome::Applied {
-                            bytes: None,
-                            sha256: None,
-                            warning: None,
-                        }
-                    }
+                        Err(reason) => ItemOutcome::Failed { reason },
+                    },
                     Err(reason) => ItemOutcome::Failed { reason },
-                },
-                Err(reason) => ItemOutcome::Failed { reason },
+                }
             };
             items.push(ItemReport {
                 target: item.target(),
@@ -417,10 +490,17 @@ impl SftpManager {
                 outcome,
             });
         }
-        let audit_warning = audit.finish_sync(applied == total, applied).await;
+        drop(run);
+        let successful = applied == total
+            || (stopped
+                && !items
+                    .iter()
+                    .any(|item| matches!(item.outcome, ItemOutcome::Failed { .. })));
+        let audit_warning = audit.finish_sync(successful, applied, stopped).await;
         Ok(SyncReport {
             items,
             audit_warning,
+            stopped,
         })
     }
 }

@@ -1202,8 +1202,8 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     if (event.operation === 'sftp.delete') assert.equal(event.policy, 'sftp-delete-preview-prod-required');
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
-    if (event.operation === 'sftp.sync' || event.operation === 'sftp.sync.delete') {
-      assert.equal(event.policy, event.operation === 'sftp.sync' ? 'sftp-pinned-host-sync-verified-plan' : 'sftp-pinned-host-sync-mirror-delete-confirmed');
+    if (event.operation.startsWith('sftp.sync')) {
+      assert.equal(event.policy, event.operation.startsWith('sftp.sync.delete') ? 'sftp-pinned-host-sync-mirror-delete-confirmed' : 'sftp-pinned-host-sync-verified-plan');
       if (event.outcome === 'started') assert.equal(event.affected_count, null);
     } else {
       assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
@@ -1214,6 +1214,8 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     .map(event => event.affected_count).sort(), [1, 1, 4]);
   assert.deepEqual(fileEvents.filter(event => event.operation === 'sftp.sync.delete' && event.outcome === 'failed')
     .map(event => event.affected_count).sort(), [3, 3]);
+  assert.deepEqual(fileEvents.filter(event => event.operation === 'sftp.sync.delete.cancel' && event.outcome === 'succeeded')
+    .map(event => event.affected_count), [1]);
   const serialized = JSON.stringify(fileEvents);
   for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', '편집 원본.txt', '편집 내용 유지', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
@@ -1230,7 +1232,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     expected.push({ action, state: '완료' }, { action, state: '실패' });
   }
   expected.push({ action: 'SFTP 폴더 동기화', state: '시작' }, { action: 'SFTP 폴더 동기화', state: '실패' });
-  expected.push({ action: 'SFTP 폴더 동기화 · 삭제 포함', state: '시작' }, { action: 'SFTP 폴더 동기화 · 삭제 포함', state: '실패' });
+  for (const state of ['시작', '실패', '중단']) expected.push({ action: 'SFTP 폴더 동기화 · 삭제 포함', state });
   const history = page.locator('.audit-card .audit-list');
   const older = page.getByRole('button', { name: '이전 기록 더 보기', exact: true });
   await history.waitFor();
@@ -1616,6 +1618,7 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   await comparison.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
   await verifySyncReplacements(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await verifySyncDeletions(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
+  await verifySyncStop(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await comparison.getByRole('button', { name: '닫기', exact: true }).click();
   await remote.getByRole('button', { name: '송신', exact: true }).waitFor();
   await localPane.getByRole('button', { name: '수신', exact: true }).waitFor();
@@ -1791,6 +1794,45 @@ async function verifySyncDeletions(page, comparison, plan, localRoot, remoteRoot
   assert.equal(fs.readFileSync(path.join(localRoot, localBase, '기준 다시 생김.txt'), 'utf8'), 'before');
   assert.equal(fs.readFileSync(path.join(localRoot, localBase, '대상 변경.txt'), 'utf8'), 'edited');
   await finish();
+}
+
+async function verifySyncStop(page, comparison, plan, localRoot, remoteRoot, uploads, remoteFile) {
+  const excluded = fs.readdirSync(localRoot);
+  const folder = '중단 시험';
+  const localBase = path.join(localRoot, folder);
+  const remoteBase = `${remoteRoot}/${folder}`;
+  fs.mkdirSync(localBase);
+  fs.writeFileSync(path.join(localBase, '01-현재 복사.bin'), 'in-flight upload');
+  fs.writeFileSync(path.join(localBase, '02-다음 복사.bin'), 'do not copy');
+  uploads.comparisonDirectories.set(remoteBase, []);
+  remoteFile(`${folder}/03-삭제 후보.bin`, 'keep this file');
+
+  const relative = comparison.getByRole('columnheader', { name: '상대 경로', exact: true });
+  await comparison.getByRole('button', { name: '다시 비교', exact: true }).click();
+  await relative.waitFor();
+  await comparison.getByRole('button', { name: '동기화 계획', exact: true }).click();
+  await plan.getByRole('textbox', { name: '제외 패턴', exact: true }).fill(excluded.join('\n'));
+  await plan.getByRole('checkbox', { name: '대상에만 있는 항목을 삭제 후보에 포함', exact: true }).check();
+  await plan.getByRole('button', { name: '삭제 후보 검증 (1)', exact: true }).click();
+  await plan.getByRole('button', { name: '동기화 실행 (3)', exact: true }).click();
+  const confirmation = page.getByRole('alertdialog', { name: '동기화 계획 미리보기', exact: true });
+  await confirmation.getByRole('textbox', { name: '운영 연결 확인', exact: true }).fill('PROD');
+  await confirmation.getByRole('textbox', { name: '영구 삭제 확인', exact: true }).fill('삭제');
+  const held = new Promise(resolve => { uploads.holdWrite = resolve; });
+  await confirmation.getByRole('button', { name: '확인하고 시작', exact: true }).click();
+  const release = await Promise.race([held, new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('The first synchronization write was not held.')), 5000).unref();
+  })]);
+  await confirmation.getByRole('button', { name: '남은 작업 중단', exact: true }).click();
+  await confirmation.getByText('현재 항목을 마친 뒤 중단합니다.', { exact: true }).waitFor();
+  release();
+  await plan.getByText('완료 1개 · 실패 0개 · 건너뜀 2개', { exact: true }).waitFor();
+  await plan.getByText('진행 중이던 항목을 마친 뒤 남은 작업을 중단했습니다.', { exact: true }).waitFor();
+  assert.equal(uploads.files.get(`${remoteBase}/01-현재 복사.bin`).data.toString(), 'in-flight upload');
+  assert.equal(uploads.files.has(`${remoteBase}/02-다음 복사.bin`), false);
+  assert.equal(uploads.files.get(`${remoteBase}/03-삭제 후보.bin`).data.toString(), 'keep this file');
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await relative.waitFor();
 }
 
 async function verifyPreviews(page, remote, local) {

@@ -41,8 +41,10 @@ impl FileOperation {
             (Self::Edit, true) => "sftp.edit.cancel",
             (Self::EditedCopy, false) => "sftp.edit.copy",
             (Self::EditedCopy, true) => "sftp.edit.copy.cancel",
-            (Self::Synchronize, _) => "sftp.sync",
-            (Self::SynchronizeDelete, _) => "sftp.sync.delete",
+            (Self::Synchronize, false) => "sftp.sync",
+            (Self::Synchronize, true) => "sftp.sync.cancel",
+            (Self::SynchronizeDelete, false) => "sftp.sync.delete",
+            (Self::SynchronizeDelete, true) => "sftp.sync.delete.cancel",
         }
     }
 }
@@ -112,11 +114,20 @@ impl FileAudit {
         }
     }
 
-    pub(super) async fn finish_sync(self, success: bool, applied: usize) -> Option<&'static str> {
+    pub(super) async fn finish_sync(
+        self,
+        success: bool,
+        applied: usize,
+        stopped: bool,
+    ) -> Option<&'static str> {
         let outcome = if success { "succeeded" } else { "failed" };
         let written = matches!(
-            tokio::task::spawn_blocking(move || self.record(outcome, false, Some(applied as i64)))
-                .await,
+            tokio::task::spawn_blocking(move || self.record(
+                outcome,
+                stopped,
+                Some(applied as i64)
+            ))
+            .await,
             Ok(Ok(()))
         );
         (!written).then_some("동기화 결과의 기록을 저장하지 못했습니다.")
