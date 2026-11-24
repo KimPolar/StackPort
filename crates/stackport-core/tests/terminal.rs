@@ -24,6 +24,25 @@ fn wait_for(manager: &TerminalManager, id: &str, needle: &str) -> String {
 }
 
 #[test]
+fn powershell_reports_unicode_directory_changes_and_clears_non_filesystem_locations() {
+    let manager = TerminalManager::default();
+    let terminal = manager.open("powershell", 24, 100).unwrap();
+    let authority = terminal.cwd_authority.as_deref().unwrap();
+    let prefix = format!("\x1b]7;file://{authority}/");
+    wait_for(&manager, &terminal.id, &prefix);
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("directory % # 한글");
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.to_str().unwrap().replace('\'', "''");
+    let command = format!("Set-Location -LiteralPath '{path}'\r");
+    manager.write(&terminal.id, command.as_bytes()).unwrap();
+    wait_for(&manager, &terminal.id, "directory%20%25%20%23%20%ED%95%9C%EA%B8%80\x07");
+    manager.write(&terminal.id, b"Set-Location HKCU:\r").unwrap();
+    wait_for(&manager, &terminal.id, &format!("{prefix}\x07"));
+    manager.close(&terminal.id).unwrap();
+}
+
+#[test]
 fn interactive_cmd_reads_input_resizes_and_reports_exit() {
     let manager = TerminalManager::default();
     assert!(manager.open("invalid", 24, 80).is_err());

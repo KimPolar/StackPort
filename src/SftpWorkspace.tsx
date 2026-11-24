@@ -13,6 +13,7 @@ import { SftpEditorDialog, type SftpEditDocument, type SftpEditorSelection } fro
 import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
 import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
+import type { TerminalDirectory } from "./terminalDirectory";
 
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
@@ -25,11 +26,12 @@ const fileColumns = [["name", "이름"], ["size", "크기"], ["modified", "수�
 const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료", permissions: "원격 권한·소유자 변경 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료", edit: "원격 파일 저장 완료" };
 
-export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit }: {
+export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit, terminalDirectory }: {
   projectName: string;
   profiles: SshProfile[];
   onExitGuard: (guard: (() => void) | null) => void;
   onRequestExit: () => void;
+  terminalDirectory: TerminalDirectory | null;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
@@ -52,6 +54,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [remoteRefresh, setRemoteRefresh] = useState(0);
   const [error, setError] = useState("");
   const selected = profiles.find(profile => profile.id === selectedId) ?? profiles[0];
+  const followPaused = Boolean(closing || transfer || comparison || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
+  const remoteTerminalPath = terminalDirectory?.kind === "ssh" && remote && terminalDirectory.profileId === remote.profile.id
+    && terminalDirectory.revision === remote.profile.revision ? terminalDirectory.path : null;
 
   async function disconnect() {
     if (!remote || closing) return;
@@ -217,11 +222,13 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     <div className="files-panes">
       <DirectoryPane id="local-files" active={activePane === "local"} title="로컬 파일"
         load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
+        terminalPath={terminalDirectory?.kind === "local" ? terminalDirectory.path : null} followPaused={followPaused}
         onFolder={directory => setLocalFolder(directoryLocation(directory))} refresh={localRefresh}
         onPreview={file => choosePreview(file.name, "로컬 파일", invoke("preview_local_browse_file", { path: file.location }))}
         action={remote ? { kind: "upload", run: file => chooseTransfer({ ...file, kind: "upload", remotePath: remote.directory.path, remoteDirectory: remote.directory.location }) } : undefined} />
       {remote ? <DirectoryPane id="remote-files" active={activePane === "remote"} key={remote.id} title="원격 파일" initial={remote.directory}
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
+        terminalPath={remoteTerminalPath} followPaused={followPaused}
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
         onNameAction={chooseNameAction}
         onDestination={chooseDestination}
@@ -358,7 +365,7 @@ function compareEntries(left: Entry, right: Entry, { key, direction }: FileSort)
   return (sizeOrTimeA < sizeOrTimeB ? -order : sizeOrTimeA > sizeOrTimeB ? order : byName);
 }
 
-function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, onEdit, onPermissions, action, refresh }: {
+function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, onEdit, onPermissions, action, refresh, terminalPath, followPaused }: {
   id: string; active: boolean; title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
   onNameAction?: (action: SftpNameAction) => void;
@@ -367,6 +374,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   onEdit?: (directory: Directory, item: SftpListedItem) => void;
   onPermissions?: (selection: PermissionSelection) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
+  terminalPath: string | null; followPaused: boolean;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
   const [value, setValue] = useState(initial ? displayFilePath(initial.path) : "");
@@ -378,6 +386,8 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   const [sort, setSort] = useState<FileSort>({ key: "name", direction: "ascending" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [following, setFollowing] = useState(false);
+  const lastTerminalPath = useRef<string | null>(null);
   const pending = useRef(false);
   const filterInput = useRef<HTMLInputElement>(null);
   const pathInput = useRef<HTMLInputElement>(null);
@@ -389,7 +399,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
   }, [directory, filter, hidden, sort]);
   const actionLabel = action?.kind === "upload" ? "업로드" : "다운로드";
 
-  async function navigate(path: BrowsePath | null, historyIndex?: number) {
+  async function navigate(path: BrowsePath | null, historyIndex?: number, fromTerminal = false) {
     if (pending.current) return;
     pending.current = true;
     setBusy(true);
@@ -415,7 +425,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
       setValue(displayFilePath(next.path));
       onFolder?.(next);
     } catch (error) {
-      setError(String(error));
+      setError(fromTerminal ? `터미널 경로를 열지 못했습니다. ${String(error)}` : String(error));
     } finally {
       pending.current = false;
       setBusy(false);
@@ -426,6 +436,21 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
     if (directory) void navigate({ kind: "token", value: directory.location });
   });
   useEffect(() => { if (refresh) reload(); }, [refresh]);
+
+  const follow = useEffectEvent((path: string) => {
+    if (pending.current || lastTerminalPath.current === path) return;
+    lastTerminalPath.current = path;
+    if (path !== displayFilePath(directory?.path ?? "")) void navigate({ kind: "text", value: path }, undefined, true);
+  });
+  useEffect(() => {
+    if (!following || terminalPath === null) {
+      lastTerminalPath.current = null;
+      return;
+    }
+    if (busy || followPaused) return;
+    const timer = window.setTimeout(() => follow(terminalPath), 180);
+    return () => window.clearTimeout(timer);
+  }, [following, terminalPath, busy, followPaused]);
 
   function go(event: FormEvent) {
     event.preventDefault();
@@ -477,6 +502,11 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
           onClick={() => directory && void navigate({ kind: "token", value: directory.location })}><RefreshCw size={14} aria-hidden /></button>
       </div>
     </form>
+    <div className="files-follow-control">
+      <label className="files-check"><input type="checkbox" checked={following} onChange={event => setFollowing(event.target.checked)} />
+        터미널 경로 따라가기</label>
+      {following && !terminalPath && <span role="status">{chooseFolder ? "활성 PowerShell의 폴더 경로를 기다리는 중" : "같은 SSH 연결의 활성 터미널 경로를 기다리는 중"}</span>}
+    </div>
     {directory && <div className="files-list-controls">
       <div className="files-filter">
         <Search size={14} aria-hidden />

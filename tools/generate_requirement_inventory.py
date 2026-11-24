@@ -59,6 +59,7 @@ PARTIAL = {
     "SP-FL-015": "현재 로컬·SFTP 폴더에서 각 파일 직접 선택, SHA-256(16 MiB), UTF-8 줄·HEX 차이(64 KiB), 변경 구간 선택 및 UTF-8 병합 결과 별도 저장",
     "SP-FL-016": "로컬·SFTP 하위 구조·크기·수정 시각과 미확인 상태, 선택한 쌍의 SHA-256 비교, 동기화 작업 미리보기",
     "SP-FL-017": "단방향·양방향 dry-run·실행, 검증 후 갱신과 단방향 삭제 반영, 제외·충돌 표시, 남은 작업 중단과 작업 기록",
+    "SP-FL-018": "활성 Windows PowerShell의 드라이브 경로와 같은 저장된 SSH 연결의 OSC 7 경로를 파일 창별 선택으로 반영",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
     "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
     "SP-FL-023": "SFTP 전송·편집·파일 관리·권한 및 소유자 변경·동기화의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
@@ -213,6 +214,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/FolderCompareDialog.tsx; src/folderComparison.ts; src/FolderSyncPlanDialog.tsx; crates/stackport-core/src/sftp/folder_tree.rs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-017":
                 evidence = "src/FolderSyncPlanDialog.tsx; src/folderSyncPlan.ts; crates/stackport-core/src/sftp/sync.rs; crates/stackport-core/src/sftp/sync_replace.rs; crates/stackport-core/src/sftp/sync_delete.rs; tests/folder-sync-plan.test.mjs; tests/sftp-smoke.cjs"
+            elif requirement_id == "SP-FL-018":
+                evidence = "crates/stackport-core/src/terminal.rs; crates/stackport-core/tests/terminal.rs; src/terminalDirectory.ts; src/TerminalWorkspace.tsx; src/SftpWorkspace.tsx; tests/terminal-smoke.cjs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-019":
                 evidence = "crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx"
             elif requirement_id == "SP-FL-008":

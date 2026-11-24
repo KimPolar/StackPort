@@ -37,6 +37,8 @@ async function main() {
   const shellText = await rows.innerText();
   const shellPid = shellText.match(/STACKPORT-PS-(\d+)/)?.[1];
   if (!shellPid) throw new Error(`PowerShell PID missing: ${shellText}`);
+  await verifyLocalDirectoryFollow(page);
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
   await page.keyboard.type("[Console]::WriteLine('");
   await page.keyboard.insertText('한글출력');
   await page.keyboard.type("')");
@@ -240,7 +242,46 @@ async function main() {
     await page.getByRole('button', { name: 'PowerShell 2 터미널 닫기' }).click();
     await browser.close();
   }
-  console.log('Desktop terminals, scrollback search, TXT/ANSI export, background activity, tabs, process cleanup, and close protection passed.');
+  console.log('Desktop terminals, directory follow, scrollback search, TXT/ANSI export, tabs, process cleanup, and close protection passed.');
+}
+
+async function verifyLocalDirectoryFollow(page) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stackport-cwd-'));
+  const nested = path.join(root, '폴더 % #');
+  fs.mkdirSync(nested);
+  const local = page.getByRole('region', { name: '로컬 파일', exact: true });
+  const address = local.getByLabel('로컬 파일 경로');
+  const follow = local.getByRole('checkbox', { name: '터미널 경로 따라가기' });
+  const tools = page.getByRole('navigation', { name: '작업 도구' });
+  const files = tools.getByRole('button', { name: '파일 탐색', exact: true });
+  const terminal = tools.getByRole('button', { name: '터미널', exact: true });
+  const input = page.locator('[role=tabpanel]:visible .xterm-helper-textarea');
+  const rows = page.locator('[role=tabpanel]:visible .xterm-rows');
+  async function run(source, marker) {
+    await terminal.click();
+    await input.focus();
+    await page.keyboard.insertText(`${source}; Write-Output ('${marker.slice(0, -1)}' + '${marker.at(-1)}')`);
+    await page.keyboard.press('Enter');
+    await rows.getByText(marker, { exact: true }).waitFor();
+    await files.click();
+  }
+  const change = value => `Set-Location -LiteralPath '${value.replaceAll("'", "''")}'`;
+  const waitForPath = value => address.evaluate((input, value) => input.value === value, value);
+
+  await run(change(root), 'CWD_ROOT_READY');
+  if (await follow.isChecked() || await address.inputValue()) throw new Error('The file pane followed PowerShell without opt-in.');
+  await follow.check();
+  await local.getByRole('button', { name: '폴더 % #', exact: true }).waitFor();
+  await run(change(nested), 'CWD_NESTED_READY');
+  await page.waitForFunction(value => document.querySelector('[aria-label="로컬 파일 경로"]').value === value, nested);
+  await run("[Console]::Write([char]27 + ']7;file:///C:/untrusted' + [char]7)", 'CWD_UNRELATED_READY');
+  if (!await waitForPath(nested)) throw new Error('An unrelated terminal sequence changed the local directory.');
+  await run('Set-Location HKCU:', 'CWD_REGISTRY_READY');
+  await local.getByRole('status').getByText(/활성 PowerShell의 폴더 경로를 기다리는 중/).waitFor();
+  await follow.uncheck();
+  await run(change(root), 'CWD_DISABLED_READY');
+  if (!await waitForPath(nested)) throw new Error('The file pane followed PowerShell after being disabled.');
+  await terminal.click();
 }
 
 async function verifyTerminalOutput(page, shellPid) {

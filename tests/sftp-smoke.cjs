@@ -335,7 +335,21 @@ async function startHost(host, identity, port = 0) {
       context.reject(['password', 'publickey']);
     });
     client.on('ready', () => client.on('session', accept => {
-      accept().on('sftp', acceptSftp => {
+      const session = accept();
+      session.on('pty', acceptPty => acceptPty());
+      session.on('window-change', acceptResize => acceptResize?.());
+      session.on('shell', acceptShell => {
+        const stream = acceptShell();
+        stream.write('SFTP_FOLLOW_SHELL_READY\r\n');
+        stream.on('data', buffer => {
+          for (const value of buffer.toString('utf8')) {
+            if (value !== '\r' && value !== '\n') continue;
+            stream.write(`\x1b]7;file://fixture/home/stackport/${encodeURIComponent('문서')}\x07`);
+            stream.write('SFTP_FOLLOW_PATH_REPORTED\r\n');
+          }
+        });
+      });
+      session.on('sftp', acceptSftp => {
         stats.subsystem++;
         sftpChannel(acceptSftp(), uploads);
       });
@@ -463,6 +477,7 @@ async function main() {
     await page.waitForFunction(() => document.querySelector('[aria-label="원격 파일 경로"]').value === '/home/stackport');
     assert.equal(server.stats.passwords, 1);
     assert.equal(server.stats.subsystem, 1);
+    await verifyRemoteDirectoryFollow(page, remote);
 
     const localPane = page.getByRole('region', { name: '로컬 파일' });
     await localPane.getByLabel('로컬 파일 경로').fill(local);
@@ -585,6 +600,46 @@ async function main() {
     await browser.close();
     await server.close();
   }
+}
+
+async function verifyRemoteDirectoryFollow(page, remote) {
+  const follow = remote.getByRole('checkbox', { name: '터미널 경로 따라가기' });
+  const address = remote.getByLabel('원격 파일 경로');
+  const tools = page.getByRole('navigation', { name: '작업 도구' });
+  const terminal = tools.getByRole('button', { name: '터미널', exact: true });
+  const files = tools.getByRole('button', { name: '파일 탐색', exact: true });
+  const rows = page.locator('[role=tabpanel]:visible .xterm-rows');
+  const input = page.locator('[role=tabpanel]:visible .xterm-helper-textarea');
+  await follow.check();
+  const waiting = remote.getByRole('status').getByText('같은 SSH 연결의 활성 터미널 경로를 기다리는 중');
+  await waiting.waitFor();
+
+  await page.getByRole('button', { name: 'SSH 운영 파일 서버 연결', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await dialog.getByRole('button', { name: '지문 확인' }).click();
+  await dialog.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+  await dialog.getByRole('button', { name: '연결', exact: true }).click();
+  await rows.getByText(/password:/).waitFor();
+  await input.focus();
+  await page.keyboard.type(password);
+  await page.keyboard.press('Enter');
+  await rows.getByText('SFTP_FOLLOW_SHELL_READY').waitFor();
+  await page.keyboard.press('Enter');
+  await rows.getByText('SFTP_FOLLOW_PATH_REPORTED').waitFor();
+  await files.click();
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+  assert.equal(await address.inputValue(), '/home/stackport/문서');
+  await remote.getByRole('button', { name: '원격 파일 뒤로', exact: true }).click();
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+
+  await terminal.click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: /SSH 1 .*터미널 닫기/ }).click();
+  await page.getByRole('tab', { name: /SSH 1/ }).waitFor({ state: 'detached' });
+  await files.click();
+  await waiting.waitFor();
+  assert.equal(await address.inputValue(), '/home/stackport');
+  await follow.uncheck();
 }
 
 async function verifyPermissions(page, remote, uploads, method) {

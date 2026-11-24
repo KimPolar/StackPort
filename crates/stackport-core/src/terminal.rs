@@ -30,6 +30,7 @@ pub struct TerminalInfo {
     pub process_id: Option<u32>,
     pub target: Option<String>,
     pub environment: Option<String>,
+    pub cwd_authority: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,8 +105,11 @@ pub struct TerminalManager {
 
 impl TerminalManager {
     pub fn open(&self, shell: &str, rows: u16, cols: u16) -> Result<TerminalInfo> {
-        let command = shell_command(shell)?;
-        self.open_command(shell, None, command, rows, cols, None)
+        let cwd_authority = (shell == "powershell").then(|| Uuid::new_v4().to_string());
+        let command = shell_command(shell, cwd_authority.as_deref())?;
+        let mut terminal = self.open_command(shell, None, command, rows, cols, None)?;
+        terminal.cwd_authority = cwd_authority;
+        Ok(terminal)
     }
 
     pub(crate) fn open_command(
@@ -239,6 +243,7 @@ impl TerminalManager {
             process_id,
             target,
             environment: None,
+            cwd_authority: None,
         })
     }
 
@@ -361,8 +366,23 @@ fn terminal_size(rows: u16, cols: u16) -> Result<PtySize> {
     })
 }
 
+// Distinguish our PowerShell prompt from OSC 7 sent by a child such as ssh.
 #[cfg(windows)]
-fn shell_command(shell: &str) -> Result<CommandBuilder> {
+const POWERSHELL_PROMPT: &str = r#"
+function global:prompt {
+    $location = $executionContext.SessionState.Path.CurrentLocation
+    $path = ''
+    if ($location.Provider.Name -eq 'FileSystem' -and $location.ProviderPath -match '^[A-Za-z]:\\') {
+        $native = $location.ProviderPath.Replace('\', '/')
+        $path = $native.Substring(0, 3) + [Uri]::EscapeDataString($native.Substring(3)).Replace('%2F', '/')
+    }
+    [Console]::Write(([char]27 + ']7;file://STACKPORT_CWD_AUTHORITY/' + $path + [char]7))
+    "PS $location$('>' * ($nestedPromptLevel + 1)) "
+}
+"#;
+
+#[cfg(windows)]
+fn shell_command(shell: &str, cwd_authority: Option<&str>) -> Result<CommandBuilder> {
     use std::path::PathBuf;
     let system = PathBuf::from(
         std::env::var_os("SystemRoot").ok_or("Windows 시스템 경로를 찾을 수 없습니다.")?,
@@ -384,6 +404,10 @@ fn shell_command(shell: &str) -> Result<CommandBuilder> {
     }
     let mut command = CommandBuilder::new(program);
     command.args(args);
+    if let Some(authority) = cwd_authority {
+        command.args(["-NoExit", "-Command"]);
+        command.arg(POWERSHELL_PROMPT.replace("STACKPORT_CWD_AUTHORITY", authority));
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     if let Some(home) = std::env::var_os("USERPROFILE") {
@@ -393,7 +417,7 @@ fn shell_command(shell: &str) -> Result<CommandBuilder> {
 }
 
 #[cfg(not(windows))]
-fn shell_command(_shell: &str) -> Result<CommandBuilder> {
+fn shell_command(_shell: &str, _cwd_authority: Option<&str>) -> Result<CommandBuilder> {
     Err("로컬 터미널은 현재 Windows에서만 지원합니다.".into())
 }
 

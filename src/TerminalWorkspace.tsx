@@ -9,19 +9,20 @@ import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
 import { TerminalTabDialog } from "./TerminalTabDialog";
+import { terminalDirectoryFromOsc, type TerminalDirectory } from "./terminalDirectory";
 import "@xterm/xterm/css/xterm.css";
 
 type LocalShell = "powershell" | "cmd";
 type Shell = LocalShell | "ssh";
-type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null };
+type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null; cwd_authority: string | null };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
 type DirectSshTarget = { host: string; port: number; username: string };
 type TerminalLaunch = { kind: "local"; shell: LocalShell }
-  | { kind: "saved_ssh"; projectId: string; profileId: string; authentication: SshAuthenticationMode }
+  | { kind: "saved_ssh"; projectId: string; profileId: string; revision: number; authentication: SshAuthenticationMode }
   | { kind: "direct_ssh"; target: DirectSshTarget; authentication: SshAuthenticationMode };
 type ClosedTab = { number: number; name: string; launch: TerminalLaunch };
-type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean; pinned: boolean; launch: TerminalLaunch };
+type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; directory: string | null; unreadOutput: boolean; pinned: boolean; launch: TerminalLaunch };
 type SshDialogRequest = { profile: SshProfile | null; target?: DirectSshTarget; authentication?: SshAuthenticationMode; reopen?: number };
 type SshKey = { algorithm: string; fingerprint: string };
 type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
@@ -32,7 +33,13 @@ const errorText = (error: unknown) => typeof error === "string" ? error : String
 const shellName = (shell: Shell) => shell === "powershell" ? "PowerShell" : shell === "cmd" ? "CMD" : "SSH";
 const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target ? ` · ${tab.target}` : ""}`;
 
-export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled }: { visible: boolean; onCountChange: (count: number) => void; request: SshOpenRequest | null; onRequestHandled: () => void }) {
+export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled, onDirectoryChange }: {
+  visible: boolean;
+  onCountChange: (count: number) => void;
+  request: SshOpenRequest | null;
+  onRequestHandled: () => void;
+  onDirectoryChange: (directory: TerminalDirectory | null) => void;
+}) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedId, setActiveId] = useState("");
   const [recentTabs, setRecentTabs] = useState<ClosedTab[]>([]);
@@ -51,8 +58,19 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   const activeId = tabs.some(tab => tab.id === selectedId) ? selectedId : tabs.at(-1)?.id ?? "";
   const activeIndex = tabs.findIndex(tab => tab.id === activeId);
   const activeTab = tabs[activeIndex];
+  const activeDirectory = activeTab?.exit ? null : activeTab?.directory;
+  const activeLaunch = activeTab?.launch;
 
   useEffect(() => { onCountChange(tabs.length + (opening ? 1 : 0) + (sshOpening ? 1 : 0)); }, [tabs.length, opening, sshOpening, onCountChange]);
+  useEffect(() => {
+    if (activeDirectory && activeLaunch?.kind === "local") {
+      onDirectoryChange({ kind: "local", path: activeDirectory });
+    } else if (activeDirectory && activeLaunch?.kind === "saved_ssh") {
+      onDirectoryChange({ kind: "ssh", path: activeDirectory, profileId: activeLaunch.profileId, revision: activeLaunch.revision });
+    } else {
+      onDirectoryChange(null);
+    }
+  }, [activeDirectory, activeLaunch, onDirectoryChange]);
   useEffect(() => {
     if (!visible || !activeId) return;
     setTabs(current => current.some(tab => tab.id === activeId && tab.unreadOutput)
@@ -68,7 +86,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 
   function addTerminal(terminal: TerminalInfo, launch: TerminalLaunch, reopened?: number) {
     const number = nextNumber.current++;
-    setTabs(current => [...current, { ...terminal, launch, number, exit: null, unreadOutput: false, pinned: false }]);
+    setTabs(current => [...current, { ...terminal, launch, number, exit: null, directory: null, unreadOutput: false, pinned: false }]);
     if (reopened !== undefined) setRecentTabs(current => current.filter(tab => tab.number !== reopened));
     setActiveId(terminal.id);
   }
@@ -133,6 +151,12 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 
   function reportExit(id: string, exit: TerminalExit) {
     setTabs(current => current.map(tab => tab.id === id ? { ...tab, exit } : tab));
+  }
+
+  function reportDirectory(id: string, directory: string | null) {
+    setTabs(current => current.some(tab => tab.id === id && tab.directory !== directory)
+      ? current.map(tab => tab.id === id ? { ...tab, directory } : tab)
+      : current);
   }
 
   function reportActivity(id: string) {
@@ -248,7 +272,8 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
         <button type="button" className="icon-button terminal-tab-menu" aria-label="터미널 탭 관리" aria-haspopup="dialog"
           title="터미널 탭 관리" disabled={!activeTab} onClick={() => setTabDialogOpen(true)}><Ellipsis size={17} aria-hidden /></button>
       </div>
-      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} onActivity={reportActivity} />)}
+      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit}
+        onActivity={reportActivity} onDirectory={reportDirectory} />)}
     </div>}
     {tabDialogOpen && <TerminalTabDialog name={activeTab && tabName(activeTab)} pinned={activeTab?.pinned ?? false}
       canMoveLeft={Boolean(activeTab && tabs[activeIndex - 1]?.pinned === activeTab.pinned)}
@@ -268,7 +293,13 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   </section>;
 }
 
-function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible: boolean; onExit: (id: string, exit: TerminalExit) => void; onActivity: (id: string) => void }) {
+function TerminalPane({ tab, visible, onExit, onActivity, onDirectory }: {
+  tab: Tab;
+  visible: boolean;
+  onExit: (id: string, exit: TerminalExit) => void;
+  onActivity: (id: string) => void;
+  onDirectory: (id: string, directory: string | null) => void;
+}) {
   const container = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const searchAddon = useRef<SearchAddon | null>(null);
@@ -278,6 +309,7 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
   const visibleRef = useRef(visible);
   const exitCallback = useRef(onExit);
   const activityCallback = useRef(onActivity);
+  const directoryCallback = useRef(onDirectory);
   const [error, setError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -288,6 +320,7 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
   visibleRef.current = visible;
   exitCallback.current = onExit;
   activityCallback.current = onActivity;
+  directoryCallback.current = onDirectory;
 
   useEffect(() => {
     if (!visible) return;
@@ -336,6 +369,13 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
       let inputQueue = Promise.resolve();
       let resizeQueue = Promise.resolve();
       let reportedExit = false;
+      const directoryUpdates = emulator.parser.registerOscHandler(7, data => {
+        if (tab.cwd_authority || tab.launch.kind === "saved_ssh") {
+          const directory = terminalDirectoryFromOsc(data, tab.cwd_authority);
+          if (directory !== undefined) directoryCallback.current(tab.id, directory);
+        }
+        return true;
+      });
       const encoder = new TextEncoder();
       const input = emulator.onData(value => {
         if (reportedExit) return;
@@ -387,7 +427,7 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
 
       dispose = () => {
         host.removeEventListener("paste", onPaste, true);
-        observer.disconnect(); input.dispose(); resized.dispose(); emulator.dispose();
+        observer.disconnect(); input.dispose(); resized.dispose(); directoryUpdates.dispose(); emulator.dispose();
         fit.current = null; terminal.current = null; searchAddon.current = null; serializeAddon.current = null;
       };
     });
@@ -524,7 +564,7 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", onClo
         ? await call<TerminalInfo>("open_saved_ssh_terminal", { profile, confirmation: prodConfirmation, authentication: selectedAuthentication, rows: 24, cols: 80 })
         : await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, authentication: selectedAuthentication, rows: 24, cols: 80 });
       const launch: TerminalLaunch = profile
-        ? { kind: "saved_ssh", projectId: profile.project_id, profileId: profile.id, authentication }
+        ? { kind: "saved_ssh", projectId: profile.project_id, profileId: profile.id, revision: profile.revision, authentication }
         : { kind: "direct_ssh", target: { host: info.host, port: info.port, username }, authentication };
       onOpened(terminal, launch);
     } catch (e) { setError(errorText(e)); }

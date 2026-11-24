@@ -25,6 +25,7 @@ import { CodeTextarea } from "./CodeTextarea";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
+import type { TerminalDirectory } from "./terminalDirectory";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
@@ -110,6 +111,7 @@ function App() {
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
+  const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
   const [profileId, setProfileId] = useState("");
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
@@ -939,13 +941,15 @@ function App() {
     workspace: databasePane,
     terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
-        <TerminalWorkspace visible={toolVisible("terminal")} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} />
+        <TerminalWorkspace visible={toolVisible("terminal")} onCountChange={updateTerminalCount} request={sshOpenRequest}
+          onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} />
       </React.Suspense>
     </div>,
     network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body"><NetworkWorkspace /></div>,
     rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
-      <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard} onRequestExit={requestAppClose} />
+      <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard}
+        onRequestExit={requestAppClose} terminalDirectory={terminalDirectory} />
     </div>,
   };
 
