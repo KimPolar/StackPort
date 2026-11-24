@@ -3,9 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
-import { ChevronDown, ChevronUp, Plus, Search, TerminalSquare, X } from "lucide-react";
+import { SerializeAddon } from "@xterm/addon-serialize";
+import { ChevronDown, ChevronUp, FileDown, Plus, Search, TerminalSquare, X } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
+import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
 import "@xterm/xterm/css/xterm.css";
 
 type Shell = "powershell" | "cmd" | "ssh";
@@ -111,7 +113,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
       <div><h1><TerminalSquare size={20} /> 터미널</h1><p>로컬 PowerShell·CMD와 호스트 키를 확인한 SSH 세션을 엽니다.</p></div>
       <div className="terminal-actions"><label htmlFor="terminal-shell">셸</label><select id="terminal-shell" value={shell} onChange={event => setShell(event.target.value as Shell)} disabled={opening}><option value="powershell">PowerShell</option><option value="cmd">CMD</option><option value="ssh">SSH</option></select><button className="primary" disabled={opening} onClick={() => void openTerminal()}><Plus size={15} /> {opening ? "여는 중…" : shell === "ssh" ? "SSH 연결" : "새 터미널"}</button></div>
     </div>
-    <p className="terminal-hint">StackPort는 터미널 입력과 출력을 저장하지 않습니다. 셸이나 실행한 프로그램의 기록 설정은 별도로 적용됩니다.</p>
+    <p className="terminal-hint">터미널 출력은 메모리에 유지되며, 출력 저장을 선택하면 파일로 내보낼 수 있습니다. 셸과 실행한 프로그램은 자체 기록 설정을 사용합니다.</p>
     {error && <div className="error-banner" role="alert">{error}</div>}
     {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} /><strong>열린 터미널이 없습니다</strong><span>셸을 선택하고 새 터미널을 여세요.</span></div> : <div className="terminal-card">
       <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} key={tab.id}>
@@ -128,6 +130,7 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
   const container = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const searchAddon = useRef<SearchAddon | null>(null);
+  const serializeAddon = useRef<SerializeAddon | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const fit = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
@@ -138,6 +141,8 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
   const [searchText, setSearchText] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [searchStatus, setSearchStatus] = useState("");
+  const [outputDialog, setOutputDialog] = useState(false);
+  const [savedOutput, setSavedOutput] = useState<{ path: string; bytes: number } | null>(null);
   visibleRef.current = visible;
   exitCallback.current = onExit;
   activityCallback.current = onActivity;
@@ -177,12 +182,15 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
       });
       const addon = new FitAddon();
       const search = new SearchAddon();
+      const serializer = new SerializeAddon();
       emulator.loadAddon(addon);
       emulator.loadAddon(search);
+      emulator.loadAddon(serializer);
       emulator.open(host);
       host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.setAttribute("aria-label", "터미널 입력");
       terminal.current = emulator;
       searchAddon.current = search;
+      serializeAddon.current = serializer;
       let inputQueue = Promise.resolve();
       let resizeQueue = Promise.resolve();
       let reportedExit = false;
@@ -238,7 +246,7 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
       dispose = () => {
         host.removeEventListener("paste", onPaste, true);
         observer.disconnect(); input.dispose(); resized.dispose(); emulator.dispose();
-        fit.current = null; terminal.current = null; searchAddon.current = null;
+        fit.current = null; terminal.current = null; searchAddon.current = null; serializeAddon.current = null;
       };
     });
     return () => { stopped = true; dispose(); };
@@ -263,9 +271,19 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
     setSearchStatus(found ? "일치하는 내용을 선택했습니다." : "일치하는 내용이 없습니다.");
   }
 
+  function captureOutput(format: TerminalOutputFormat) {
+    const emulator = terminal.current;
+    if (!emulator) return "";
+    if (format === "ansi") return serializeAddon.current?.serialize({ excludeAltBuffer: true, excludeModes: true }) ?? "";
+    return terminalText(emulator.buffer.normal, emulator.cols);
+  }
+
   return <div role="tabpanel" id={`terminal-panel-${tab.id}`} aria-labelledby={`terminal-tab-${tab.id}`} className="terminal-panel" hidden={!visible}>
     {tab.target && <div className={`terminal-remote ${tab.environment === "PROD" ? "prod" : ""}`}><strong>SSH · {tab.target} · {tab.environment ?? "환경 미지정"}</strong><span>이 터미널의 명령은 원격 서버에서 실행됩니다.</span></div>}
-    <div className="terminal-tools"><button className="terminal-search-toggle" aria-expanded={searchOpen} onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); requestAnimationFrame(() => searchInput.current?.focus()); } }}><Search size={14} /> 출력 찾기 <span>Ctrl+Shift+F</span></button></div>
+    <div className="terminal-tools">
+      <button className="terminal-tool-button" aria-haspopup="dialog" onClick={() => { setSavedOutput(null); setOutputDialog(true); }}><FileDown size={14} /> 출력 저장</button>
+      <button className="terminal-tool-button" aria-expanded={searchOpen} onClick={() => { if (searchOpen) closeSearch(); else { setSearchOpen(true); requestAnimationFrame(() => searchInput.current?.focus()); } }}><Search size={14} /> 출력 찾기 <span>Ctrl+Shift+F</span></button>
+    </div>
     {searchOpen && <form className="terminal-search" role="search" aria-label={`${tabName(tab)} 출력 검색`} onSubmit={event => { event.preventDefault(); find("next"); }}>
       <label className="sr-only" htmlFor={`terminal-search-${tab.id}`}>터미널 출력 검색어</label><input id={`terminal-search-${tab.id}`} ref={searchInput} type="search" maxLength={512} autoComplete="off" spellCheck={false} value={searchText} onChange={event => { setSearchText(event.target.value); clearSearch(); }} onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); closeSearch(); } else if (event.key === "Enter" && event.shiftKey) { event.preventDefault(); find("previous"); } }} placeholder="스크롤백에서 찾기" />
       <label className="terminal-search-case"><input type="checkbox" checked={caseSensitive} onChange={event => { setCaseSensitive(event.target.checked); clearSearch(); }} /> 대소문자 구분</label>
@@ -273,8 +291,10 @@ function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible:
       <span className="terminal-search-status" role="status">{searchStatus}</span>
     </form>}
     {tab.exit && <div className="terminal-exit" role="status">{tab.exit.error ?? `셸이 종료되었습니다. 종료 코드: ${tab.exit.code ?? "확인 불가"}`}</div>}
+    {savedOutput && <div className="terminal-exit terminal-output-saved" role="status"><span>출력을 저장했습니다.</span> <span>{savedOutput.path} · {savedOutput.bytes.toLocaleString("ko-KR")} bytes</span></div>}
     {error && <div className="terminal-error" role="alert">{error}</div>}
     <div className="terminal-screen" ref={container} aria-label={`${tabName(tab)} 터미널 화면`} />
+    {outputDialog && <TerminalOutputDialog tab={tabName(tab)} capture={captureOutput} onClose={() => setOutputDialog(false)} onSaved={(path, bytes) => { setSavedOutput({ path, bytes }); setOutputDialog(false); }} />}
   </div>;
 }
 

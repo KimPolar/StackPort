@@ -31,7 +31,7 @@ PARTIAL = {
     "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널",
     "SP-TM-002": "Windows OpenSSH의 대화형 원격 셸 입출력",
     "SP-TM-003": "Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절",
-    "SP-TM-005": "터미널 메모리 스크롤백과 탭별 일반 문자열 앞뒤 검색·대소문자 구분",
+    "SP-TM-005": "터미널 메모리 스크롤백, 탭별 일반 문자열 검색과 TXT·ANSI 출력 내보내기",
     "SP-TM-006": "터미널 키보드 입력과 선택·붙여넣기",
     "SP-TM-007": "여러 줄 붙여넣기 전 확인",
     "SP-TM-016": "비활성 터미널에 새 출력이 있으면 탭에 표시하고 확인 시 지움",
@@ -158,6 +158,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/src/ssh.rs; crates/stackport-core/src/web_check/windows.rs; tests/ssh-smoke.cjs; tests/ports-smoke.cjs"
             elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-008", "SP-AT-001"}:
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
+            elif requirement_id == "SP-TM-005":
+                evidence = "crates/stackport-core/tests/terminal_output.rs; tests/terminal-smoke.cjs; src/TerminalOutputDialog.tsx; src/TerminalWorkspace.tsx"
             elif requirement_id.startswith("SP-TM-") or requirement_id in {"SP-UI-003", "SP-UI-016", "SP-AT-007"}:
                 evidence = "crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-DT-010", "SP-DT-011"}:

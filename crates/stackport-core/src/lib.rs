@@ -33,6 +33,8 @@ mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
+mod terminal_output;
+pub use terminal_output::{save_terminal_output, TerminalOutputFormat};
 mod workspace_copy;
 pub use workspace_copy::{WorkspaceCopyPreview, WorkspaceCopyReport};
 

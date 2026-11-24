@@ -8,7 +8,8 @@ use stackport_core::{
     local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
+    save_terminal_output, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
+    TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
 };
 use std::sync::Arc;
@@ -81,6 +82,15 @@ async fn run_web_diagnostic(
 ) -> Result<WebDiagnostic, String> {
     let network = Arc::clone(network.inner());
     worker(move || network.probe_web(&address, method, samples)).await
+}
+
+#[tauri::command]
+async fn export_terminal_output(
+    destination: String,
+    format: TerminalOutputFormat,
+    text: String,
+) -> Result<usize, String> {
+    worker(move || save_terminal_output(&destination, format, &text)).await
 }
 
 #[tauri::command]
@@ -678,6 +688,7 @@ fn main() {
             list_local_ports,
             run_route_diagnostic,
             run_web_diagnostic,
+            export_terminal_output,
             list_archived_projects,
             archive_project,
             unarchive_project,

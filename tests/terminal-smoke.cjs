@@ -1,6 +1,9 @@
 /* Attach only to an isolated test instance. See docs/IMPLEMENTATION.md. */
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { execFileSync } = require('child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 function postClose(pid) {
   if (!/^\d+$/.test(pid)) throw new Error('Set STACKPORT_TEST_WINDOW_PID to the isolated app PID.');
@@ -72,6 +75,14 @@ async function main() {
   await search.press('Enter');
   await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
   if (process.env.STACKPORT_TEST_SCREENSHOT) await page.screenshot({ path: process.env.STACKPORT_TEST_SCREENSHOT });
+
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.type("[Console]::WriteLine(('W' * 215) + '");
+  await page.keyboard.insertText('절');
+  await page.keyboard.type("' + ('Q' * 175) + 'WRAPPED-TAIL')");
+  await page.keyboard.press('Enter');
+  await rows.getByText(/QWRAPPED-TAIL/).waitFor();
+  await verifyTerminalOutput(page, Number(shellPid));
 
   await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
   await page.keyboard.type("Start-Sleep -Seconds 2; [Console]::WriteLine('STACKPORT_BACKGROUND')");
@@ -158,7 +169,49 @@ async function main() {
     await page.getByRole('button', { name: 'PowerShell 2 터미널 닫기' }).click();
     await browser.close();
   }
-  console.log('Desktop terminals, scrollback search, background activity, tabs, process cleanup, and close protection passed.');
+  console.log('Desktop terminals, scrollback search, TXT/ANSI export, background activity, tabs, process cleanup, and close protection passed.');
+}
+
+async function verifyTerminalOutput(page, shellPid) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stackport-output-'));
+  const plain = path.join(root, 'powershell.txt');
+  const styled = path.join(root, 'powershell.ansi');
+  const dialog = page.getByRole('dialog', { name: '터미널 출력 저장' });
+  const open = page.getByRole('button', { name: '출력 저장', exact: true });
+  const destination = dialog.getByLabel('새 출력 파일 경로');
+  const save = dialog.getByRole('button', { name: '저장', exact: true });
+  const saved = page.getByRole('status').getByText('출력을 저장했습니다.', { exact: true });
+  try {
+    await open.click();
+    await dialog.getByText('PowerShell 2', { exact: true }).waitFor();
+    await destination.fill(plain);
+    await save.click();
+    await saved.waitFor();
+    const text = fs.readFileSync(plain, 'utf8');
+    const lines = text.split('\r\n');
+    if (!lines.includes(`STACKPORT-PS-${shellPid}`) || !lines.includes('한글출력') || !lines.includes('STACKPORT_COLOR') || !lines.includes('STACKPORT_SCROLLBACK_MARKER')) {
+      throw new Error('TXT export lost scrollback, Unicode, or rendered output.');
+    }
+    if (!lines.includes(`${'W'.repeat(215)}절${'Q'.repeat(175)}WRAPPED-TAIL`)) throw new Error('TXT export broke a wrapped output line.');
+    if (text.includes('\u001b') || lines.includes('26441')) throw new Error('TXT included ANSI controls or another terminal tab.');
+
+    await open.click();
+    await destination.fill(plain);
+    await save.click();
+    await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+    await dialog.getByLabel('파일 형식').selectOption('ansi');
+    if (await destination.inputValue() !== styled) throw new Error('Changing export format did not switch the output extension.');
+    await save.click();
+    await saved.waitFor();
+    const ansi = fs.readFileSync(styled, 'utf8');
+    if (!ansi.includes('\u001b[38;2;123;45;67mSTACKPORT_COLOR') || !ansi.includes('STACKPORT_SCROLLBACK_MARKER')) {
+      throw new Error('ANSI export lost color or scrollback.');
+    }
+    if (fs.readFileSync(plain, 'utf8') !== text) throw new Error('An existing snapshot was overwritten.');
+  } finally {
+    for (const file of [plain, styled]) if (fs.existsSync(file)) fs.unlinkSync(file);
+    fs.rmdirSync(root);
+  }
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

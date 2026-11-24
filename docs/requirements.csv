@@ -47,7 +47,7 @@ SP-TM-001,로컬 셸,"PowerShell, CMD, WSL, 설치된 Bash/Zsh 등 사용자 지
 SP-TM-002,원격 셸,"SSH, Telnet, Rlogin/Rsh, Mosh 세션에서 명령 입력·표준입출력·종료 코드·에러 스트림 처리.",partial,Windows OpenSSH의 대화형 원격 셸 입출력,crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-003,터미널 호환,"PTY/ConPTY, ANSI/VT100/VT220/xterm 계열 제어, UTF-8·기타 문자집합, 24-bit 색, 줄 바꿈·커서·스크롤 영역.",partial,Windows ConPTY와 xterm.js 기반 입력·출력·크기 조절,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-004,인터랙티브 프로그램,"vim, less, top, tmux, screen, curses 애플리케이션의 입력/리사이즈 정상 동작.",not_started,,
-SP-TM-005,출력 기록,"스크롤백 크기, 검색, 정규식 필터, 저장/인쇄, TXT/ANSI 내보내기, 타임스탬프 로그.",partial,터미널 메모리 스크롤백과 탭별 일반 문자열 앞뒤 검색·대소문자 구분,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
+SP-TM-005,출력 기록,"스크롤백 크기, 검색, 정규식 필터, 저장/인쇄, TXT/ANSI 내보내기, 타임스탬프 로그.",partial,"터미널 메모리 스크롤백, 탭별 일반 문자열 검색과 TXT·ANSI 출력 내보내기",crates/stackport-core/tests/terminal_output.rs; tests/terminal-smoke.cjs; src/TerminalOutputDialog.tsx; src/TerminalWorkspace.tsx
 SP-TM-006,단축키·입력,"복사/붙여넣기, 선택 시 복사, 우클릭 붙여넣기, 마우스 보고, 키 매핑, Backspace/Delete 호환.",partial,터미널 키보드 입력과 선택·붙여넣기,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-007,붙여넣기 보호,여러 줄 입력·비밀값 포함 가능성·프로덕션 대상 명령에 사전 확인 및 선택적 입력 지연.,partial,여러 줄 붙여넣기 전 확인,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-008,터미널 디자인,"글꼴, 리가처·안티앨리어싱, 색상, 배경, 투명도, 커서 형태, 벨·알림.",not_started,,
