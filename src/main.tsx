@@ -4,7 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
-  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
+  Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
   Pencil, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
@@ -47,7 +47,10 @@ import {
   type SplitDirection, type WorkspaceLayout,
 } from "./WorkspaceLayout";
 import { restoreLayout, saveLayout, useWorkspaceResume, type ResumeRecord } from "./WorkspaceResume";
-import { applyColorScheme, readThemePreference, saveThemePreference, subscribeSystemTheme, systemTheme, type ThemePreference } from "./appearance";
+import {
+  applyColorScheme, readDensityPreference, readThemePreference, saveDensityPreference, saveThemePreference,
+  subscribeSystemTheme, systemTheme, type ThemePreference, type WorkspaceDensity,
+} from "./appearance";
 import "./theme.css";
 import "./styles.css";
 
@@ -127,8 +130,12 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 
 function App() {
   const [theme, setTheme] = useState(initialTheme);
+  const [density, setDensity] = useState(readDensityPreference);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
   const [themeSaveError, setThemeSaveError] = useState(false);
+  const [densitySaveError, setDensitySaveError] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const focusToggle = useRef<HTMLButtonElement>(null);
   const osTheme = useSyncExternalStore(subscribeSystemTheme, systemTheme);
   const colorScheme = theme === "system" ? osTheme : theme;
   useLayoutEffect(() => applyColorScheme(colorScheme), [colorScheme]);
@@ -924,6 +931,13 @@ function App() {
     applyLayout(replacePaneTool(layout, previous, next));
   }
 
+  function toggleFocusMode() {
+    if (!focusMode && document.activeElement?.closest("#workspace-toolbar, #workspace-explorer, #workspace-status")) {
+      focusToggle.current?.focus();
+    }
+    setFocusMode(current => !current);
+  }
+
   function toggleSplit() {
     if (layout.kind === "split") {
       if (toolsInLayout.length === 2) lastPair.current = { direction: layout.direction, size: layout.size };
@@ -982,12 +996,16 @@ function App() {
     const commands: WorkspaceCommand[] = workspaceTools.filter(tool => desktop || !("native" in tool)).map(tool => ({
       id: `tool:${tool.id}`, title: tool.label, group: "도구", keywords: tool.keywords, Icon: tool.Icon, run: () => openPage(tool.id),
     }));
-    commands.push({
+    if (!focusMode) commands.push({
       id: "toggle:explorer", title: explorerOpen ? "탐색기 접기" : "탐색기 펼치기", group: "작업",
       keywords: "explorer sidebar", Icon: explorerOpen ? PanelLeftClose : PanelLeftOpen, run: () => setExplorerOpen(open => !open),
     });
     commands.push({
-      id: "open:appearance", title: "화면 설정", group: "작업", keywords: "테마 라이트 다크 theme appearance",
+      id: "toggle:focus", title: focusMode ? "집중 모드 끄기" : "집중 모드 켜기", group: "작업",
+      keywords: "focus mode", Icon: Focus, run: toggleFocusMode,
+    });
+    commands.push({
+      id: "open:appearance", title: "화면 설정", group: "작업", keywords: "테마 라이트 다크 밀도 컴팩트 theme density appearance",
       Icon: Settings, run: () => setAppearanceOpen(true),
     });
     if (desktop) {
@@ -1325,7 +1343,7 @@ function App() {
     </div>,
   };
 
-  return <div className="app-shell">
+  return <div className="app-shell" data-density={density}>
     <div className="workspace">
       <header className="topbar">
         <div className="workspace-heading">
@@ -1337,10 +1355,14 @@ function App() {
           <button className="history-button palette-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+P Meta+Shift+P"
             title="명령 팔레트 (Ctrl+Shift+P)" onClick={() => setPaletteOpen(true)}><Search size={15} aria-hidden /> 명령 팔레트 <kbd aria-hidden>Ctrl+Shift+P</kbd></button>
           <button className="history-button" disabled={!desktop} onClick={() => { if (toolVisible("workspace") && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={toolVisible("workspace") && historyOpen}><History size={15} /> 작업 기록</button>
+          <button ref={focusToggle} className="history-button" type="button" aria-pressed={focusMode}
+            aria-controls="workspace-toolbar workspace-explorer workspace-status" onClick={toggleFocusMode}>
+            <Focus size={15} aria-hidden /> 집중 모드
+          </button>
           <button className="history-button" type="button" aria-haspopup="dialog" onClick={() => setAppearanceOpen(true)}><Settings size={15} aria-hidden /> 화면 설정</button>
         </div>
       </header>
-      <div className="workspace-toolbar">
+      <div className="workspace-toolbar" id="workspace-toolbar" hidden={focusMode}>
         <button className="icon-button explorer-toggle" type="button" aria-controls="workspace-explorer" aria-expanded={explorerOpen}
           aria-label={explorerOpen ? "탐색기 접기" : "탐색기 펼치기"} title={explorerOpen ? "탐색기 접기" : "탐색기 펼치기"}
           onClick={() => setExplorerOpen(open => !open)}>{explorerOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
@@ -1355,7 +1377,7 @@ function App() {
         {resumeNotice?.retry && <button type="button" className="secondary small" onClick={retryResume}>이 창의 배치 저장</button>}
       </div>}
       <div className="body-layout">
-        <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={!explorerOpen}>
+        <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={focusMode || !explorerOpen}>
           <div className="explorer-top"><span>탐색기</span><button className="icon-button" onClick={() => openModal("project")} disabled={!desktop} aria-label="새 프로젝트"><Plus size={17} /></button></div>
           <label className="select-label" htmlFor="project-select">프로젝트</label>
           <div className="project-selector"><FolderOpen size={16} /><select id="project-select" value={projectId} onChange={event => setProjectId(event.target.value)} disabled={!projects.length}>
@@ -1393,7 +1415,7 @@ function App() {
         </aside>
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
-      <footer className="statusbar">
+      <footer className="statusbar" id="workspace-status" hidden={focusMode}>
         <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span />
           {desktop ? runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간" : "브라우저 · 게이트웨이 미연결"}</span>
         {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
@@ -1412,7 +1434,16 @@ function App() {
           <option value="light">라이트</option>
           <option value="dark">다크</option>
         </select></label>
-        {themeSaveError && <p className="form-error" role="alert">설정을 저장할 수 없어 현재 창에만 적용됩니다.</p>}
+        {themeSaveError && <p className="form-error" role="alert">테마를 저장할 수 없어 현재 창에만 적용됩니다.</p>}
+        <label className="field">화면 밀도<select value={density} onChange={event => {
+          const preference = event.target.value as WorkspaceDensity;
+          setDensity(preference);
+          setDensitySaveError(!saveDensityPreference(preference));
+        }}>
+          <option value="default">기본</option>
+          <option value="compact">컴팩트</option>
+        </select></label>
+        {densitySaveError && <p className="form-error" role="alert">화면 밀도를 저장할 수 없어 현재 창에만 적용됩니다.</p>}
       </div>
     </Dialog>}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>

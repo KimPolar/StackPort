@@ -722,3 +722,17 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
   .session-heading { align-items: start; gap: 6px; }
   .terminal-actions .small { padding-inline: 7px; gap: 4px; }
 }
+
+.app-shell[data-density="compact"] .topbar { min-height: 44px; }
+.app-shell[data-density="compact"] .workspace-toolbar { min-height: 37px; }
+.app-shell[data-density="compact"] .explorer { padding-block: 12px 18px; }
+.app-shell[data-density="compact"] .explorer .section-heading { margin-top: 14px; }
+.app-shell[data-density="compact"] .explorer :is(.profile-row, .object-row) { min-height: 26px; padding-block: 4px; }
+.app-shell[data-density="compact"] :is(.main-content, .terminal-workspace, .network-workspace) { padding: 14px 16px 18px; }
+.app-shell[data-density="compact"] .workspace-panes[data-split] :is(.main-content, .terminal-workspace, .network-workspace) { padding: 10px; }
+.app-shell[data-density="compact"] :is(.editor-card, .files-pane) > .panel-heading { height: auto; min-height: 36px; }
+.app-shell[data-density="compact"] .database-results > .panel-heading { min-height: 36px; }
+.app-shell[data-density="compact"] .workspace :is(.table-wrap, .files-table) :is(th, td) { padding-block: 4px; }
+.app-shell[data-density="compact"] .row-edit { min-height: 24px; }
+.app-shell[data-density="compact"] .terminal-tab [role="tab"] { min-height: 28px; padding-block: 4px; }
+.app-shell[data-density="compact"] .terminal-screen { padding: 8px; }

@@ -13,7 +13,7 @@ SP-UI-011,작업 이력,"최근 접속·열람한 객체·실행 쿼리·파일 
 SP-UI-012,세션 재개,"앱 재시작 후 열린 탭 레이아웃과 연결 목록 복구, 실제 재연결은 정책에 따라 수행.",partial,"재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",crates/stackport-core/src/workspace_resume.rs; crates/stackport-core/tests/workspace_resume.rs; tests/workspace-resume-smoke.cjs; src/WorkspaceResume.ts; src/main.tsx
 SP-UI-013,대량 작업,다중 연결 선택 시 그룹 접속·일괄 편집·내보내기·실행·삭제. 파괴 작업은 개별/전체 영향 미리보기.,not_started,,
 SP-UI-014,개체 상태,연결 중/연결됨/오류/재시도/실행 중/읽기 전용/수정됨 상태를 즉시 표시.,partial,읽기 전용·실행 중·중단·시간 초과·오류 표시,crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
-SP-UI-015,테마·레이아웃,"라이트/다크/시스템, 크기·아이콘·글꼴·색상, 컴팩트/집중 모드 및 패널 숨김.",partial,"작업 공간과 대화상자·편집기·터미널의 라이트·다크·시스템 테마, 탐색기 펼치기·접기",src/appearance.ts; src/theme.css; src/main.tsx; src/TerminalWorkspace.tsx; tests/appearance-smoke.cjs
+SP-UI-015,테마·레이아웃,"라이트/다크/시스템, 크기·아이콘·글꼴·색상, 컴팩트/집중 모드 및 패널 숨김.",partial,"작업 공간의 라이트·다크·시스템 테마, 컴팩트 밀도, 분할·초안·터미널을 유지하는 집중 모드, 탐색기 펼치기·접기",src/appearance.ts; src/theme.css; src/styles.css; src/main.tsx; src/TerminalWorkspace.tsx; tests/appearance-smoke.cjs
 SP-UI-016,키보드 중심,"키보드 탐색, 명령 검색, 사용자 지정 단축키, 탭 전환, 컨텍스트 메뉴 대체 동작.",partial,"작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs
 SP-UI-017,도움말,"문맥형 설명, 연결 진단, 프로토콜별 오류 가이드, 키보드 단축키 검색.",not_started,,
 SP-UI-018,외부 실행,운영체제 바로가기·프로토콜 URI·CLI 인자로 특정 프로젝트/세션/쿼리/작업 열기.,not_started,,
@@ -355,7 +355,7 @@ SP-CO-015,중앙 계정 관리,조직 멤버·워크스페이스·정책·기기
 SP-CO-016,재동기화,"오프라인 수정 큐, 충돌 해결, 부분 동기화 실패 재시도, 로컬 우선 보존.",not_started,,
 SP-CO-017,기업 배포,정책 파일·기본 프로필·연결 제한·승인 플러그인·브랜딩 배포 설정.,not_started,,
 SP-CO-018,워크스페이스 백업,공유 자산 버전과 소유권 정보를 포함한 내보내기/복원 및 포맷 호환성 검증.,not_started,,
-SP-ST-001,글로벌 설정,"테마, 언어, 글꼴, 로케일, 시간대, 데이터 표시, 알림, UI 배율 및 접근성.",partial,"화면 설정과 명령 팔레트에서 라이트·다크·시스템 테마 선택, 재시작 뒤 선택 유지",src/appearance.ts; src/theme.css; src/main.tsx; src/TerminalWorkspace.tsx; tests/appearance-smoke.cjs
+SP-ST-001,글로벌 설정,"테마, 언어, 글꼴, 로케일, 시간대, 데이터 표시, 알림, UI 배율 및 접근성.",partial,"화면 설정의 라이트·다크·시스템 테마와 기본·컴팩트 밀도, 재시작 뒤 선택 유지",src/appearance.ts; src/theme.css; src/styles.css; src/main.tsx; src/TerminalWorkspace.tsx; tests/appearance-smoke.cjs
 SP-ST-002,터미널 설정,폰트·색상·인코딩·줄 수·키보드·Paste 정책·출력 로그 기본 디렉터리.,not_started,,
 SP-ST-003,X11 설정,"디스플레이 번호/모니터, 화면 모드, 키보드 레이아웃, 클립보드, 그래픽 엔진·가속 옵션.",not_started,,
 SP-ST-004,네트워크 설정,"DNS/프록시, 연결 시간 초과, 재시도, KeepAlive, TLS 최소 정책, 대역폭 제한.",not_started,,
