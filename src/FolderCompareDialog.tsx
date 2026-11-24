@@ -1,56 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
-import { displayFilePath, type Directory, type Entry } from "./fileBrowse";
-import { compareFileContents, fileComparisonSnapshot, loadFolderComparison, type ContentResult, type FileSnapshot, type FolderComparison, type FolderPair } from "./fileCompare";
+import { displayFilePath, type Entry } from "./fileBrowse";
+import { asFolderTree, compareFileContents, fileComparisonSnapshot, loadFolderComparison, loadFolderTreeComparison,
+  type ContentResult, type FileSnapshot, type FolderComparison, type FolderPair, type FolderTreeComparison } from "./fileCompare";
 import { FileComparisonResult, FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
+import { compareFolderTrees, relationLabels } from "./folderComparison";
 
-const names = new Intl.Collator("ko-KR", { numeric: true });
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "medium" });
 const kindLabels = { directory: "폴더", file: "파일", symlink: "심볼릭 링크", other: "기타 항목" };
-const relationLabels = {
-  local: "로컬에만 있음", remote: "원격에만 있음", difference: "차이 있음",
-  same: "크기·수정 시각 일치", folder: "양쪽 폴더", unknown: "확인 필요",
-};
-type Relation = keyof typeof relationLabels;
-type Row = { name: string; local: Entry[]; remote: Entry[]; relation: Relation; detail?: string };
 type Visible = "all" | "issues" | "local" | "remote";
-
-function relation(row: Pick<Row, "local" | "remote">, localTruncated: boolean, remoteTruncated: boolean): Pick<Row, "relation" | "detail"> {
-  const [local] = row.local;
-  const [remote] = row.remote;
-  if (row.local.length > 1 || row.remote.length > 1 || local?.name_is_lossy || remote?.name_is_lossy) {
-    return { relation: "unknown", detail: "이름을 정확히 대조할 수 없습니다." };
-  }
-  if (!local) return localTruncated ? { relation: "unknown", detail: "로컬 목록 일부만 확인" } : { relation: "remote" };
-  if (!remote) return remoteTruncated ? { relation: "unknown", detail: "원격 목록 일부만 확인" } : { relation: "local" };
-  if (local.kind !== remote.kind) return { relation: "difference", detail: "유형 다름" };
-  if (local.kind === "directory") return { relation: "folder" };
-  if (local.kind !== "file") return { relation: "unknown", detail: "링크 또는 기타 항목" };
-  const differences: string[] = [];
-  if (local.size !== null && remote.size !== null && local.size !== remote.size) differences.push("크기 다름");
-  if (local.modified !== null && remote.modified !== null && local.modified !== remote.modified) {
-    differences.push(local.modified > remote.modified ? "로컬 수정 시각이 더 최근" : "원격 수정 시각이 더 최근");
-  }
-  if (differences.length) return { relation: "difference", detail: differences.join(" · ") };
-  if (local.size === null || remote.size === null || local.modified === null || remote.modified === null) {
-    return { relation: "unknown", detail: "크기 또는 수정 시각 미확인" };
-  }
-  return { relation: "same" };
-}
-
-function compareFolders(local: Directory, remote: Directory): Row[] {
-  const joined = new Map<string, Pick<Row, "local" | "remote">>();
-  for (const side of ["local", "remote"] as const) {
-    for (const entry of (side === "local" ? local : remote).entries) {
-      const row = joined.get(entry.name) ?? { local: [], remote: [] };
-      row[side].push(entry);
-      joined.set(entry.name, row);
-    }
-  }
-  return Array.from(joined, ([name, row]) => ({ name, ...row, ...relation(row, local.truncated, remote.truncated) }))
-    .sort((left, right) => names.compare(left.name, right.name));
-}
+const PAGE_SIZE = 200;
 
 function Metadata({ entries }: { entries: Entry[] }) {
   if (!entries.length) return <td>—</td>;
@@ -64,9 +24,12 @@ function Metadata({ entries }: { entries: Entry[] }) {
 
 export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPair; initial: Promise<FolderComparison>; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const [pending, setPending] = useState(initial);
-  const [result, setResult] = useState<FolderComparison | null>(null);
+  const resultList = useRef<HTMLDivElement>(null);
+  const [pending, setPending] = useState(() => initial.then(asFolderTree));
+  const [result, setResult] = useState<FolderTreeComparison | null>(null);
+  const [recursive, setRecursive] = useState(false);
   const [visible, setVisible] = useState<Visible>("issues");
+  const [page, setPage] = useState(0);
   const [content, setContent] = useState(new Map<string, ContentResult>());
   const [hashing, setHashing] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ name: string; difference: ViewableDifference } | null>(null);
@@ -79,7 +42,8 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   }, [pending]);
 
   const folders = result && "local" in result ? result : null;
-  const rows = useMemo(() => folders ? compareFolders(folders.local, folders.remote) : [], [folders]);
+  const { rows, localIncomplete, remoteIncomplete } = useMemo(() => folders ? compareFolderTrees(folders.local, folders.remote)
+    : { rows: [], localIncomplete: 0, remoteIncomplete: 0 }, [folders]);
   const shown = rows.filter(row => {
     if (visible === "all") return true;
     if (visible !== "issues") return row.relation === visible;
@@ -87,6 +51,22 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
     return (row.relation !== "same" && row.relation !== "folder") || hashing === row.name
       || (checked !== undefined && ("error" in checked || !checked.matches));
   });
+  const pages = Math.ceil(shown.length / PAGE_SIZE);
+  const currentPage = Math.max(0, Math.min(page, pages - 1));
+  const pageRows = shown.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
+  function goToPage(next: number) {
+    setPage(next);
+    resultList.current?.scrollTo({ top: 0 });
+  }
+
+  function refresh(includeChildren: boolean) {
+    setRecursive(includeChildren);
+    setResult(null);
+    setContent(new Map());
+    setPage(0);
+    setPending(includeChildren ? loadFolderTreeComparison(pair) : loadFolderComparison(pair).then(asFolderTree));
+  }
 
   async function compareFile(name: string, local: FileSnapshot, remote: FileSnapshot) {
     if (hashPending.current) return;
@@ -116,29 +96,31 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
         <div><dt>로컬 폴더</dt><dd>{displayFilePath(folders?.local.path ?? pair.local.path)}</dd></div>
         <div><dt>원격 폴더 · {pair.target}</dt><dd>{folders?.remote.path ?? pair.remote.path}</dd></div>
       </dl>
-      <p className="form-note">현재 폴더 바로 아래 항목의 이름·유형·크기·수정 시각을 비교합니다.</p>
+      <p className="form-note">{recursive
+        ? "하위 항목을 루트 기준 상대 경로로 맞춰 유형·크기·수정 시각을 비교합니다."
+        : "현재 폴더 바로 아래 항목의 이름·유형·크기·수정 시각을 비교합니다."}</p>
       {!result && <p className="form-note" role="status">양쪽 폴더를 읽는 중…</p>}
       {result && "errors" in result && result.errors.map(error => <p className="form-error" role="alert" key={error}>{error}</p>)}
-      {folders && (folders.local.truncated || folders.remote.truncated) && <p className="form-note" role="status">
-        {folders.local.truncated && folders.remote.truncated ? "두 목록" : folders.local.truncated ? "로컬 목록" : "원격 목록"}의 처음 2,000개 항목을 확인했습니다.
+      {folders && (localIncomplete > 0 || remoteIncomplete > 0) && <p className="form-note" role="status">
+        일부 또는 전체 목록을 확인할 수 없는 폴더 · 로컬 {numbers.format(localIncomplete)}개 / 원격 {numbers.format(remoteIncomplete)}개
       </p>}
       <div className="files-compare-tools">
+        <label className="files-compare-scope"><input type="checkbox" checked={recursive} disabled={!result || hashing !== null}
+          onChange={event => refresh(event.target.checked)} /> 하위 폴더 포함</label>
         {folders && <>
-          <label>표시 <select aria-label="비교 결과 필터" value={visible} onChange={event => setVisible(event.target.value as Visible)}>
+          <label>표시 <select aria-label="비교 결과 필터" value={visible} onChange={event => { setVisible(event.target.value as Visible); goToPage(0); }}>
             <option value="issues">차이 및 확인 필요</option><option value="all">전체 항목</option>
             <option value="local">로컬에만 있음</option><option value="remote">원격에만 있음</option>
           </select></label>
           <span role="status">{numbers.format(shown.length)} / {numbers.format(rows.length)}개 항목</span>
         </>}
-        <button type="button" className="secondary small" disabled={!result || hashing !== null} onClick={() => {
-          setResult(null);
-          setContent(new Map());
-          setPending(loadFolderComparison(pair));
-        }}><RefreshCw size={14} aria-hidden /> 다시 비교</button>
+        <button type="button" className="secondary small" disabled={!result || hashing !== null}
+          onClick={() => refresh(recursive)}><RefreshCw size={14} aria-hidden /> 다시 비교</button>
       </div>
-      {folders && shown.length > 0 && <div className="files-compare-results"><table className="files-table" aria-label="폴더 비교 결과">
-        <thead><tr><th scope="col">이름</th><th scope="col">비교 결과</th><th scope="col">로컬</th><th scope="col">원격</th></tr></thead>
-        <tbody>{shown.map(row => {
+      {folders && shown.length > 0 && <div ref={resultList} className="files-compare-results" role="region" aria-label="폴더 비교 결과 스크롤 영역" tabIndex={0}>
+        <table className="files-table" aria-label="폴더 비교 결과">
+        <thead><tr><th scope="col">{recursive ? "상대 경로" : "이름"}</th><th scope="col">비교 결과</th><th scope="col">로컬</th><th scope="col">원격</th></tr></thead>
+        <tbody>{pageRows.map(row => {
           const local = row.local.length === 1 ? fileComparisonSnapshot(row.local[0]) : null;
           const remote = row.remote.length === 1 ? fileComparisonSnapshot(row.remote[0]) : null;
           const checked = content.get(row.name);
@@ -159,6 +141,11 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
           </tr>;
         })}</tbody>
       </table></div>}
+      {pages > 1 && <nav className="files-compare-pages" aria-label="폴더 비교 결과 페이지">
+        <button type="button" className="secondary small" disabled={currentPage === 0} onClick={() => goToPage(currentPage - 1)}>이전</button>
+        <span role="status">{numbers.format(currentPage + 1)} / {numbers.format(pages)} 페이지</span>
+        <button type="button" className="secondary small" disabled={currentPage + 1 === pages} onClick={() => goToPage(currentPage + 1)}>다음</button>
+      </nav>}
       {folders && shown.length === 0 && <p className="form-note">이 조건에 해당하는 항목이 없습니다.</p>}
     </div>
   </dialog>

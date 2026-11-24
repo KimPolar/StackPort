@@ -85,15 +85,17 @@ function sftpChannel(channel, uploads) {
   }
   channel.on('REALPATH', (id, requested) => {
     const resolved = requested === '.' ? '/home/stackport' : uploads.aliases.get(requested) ?? requested;
-    if (directories.has(resolved) && !uploads.unavailableDirectories.has(resolved)) channel.name(id, [directory(resolved)]);
+    if ((directories.has(resolved) || uploads.comparisonDirectories.has(resolved)) && !uploads.unavailableDirectories.has(resolved)) channel.name(id, [directory(resolved)]);
     else channel.status(id, code.NO_SUCH_FILE);
   });
   channel.on('OPENDIR', (id, requested) => {
-    const entries = directories.get(requested);
+    const entries = directories.get(requested) ?? uploads.comparisonDirectories.get(requested);
     if (!entries) return channel.status(id, code.NO_SUCH_FILE);
     const added = Array.from(uploads.files).filter(([name]) => path.posix.dirname(name) === requested)
       .map(([name, fixture]) => ({ filename: path.posix.basename(name), longname: name, attrs: fixture.attrs }));
-    newHandle(id, { entries: [...entries, ...added] });
+    const nested = Array.from(uploads.comparisonDirectories.keys()).filter(name => path.posix.dirname(name) === requested)
+      .map(name => directory(path.posix.basename(name)));
+    newHandle(id, { entries: [...entries, ...added, ...nested] });
   });
   channel.on('READDIR', (id, handle) => {
     const entries = handles.get(handle.toString('hex'))?.entries;
@@ -112,7 +114,7 @@ function sftpChannel(channel, uploads) {
   });
   channel.on('LSTAT', (id, remotePath) => {
     const existing = lookup(remotePath);
-    if (directories.has(remotePath)) channel.attrs(id, directory(remotePath).attrs);
+    if (directories.has(remotePath) || uploads.comparisonDirectories.has(remotePath)) channel.attrs(id, directory(remotePath).attrs);
     else if (existing) channel.attrs(id, existing.attrs);
     else channel.status(id, code.NO_SUCH_FILE);
   });
@@ -269,7 +271,7 @@ function makeHost() {
 async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
-  const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), moves: 0, moveCollision: false,
+  const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), comparisonDirectories: new Map(), moves: 0, moveCollision: false,
     deletions: 0, edits: 0, editRace: null, advertiseEdit: true };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
@@ -1439,6 +1441,59 @@ async function verifyFolderComparison(page, local, uploads) {
   await runPair.click();
   await pair.getByText('내용 다름', { exact: true }).waitFor();
   await pair.getByRole('button', { name: '닫기', exact: true }).click();
+
+  for (const child of ['깊이', '열수없음', '바뀐 경로']) {
+    fs.mkdirSync(path.join(local, '문서', child));
+    uploads.comparisonDirectories.set(`${rootPath}/문서/${child}`, []);
+  }
+  localFile('문서/깊이/설정.txt', 'left');
+  remoteFile('문서/깊이/설정.txt', 'rght');
+  localFile('문서/깊이/지역.txt', 'local child');
+  remoteFile('문서/깊이/원격.txt', 'remote child');
+  localFile('문서/열수없음/보류.txt', 'unknown child');
+  remoteFile('정리/경로 표식.txt', 'outside alias path');
+  uploads.unavailableDirectories.add(`${rootPath}/문서/열수없음`);
+  uploads.aliases.set(`${rootPath}/문서/바뀐 경로`, `${rootPath}/정리`);
+
+  await page.getByRole('button', { name: '폴더 비교', exact: true }).click();
+  const includeChildren = compare.getByRole('checkbox', { name: '하위 폴더 포함', exact: true });
+  await row('Case.txt').waitFor();
+  assert.equal(await row('문서/깊이/원격.txt').count(), 0);
+  await includeChildren.check();
+  await table.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
+  await row('문서/깊이/지역.txt').getByText('로컬에만 있음', { exact: true }).waitFor();
+  await row('문서/깊이/원격.txt').getByText('원격에만 있음', { exact: true }).waitFor();
+  await row('정리/경로 표식.txt').getByText('원격에만 있음', { exact: true }).waitFor();
+  const blocked = row('문서/열수없음/보류.txt');
+  await blocked.getByText('확인 필요', { exact: true }).waitFor();
+  await blocked.getByText(/원격 목록 미확인/).waitFor();
+  await row('문서/바뀐 경로').getByText(/원격 폴더 경로가 바뀌었습니다/).waitFor();
+  assert.equal(await row('문서/바뀐 경로/경로 표식.txt').count(), 0);
+  await filter.selectOption('all');
+  const nested = row('문서/깊이/설정.txt');
+  await nested.getByText('크기·수정 시각 일치', { exact: true }).waitFor();
+  await nested.getByRole('button', { name: '문서/깊이/설정.txt 내용 비교', exact: true }).click();
+  await nested.getByText('내용 다름', { exact: true }).waitFor();
+  uploads.unavailableDirectories.delete(`${rootPath}/문서/열수없음`);
+  await refresh.click();
+  await blocked.getByText('로컬에만 있음', { exact: true }).waitFor();
+
+  fs.mkdirSync(path.join(local, '페이지 검증'));
+  for (let index = 1; index <= 206; index++) localFile(`페이지 검증/항목 ${index}.txt`, '');
+  await refresh.click();
+  await filter.selectOption('local');
+  const pagination = compare.getByRole('navigation', { name: '폴더 비교 결과 페이지', exact: true });
+  await pagination.getByText('1 / 2 페이지', { exact: true }).waitFor();
+  assert.equal(await table.getByRole('row').count(), 201);
+  await pagination.getByRole('button', { name: '다음', exact: true }).click();
+  await pagination.getByText('2 / 2 페이지', { exact: true }).waitFor();
+  await row('페이지 검증/항목 206.txt').getByText('로컬에만 있음', { exact: true }).waitFor();
+  await includeChildren.uncheck();
+  await table.getByRole('columnheader', { name: '이름', exact: true }).waitFor();
+  assert.equal(await row('문서/깊이/지역.txt').count(), 0);
+  await compare.getByRole('button', { name: '닫기', exact: true }).click();
+  uploads.aliases.delete(`${rootPath}/문서/바뀐 경로`);
+  uploads.comparisonDirectories.clear();
   assert.deepEqual({ edits: uploads.edits, moves: uploads.moves, deletions: uploads.deletions }, before);
   for (const name of remoteFixtures) uploads.files.delete(name);
 }

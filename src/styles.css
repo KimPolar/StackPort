@@ -319,6 +319,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; font-size: 12px; color: #526a5f; }
 .files-compare-tools select { padding: 5px; margin-inline-start: 3px; border: 1px solid #d6e4db; border-radius: 5px; background: white; color: #39594b; }
 .files-compare-tools button { margin-inline-start: auto; }
+.files-compare-scope, .files-compare-pages { display: flex; align-items: center; gap: 6px; }
+.files-compare-pages { justify-content: flex-end; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .files-compare-results { max-height: 50vh; overflow: auto; }
 .files-compare-results th[scope="row"] { position: static; max-width: 260px; overflow: hidden; text-overflow: ellipsis; background: transparent; }
 .files-compare-date { margin-top: 3px; color: #526a5f; font-size: 11px; font-variant-numeric: tabular-nums; }

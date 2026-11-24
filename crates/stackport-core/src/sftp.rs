@@ -6,6 +6,7 @@ mod copy;
 mod delete;
 mod download;
 mod editor;
+mod folder_tree;
 mod mutation;
 mod preview;
 mod remote_stage;
@@ -15,6 +16,7 @@ pub use audit::SftpTransferReport;
 pub use compare::{save_merged_text, ComparedFile, FileContentComparison};
 pub use delete::SftpDeletePreview;
 pub use editor::{SftpEditDocument, SftpEditSave};
+pub use folder_tree::{list_local_tree, FolderTree};
 pub use mutation::{SftpEntrySource, SftpMutationReport};
 pub use preview::{preview_local_file, FilePreview};
 pub use transfer::SftpTransferProgress;
@@ -394,6 +396,14 @@ async fn canonical_remote_path(files: &RawSftpSession, requested: SftpString) ->
 
 async fn read_directory(files: &RawSftpSession, requested: SftpString) -> Result<BrowseDirectory> {
     let path = canonical_remote_path(files, requested).await?;
+    read_resolved_directory(files, path, MAX_ITEMS).await
+}
+
+async fn read_resolved_directory(
+    files: &RawSftpSession,
+    path: SftpString,
+    limit: usize,
+) -> Result<BrowseDirectory> {
     let handle = files
         .opendir(path.clone())
         .await
@@ -419,7 +429,7 @@ async fn read_directory(files: &RawSftpSession, requested: SftpString) -> Result
                 {
                     continue;
                 }
-                if entries.len() == MAX_ITEMS {
+                if entries.len() == limit {
                     return Ok((entries, true));
                 }
                 let location = path.join(name);
@@ -515,9 +525,13 @@ pub fn list_local_directory(value: &str) -> Result<BrowseDirectory> {
     let path = path
         .canonicalize()
         .map_err(|_| "로컬 폴더에 접근할 수 없습니다.")?;
+    read_local_directory(&path, MAX_ITEMS)
+}
+
+fn read_local_directory(path: &Path, limit: usize) -> Result<BrowseDirectory> {
     let mut entries = Vec::new();
-    let mut directory = fs::read_dir(&path).map_err(|_| "로컬 폴더를 열 수 없습니다.")?;
-    for entry in directory.by_ref().take(MAX_ITEMS) {
+    let mut directory = fs::read_dir(path).map_err(|_| "로컬 폴더를 열 수 없습니다.")?;
+    for entry in directory.by_ref().take(limit) {
         let entry = entry.map_err(|_| "로컬 폴더 항목을 읽을 수 없습니다.")?;
         let metadata = fs::symlink_metadata(entry.path()).ok();
         let kind = metadata
@@ -572,6 +586,17 @@ pub fn list_local_directory(value: &str) -> Result<BrowseDirectory> {
         entries,
         truncated,
     })
+}
+
+fn local_link(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    metadata.file_type().is_symlink()
 }
 
 fn open_local_file(value: &str) -> Result<fs::File> {

@@ -5,7 +5,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
-    list_local_directory, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, NetworkDiagnostics, NetworkManager,
+    list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
@@ -797,6 +797,20 @@ async fn browse_local_directory(path: String) -> Result<BrowseDirectory, String>
 }
 
 #[tauri::command]
+async fn browse_local_folder_tree(path: String) -> Result<FolderTree, String> {
+    worker(move || list_local_tree(&path)).await
+}
+
+#[tauri::command]
+async fn browse_sftp_folder_tree(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    location: String,
+) -> Result<FolderTree, String> {
+    sftp.list_tree(&id, location).await
+}
+
+#[tauri::command]
 async fn compare_sftp_file_contents(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1086,6 +1100,8 @@ fn main() {
             cancel_sftp_transfer,
             close_sftp,
             browse_local_directory,
+            browse_local_folder_tree,
+            browse_sftp_folder_tree,
             compare_sftp_file_contents,
             save_merged_file,
             choose_merged_file_path,
