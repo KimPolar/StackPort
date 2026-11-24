@@ -319,6 +319,7 @@ async function main() {
   const port = server.port;
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
   const page = browser.contexts().flatMap(context => context.pages())[0];
+  await page.setViewportSize({ width: 1440, height: 900 });
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   const command = (command, args) => page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args });
@@ -380,6 +381,16 @@ async function main() {
     await localPane.getByText('표시할 파일이 없습니다.').waitFor();
     await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+
+    await page.setViewportSize({ width: 900, height: 600 });
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    await localPane.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: '로컬 파일 보기', exact: true }).press('Enter');
+    await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+    await remote.waitFor({ state: 'hidden' });
+    await page.getByRole('button', { name: '원격 파일 보기', exact: true }).press('Enter');
+    assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), '/home/stackport');
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
