@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use stackport_core::{
-    AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
+    ArchivedProject, AuditPage, BackupReport, CsvOptions, CsvQuery, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
     EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
     RestorePreview, RestoreReport, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
@@ -24,6 +24,24 @@ where
 async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> {
     let store = store.inner().clone();
     worker(move || store.list_projects()).await
+}
+
+#[tauri::command]
+async fn list_archived_projects(store: State<'_, Store>) -> Result<Vec<ArchivedProject>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_archived_projects()).await
+}
+
+#[tauri::command]
+async fn archive_project(store: State<'_, Store>, id: String) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.archive_project(&id)).await
+}
+
+#[tauri::command]
+async fn unarchive_project(store: State<'_, Store>, id: String) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.unarchive_project(&id)).await
 }
 
 #[tauri::command]
@@ -583,6 +601,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             list_projects,
+            list_archived_projects,
+            archive_project,
+            unarchive_project,
             list_audit_events,
             create_project,
             duplicate_project,

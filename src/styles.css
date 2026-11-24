@@ -36,6 +36,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .project-actions { display: flex; gap: 12px; margin: 8px 0 0 3px; }
 .project-actions button { border: 0; background: none; padding: 0; color: #81938e; font-size: 11px; }
 .project-actions button:hover { color: #156b55; text-decoration: underline; }
+.project-actions button { display: inline-flex; align-items: center; gap: 4px; }
+.archive-dialog-body { padding: 0 21px 21px; }
+.archived-projects-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.archived-projects-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid #edf1ee; }
+.archived-projects-list li div { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.archived-projects-list time { color: #617b6d; font-size: 11px; }
+.archived-projects-list button { flex-shrink: 0; }
 .section-heading { display: flex; margin: 30px 0 8px 3px; }
 .sidebar-empty { margin: 12px 3px; color: #98a7a2; font-size: 12px; line-height: 1.6; }
 .profile-list { display: grid; gap: 3px; }

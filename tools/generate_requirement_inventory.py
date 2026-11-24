@@ -9,7 +9,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
-    "SP-UI-001": "프로젝트 생성·이름 변경·복제·삭제와 복제 시 SQLite·SSH 연결 정의 복사",
+    "SP-UI-001": "프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제",
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색",
     "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
@@ -84,8 +84,8 @@ PARTIAL = {
     "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
-    "SP-NFR-006": "v1·v2 작업 공간을 백업한 뒤 트랜잭션으로 v3 이관",
-    "SP-AT-025": "v1·v2 백업 후 v3 이관·이관 실패 시 원본 보존",
+    "SP-NFR-006": "v1~v3 작업 공간을 백업한 뒤 트랜잭션으로 v4 이관",
+    "SP-AT-025": "v1~v3 백업 후 v4 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",

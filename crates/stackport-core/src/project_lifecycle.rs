@@ -5,9 +5,70 @@ use super::{
     Result, Store,
 };
 use rusqlite::{params, TransactionBehavior};
+use serde::Serialize;
 use uuid::Uuid;
 
+#[derive(Debug, Serialize)]
+pub struct ArchivedProject {
+    pub id: String,
+    pub name: String,
+    pub archived_at: String,
+}
+
 impl Store {
+    pub fn list_archived_projects(&self) -> Result<Vec<ArchivedProject>> {
+        let db = self.connect()?;
+        let mut statement = db
+            .prepare(
+                "SELECT projects.id, projects.name, archives.archived_at
+             FROM project_archives AS archives
+             JOIN projects ON projects.id = archives.project_id
+             ORDER BY archives.archived_at DESC, projects.name COLLATE NOCASE, projects.id",
+            )
+            .map_err(db_error)?;
+        let result = statement
+            .query_map([], |row| {
+                Ok(ArchivedProject {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    archived_at: row.get(2)?,
+                })
+            })
+            .map_err(db_error)?;
+        result.collect::<rusqlite::Result<_>>().map_err(db_error)
+    }
+
+    pub fn archive_project(&self, id: &str) -> Result<()> {
+        let mut db = self.connect()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let changed = tx
+            .execute(
+                "INSERT INTO project_archives(project_id)
+             SELECT id FROM projects WHERE id = ?1
+             AND NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id = ?1)",
+                [id],
+            )
+            .map_err(db_error)?;
+        require_changed(changed, "보관할 활성 프로젝트를 찾을 수 없습니다.")?;
+        record_archive_change(&tx, id, "project.archive")?;
+        tx.commit().map_err(db_error)
+    }
+
+    pub fn unarchive_project(&self, id: &str) -> Result<()> {
+        let mut db = self.connect()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let changed = tx
+            .execute("DELETE FROM project_archives WHERE project_id = ?1", [id])
+            .map_err(db_error)?;
+        require_changed(changed, "보관된 프로젝트를 찾을 수 없습니다.")?;
+        record_archive_change(&tx, id, "project.unarchive")?;
+        tx.commit().map_err(db_error)
+    }
+
     /// Duplicate connection definitions in one transaction. The original
     /// SQLite files and SSH destinations are still referenced by both projects.
     pub fn duplicate_project(&self, source: &str, name: &str) -> Result<Project> {
@@ -65,4 +126,24 @@ impl Store {
         tx.commit().map_err(db_error)?;
         Ok(duplicate)
     }
+}
+
+fn record_archive_change(
+    db: &rusqlite::Connection,
+    id: &str,
+    operation: &'static str,
+) -> Result<()> {
+    insert_audit(
+        db,
+        AuditRecord {
+            correlation_id: &Uuid::new_v4().to_string(),
+            operation,
+            project_id: Some(id),
+            profile_id: None,
+            environment: None,
+            object_name: None,
+            outcome: "succeeded",
+            affected_count: Some(1),
+        },
+    )
 }

@@ -42,6 +42,33 @@ fn v2_backups(directory: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn create_v3(path: &Path, conflict: bool) {
+    create_v2(path, false);
+    let db = Connection::open(path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE ssh_profiles (
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            name TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, username TEXT NOT NULL,
+            environment TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1);
+         INSERT INTO ssh_profiles VALUES ('ssh-1', 'project-1', 'saved SSH', 'server.example.com', 22, 'alice', 'PROD', 9);
+         PRAGMA user_version=3;",
+    ).unwrap();
+    if conflict {
+        db.execute_batch("CREATE VIEW project_archives AS SELECT 1 AS value;")
+            .unwrap();
+    }
+}
+
+fn v3_backup(directory: &Path) -> PathBuf {
+    let mut backups = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.file_name().unwrap().to_string_lossy().contains(".v3-"));
+    let backup = backups.next().expect("a pre-migration v3 backup");
+    assert!(backups.next().is_none());
+    backup
+}
+
 #[test]
 fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     let dir = tempfile::tempdir().unwrap();
@@ -54,7 +81,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -88,7 +115,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         backups(dir.path()).len(),
         1,
-        "v3 must not make another migration backup"
+        "v4 must not make another migration backup"
     );
 }
 
@@ -108,7 +135,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);
@@ -142,6 +169,81 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn version_three_migration_preserves_ssh_and_adds_project_archives() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    create_v3(&path, false);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.list_projects().unwrap()[0].id, "project-1");
+    let ssh = store.ssh_profile("ssh-1").unwrap();
+    assert_eq!((ssh.revision, ssh.environment.as_str()), (9, "PROD"));
+    assert_eq!(
+        store.list_audit_events(None).unwrap().events[0].id,
+        "old-event"
+    );
+    store.archive_project("project-1").unwrap();
+    assert!(store.list_projects().unwrap().is_empty());
+    assert_eq!(store.list_archived_projects().unwrap()[0].id, "project-1");
+    let backup = Connection::open(v3_backup(directory.path())).unwrap();
+    assert_eq!(
+        backup
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT revision FROM ssh_profiles WHERE id='ssh-1'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        9
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+}
+
+#[test]
+fn failed_archive_migration_preserves_version_three_and_its_backup() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    create_v3(&path, true);
+    assert!(Store::open(&path).is_err());
+    for file in [path, v3_backup(directory.path())] {
+        let db = Connection::open(file).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT revision FROM ssh_profiles WHERE id='ssh-1'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            9
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT type FROM sqlite_schema WHERE name='project_archives'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "view"
+        );
+    }
 }
 
 #[test]

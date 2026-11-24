@@ -11,6 +11,7 @@ pub use edit::{EditField, EditInput, EditKey, EditPreview, EditResult, EditSessi
 mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod project_lifecycle;
+pub use project_lifecycle::ArchivedProject;
 mod query;
 pub use query::{QueryOutcome, SqlParameterValue};
 mod restore;
@@ -42,7 +43,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -68,6 +69,10 @@ const SSH_PROFILE_SCHEMA: &str = "CREATE TABLE ssh_profiles (
     username TEXT NOT NULL,
     environment TEXT NOT NULL CHECK(environment IN ('DEV', 'STAGING', 'PROD')),
     revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0)
+);";
+const PROJECT_ARCHIVE_SCHEMA: &str = "CREATE TABLE project_archives (
+    project_id TEXT PRIMARY KEY NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    archived_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +292,7 @@ impl Store {
                 .map_err(db_error)?;
                 tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -306,7 +312,10 @@ impl Store {
                 if current == 1 {
                     tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
+                if current < 3 {
+                    tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -330,7 +339,9 @@ impl Store {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         let db = self.connect()?;
         let mut stmt = db
-            .prepare("SELECT id, name FROM projects ORDER BY name COLLATE NOCASE, id")
+            .prepare("SELECT id, name FROM projects
+                      WHERE NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id = projects.id)
+                      ORDER BY name COLLATE NOCASE, id")
             .map_err(db_error)?;
         let items = stmt
             .query_map([], |r| {

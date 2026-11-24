@@ -144,6 +144,44 @@ fn project_duplicate_rolls_back_connections_when_audit_fails() {
 }
 
 #[test]
+fn project_archive_survives_reopen_and_restores_the_same_project() {
+    let (dir, store, source, sqlite_id) = fixture();
+    store.archive_project(&source).unwrap();
+    assert!(store.archive_project(&source).is_err());
+    let path = dir.path().join("workspace.sqlite");
+    let reopened = Store::open(&path).unwrap();
+    assert!(reopened.list_projects().unwrap().is_empty());
+    let archived = reopened.list_archived_projects().unwrap();
+    assert_eq!(
+        (archived[0].id.as_str(), archived[0].name.as_str()),
+        (source.as_str(), "운영")
+    );
+    assert!(archived[0].archived_at.ends_with('Z'));
+
+    let metadata = Connection::open(path).unwrap();
+    metadata
+        .execute_batch(
+            "CREATE TRIGGER reject_unarchive BEFORE INSERT ON audit_events
+         WHEN NEW.operation = 'project.unarchive'
+         BEGIN SELECT raise(ABORT, 'unarchive fixture'); END;",
+        )
+        .unwrap();
+    assert!(reopened.unarchive_project(&source).is_err());
+    assert_eq!(reopened.list_archived_projects().unwrap().len(), 1);
+    metadata
+        .execute_batch("DROP TRIGGER reject_unarchive")
+        .unwrap();
+    reopened.unarchive_project(&source).unwrap();
+    assert_eq!(reopened.list_projects().unwrap()[0].id, source);
+    assert_eq!(reopened.list_profiles(&source).unwrap()[0].id, sqlite_id);
+    assert!(reopened.list_archived_projects().unwrap().is_empty());
+    assert!(reopened.unarchive_project(&source).is_err());
+    let events = reopened.list_audit_events(None).unwrap();
+    assert_eq!(events.events[0].operation, "project.unarchive");
+    assert_eq!(events.events[1].operation, "project.archive");
+}
+
+#[test]
 fn sqlite_objects_and_bounded_pages_use_real_data() {
     let (_dir, store, _project_id, profile_id) = fixture();
     let objects = store.objects(&profile_id).unwrap();

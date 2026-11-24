@@ -283,9 +283,22 @@ async function main() {
   await page.getByRole('button', { name: /운영 DB.*PROD/ }).click();
   await page.getByRole('button', { name: 'people' }).click();
   await page.getByText('백업 이후 변경', { exact: true }).waitFor();
+  const copyProject = await projectSelector.inputValue();
+  await page.getByRole('button', { name: '보관', exact: true }).click();
+  await page.getByRole('button', { name: '프로젝트 보관', exact: true }).click();
+  await page.getByRole('option', { name: 'E2E 복제본' }).waitFor({ state: 'detached' });
+  if (await projectSelector.inputValue() !== sourceProject) throw new Error('Archiving did not switch to the remaining active project.');
+  await page.getByRole('button', { name: '보관된 프로젝트', exact: true }).click();
+  const archiveDialog = page.getByRole('dialog', { name: '보관된 프로젝트' });
+  await archiveDialog.getByText('E2E 복제본', { exact: true }).waitFor();
+  await archiveDialog.getByRole('button', { name: 'E2E 복제본 다시 활성화' }).click();
+  await page.getByRole('option', { name: 'E2E 복제본' }).waitFor({ state: 'attached' });
+  if (await projectSelector.inputValue() !== copyProject) throw new Error('Reactivation did not restore the original project ID.');
+  await page.getByRole('button', { name: 'SSH 복제할 SSH 연결' }).waitFor();
+  await page.getByRole('button', { name: /운영 DB.*PROD/ }).waitFor();
 
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, and project duplication passed.');
+  console.log('SQLite browsing, cancellation, editing, CSV, restore, audit, and project lifecycle passed.');
   await browser.close();
 }
 
