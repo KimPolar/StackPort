@@ -1,9 +1,9 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Download, Eye, File, FolderOpen, FolderPlus, Link, RefreshCw, Upload } from "lucide-react";
+import { ArrowUp, Download, Eye, File, FolderOpen, FolderPlus, Link, Pencil, RefreshCw, Upload } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
-import { SftpFolderDialog } from "./SftpFolderDialog";
+import { SftpNameDialog, type SftpNameAction } from "./SftpNameDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
 type Entry = { name: string; kind: "directory" | "file" | "symlink" | "other"; location: string | null; size: string | null; modified: number | null; mode: number | null; uid: number | null; gid: number | null; hidden: boolean };
@@ -22,8 +22,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [localFolder, setLocalFolder] = useState("");
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
-  const [newFolder, setNewFolder] = useState<Directory | null>(null);
-  const [createdFolder, setCreatedFolder] = useState<{ name: string; auditWarning: string | null } | null>(null);
+  const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
+  const [nameResult, setNameResult] = useState<{ kind: SftpNameAction["kind"]; name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
   const [remoteRefresh, setRemoteRefresh] = useState(0);
@@ -39,8 +39,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       setRemote(null);
       setTransfer(null);
       setFinished(null);
-      setNewFolder(null);
-      setCreatedFolder(null);
+      setNameAction(null);
+      setNameResult(null);
       setRemoteRefresh(0);
     } catch (error) {
       setError(String(error));
@@ -51,7 +51,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
 
   function chooseTransfer(selection: TransferSelection) {
     setFinished(null);
-    setCreatedFolder(null);
+    setNameResult(null);
     setTransfer(selection);
   }
 
@@ -70,14 +70,14 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     });
   }
 
-  function createFolder(directory: Directory) {
+  function chooseNameAction(action: SftpNameAction) {
     setFinished(null);
-    setCreatedFolder(null);
-    setNewFolder(directory);
+    setNameResult(null);
+    setNameAction(action);
   }
 
-  function folderCreated(name: string, auditWarning: string | null) {
-    setCreatedFolder({ name, auditWarning });
+  function mutationSaved(kind: SftpNameAction["kind"], name: string, auditWarning: string | null) {
+    setNameResult({ kind, name, auditWarning });
     setRemoteRefresh(value => value + 1);
   }
 
@@ -102,9 +102,9 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       <details><summary>SHA-256</summary><code>{finished.sha256}</code></details>
       {finished.auditWarning && <strong className="audit-warning">{finished.auditWarning}</strong>}
     </div>}
-    {createdFolder && <div className="success-banner" role="status">
-      <strong>원격 폴더 생성 완료</strong><span>{createdFolder.name}</span>
-      {createdFolder.auditWarning && <strong className="audit-warning">{createdFolder.auditWarning}</strong>}
+    {nameResult && <div className="success-banner" role="status">
+      <strong>{nameResult.kind === "create" ? "원격 폴더 생성 완료" : "원격 이름 변경 완료"}</strong><span>{nameResult.name}</span>
+      {nameResult.auditWarning && <strong className="audit-warning">{nameResult.auditWarning}</strong>}
     </div>}
     <div className="files-panes">
       <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
@@ -114,15 +114,15 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       {remote ? <DirectoryPane key={remote.id} title="원격 파일" initial={remote.directory}
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
-        onCreateFolder={createFolder}
+        onNameAction={chooseNameAction}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
     </div>
     {remote && transfer && <SftpTransferDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       file={transfer} onClose={() => setTransfer(null)} onSaved={transferSaved} />}
-    {remote && newFolder && <SftpFolderDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
-      parent={newFolder} onClose={() => setNewFolder(null)} onCreated={folderCreated} />}
+    {remote && nameAction && <SftpNameDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      action={nameAction} onClose={() => setNameAction(null)} onSaved={(name, warning) => mutationSaved(nameAction.kind, name, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
@@ -214,10 +214,10 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onCreateFolder, action, refresh }: {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, action, refresh }: {
   title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
-  onCreateFolder?: (directory: Directory) => void;
+  onNameAction?: (action: SftpNameAction) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -265,8 +265,8 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
   return <section className="results-card files-pane" aria-label={title}>
     <div className="panel-heading"><div><strong>{title}</strong>{directory && <span>{numbers.format(shown.length)}개 항목</span>}</div>
       {chooseFolder && <button type="button" className="secondary small" disabled={busy} onClick={() => void navigate(null)}>폴더 선택</button>}
-      {directory && onCreateFolder && <button type="button" className="secondary small" disabled={busy}
-        onClick={() => onCreateFolder(directory)}><FolderPlus size={14} /> 새 폴더</button>}
+      {directory && onNameAction && <button type="button" className="secondary small" disabled={busy}
+        onClick={() => onNameAction({ kind: "create", parent: directory })}><FolderPlus size={14} /> 새 폴더</button>}
     </div>
     <form className="files-path" onSubmit={go}>
       <button type="button" className="icon-button" aria-label={`${title} 상위 폴더`} disabled={busy || !directory?.parent}
@@ -284,6 +284,7 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
       <thead><tr><th scope="col">이름</th><th scope="col">크기</th><th scope="col">수정</th>{!chooseFolder && <th scope="col">권한 · UID/GID</th>}<th scope="col"><span className="sr-only">파일 작업</span></th></tr></thead>
       <tbody>{shown.map((entry, index) => {
         const location = entry.location;
+        const kind = entry.kind;
         const icon = entry.kind === "directory" ? <FolderOpen size={14} /> : entry.kind === "symlink" ? <Link size={14} /> : <File size={14} />;
         return <tr key={entry.location ?? index}>
           <td>{entry.kind === "directory" && location ? <button type="button" className="files-entry" disabled={busy}
@@ -292,12 +293,17 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
           <td>{entry.kind !== "directory" && entry.size !== null ? `${numbers.format(BigInt(entry.size))} B` : "—"}</td>
           <td>{entry.modified === null ? "—" : dates.format(entry.modified * 1000)}</td>
           {!chooseFolder && <td>{entry.mode === null ? "—" : entry.mode.toString(8).padStart(4, "0")} · {entry.uid ?? "—"}/{entry.gid ?? "—"}</td>}
-          <td>{entry.kind === "file" && location && <div className="files-row-actions">
-            <button type="button" className="icon-button" disabled={busy} aria-label={`${entry.name} 미리보기`} title="미리보기"
-              onClick={() => onPreview({ name: entry.name, location })}><Eye size={14} /></button>
-            {action && <button type="button" className="icon-button" disabled={busy}
-              aria-label={`${entry.name} ${actionLabel}`} title={actionLabel} onClick={() => action.run({ name: entry.name, location })}>
-              {action.kind === "upload" ? <Upload size={14} /> : <Download size={14} />}</button>}
+          <td>{location && (kind === "file" || kind === "directory") && <div className="files-row-actions">
+            {kind === "file" && <>
+              <button type="button" className="icon-button" disabled={busy} aria-label={`${entry.name} 미리보기`} title="미리보기"
+                onClick={() => onPreview({ name: entry.name, location })}><Eye size={14} /></button>
+              {action && <button type="button" className="icon-button" disabled={busy}
+                aria-label={`${entry.name} ${actionLabel}`} title={actionLabel} onClick={() => action.run({ name: entry.name, location })}>
+                {action.kind === "upload" ? <Upload size={14} /> : <Download size={14} />}</button>}
+            </>}
+            {onNameAction && <button type="button" className="icon-button" disabled={busy}
+              aria-label={`${entry.name} 이름 변경`} title="이름 변경"
+              onClick={() => onNameAction({ kind: "rename", parent: directory, item: { ...entry, kind, location } })}><Pencil size={14} /></button>}
           </div>}</td>
         </tr>;
       })}</tbody>

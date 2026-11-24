@@ -7,7 +7,7 @@ mod preview;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
-pub use mutation::SftpFolderCreated;
+pub use mutation::{SftpMutationReport, SftpRenameSource};
 pub use preview::{preview_local_file, FilePreview};
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;

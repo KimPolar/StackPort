@@ -3,7 +3,7 @@
 use super::{
     audit::{FileAudit, FileOperation},
     file_error, open_local_file,
-    mutation::{ensure_directory, ensure_vacant, new_child_path},
+    mutation::{ensure_directory, ensure_vacant, new_child_path, rename_to_vacant},
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
     MAX_REMOTE_PATH,
@@ -120,14 +120,14 @@ async fn upload_file(
         transfer.check()?;
         ensure_vacant(files, &destination).await?;
         transfer.begin_publication()?;
-        match request(files.rename(temporary.clone(), destination.clone())).await {
-            Ok(_) => Ok(SftpTransferOutcome::Saved { bytes: expected.to_string(), sha256 }),
-            Err(SftpError::Status(status)) => {
-                ensure_vacant(files, &destination).await?;
-                Err(file_error(SftpError::Status(status)))
-            }
-            Err(_) => Err("원격 서버에서 게시 응답을 받지 못했습니다. 재시도하기 전에 원격 폴더를 새로고침하세요.".into()),
-        }
+        rename_to_vacant(
+            files,
+            &temporary,
+            &destination,
+            "원격 서버에서 게시 응답을 받지 못했습니다. 재시도하기 전에 원격 폴더를 새로고침하세요.",
+        )
+        .await?;
+        Ok(SftpTransferOutcome::Saved { bytes: expected.to_string(), sha256 })
     }.await;
 
     if let Err(error) = published {

@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpFolderCreated, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpMutationReport, SftpRenameSource, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -621,8 +621,19 @@ async fn create_sftp_folder(
     id: String,
     parent: String,
     name: String,
-) -> Result<SftpFolderCreated, String> {
+) -> Result<SftpMutationReport, String> {
     sftp.create_folder(&id, parent, name).await
+}
+
+#[tauri::command]
+async fn rename_sftp_entry(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    source: SftpRenameSource,
+    name: String,
+) -> Result<SftpMutationReport, String> {
+    sftp.rename(&id, parent, source, name).await
 }
 
 #[tauri::command]
@@ -881,6 +892,7 @@ fn main() {
             list_sftp_directory,
             preview_sftp_file,
             create_sftp_folder,
+            rename_sftp_entry,
             preview_local_browse_file,
             download_sftp_file,
             upload_sftp_file,

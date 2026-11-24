@@ -140,11 +140,25 @@ function sftpChannel(channel, uploads) {
   });
   channel.on('RENAME', (id, from, to) => {
     const fixture = uploads.files.get(from);
-    if (!fixture || !path.posix.basename(from).startsWith('.stackport-upload-')) return channel.status(id, code.FAILURE);
-    if (fixture.behavior === 'collision') uploads.files.set(to, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
-    if (lookup(to) || !directories.has(path.posix.dirname(to))) return channel.status(id, code.FAILURE);
-    uploads.files.set(to, fixture);
-    uploads.files.delete(from);
+    const isFolder = directories.has(from);
+    const parent = path.posix.dirname(from);
+    if ((!fixture && !isFolder) || path.posix.dirname(to) !== parent) return channel.status(id, code.FAILURE);
+    if (path.posix.basename(to) === '변경 금지.bin') return channel.status(id, code.PERMISSION_DENIED);
+    if (fixture?.behavior === 'collision' || path.posix.basename(to) === '이름 변경 경쟁.bin') {
+      uploads.files.set(to, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
+    }
+    if (lookup(to) || directories.has(to)) return channel.status(id, code.FAILURE);
+    if (isFolder) {
+      const entry = directories.get(parent).find(item => item.filename === path.posix.basename(from));
+      entry.filename = entry.longname = path.posix.basename(to);
+    }
+    for (const objects of [directories, uploads.files]) {
+      for (const [name, value] of Array.from(objects)) {
+        if (name !== from && !name.startsWith(from + '/')) continue;
+        objects.set(to + name.slice(from.length), value);
+        objects.delete(name);
+      }
+    }
     channel.status(id, code.OK);
   });
   channel.on('REMOVE', (id, remotePath) => {
@@ -264,7 +278,7 @@ async function main() {
     assert.equal(await remote.getByText('.숨김', { exact: true }).count(), 0);
     await remote.getByLabel('숨김 파일 표시').check();
     await remote.getByText('.숨김', { exact: true }).waitFor();
-    await remote.getByRole('button', { name: '문서' }).click();
+    await remote.getByRole('button', { name: '문서', exact: true }).click();
     await remote.getByText('보고서.txt', { exact: true }).waitFor();
     await remote.getByRole('button', { name: '원격 파일 상위 폴더' }).click();
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
@@ -289,6 +303,7 @@ async function main() {
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
     await verifyNewFolder(page, remote, server.uploads);
+    await verifyRenames(page, remote, server.uploads);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
@@ -310,7 +325,7 @@ async function main() {
     assert.equal(server.stats.subsystem, 0);
     await verifyFileAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, browsing and previews, remote folders, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, browsing and previews, remote folders and renames, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
@@ -360,6 +375,68 @@ async function verifyNewFolder(page, remote, uploads) {
   await entry.waitFor();
 }
 
+async function verifyRenames(page, remote, uploads) {
+  const parent = '/home/stackport/문서';
+  const oldFile = '새 원격 파일.bin';
+  const newFile = '변경한 파일.bin';
+  const oldFolder = '새 테스트 폴더';
+  const newFolder = '변경한 폴더';
+  const dialog = page.getByRole('dialog', { name: '원격 이름 변경' });
+  const open = name => remote.getByRole('button', { name: `${name} 이름 변경`, exact: true }).click();
+  const submit = async name => {
+    await dialog.getByLabel('새 이름').fill(name);
+    await dialog.getByRole('button', { name: '이름 변경', exact: true }).click();
+  };
+  const cancel = () => dialog.getByRole('button', { name: '취소', exact: true }).click();
+  const error = text => dialog.getByRole('alert').getByText(text).waitFor();
+  const checkSaved = async (from, to) => {
+    await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('status').getByText('원격 이름 변경 완료').waitFor();
+    await remote.getByRole('button', { name: `${to} 이름 변경`, exact: true }).waitFor();
+    assert.equal(await remote.getByRole('button', { name: `${from} 이름 변경`, exact: true }).count(), 0);
+  };
+
+  const original = uploads.files.get(`${parent}/${oldFile}`);
+  const originalBytes = Buffer.from(original.data);
+  await open(oldFile);
+  await dialog.getByText(parent).waitFor();
+  await dialog.getByText(oldFile, { exact: true }).waitFor();
+  await submit('../밖');
+  await error(/경로 구분자/);
+  await submit(oldFile);
+  await error(/다른 새 이름/);
+  await submit(oldFolder);
+  await error(/같은 이름/);
+  await submit('변경 금지.bin');
+  await error(/접근을 거부/);
+  await submit('이름 변경 경쟁.bin');
+  await error(/같은 이름/);
+  assert.equal(uploads.files.get(`${parent}/이름 변경 경쟁.bin`).data.toString(), 'keep');
+  assert.deepEqual(uploads.files.get(`${parent}/${oldFile}`).data, originalBytes);
+  original.attrs.mtime++;
+  await submit(newFile);
+  await error(/목록을 읽은 뒤 변경/);
+  assert.equal(uploads.files.has(`${parent}/${newFile}`), false);
+  original.attrs.mtime--;
+  await cancel();
+  await dialog.waitFor({ state: 'detached' });
+
+  await open(oldFile);
+  await submit(newFile);
+  await checkSaved(oldFile, newFile);
+  assert.equal(uploads.files.has(`${parent}/${oldFile}`), false);
+  assert.deepEqual(uploads.files.get(`${parent}/${newFile}`).data, originalBytes);
+
+  const child = { data: Buffer.from('nested file'), attrs: { ...file('').attrs, size: 11 } };
+  uploads.files.set(`${parent}/${oldFolder}/하위.txt`, child);
+  await open(oldFolder);
+  await submit(newFolder);
+  await checkSaved(oldFolder, newFolder);
+  await remote.getByRole('button', { name: newFolder, exact: true }).click();
+  await remote.getByText('하위.txt', { exact: true }).waitFor();
+  assert.deepEqual(uploads.files.get(`${parent}/${newFolder}/하위.txt`).data, child.data);
+}
+
 async function verifyFileAudit(page, command, project, profile, localPath) {
   const { events } = await command('list_audit_events', { before: null });
   const fileEvents = events.filter(event => event.operation.startsWith('sftp.'));
@@ -377,8 +454,10 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     }
     assert.ok(fileEvents.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
   }
-  for (const outcome of ['started', 'succeeded', 'failed']) {
-    assert.ok(fileEvents.some(event => event.operation === 'sftp.mkdir' && event.outcome === outcome));
+  for (const operation of ['sftp.mkdir', 'sftp.rename']) {
+    for (const outcome of ['started', 'succeeded', 'failed']) {
+      assert.ok(fileEvents.some(event => event.operation === operation && event.outcome === outcome));
+    }
   }
   for (const event of fileEvents) {
     assert.equal(event.project_id, project.id);
@@ -390,7 +469,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
   const serialized = JSON.stringify(fileEvents);
-  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '전송.bin', password, passphrase]) {
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
   }
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
@@ -401,9 +480,11 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
       await rows.getByText(state, { exact: true }).first().waitFor();
     }
   }
-  const folderRows = page.getByRole('listitem').filter({ hasText: 'SFTP 폴더 생성' });
-  await folderRows.getByText('완료', { exact: true }).first().waitFor();
-  await folderRows.getByText('실패', { exact: true }).first().waitFor();
+  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경']) {
+    const rows = page.getByRole('listitem').filter({ hasText: action });
+    await rows.getByText('완료', { exact: true }).first().waitFor();
+    await rows.getByText('실패', { exact: true }).first().waitFor();
+  }
 }
 
 async function verifyPreviews(page, remote, local) {
@@ -524,7 +605,7 @@ async function verifyUploads(page, remote, localPane, local, uploads) {
   fs.writeFileSync(path.join(local, '업로드.bin'), payload);
   fs.writeFileSync(path.join(local, '로컬 빈 파일.txt'), '');
   await localPane.getByRole('button', { name: '로컬 파일 새로고침' }).click();
-  await remote.getByRole('button', { name: '문서' }).click();
+  await remote.getByRole('button', { name: '문서', exact: true }).click();
   await remote.getByText('보고서.txt', { exact: true }).waitFor();
   const directoryPath = '/home/stackport/문서';
   const open = () => localPane.getByRole('button', { name: '업로드.bin 업로드', exact: true }).click();

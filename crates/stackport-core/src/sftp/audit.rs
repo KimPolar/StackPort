@@ -14,6 +14,7 @@ pub(super) enum FileOperation {
     Download,
     Upload,
     CreateFolder,
+    Rename,
 }
 
 impl FileOperation {
@@ -24,6 +25,7 @@ impl FileOperation {
             (Self::Upload, false) => "sftp.upload",
             (Self::Upload, true) => "sftp.upload.cancel",
             (Self::CreateFolder, _) => "sftp.mkdir",
+            (Self::Rename, _) => "sftp.rename",
         }
     }
 }

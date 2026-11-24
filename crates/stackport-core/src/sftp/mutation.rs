@@ -2,19 +2,36 @@ use super::{
     audit::{FileAudit, FileOperation},
     file_error,
     transfer::request,
-    RemotePath, SftpError, SftpManager, MAX_REMOTE_PATH,
+    FilesSession, RemotePath, SftpError, SftpManager, MAX_REMOTE_PATH,
 };
 use crate::Result;
 use russh_sftp::{
     client::RawSftpSession,
     protocol::{FileAttributes, SftpString, StatusCode},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::{future::Future, sync::Arc};
 use uuid::Uuid;
 
 #[derive(Serialize)]
-pub struct SftpFolderCreated {
+pub struct SftpMutationReport {
     audit_warning: Option<&'static str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpRenameSource {
+    location: String,
+    kind: RenameKind,
+    size: Option<String>,
+    modified: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RenameKind {
+    File,
+    Directory,
 }
 
 impl SftpManager {
@@ -23,25 +40,124 @@ impl SftpManager {
         id: &str,
         parent: String,
         name: String,
-    ) -> Result<SftpFolderCreated> {
+    ) -> Result<SftpMutationReport> {
         let parent = RemotePath::Token(parent).into_path()?;
         let path = new_child_path(&parent, &name)?;
+        self.run_mutation(id, FileOperation::CreateFolder, |session| async move {
+            create_folder(&session.files, parent, path).await
+        })
+        .await
+    }
+
+    pub async fn rename(
+        &self,
+        id: &str,
+        parent: String,
+        source: SftpRenameSource,
+        name: String,
+    ) -> Result<SftpMutationReport> {
+        let parent = RemotePath::Token(parent).into_path()?;
+        let old_path = RemotePath::Token(source.location.clone()).into_path()?;
+        check_direct_child(&parent, &old_path)?;
+        let new_path = new_child_path(&parent, &name)?;
+        if old_path == new_path {
+            return Err("현재 이름과 다른 새 이름을 입력하세요.".into());
+        }
+        self.run_mutation(id, FileOperation::Rename, |session| async move {
+            let files = &session.files;
+            ensure_directory(files, parent).await?;
+            ensure_vacant(files, &new_path).await?;
+            let current = request(files.lstat(old_path.clone()))
+                .await
+                .map_err(file_error)?
+                .attrs;
+            source.check_snapshot(&current)?;
+            rename_to_vacant(
+                files,
+                &old_path,
+                &new_path,
+                "이름 변경 응답을 받지 못했습니다. 재시도하기 전에 원격 목록을 새로고침하세요.",
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn run_mutation<F>(
+        &self,
+        id: &str,
+        operation: FileOperation,
+        run: impl FnOnce(Arc<FilesSession>) -> F,
+    ) -> Result<SftpMutationReport>
+    where
+        F: Future<Output = Result<()>>,
+    {
         let session = self.session(id)?;
         let _operation = session
             .operation
             .try_lock()
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
         let correlation_id = Uuid::new_v4().to_string();
-        let audit = FileAudit::start(
-            &self.store,
-            &session.profile,
-            &correlation_id,
-            FileOperation::CreateFolder,
-        )
-        .await?;
-        let result = create_folder(&session.files, parent, path).await;
+        let audit =
+            FileAudit::start(&self.store, &session.profile, &correlation_id, operation).await?;
+        let result = run(Arc::clone(&session)).await;
         let ((), audit_warning) = audit.finish(result, false).await?;
-        Ok(SftpFolderCreated { audit_warning })
+        Ok(SftpMutationReport { audit_warning })
+    }
+}
+
+fn check_direct_child(parent: &SftpString, path: &SftpString) -> Result<()> {
+    let leaf = path
+        .as_bytes()
+        .rsplit(|byte| *byte == b'/')
+        .next()
+        .unwrap_or_default();
+    if leaf.is_empty()
+        || matches!(leaf, b"." | b"..")
+        || leaf.contains(&b'\\')
+        || parent.join(leaf) != *path
+    {
+        return Err("현재 원격 폴더에서 이름을 바꿀 항목을 다시 선택하세요.".into());
+    }
+    Ok(())
+}
+
+impl SftpRenameSource {
+    fn check_snapshot(&self, attrs: &FileAttributes) -> Result<()> {
+        let kind_matches = match self.kind {
+            RenameKind::File => attrs.is_regular(),
+            RenameKind::Directory => attrs.is_dir(),
+        };
+        let size_changed = self.size.as_deref().is_some_and(|size| {
+            size.parse::<u64>()
+                .map_or(true, |listed| attrs.size != Some(listed))
+        });
+        let time_changed = self.modified.is_some_and(|time| attrs.mtime != Some(time));
+        if !kind_matches || size_changed || time_changed {
+            return Err(
+                "원격 항목이 목록을 읽은 뒤 변경되었습니다. 새로고침하고 다시 선택하세요.".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+pub(super) async fn rename_to_vacant(
+    files: &RawSftpSession,
+    source: &SftpString,
+    destination: &SftpString,
+    unknown_outcome: &'static str,
+) -> Result<()> {
+    // The standard SFTP v3 rename rejects occupied destinations on the server.
+    match request(files.rename(source.clone(), destination.clone())).await {
+        Ok(_) => Ok(()),
+        Err(SftpError::Status(status)) => {
+            if status.status_code == StatusCode::Failure {
+                ensure_vacant(files, destination).await?;
+            }
+            Err(file_error(SftpError::Status(status)))
+        }
+        Err(_) => Err(unknown_outcome.into()),
     }
 }
 
