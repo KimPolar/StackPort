@@ -54,30 +54,16 @@ pub(super) fn create(
 ) -> Result<PostgresBackupReport> {
     check()?;
     let file = NewFile::stage(&destination, Some("backup"), ".stackport-postgres-")?;
-    let tools = locate_tools(
-        source
-            .major
-            .max(if profile.ca_path.is_some() { 14 } else { 16 }),
-        &check,
-    )?;
+    let tools = tools_for(profile, source.major, &check)?;
     let mut dump = command(&tools.directory, "pg_dump.exe");
-    dump.env("PGHOST", &profile.host)
-        .env(
-            "PGPORT",
-            source.tunnel_port.unwrap_or(profile.port).to_string(),
-        )
-        .env("PGDATABASE", &profile.database)
-        .env("PGUSER", &profile.username)
-        .env("PGPASSWORD", password.0.as_str())
-        .env("PGCONNECT_TIMEOUT", "5")
-        .env("PGSSLMODE", "verify-full")
-        .env("PGSSLMINPROTOCOLVERSION", "TLSv1.2")
-        .env(
-            "PGSSLROOTCERT",
-            profile.ca_path.as_deref().unwrap_or("system"),
-        )
-        .env("PGGSSENCMODE", "disable")
-        .env("PGAPPNAME", "StackPort Backup")
+    configure_connection(
+        &mut dump,
+        profile,
+        &password,
+        source.tunnel_port,
+        tools.major,
+    );
+    dump.env("PGAPPNAME", "StackPort Backup")
         .env("PGOPTIONS", "-c default_transaction_read_only=on")
         .args([
             "--format=custom",
@@ -86,12 +72,6 @@ pub(super) fn create(
             "--lock-wait-timeout=5000",
         ])
         .stdout(Stdio::from(file.writer()?));
-    if tools.major >= 16 {
-        dump.env("PGSSLCERTMODE", "disable");
-    }
-    if source.tunnel_port.is_some() {
-        dump.env("PGHOSTADDR", "127.0.0.1");
-    }
     if let Some((flag, pattern)) = source.selection {
         dump.arg("--strict-names").arg(format!("{flag}={pattern}"));
     }
@@ -160,10 +140,50 @@ pub(super) fn create(
     })
 }
 
-struct Tools {
-    directory: PathBuf,
+pub(super) struct Tools {
+    pub directory: PathBuf,
+    pub major: u32,
+    pub version: String,
+}
+
+pub(super) fn tools_for(
+    profile: &PostgresProfileInput,
     major: u32,
-    version: String,
+    check: &impl Fn() -> Result<()>,
+) -> Result<Tools> {
+    locate_tools(
+        major.max(if profile.ca_path.is_some() { 14 } else { 16 }),
+        check,
+    )
+}
+
+pub(super) fn configure_connection(
+    command: &mut Command,
+    profile: &PostgresProfileInput,
+    password: &PostgresPassword,
+    tunnel_port: Option<u16>,
+    tool_major: u32,
+) {
+    command
+        .env("PGHOST", &profile.host)
+        .env("PGPORT", tunnel_port.unwrap_or(profile.port).to_string())
+        .env("PGDATABASE", &profile.database)
+        .env("PGUSER", &profile.username)
+        .env("PGPASSWORD", password.0.as_str())
+        .env("PGCONNECT_TIMEOUT", "5")
+        .env("PGSSLMODE", "verify-full")
+        .env("PGSSLMINPROTOCOLVERSION", "TLSv1.2")
+        .env(
+            "PGSSLROOTCERT",
+            profile.ca_path.as_deref().unwrap_or("system"),
+        )
+        .env("PGGSSENCMODE", "disable");
+    if tool_major >= 16 {
+        command.env("PGSSLCERTMODE", "disable");
+    }
+    if tunnel_port.is_some() {
+        command.env("PGHOSTADDR", "127.0.0.1");
+    }
 }
 
 fn locate_tools(minimum: u32, check: &impl Fn() -> Result<()>) -> Result<Tools> {
@@ -271,7 +291,7 @@ fn tool_version(
     Ok((major, version.into()))
 }
 
-fn command(directory: &Path, executable: &str) -> Command {
+pub(super) fn command(directory: &Path, executable: &str) -> Command {
     let mut command = Command::new(directory.join(executable));
     command
         .current_dir(directory)
@@ -293,14 +313,17 @@ fn command(directory: &Path, executable: &str) -> Command {
     command
 }
 
-fn spawn(command: &mut Command, check: &impl Fn() -> Result<()>) -> Result<std::process::Child> {
+pub(super) fn spawn(
+    command: &mut Command,
+    check: &impl Fn() -> Result<()>,
+) -> Result<std::process::Child> {
     check()?;
     command.spawn().map_err(|_| {
         "PostgreSQL 백업 도구를 실행할 수 없습니다. CLI 설치와 실행 권한을 확인하세요.".into()
     })
 }
 
-fn finish(
+pub(super) fn finish(
     mut child: std::process::Child,
     check: &impl Fn() -> Result<()>,
     failure: &str,

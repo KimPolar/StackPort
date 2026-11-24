@@ -274,7 +274,7 @@ SP-BK-001,백업 선택,"전체 DB/스키마/테이블/컬렉션/설정, 구조�
 SP-BK-002,엔진별 방법,DB의 네이티브 백업/덤프/스냅샷 도구 또는 검증된 드라이버 방식을 사용.,partial,SQLite 온라인 백업 API와 PostgreSQL pg_dump,crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
 SP-BK-003,백업 포맷,"SQL, 엔진 전용 바이너리/아카이브, JSON/BSON 등 실제 복원 가능한 형식을 표기.",partial,SQLite 바이너리 파일과 PostgreSQL pg_dump 압축 아카이브,crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
 SP-BK-004,MySQL 계열,"논리 백업·복원, 스키마/데이터 옵션, 문자셋/트랜잭션 일관성 처리.",not_started,,
-SP-BK-005,PostgreSQL 계열,"pg_dump/pg_restore 등 호환 가능한 버전별 도구, 개체 선택·복원 순서 관리.",partial,"서버 주 버전 이상인 동일 버전 pg_dump와 pg_restore 탐색, 전체·스키마·일반 테이블 백업과 아카이브 검사",crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
+SP-BK-005,PostgreSQL 계열,"pg_dump/pg_restore 등 호환 가능한 버전별 도구, 개체 선택·복원 순서 관리.",partial,"버전이 일치하는 pg_dump·pg_restore 탐색, 전체·스키마·일반 테이블 백업, 커스텀 아카이브 목차 확인 후 새 DB에 단일 트랜잭션 복원",crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx
 SP-BK-006,SQLite,일관된 스냅샷·백업 API·파일 복사 위험 방지·무결성 검사.,partial,SQLite WAL 포함 스냅샷과 무결성 검사,crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-BK-007,SQL Server,서버 측 BACKUP/RESTORE 권한·경로·장치·진행 상태와 복원 충돌 처리.,not_started,,
 SP-BK-008,Oracle,Data Pump 등 권한·디렉터리 객체·서버 측 작업을 고려한 내보내기/가져오기.,not_started,,
@@ -282,11 +282,11 @@ SP-BK-009,MongoDB,"mongodump/mongorestore 및 파일 가져오기/내보내기, 
 SP-BK-010,Redis,지원되는 RDB/AOF 저장·복원 절차 및 원격 서버 파일 접근 조건 안내.,not_started,,
 SP-BK-011,암호화·압축,백업 파일 암호화/압축·키 관리·무결성 해시 및 별도 자격 증명 관리.,partial,"PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
 SP-BK-012,백업 계획,"스케줄, 보존 기간, 저장 경로, 파일 이름 규칙, 용량 경고, 백업 이력.",not_started,,
-SP-BK-013,복원 미리보기,대상/덮어쓰기 객체/버전/데이터 손실 위험·스키마 의존성·사전 백업 안내.,partial,독립된 SQLite 백업의 새 복원 경로·버전·객체/행 수·SHA-256 미리보기,crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/
-SP-BK-014,복구 검증,생성 완료와 복원 가능성은 분리해 검증; 검사 쿼리·복원 테스트·해시로 검증 상태 표시.,partial,"SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 읽기와 SHA-256 출력, 검증 테스트에서 격리 DB의 행과 복합 외래 키 확인",crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
+SP-BK-013,복원 미리보기,대상/덮어쓰기 객체/버전/데이터 손실 위험·스키마 의존성·사전 백업 안내.,partial,"SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인",crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx; tests/postgres-smoke.cjs
+SP-BK-014,복구 검증,생성 완료와 복원 가능성은 분리해 검증; 검사 쿼리·복원 테스트·해시로 검증 상태 표시.,partial,"SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수 표시, 통합 테스트로 행·복합 외래 키·롤백 확인",crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx
 SP-BK-015,SQL 스크립트,"백업을 SQL로 변환(가능 형식에 한함), 대용량 SQL 파일 실행·재시도·진행률.",not_started,,
 SP-BK-016,백업 파일 탐색,"파일 목록, 생성 일시·크기·엔진 버전·검증 결과·보존 및 삭제 정책 표시.",not_started,,
-SP-BK-017,권한 경고,서버 측 파일 경로/백업 권한/클라이언트 저장 경로의 차이를 정확히 안내.,not_started,,
+SP-BK-017,권한 경고,서버 측 파일 경로/백업 권한/클라이언트 저장 경로의 차이를 정확히 안내.,partial,PostgreSQL 백업의 로컬 파일 저장 경로와 복원할 서버·새 DB를 각각 표시하고 복원 시 CREATEDB 권한 확인,crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx
 SP-AU-001,작업 엔진,"SQL, 덤프/복원, 파일 전송, 구조/데이터 동기화, 데이터 생성·마스킹, 가져오기/내보내기, 문서 생성, 모델 갱신, BI 새로고침 실행.",not_started,,
 SP-AU-002,고급 작업,"문서 DB 집계 파이프라인·내보내기·MapReduce(서버 지원 시), Redis 명령 스크립트 실행.",not_started,,
 SP-AU-003,예약 스케줄,"단발성, 분/시/일/주/월, cron 표현식, 타임존·서머타임·휴일·예외 날짜 처리.",not_started,,
@@ -420,7 +420,7 @@ SP-AT-012,이종 DB 이관,"100% 데이터형 보존 가능한 컬럼은 값 일
 SP-AT-013,구조 동기화,DDL diff→예상 변경→승인→적용→재비교에서 변경 계획과 실제 결과 일치,not_started,,
 SP-AT-014,데이터 동기화,조건부 추가/수정/삭제·충돌 정책·샘플 미리보기·건수 검증이 정확히 동작,not_started,,
 SP-AT-015,테스트 데이터·마스킹,"FK·UNIQUE·NULL 규칙 유지, 원본 민감값을 마스킹 결과에서 복원할 수 있는지 정책에 맞게 검증",not_started,,
-SP-AT-016,백업·복원,실제 백업 파일을 격리된 환경에 복구하여 행 수/객체/체크섬을 검증,partial,"실제 SQLite 백업의 격리 파일 복원, PostgreSQL 백업의 격리 데이터베이스 복원과 행·복합 외래 키·SHA-256 확인",crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs
+SP-AT-016,백업·복원,실제 백업 파일을 격리된 환경에 복구하여 행 수/객체/체크섬을 검증,partial,"SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx
 SP-AT-017,예약 작업,"앱 실행/종료 조건에 따른 예약 정책, 중복 실행 차단, 실패 재시도·알림 검증",not_started,,
 SP-AT-018,MongoDB/Redis,"문서·집계·스키마 분석, 키 타입별 편집, Pub/Sub 및 서버 지원 검사 정상",not_started,,
 SP-AT-019,모델링,DB 역공학→ERD 수정→DDL 생성→동기화→역공학으로 모델/스키마 차이 검증,not_started,,

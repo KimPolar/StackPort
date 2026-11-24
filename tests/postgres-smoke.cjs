@@ -393,7 +393,7 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(denied.readable, false);
   await assert.rejects(command('postgres_page', { id: session.id, object: denied.id, rowPage: 0, columnPage: 0 }), /권한/);
   const findObject = name => objects.objects.find(object => object.name === name).id;
-  if (backupTools) await verifyBackups({ command, open, close, alternate, session, fixture, findObject, archive });
+  if (backupTools) await verifyBackups({ command, open, close, alternate, session, findObject, archive });
   const structure = (name, section, page = 0) => command('postgres_structure', { id: session.id, object: findObject(name), section, page });
   await assert.rejects(structure('denied', 'overview'), /SELECT 권한/);
   await assert.rejects(command('postgres_structure', { id: session.id, object: 0, section: 'columns', page: 0 }), /객체를 찾을 수/);
@@ -1814,6 +1814,7 @@ async function verify(browser, fixture, gateway, jump) {
     await reconnect.waitFor();
   } finally { await command('stop_ssh_tunnel', { id: tunnel.id }); }
   await assert.rejects(open(profile, password, 'PROD', tunnel.id), /실행 중인 로컬 SSH 터널/);
+  if (backupTools) await verifyRestoreDialog(page, project.id);
   assert.deepEqual(errors, []);
 }
 
@@ -1823,7 +1824,7 @@ function backupList(destination) {
   });
 }
 
-async function verifyBackups({ command, open, close, alternate, session, fixture, findObject, archive }) {
+async function verifyBackups({ command, open, close, alternate, session, findObject, archive }) {
   const adminPassword = 'fixture-administrator-password';
   const admin = await alternate('백업·복구 검증', { username: 'fixture_admin', environment: 'DEV' });
   const adminSession = await open(admin, adminPassword);
@@ -1855,15 +1856,32 @@ async function verifyBackups({ command, open, close, alternate, session, fixture
     assert.ok(events.some(event => event.outcome === 'failed'));
     assert.doesNotMatch(JSON.stringify(events), /wrong-backup-password|database-full\.backup/);
 
-    const database = 'fixture_backup_restore';
-    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^PG/i.test(name)));
-    execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--dbname=' + database, '--single-transaction',
-      '--no-owner', '--no-privileges', '--no-password', destination], {
-      windowsHide: true, stdio: 'pipe', timeout: 45_000, env: { ...env,
-        PGHOST: 'localhost', PGHOSTADDR: '127.0.0.1', PGPORT: String(fixture.port), PGUSER: 'fixture_admin',
-        PGSSLMODE: 'verify-full', PGSSLROOTCERT: fixture.ca, PGPASSWORD: adminPassword,
-      },
+    const preview = (id, source, database) => command('preview_postgres_restore', { id, request: randomUUID(), source, database });
+    const apply = (plan, options = {}) => command('apply_postgres_restore', {
+      id: adminSession.id, request: randomUUID(), token: plan.token, databaseConfirmation: plan.database,
+      trusted: true, password: adminPassword, confirmation: '', ...options,
     });
+    const database = "fixture_restore='checked'";
+    await assert.rejects(preview(session.id, destination, database), /CREATEDB/);
+    await assert.rejects(preview(adminSession.id, destination, 'fixture_latin'), /이미 같은 이름/);
+    const selectedArchive = path.join(root, 'approved-copy.backup');
+    fs.copyFileSync(destination, selectedArchive);
+    const plan = await preview(adminSession.id, selectedArchive, database);
+    assert.equal(plan.archive_database, 'postgres');
+    assert.equal(plan.sha256, report.sha256);
+    assert.match(plan.toc, /TABLE DATA report quoted table/);
+    await assert.rejects(apply(plan, { trusted: false }), /출처/);
+    await assert.rejects(apply(plan, { databaseConfirmation: 'different_target' }), /같은 새 DB 이름/);
+    fs.writeFileSync(selectedArchive, 'The reviewed archive was replaced on disk.');
+    const recovered = await apply(plan);
+    assert.equal(recovered.database, database);
+    assert.equal(recovered.sha256, report.sha256);
+    assert.ok(recovered.tables > 0);
+    await assert.rejects(apply(plan), /만료되었거나 사용/);
+    await assert.rejects(preview(adminSession.id, destination, database), /이미 같은 이름/);
+    const denied = await alternate('격리 복원 접속 권한 검증', { database, environment: 'DEV' });
+    await assert.rejects(open(denied), /SQLSTATE 42501/);
+
     const profile = await alternate('격리 복구본 검증', { username: 'fixture_admin', database, environment: 'DEV' });
     const restored = await open(profile, adminPassword);
     try {
@@ -1880,7 +1898,57 @@ async function verifyBackups({ command, open, close, alternate, session, fixture
       const { constraints } = await command('postgres_structure', { id: restored.id, object: restoredChild.id, section: 'constraints', page: 0 });
       assert.deepEqual(constraints.find(value => value.name === 'meta_fk').reference.columns, ['parent_id', 'tenant']);
     } finally { await close(restored.id); }
+
+    const incomplete = await preview(adminSession.id, schema, 'fixture_restore_rollback');
+    let staging;
+    await assert.rejects(apply(incomplete), error => {
+      const match = /임시 DB '(stackport_restore_[a-f0-9]+)'.*pg_restore가 복원에 실패/.exec(error.message);
+      assert.ok(match, error.message);
+      staging = match[1];
+      return true;
+    });
+    const retryPlan = await preview(adminSession.id, destination, incomplete.database);
+    await command('discard_postgres_restore', { id: adminSession.id, token: retryPlan.token });
+    const emptyProfile = await alternate('격리 복원 롤백 검증', {
+      username: 'fixture_admin', database: staging, environment: 'DEV',
+    });
+    const empty = await open(emptyProfile, adminPassword);
+    try {
+      const { schemas } = await command('postgres_schemas', { id: empty.id, page: 0 });
+      assert.deepEqual(schemas.map(schema => schema.name), ['public']);
+    } finally { await close(empty.id); }
+    const restoreEvents = (await command('list_audit_events', { before: null })).events.filter(event => event.operation === 'postgres.restore');
+    assert.ok(restoreEvents.some(event => event.outcome === 'succeeded'));
+    assert.ok(restoreEvents.some(event => event.outcome === 'failed'));
+    assert.doesNotMatch(JSON.stringify(restoreEvents), /fixture-administrator-password|approved-copy\.backup/);
   } finally { await close(adminSession.id); }
+}
+
+async function verifyRestoreDialog(page, projectId) {
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(projectId);
+  await page.getByRole('button', { name: 'PostgreSQL 백업·복구 검증 열기', exact: true }).click();
+  await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).click();
+  const connection = page.getByRole('dialog', { name: 'PostgreSQL 연결', exact: true });
+  await connection.getByLabel('PostgreSQL 암호').fill('fixture-administrator-password');
+  await connection.getByRole('button', { name: '연결', exact: true }).click();
+  await connection.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '백업 복원', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 복원', exact: true });
+  await dialog.getByRole('textbox', { name: /백업 파일/ }).fill(path.join(root, 'database-full.backup'));
+  await dialog.getByLabel('새 데이터베이스 이름').fill('fixture_restore_ui');
+  await dialog.getByRole('button', { name: '복원 미리보기', exact: true }).click();
+  await dialog.getByText(/아카이브 목차 ·/).click();
+  await dialog.getByLabel('PostgreSQL 아카이브 목차', { exact: true }).waitFor();
+  const restore = dialog.getByRole('button', { name: '새 DB에 복원', exact: true });
+  assert.equal(await restore.isDisabled(), true);
+  await dialog.getByRole('checkbox', { name: '백업 출처를 확인했고 복원 실행에 동의합니다.' }).check();
+  await dialog.getByLabel('새 DB 이름 확인').fill('fixture_restore_ui');
+  await dialog.getByLabel('PostgreSQL 암호').fill('fixture-administrator-password');
+  await restore.click();
+  await dialog.waitFor({ state: 'detached' });
+  await page.getByText('새 DB 복원 완료 · fixture_restore_ui', { exact: true }).waitFor();
+  await page.getByText(/다시 연결하여 테이블 \d+개 확인/).waitFor();
 }
 
 async function verifyServerMonitor({ command, open, close, unrelated }) {

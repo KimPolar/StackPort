@@ -1026,7 +1026,37 @@ async fn create_postgres_backup(
 
 #[tauri::command]
 fn cancel_postgres_backup(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<bool, String> {
-    postgres.cancel_backup(&id, &request)
+    postgres.cancel_archive_job(&id, &request)
+}
+
+#[tauri::command]
+async fn preview_postgres_restore(postgres: State<'_, PostgresManager>, id: String, request: String, source: String, database: String)
+    -> Result<stackport_core::PostgresRestorePreview, String> {
+    postgres.preview_restore(&id, &request, source, database).await
+}
+
+#[tauri::command]
+fn discard_postgres_restore(postgres: State<'_, PostgresManager>, id: String, token: String) -> Result<(), String> {
+    postgres.discard_restore(&id, &token)
+}
+
+#[tauri::command]
+fn cancel_postgres_restore(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<bool, String> {
+    postgres.cancel_archive_job(&id, &request)
+}
+
+#[tauri::command]
+async fn apply_postgres_restore(postgres: State<'_, PostgresManager>, id: String, request: String, token: String,
+    database_confirmation: String, trusted: bool, password: PostgresPassword, confirmation: String,
+) -> Result<stackport_core::PostgresRestoreReport, String> {
+    postgres.apply_restore(&id, &request, &token, &database_confirmation, trusted, password, &confirmation).await
+}
+
+#[tauri::command]
+async fn choose_postgres_restore_archive() -> Result<Option<String>, String> {
+    worker(|| Ok(rfd::FileDialog::new().set_title("PostgreSQL 백업 파일 선택")
+        .add_filter("PostgreSQL 아카이브", &["backup", "dump"]).pick_file()
+        .map(|path| path.to_string_lossy().into_owned()))).await
 }
 
 #[tauri::command]
@@ -1857,6 +1887,11 @@ fn main() {
             postgres_schema_diagram,
             create_postgres_backup,
             cancel_postgres_backup,
+            preview_postgres_restore,
+            discard_postgres_restore,
+            cancel_postgres_restore,
+            apply_postgres_restore,
+            choose_postgres_restore_archive,
             begin_postgres_edit,
             preview_postgres_edit,
             open_postgres_edit_field,

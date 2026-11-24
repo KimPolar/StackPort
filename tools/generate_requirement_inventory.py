@@ -156,11 +156,12 @@ PARTIAL = {
     "SP-BK-001": "SQLite 전체 DB, PostgreSQL 전체 DB·스키마·일반 테이블의 구조와 데이터·구조만·데이터만 선택",
     "SP-BK-002": "SQLite 온라인 백업 API와 PostgreSQL pg_dump",
     "SP-BK-003": "SQLite 바이너리 파일과 PostgreSQL pg_dump 압축 아카이브",
-    "SP-BK-005": "서버 주 버전 이상인 동일 버전 pg_dump와 pg_restore 탐색, 전체·스키마·일반 테이블 백업과 아카이브 검사",
+    "SP-BK-005": "버전이 일치하는 pg_dump·pg_restore 탐색, 전체·스키마·일반 테이블 백업, 커스텀 아카이브 목차 확인 후 새 DB에 단일 트랜잭션 복원",
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-011": "PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",
-    "SP-BK-013": "독립된 SQLite 백업의 새 복원 경로·버전·객체/행 수·SHA-256 미리보기",
-    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 읽기와 SHA-256 출력, 검증 테스트에서 격리 DB의 행과 복합 외래 키 확인",
+    "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인",
+    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수 표시, 통합 테스트로 행·복합 외래 키·롤백 확인",
+    "SP-BK-017": "PostgreSQL 백업의 로컬 파일 저장 경로와 복원할 서버·새 DB를 각각 표시하고 복원 시 CREATEDB 권한 확인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
@@ -178,7 +179,7 @@ PARTIAL = {
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
-    "SP-AT-016": "실제 SQLite 백업의 격리 파일 복원, PostgreSQL 백업의 격리 데이터베이스 복원과 행·복합 외래 키·SHA-256 확인",
+    "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
@@ -212,7 +213,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         if subset:
             if requirement_id in {"SP-BK-013", "SP-BK-014", "SP-AT-016"}:
                 evidence = "crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/"
-            elif requirement_id in {"SP-BK-005", "SP-BK-011"}:
+            elif requirement_id in {"SP-BK-005", "SP-BK-011", "SP-BK-017"}:
                 evidence = "crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs"
             elif requirement_id.startswith("SP-BK-"):
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
@@ -440,5 +441,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/desktop-smoke.cjs"
             if requirement_id in {"SP-BK-001", "SP-BK-002", "SP-BK-003", "SP-BK-014", "SP-AT-016"}:
                 evidence += "; crates/stackport-core/src/postgres/backup.rs; src/PostgresBackupDialog.tsx; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-BK-005", "SP-BK-013", "SP-BK-014", "SP-BK-017", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/postgres/restore.rs; src/PostgresRestoreDialog.tsx"
+                if requirement_id == "SP-BK-013":
+                    evidence += "; tests/postgres-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

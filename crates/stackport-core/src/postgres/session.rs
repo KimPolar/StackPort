@@ -12,13 +12,14 @@ use super::{
     grid_layout::PostgresGridLayout,
     monitor::{self, PostgresActivityInput, PostgresActivitySnapshot},
     parameters::Value,
+    restore::{self, PostgresRestorePreview, PostgresRestoreReport},
     sql, sql_range,
     statement_stats::{self, PostgresStatementStats, PostgresStatementStatsInput},
     value::{
         self, PostgresValuePage, PostgresValueRepresentation, PostgresValueRow, PostgresValueSave,
         PostgresValueTarget, ValueKind,
     },
-    PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
+    PostgresProfile, PostgresProfileInput, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
     edit::{RowChangePreview, RowChangeSession, RowPastePreview},
@@ -193,7 +194,8 @@ struct Session {
     monitor_of: Option<String>,
     tls: TlsConnector,
     running_sql: Mutex<Option<sql::RunningSql>>,
-    backup: Mutex<Option<(Uuid, Arc<AtomicBool>)>>,
+    archive_job: Mutex<Option<(Uuid, Arc<AtomicBool>)>>,
+    restore_plan: Mutex<Option<restore::Plan>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
     grid_update: AsyncMutex<Option<grid_update::Plan>>,
@@ -206,19 +208,19 @@ struct MonitorOwner {
     connection_ended: watch::Receiver<bool>,
 }
 
-struct BackupJob {
+struct ArchiveJob {
     session: Arc<Session>,
     cancelled: Arc<AtomicBool>,
     deadline: Instant,
 }
 
-impl BackupJob {
+impl ArchiveJob {
     fn start(session: Arc<Session>, request: Uuid) -> Result<Self> {
         let cancelled = Arc::new(AtomicBool::new(false));
         {
-            let mut running = session.backup.lock().map_err(|_| "백업 상태를 확인할 수 없습니다.")?;
+            let mut running = session.archive_job.lock().map_err(|_| "아카이브 작업 상태를 확인할 수 없습니다.")?;
             if running.is_some() {
-                return Err("이 PostgreSQL 연결에서 이미 백업을 실행하고 있습니다.".into());
+                return Err("이 PostgreSQL 연결에서 이미 백업 또는 복원 작업을 실행하고 있습니다.".into());
             }
             *running = Some((request, Arc::clone(&cancelled)));
         }
@@ -227,22 +229,66 @@ impl BackupJob {
 
     fn check(&self) -> Result<()> {
         if self.cancelled.load(Ordering::Relaxed) {
-            return Err("PostgreSQL 백업을 취소했습니다.".into());
+            return Err("PostgreSQL 아카이브 작업을 취소했습니다.".into());
         }
         if let Some(reason) = self.session.closed_reason() {
             return Err(reason.message().into());
         }
         if Instant::now() >= self.deadline {
-            return Err("PostgreSQL 백업이 30분 제한을 초과했습니다.".into());
+            return Err("PostgreSQL 아카이브 작업이 30분 제한을 초과했습니다.".into());
         }
         Ok(())
     }
 }
 
-impl Drop for BackupJob {
+impl Drop for ArchiveJob {
     fn drop(&mut self) {
-        if let Ok(mut running) = self.session.backup.lock() { *running = None; }
+        if let Ok(mut running) = self.session.archive_job.lock() { *running = None; }
     }
+}
+
+fn clear_restore_plan(session: &Session, token: Uuid) {
+    if let Ok(mut plan) = session.restore_plan.lock() {
+        if plan.as_ref().is_some_and(|plan| plan.token == token) { plan.take(); }
+    }
+}
+
+fn connection_config(settings: &PostgresProfileInput, password: &PostgresPassword, tunnel_port: Option<u16>, application: &str) -> Config {
+    let mut config = Config::new();
+    config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
+        .application_name(application).ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
+        .port(tunnel_port.unwrap_or(settings.port));
+    if tunnel_port.is_some() {
+        // Keep the original host for SNI and certificate validation.
+        config.hostaddr(Ipv4Addr::LOCALHOST.into());
+    }
+    config
+}
+
+struct RestoreConnection(JoinHandle<()>);
+
+impl Drop for RestoreConnection {
+    fn drop(&mut self) { self.0.abort(); }
+}
+
+async fn restore_client(settings: &PostgresProfileInput, password: &PostgresPassword, tunnel: Option<&DatabaseTunnel>,
+    tls: TlsConnector, database: &str, create: bool) -> Result<(Client, RestoreConnection)> {
+    let mut config = connection_config(settings, password, tunnel.map(|route| route.endpoint().port), "StackPort Restore");
+    config.dbname(database).options(if create {
+        "-c default_transaction_read_only=off -c statement_timeout=60000 -c lock_timeout=5000 -c search_path=pg_catalog"
+    } else {
+        "-c default_transaction_read_only=on -c statement_timeout=8000 -c search_path=pg_catalog"
+    });
+    let connector = timeout(CONNECT_TIMEOUT, config.connect(MakeTlsConnector::new(tls)));
+    let opened = if let Some(tunnel) = tunnel {
+        tokio::select! {
+            biased;
+            _ = tunnel.ended() => return Err(PostgresDisconnect::TunnelStopped.message().into()),
+            result = connector => result,
+        }
+    } else { connector.await };
+    let (client, connection) = opened.map_err(|_| "PostgreSQL 복원 연결 시간이 초과되었습니다.")?.map_err(connect_error)?;
+    Ok((client, RestoreConnection(tokio::spawn(async move { let _ = connection.await; }))))
 }
 
 impl Session {
@@ -356,19 +402,9 @@ impl PostgresManager {
         } else {
             "StackPort"
         };
-        let mut config = Config::new();
-        config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
-            .application_name(application).ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
-            .options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog -c standard_conforming_strings=on");
         let endpoint = tunnel.as_ref().map(DatabaseTunnel::endpoint);
-        if let Some(endpoint) = &endpoint {
-            // Keep the original host for SNI and certificate validation.
-            config
-                .hostaddr(Ipv4Addr::LOCALHOST.into())
-                .port(endpoint.port);
-        } else {
-            config.port(settings.port);
-        }
+        let mut config = connection_config(settings, &password, endpoint.as_ref().map(|route| route.port), application);
+        config.options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog -c standard_conforming_strings=on");
         self.sessions
             .lock()
             .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?
@@ -421,7 +457,8 @@ impl PostgresManager {
             monitor_of: owner.map(|owner| owner.id),
             tls,
             running_sql: Mutex::default(),
-            backup: Mutex::default(),
+            archive_job: Mutex::default(),
+            restore_plan: Mutex::default(),
             grid_edit,
             edit: AsyncMutex::default(),
             grid_update: AsyncMutex::default(),
@@ -870,7 +907,7 @@ impl PostgresManager {
             return Err("데이터베이스 작업 공간에서 백업을 시작하세요.".into());
         }
         let request = Uuid::parse_str(request).map_err(|_| "올바른 백업 요청 ID가 필요합니다.")?;
-        let job = BackupJob::start(Arc::clone(&session), request)?;
+        let job = ArchiveJob::start(Arc::clone(&session), request)?;
         self.authorize(&session.profile, &password, confirmation).await?;
         job.check()?;
         let source = timeout(QUERY_TIMEOUT, async {
@@ -915,15 +952,165 @@ impl PostgresManager {
         }).await.map_err(|_| "PostgreSQL 백업 결과를 확인할 수 없습니다.")?
     }
 
-    pub fn cancel_backup(&self, id: &str, request: &str) -> Result<bool> {
+    pub fn cancel_archive_job(&self, id: &str, request: &str) -> Result<bool> {
         let session = self.session(id)?;
         let request = Uuid::parse_str(request).map_err(|_| "올바른 백업 요청 ID가 필요합니다.")?;
-        let running = session.backup.lock().map_err(|_| "백업 상태를 확인할 수 없습니다.")?;
+        let running = session.archive_job.lock().map_err(|_| "아카이브 작업 상태를 확인할 수 없습니다.")?;
         if let Some((_, cancelled)) = running.as_ref().filter(|(id, _)| *id == request) {
             cancelled.store(true, Ordering::Relaxed);
             return Ok(true);
         }
         Ok(false)
+    }
+
+    pub async fn preview_restore(&self, id: &str, request: &str, source: String, database: String) -> Result<PostgresRestorePreview> {
+        let session = self.session(id)?;
+        if session.monitor_of.is_some() {
+            return Err("데이터베이스 작업 공간에서 복원을 시작하세요.".into());
+        }
+        let request = Uuid::parse_str(request).map_err(|_| "올바른 복원 요청 ID가 필요합니다.")?;
+        let job = Arc::new(ArchiveJob::start(Arc::clone(&session), request)?);
+        session.restore_plan.lock().map_err(|_| "복원 미리보기 상태를 확인할 수 없습니다.")?.take();
+        let database = database.trim().to_owned();
+        if database.is_empty() || database.len() > 1024 || database.chars().any(char::is_control) {
+            return Err("새 데이터베이스 이름을 확인하세요.".into());
+        }
+        let (version, major) = timeout(QUERY_TIMEOUT, async {
+            let client = session.client.lock().await;
+            let row = client.query_one(
+                "SELECT pg_catalog.current_setting('server_version'),
+                        pg_catalog.current_setting('server_version_num')::integer,
+                        rolcreatedb OR rolsuper,
+                        EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname::text = $1),
+                        pg_catalog.octet_length(pg_catalog.convert_to($1, pg_catalog.current_setting('server_encoding')::name))
+                            <= pg_catalog.current_setting('max_identifier_length')::integer
+                 FROM pg_catalog.pg_roles WHERE rolname = current_user", &[&database],
+            ).await.map_err(pg_error)?;
+            if !field::<bool>(&row, 2)? { return Err("새 DB를 만들 수 있는 CREATEDB 권한이 필요합니다.".into()); }
+            if field::<bool>(&row, 3)? { return Err("이미 같은 이름의 데이터베이스가 있습니다.".into()); }
+            if !field::<bool>(&row, 4)? { return Err("서버가 허용하는 길이에 맞춰 새 DB 이름을 줄이세요.".into()); }
+            let major = u32::try_from(field::<i32>(&row, 1)? / 10_000).map_err(|_| "PostgreSQL 서버 버전을 확인할 수 없습니다.")?;
+            Ok::<_, String>((field::<String>(&row, 0)?, major))
+        }).await.map_err(|_| "복원 대상을 확인하는 시간이 초과되었습니다.")??;
+        let worker = Arc::clone(&job);
+        let plan = tokio::task::spawn_blocking(move || restore::preview(&worker.session.profile.settings, source, database, version, major, || worker.check()))
+            .await.map_err(|_| "복원 미리보기를 가져올 수 없습니다.")??;
+        job.check()?;
+        let preview = plan.preview.clone();
+        let token = plan.token;
+        *session.restore_plan.lock().map_err(|_| "복원 미리보기 상태를 확인할 수 없습니다.")? = Some(plan);
+        let session = Arc::downgrade(&session);
+        tokio::spawn(async move {
+            tokio::time::sleep(restore::PREVIEW_TTL).await;
+            if let Some(session) = session.upgrade() { clear_restore_plan(&session, token); }
+        });
+        Ok(preview)
+    }
+
+    pub fn discard_restore(&self, id: &str, token: &str) -> Result<()> {
+        let session = self.session(id)?;
+        let token = Uuid::parse_str(token).map_err(|_| "올바른 복원 미리보기가 필요합니다.")?;
+        clear_restore_plan(&session, token);
+        Ok(())
+    }
+
+    pub async fn apply_restore(
+        &self, id: &str, request: &str, token: &str, database_confirmation: &str,
+        trusted: bool, password: PostgresPassword, confirmation: &str,
+    ) -> Result<PostgresRestoreReport> {
+        let session = self.session(id)?;
+        let request = Uuid::parse_str(request).map_err(|_| "올바른 복원 요청 ID가 필요합니다.")?;
+        let token = Uuid::parse_str(token).map_err(|_| "복원을 다시 미리 보세요.")?;
+        let job = Arc::new(ArchiveJob::start(Arc::clone(&session), request)?);
+        if !trusted { return Err("백업의 출처와 실행 권한을 확인하세요.".into()); }
+        let tls = self.authorize(&session.profile, &password, confirmation).await?;
+        let plan = {
+            let mut plan = session.restore_plan.lock().map_err(|_| "복원 미리보기 상태를 확인할 수 없습니다.")?;
+            let preview = plan.as_ref().filter(|item| item.token == token && item.expires > Instant::now())
+                .ok_or("복원 미리보기가 만료되었거나 사용되었습니다. 다시 미리 보세요.")?;
+            if preview.preview.database != database_confirmation {
+                return Err("미리보기와 같은 새 DB 이름을 입력하세요.".into());
+            }
+            plan.take().ok_or("복원을 다시 미리 보세요.")?
+        };
+        let database = plan.preview.database.clone();
+        let sha256 = plan.preview.sha256.clone();
+        let settings = &session.profile.settings;
+        let port = session.tunnel.as_ref().map(|route| route.endpoint().port);
+        let password = Arc::new(password);
+        let result = async {
+            job.check()?;
+            let (client, driver) = restore_client(settings, &password, session.tunnel.as_ref(), tls.clone(), &settings.database, true).await?;
+            job.check()?;
+            let exists = timeout(QUERY_TIMEOUT, client.query_one(
+                "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE datname::text = $1)", &[&database],
+            )).await.map_err(|_| "복원 대상 이름을 확인하는 시간이 초과되었습니다.")?.map_err(pg_error)?;
+            if field::<bool>(&exists, 0)? { return Err("이미 같은 이름의 데이터베이스가 있습니다.".into()); }
+            // The restore tool connects separately. A unique DB name prevents it from writing to
+            // a similarly named database if DNS or a proxy routes it to a different instance.
+            let staging = format!("stackport_restore_{}", Uuid::new_v4().simple());
+            let staging_identifier = quote_identifier(&staging);
+            let create = format!("CREATE DATABASE {staging_identifier} TEMPLATE template0 ALLOW_CONNECTIONS false");
+            job.check()?;
+            timeout(Duration::from_secs(65), client.batch_execute(&create)).await
+                .map_err(|_| format!("임시 DB '{staging}' 생성 응답이 지연되었습니다. 서버에서 생성 여부를 확인하세요."))?
+                .map_err(|error| {
+                    if error.is_closed() { format!("임시 DB '{staging}'의 생성 결과를 확인할 수 없습니다. 서버에서 생성 여부를 확인하세요.") }
+                    else { pg_error(error) }
+                })?;
+            job.check().map_err(|error| format!("임시 DB '{staging}'의 상태를 확인하세요. {error}"))?;
+            let enable = format!("REVOKE CONNECT ON DATABASE {staging_identifier} FROM PUBLIC; ALTER DATABASE {staging_identifier} ALLOW_CONNECTIONS true");
+            timeout(QUERY_TIMEOUT, client.batch_execute(&enable)).await
+                .map_err(|_| format!("임시 DB '{staging}'의 접속 상태를 확인하세요."))?
+                .map_err(|error| format!("임시 DB '{staging}'의 접속 상태를 확인하세요. {}", pg_error(error)))?;
+
+            let worker = Arc::clone(&job);
+            let worker_password = Arc::clone(&password);
+            let worker_staging = staging.clone();
+            let restored = tokio::task::spawn_blocking(move || {
+                restore::apply(plan, &worker.session.profile.settings, &worker_password, &worker_staging, port, || worker.check())
+            }).await.map_err(|_| "복원 도구의 종료 상태를 확인할 수 없습니다.".to_owned())
+                .and_then(|result| result);
+            restored.and_then(|()| job.check()).map_err(|error| {
+                format!("임시 DB '{staging}'의 상태를 확인하세요. {error}")
+            })?;
+
+            let rename = format!("ALTER DATABASE {staging_identifier} RENAME TO {}", quote_identifier(&database));
+            timeout(QUERY_TIMEOUT, client.batch_execute(&rename)).await
+                .map_err(|_| format!("복원 후 이름 변경 결과를 확인할 수 없습니다. '{staging}' 및 '{database}' 상태를 확인하세요."))?
+                .map_err(|error| {
+                    if error.is_closed() {
+                        format!("복원 후 이름 변경 결과를 확인할 수 없습니다. '{staging}' 및 '{database}' 상태를 확인하세요.")
+                    } else if error.code().is_some_and(|code| code.code() == "42P04") {
+                        format!("이미 같은 이름의 데이터베이스가 있습니다. 복원한 임시 DB는 '{staging}'입니다.")
+                    } else {
+                        format!("복원한 임시 DB는 '{staging}'입니다. {}", pg_error(error))
+                    }
+                })?;
+            drop(client);
+            drop(driver);
+
+            let tables = async {
+                let (client, _driver) = restore_client(settings, &password, session.tunnel.as_ref(), tls, &database, false).await?;
+                let row = timeout(QUERY_TIMEOUT, client.query_one(
+                    "SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                     WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'", &[],
+                )).await.map_err(|_| "복원 DB의 테이블을 확인하는 시간이 초과되었습니다.")?.map_err(pg_error)?;
+                field::<i64>(&row, 0)
+            }.await.ok();
+            Ok::<_, String>(PostgresRestoreReport { database: database.clone(), sha256, tables, audit_warning: false })
+        }.await;
+        let store = self.store.clone();
+        let profile = session.profile.clone();
+        let outcome = if result.is_ok() { "succeeded" } else { "failed" };
+        let audit_warning = !matches!(tokio::task::spawn_blocking(move || {
+            store.connect().and_then(|db| insert_audit(&db, AuditRecord {
+                correlation_id: &request.to_string(), operation: "postgres.restore", project_id: Some(&profile.project_id),
+                profile_id: Some(&profile.id), environment: Some(&profile.settings.environment), object_name: Some(&database),
+                outcome, affected_count: None,
+            }))
+        }).await, Ok(Ok(())));
+        result.map(|mut report| { report.audit_warning = audit_warning; report })
     }
 
     pub async fn begin_edit(

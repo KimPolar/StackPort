@@ -8,6 +8,7 @@ mod monitor;
 mod parameters;
 mod plan;
 mod profiles;
+mod restore;
 mod search;
 mod session;
 mod sql;
@@ -30,6 +31,7 @@ pub use monitor::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{PostgresProfile, PostgresProfileInput};
+pub use restore::{PostgresRestorePreview, PostgresRestoreReport};
 pub use search::{PostgresSearchInput, PostgresSearchPage};
 pub use session::{
     PostgresCatalogObject, PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,

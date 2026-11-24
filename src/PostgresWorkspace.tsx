@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useEffectEvent, useId, useMemo, useRef, useS
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Archive, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { PostgresBackupDialog, type PostgresBackupReport, type PostgresBackupTarget } from "./PostgresBackupDialog";
+import { PostgresRestoreDialog, type PostgresRestoreReport } from "./PostgresRestoreDialog";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
@@ -88,6 +89,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [backup, setBackup] = useState<{ id: string; target: PostgresBackupTarget } | null>(null);
   const [backupReport, setBackupReport] = useState<PostgresBackupReport | null>(null);
+  const [restoreFor, setRestoreFor] = useState<string | null>(null);
+  const [restoreReport, setRestoreReport] = useState<PostgresRestoreReport | null>(null);
   const active = useRef<string | null>(null);
   const connectButton = useRef<HTMLButtonElement>(null);
   const { name, host, port, database, environment } = profile.settings;
@@ -158,6 +161,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       <div className="header-actions"><span className="readonly"><ShieldCheck size={15} aria-hidden /> {online && session.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
         {online && <button type="button" className="secondary" aria-haspopup="dialog" disabled={closing}
           onClick={() => requestBackup({ selection: { kind: "database" }, label: "전체 데이터베이스" })}><Archive size={14} aria-hidden /> DB 백업</button>}
+        {activeId && <button type="button" className="secondary" aria-haspopup="dialog" disabled={closing}
+          onClick={() => { setRestoreReport(null); setRestoreFor(activeId); }}>백업 복원</button>}
         {online ? <button type="button" className="secondary" disabled={closing} onClick={() => void disconnect()}>PostgreSQL 연결 끊기</button> :
           <button type="button" className="primary" ref={connectButton} onClick={() => setDialog(true)}>
             <Plug size={15} aria-hidden /> {loss ? "PostgreSQL 다시 연결" : "PostgreSQL 연결"}
@@ -180,6 +185,12 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       <span>{backupReport.path} · {number.format(backupReport.size_bytes)} B · pg_dump {backupReport.tool_version}</span>
       <span>SHA-256 <code>{backupReport.sha256}</code></span>
       {backupReport.audit_warning && <strong className="audit-warning">작업 기록을 저장할 수 없습니다.</strong>}
+    </div>}
+    {restoreReport && <div className="success-banner" role="status">
+      <strong>새 DB 복원 완료 · {restoreReport.database}</strong>
+      <span>{restoreReport.tables === null ? "대상 서버에서 확인이 필요합니다." : `다시 연결하여 테이블 ${number.format(restoreReport.tables)}개 확인`}</span>
+      <span>백업 SHA-256 <code>{restoreReport.sha256}</code></span>
+      {restoreReport.audit_warning && <strong className="audit-warning">작업 기록을 저장할 수 없습니다.</strong>}
     </div>}
     <nav className="postgres-views" aria-label="PostgreSQL 보기">
       <button type="button" className="secondary small" aria-pressed={view === "catalog"} onClick={() => setView("catalog")}>객체 탐색</button>
@@ -216,6 +227,9 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       source={`${endpoint(host, port)} / ${database}`} environment={environment} onBusy={onFileBusy}
       unavailable={activeId === backup.id ? "" : loss || "PostgreSQL에 다시 연결한 뒤 백업을 시작하세요."}
       onClose={() => setBackup(null)} onDone={report => { setBackup(null); setBackupReport(report); }} />}
+    {restoreFor && <PostgresRestoreDialog id={restoreFor} server={endpoint(host, port)} environment={environment}
+      unavailable={activeId === restoreFor ? "" : loss || "PostgreSQL에 다시 연결한 뒤 복원하세요."} onBusy={onFileBusy}
+      onClose={() => setRestoreFor(null)} onRestored={report => { setRestoreFor(null); setRestoreReport(report); }} />}
     {dialog && <ConnectDialog profile={profile} preferredRoute={preferredRoute} onOpenTunnels={onOpenTunnels} onClose={() => {
       setDialog(false);
       if (objectRequest) onObjectHandled(objectRequest);

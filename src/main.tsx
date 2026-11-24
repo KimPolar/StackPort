@@ -1985,6 +1985,7 @@ const auditOperationNames: Record<string, string> = {
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",
   "postgres.export.csv": "PostgreSQL CSV 내보내기", "postgres.export.json": "PostgreSQL JSON 내보내기",
   "postgres.backup": "PostgreSQL 백업",
+  "postgres.restore": "PostgreSQL 백업 복원",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",

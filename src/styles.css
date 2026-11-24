@@ -242,6 +242,8 @@ textarea:focus { outline-offset: -2px; }
 .restore-summary { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 8px 14px; font-size: 12px; line-height: 1.5; }
 .restore-summary dt { color: var(--text-muted); }
 .restore-summary dd { margin: 0; overflow-wrap: anywhere; }
+.restore-toc { max-height: 11rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.restore-trust { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
 .restore-result { margin-top: 20px; overflow-wrap: anywhere; }
 .workspace-copy-files { display: grid; gap: 8px; padding: 0; list-style: none; }
 .workspace-copy-files li { display: grid; gap: 5px; padding: 8px; border: 1px solid var(--divider); font-size: 12px; overflow-wrap: anywhere; }
