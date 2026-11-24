@@ -32,24 +32,17 @@ pub(crate) use sync_profile::SCHEMA as SYNC_PROFILE_SCHEMA;
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
 
-use crate::{ssh, Result, SshManager, SshProfile, Store};
+pub use crate::ssh_transport::SshCredentials as SftpAuthentication;
+use crate::{ssh_transport::{self, Endpoint, SshConnection}, Result, SshHostInfo, SshManager, SshProfile, Store};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use russh::{
-    client::{self, Handle},
-    keys::{
-        decode_secret_key, key::PrivateKeyWithHashAlg, Algorithm, HashAlg, PublicKey,
-        PublicKeyOrCertificate,
-    },
-    ChannelMsg, Disconnect, Preferred,
-};
+use russh::ChannelMsg;
 use russh_sftp::{
     client::{error::Error as SftpError, RawSftpSession},
     protocol::{FileAttributes, SftpString, StatusCode},
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::Path,
     sync::{Arc, Mutex},
@@ -60,34 +53,13 @@ use tokio::{
     time::timeout,
 };
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 const MAX_CONNECTIONS: usize = 8;
 const MAX_ITEMS: usize = 2_000;
 const MAX_REMOTE_PATH: usize = 4_096;
-const MAX_KEY_FILE: u64 = 128 * 1024;
+const MAX_HOPS: usize = 3;
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(18);
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SftpAuthentication {
-    Password {
-        #[serde(deserialize_with = "secret")]
-        password: Zeroizing<String>,
-    },
-    PrivateKey {
-        path: String,
-        #[serde(default, deserialize_with = "secret")]
-        passphrase: Zeroizing<String>,
-    },
-}
-
-fn secret<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<Zeroizing<String>, D::Error> {
-    String::deserialize(deserializer).map(Zeroizing::new)
-}
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
@@ -141,6 +113,20 @@ pub struct SftpOpened {
     pub directory: BrowseDirectory,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpHop {
+    pub profile: SshProfile,
+    pub authentication: SftpAuthentication,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RoutedSftpOpened {
+    Open { session: SftpOpened },
+    TrustRequired { stage: String, host: SshHostInfo },
+}
+
 pub struct SftpManager {
     store: Store,
     sessions: Mutex<HashMap<String, Arc<FilesSession>>>,
@@ -149,7 +135,8 @@ pub struct SftpManager {
 
 struct FilesSession {
     profile: SshProfile,
-    ssh: Handle<PinnedHost>,
+    ssh: SshConnection,
+    hops: Vec<SshConnection>,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
     pending_delete: Mutex<Option<delete::PendingDelete>>,
@@ -161,21 +148,6 @@ struct FilesSession {
     posix_rename_supported: bool,
     lsetstat_supported: bool,
     _permit: OwnedSemaphorePermit,
-}
-
-struct PinnedHost(PublicKey);
-
-impl client::Handler for PinnedHost {
-    type Error = russh::Error;
-
-    async fn check_server_key(
-        &mut self,
-        offered: &PublicKeyOrCertificate,
-    ) -> std::result::Result<bool, russh::Error> {
-        Ok(
-            matches!(offered, PublicKeyOrCertificate::PublicKey { key, .. } if key.key_data() == self.0.key_data()),
-        )
-    }
 }
 
 impl SftpManager {
@@ -202,31 +174,68 @@ impl SftpManager {
         profile: SshProfile,
         auth: SftpAuthentication,
     ) -> Result<SftpOpened> {
-        let host = ssh::normalize_host(&profile.host)?;
-        ssh::validate_port(profile.port)?;
-        let username = ssh::normalize_username(&profile.username)?;
-        let key_host = host.clone();
-        let port = profile.port;
-        let pinned = tokio::task::spawn_blocking(move || ssh.trusted_public_key(&key_host, port))
-            .await
-            .map_err(|_| "저장된 SSH 호스트 키를 확인할 수 없습니다.")??;
-        let pinned = PublicKey::from_openssh(&pinned)
-            .map_err(|_| "저장된 SSH 호스트 키 형식을 읽을 수 없습니다.")?;
+        let permit = self.acquire()?;
+        let ready = timeout(START_TIMEOUT, async {
+            let endpoint = ssh_transport::connect_endpoint(ssh, &profile, auth, None, false).await?;
+            let Endpoint::Authenticated(connection) = endpoint else {
+                return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
+            };
+            start_session(profile, connection, Vec::new(), permit).await
+        }).await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
+        self.insert_session(ready)
+    }
+
+    pub async fn open_routed(
+        &self,
+        ssh: Arc<SshManager>,
+        destination: SftpHop,
+        hops: Vec<SftpHop>,
+    ) -> Result<RoutedSftpOpened> {
+        if !(1..=MAX_HOPS).contains(&hops.len()) {
+            return Err(format!("경유 서버를 1~{MAX_HOPS}개 선택하세요."));
+        }
+        let mut seen = HashSet::from([(destination.profile.host.as_str(), destination.profile.port)]);
+        for hop in &hops {
+            if hop.profile.project_id != destination.profile.project_id
+                || !seen.insert((&hop.profile.host, hop.profile.port)) {
+                return Err("대상과 다른 같은 프로젝트의 SSH 서버를 순서대로 한 번씩 선택하세요.".into());
+            }
+        }
+        let permit = self.acquire()?;
+        let mut route = Vec::with_capacity(hops.len());
+        for (index, hop) in hops.into_iter().enumerate() {
+            let stage = format!("경유 {} · {}", index + 1, hop.profile.name);
+            match ssh_transport::connect_endpoint(Arc::clone(&ssh), &hop.profile, hop.authentication, route.last(), true)
+                .await.map_err(|error| format!("{stage} — {error}"))? {
+                Endpoint::Authenticated(connection) => route.push(connection),
+                Endpoint::TrustRequired(host) => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
+            }
+        }
+        let stage = format!("대상 · {}", destination.profile.name);
+        let connection = match ssh_transport::connect_endpoint(ssh, &destination.profile, destination.authentication, route.last(), true)
+            .await.map_err(|error| format!("{stage} — {error}"))? {
+            Endpoint::Authenticated(connection) => connection,
+            Endpoint::TrustRequired(host) => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
+        };
+        let ready = timeout(START_TIMEOUT, start_session(destination.profile, connection, route, permit)).await
+            .map_err(|_| format!("{stage} — SFTP 연결 준비 시간이 초과되었습니다."))?
+            .map_err(|error| format!("{stage} — {error}"))?;
+        let session = self.insert_session(ready)?;
+        Ok(RoutedSftpOpened::Open { session })
+    }
+
+    fn acquire(&self) -> Result<OwnedSemaphorePermit> {
         self.sessions
             .lock()
             .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
             .retain(|_, session| !session.ssh.is_closed());
-        let permit = Arc::clone(&self.permits)
+        Arc::clone(&self.permits)
             .try_acquire_owned()
-            .map_err(|_| "열린 SFTP 연결이 너무 많습니다. 사용하지 않는 연결을 닫으세요.")?;
-        let ready = timeout(
-            START_TIMEOUT,
-            start_session(profile, host, port, username, pinned, auth, permit),
-        )
-        .await
-        .map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
+            .map_err(|_| "열린 SFTP 연결이 너무 많습니다. 사용하지 않는 연결을 닫으세요.".into())
+    }
+
+    fn insert_session(&self, (session, directory): (FilesSession, BrowseDirectory)) -> Result<SftpOpened> {
         let id = Uuid::new_v4().to_string();
-        let (session, directory) = ready;
         self.sessions
             .lock()
             .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
@@ -262,11 +271,10 @@ impl SftpManager {
             .remove(id);
         if let Some(session) = session {
             session.cancel_transfer_on_close();
-            let _ = timeout(
-                Duration::from_secs(2),
-                session.ssh.disconnect(Disconnect::ByApplication, "", ""),
-            )
-            .await;
+            let _ = timeout(Duration::from_secs(2), async {
+                ssh_transport::disconnect(&session.ssh).await;
+                for hop in session.hops.iter().rev() { ssh_transport::disconnect(hop).await; }
+            }).await;
         }
         Ok(())
     }
@@ -274,75 +282,10 @@ impl SftpManager {
 
 async fn start_session(
     profile: SshProfile,
-    host: String,
-    port: u16,
-    username: String,
-    pinned: PublicKey,
-    auth: SftpAuthentication,
+    ssh: SshConnection,
+    hops: Vec<SshConnection>,
     permit: OwnedSemaphorePermit,
 ) -> Result<(FilesSession, BrowseDirectory)> {
-    let algorithms = match pinned.algorithm() {
-        Algorithm::Rsa { .. } => vec![
-            Algorithm::Rsa {
-                hash: Some(HashAlg::Sha512),
-            },
-            Algorithm::Rsa {
-                hash: Some(HashAlg::Sha256),
-            },
-        ],
-        algorithm => vec![algorithm],
-    };
-    let config = client::Config {
-        preferred: Preferred {
-            key: Cow::Owned(algorithms),
-            ..Preferred::default()
-        },
-        inactivity_timeout: Some(Duration::from_secs(5 * 60)),
-        nodelay: true,
-        ..client::Config::default()
-    };
-    let mut ssh = client::connect(Arc::new(config), (host.as_str(), port), PinnedHost(pinned))
-        .await
-        .map_err(|_| {
-            "저장된 SSH 호스트 키로 서버를 확인하지 못했습니다. 연결 주소와 서버 지문을 확인하세요."
-        })?;
-    let authentication = match auth {
-        SftpAuthentication::Password { password } => {
-            if password.is_empty() || password.len() > 4096 {
-                return Err("SFTP 암호를 확인하세요.".into());
-            }
-            ssh.authenticate_password(username, password.as_str()).await
-        }
-        SftpAuthentication::PrivateKey { path, passphrase } => {
-            let key = tokio::task::spawn_blocking(move || load_key(&path, &passphrase))
-                .await
-                .map_err(|_| "SSH 개인 키를 읽을 수 없습니다.")??;
-            let rsa_hash = if key.algorithm().is_rsa() {
-                let supported = ssh
-                    .best_supported_rsa_hash()
-                    .await
-                    .map_err(|_| "서버의 RSA 서명 방식을 확인할 수 없습니다.")?;
-                // Never fall back to SHA-1 RSA signatures.
-                Some(
-                    supported
-                        .flatten()
-                        .or_else(|| supported.is_none().then_some(HashAlg::Sha256))
-                        .ok_or("서버가 SHA-2 RSA 서명을 지원하지 않습니다.")?,
-                )
-            } else {
-                None
-            };
-            ssh.authenticate_publickey(
-                username,
-                PrivateKeyWithHashAlg::new(Arc::new(key), rsa_hash),
-            )
-            .await
-        }
-    }
-    .map_err(|_| "SSH 사용자 인증을 완료할 수 없습니다.")?;
-    if !authentication.success() {
-        return Err("서버가 SFTP 사용자 인증을 거부했습니다.".into());
-    }
     let mut channel = ssh
         .channel_open_session()
         .await
@@ -365,6 +308,7 @@ async fn start_session(
         FilesSession {
             profile,
             ssh,
+            hops,
             files,
             operation: AsyncMutex::new(()),
             pending_delete: Mutex::new(None),
@@ -379,23 +323,6 @@ async fn start_session(
         },
         directory,
     ))
-}
-
-fn load_key(path: &str, phrase: &str) -> Result<russh::keys::PrivateKey> {
-    use std::io::Read;
-    let path = Path::new(path.trim());
-    if !path.is_absolute() || !path.is_file() || phrase.len() > 4096 {
-        return Err("SSH 개인 키 파일의 절대 경로와 암호를 확인하세요.".into());
-    }
-    let mut contents = Zeroizing::new(String::new());
-    fs::File::open(path)
-        .and_then(|file| file.take(MAX_KEY_FILE + 1).read_to_string(&mut contents))
-        .map_err(|_| "SSH 개인 키 파일을 읽을 수 없습니다.")?;
-    if contents.is_empty() || contents.len() as u64 > MAX_KEY_FILE {
-        return Err("SSH 개인 키 파일 크기를 확인하세요.".into());
-    }
-    decode_secret_key(&contents, (!phrase.is_empty()).then_some(phrase))
-        .map_err(|_| "SSH 개인 키 형식 또는 키 암호를 확인하세요.".into())
 }
 
 async fn canonical_remote_path(files: &RawSftpSession, requested: SftpString) -> Result<SftpString> {

@@ -427,6 +427,15 @@ textarea:focus { outline-offset: -2px; }
 .files-auth .files-credentials { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; }
 .files-credentials .field { margin: 0; }
 .files-credentials .primary { min-height: 38px; }
+.dialog.sftp-route-dialog { width: min(660px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
+.sftp-route-settings, .sftp-route-trust, .sftp-route-stage { min-inline-size: 0; margin: 0; padding: 0; border: 0; }
+.sftp-route-list { margin: 0; padding: 0; list-style: none; }
+.sftp-route-stage { margin-block: 14px; padding: 0 12px 12px; border: 1px solid var(--border); border-radius: 6px; }
+.sftp-route-stage legend, .sftp-route-trust legend { padding-inline: 4px; font-size: 13px; font-weight: 600; }
+.sftp-route-select, .sftp-route-credentials { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.sftp-route-select { margin-bottom: 8px; }
+.sftp-route-select .field, .sftp-route-credentials .field { flex: 1 1 155px; margin: 0; }
+.sftp-route-fingerprint { display: grid; gap: 4px; overflow-wrap: anywhere; }
 .files-connection { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 5px 8px; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .files-connection strong { color: var(--text); }
 .files-pane-switch { display: none; gap: 6px; }

@@ -31,6 +31,7 @@ PARTIAL = {
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
+    "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SFTP 접속, 단계별 지문·인증·실패 표시",
     "SP-CN-023": "저장된 SSH 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단",
     "SP-TM-001": "Windows PowerShell·CMD 로컬 터미널과 셸별 바로 열기",
@@ -44,7 +45,7 @@ PARTIAL = {
     "SP-NW-001": "Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회, 도구 전환 후 포트 필터 유지",
     "SP-NW-002": "네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적, 도구 전환 후 진단 상태 유지",
     "SP-NW-003": "Windows HTTP/HTTPS HEAD·GET, 최대 5회 가용성 측정, 상태 코드·헤더·경과 시간·TLS 정보",
-    "SP-FL-001": "현재 프로젝트의 저장된 SSH 연결과 동일한 호스트 키 저장소로 SFTP 탐색 시작",
+    "SP-FL-001": "저장된 SSH 연결과 공통 호스트 키 저장소로 SFTP 탐색 시작, 같은 프로젝트의 다단계 SSH 경유",
     "SP-FL-002": "로컬·SFTP 이중 패널, 이름 검색과 독립 정렬·방문 기록, 경로·상위/하위 폴더 이동과 새로고침, 좁은 창에서 패널 전환",
     "SP-FL-003": "SFTP 원격 폴더 생성, 일반 파일·폴더 이름 변경·이동, 일반 파일 복사와 단일 파일·빈 폴더 삭제",
     "SP-FL-004": "확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",
@@ -204,6 +205,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/workspace_resume.rs"
             elif requirement_id in {"SP-ST-011", "SP-ST-014"}:
                 evidence = "src-tauri/src/data_location.rs; tests/portable-smoke.cjs; crates/stackport-core/tests/workspace_copy.rs; tests/desktop-smoke.cjs"
+            elif requirement_id in {"SP-CN-015", "SP-FL-001"}:
+                evidence = "crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/sftp.rs; src/SftpRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-012", "SP-ST-006", "SP-ST-017"}:

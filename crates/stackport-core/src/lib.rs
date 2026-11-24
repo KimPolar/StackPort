@@ -42,10 +42,11 @@ pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
+mod ssh_transport;
 pub use sftp::{
     list_local_directory, list_local_tree, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, FolderTree, RemotePath,
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
-    SftpManager, SftpMutationReport, SftpOpened,
+    RoutedSftpOpened, SftpHop, SftpManager, SftpMutationReport, SftpOpened,
     SftpPermissionChange,
     SftpTransferProgress, SftpTransferReport,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,

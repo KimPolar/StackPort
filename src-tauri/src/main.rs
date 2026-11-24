@@ -12,7 +12,7 @@ use stackport_core::{
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
-    SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
+    RoutedSftpOpened, SftpHop, SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -707,6 +707,36 @@ async fn open_sftp(
 }
 
 #[tauri::command]
+async fn open_routed_sftp(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    sftp: State<'_, SftpManager>,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: SftpAuthentication,
+    mut hops: Vec<SftpHop>,
+) -> Result<RoutedSftpOpened, String> {
+    let store = store.inner().clone();
+    let (profile, hops) = worker(move || {
+        let profile = confirmed_ssh_profile(&store, &profile, &confirmation)?;
+        if hops.len() > 3 {
+            return Err("경유 서버는 최대 3개입니다.".into());
+        }
+        for (index, hop) in hops.iter_mut().enumerate() {
+            hop.profile = confirmed_ssh_profile(&store, &hop.profile, &confirmation)
+                .map_err(|error| format!("경유 {} · {} — {error}", index + 1, hop.profile.name))?;
+        }
+        Ok((profile, hops))
+    })
+    .await?;
+    let destination = SftpHop {
+        profile,
+        authentication,
+    };
+    sftp.open_routed(Arc::clone(ssh.inner()), destination, hops).await
+}
+
+#[tauri::command]
 async fn list_sftp_directory(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1285,6 +1315,7 @@ fn main() {
             open_ssh_terminal,
             open_saved_ssh_terminal,
             open_sftp,
+            open_routed_sftp,
             list_sftp_directory,
             preview_sftp_file,
             open_sftp_editor,

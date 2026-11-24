@@ -147,6 +147,32 @@ impl SshManager {
 
     fn probe(&self, host: String, port: u16, previous: Option<HostKey>) -> Result<SshHostInfo> {
         let keys = scan_host(&host, port)?;
+        self.record_probe(host, port, keys, previous)
+    }
+
+    pub(crate) fn record_offered_key(
+        &self,
+        host: &str,
+        port: u16,
+        offered: &str,
+    ) -> Result<SshHostInfo> {
+        let (algorithm, blob) = offered
+            .split_once(' ')
+            .ok_or("SSH 호스트 키 형식을 읽을 수 없습니다.")?;
+        let key = parse_key(algorithm, blob)?;
+        if self.lookup(host, port)?.is_some() {
+            return Err("저장된 호스트 키가 변경되었습니다. 다시 연결하세요.".into());
+        }
+        self.record_probe(host.to_owned(), port, vec![key], None)
+    }
+
+    fn record_probe(
+        &self,
+        host: String,
+        port: u16,
+        keys: Vec<HostKey>,
+        previous: Option<HostKey>,
+    ) -> Result<SshHostInfo> {
         let token = Uuid::new_v4().to_string();
         let result = SshHostInfo {
             status: if previous.is_some() {
@@ -401,10 +427,10 @@ impl SshManager {
             .transpose()
     }
 
-    pub(crate) fn trusted_public_key(&self, host: &str, port: u16) -> Result<String> {
-        let key = self.lookup(host, port)?
-            .ok_or("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.")?;
-        Ok(format!("{} {}", key.algorithm, key.public_key))
+    pub(crate) fn pinned_public_key(&self, host: &str, port: u16) -> Result<Option<String>> {
+        Ok(self
+            .lookup(host, port)?
+            .map(|key| format!("{} {}", key.algorithm, key.public_key)))
     }
 
     fn save(&self, host: &str, port: u16, key: &HostKey, expected: Option<&HostKey>) -> Result<()> {

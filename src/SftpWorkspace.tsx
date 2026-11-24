@@ -14,6 +14,7 @@ import { SftpEditorDialog, type SftpEditDocument, type SftpEditorSelection } fro
 import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
 import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
+import { SftpRouteDialog } from "./SftpRouteDialog";
 import type { TerminalDirectory } from "./terminalDirectory";
 
 type Session = { id: string; directory: Directory };
@@ -38,7 +39,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
-  const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string } | null>(null);
+  const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string; route: string[] } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
   const [localFolder, setLocalFolder] = useState<DirectoryLocation | null>(null);
@@ -195,6 +196,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
           <span className={`environment ${remote.profile.environment.toLowerCase()}`}>{remote.profile.environment}</span>
           <strong>{remote.profile.name}</strong>
           <span>{[remote.projectName, `${remote.profile.username}@${remote.profile.host}:${remote.profile.port}`].filter(Boolean).join(" · ")}</span>
+          {remote.route.length > 0 && <span>경유 {remote.route.join(" → ")}</span>}
         </div>}
       </div>
       {remote && <div className="files-header-actions">
@@ -213,9 +215,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
           {profiles.map(profile => <option value={profile.id} key={profile.id}>{profile.name} · {profile.environment}</option>)}
         </select>
       </label>
-      {selected && <SftpConnect key={`${selected.id}:${selected.revision}`} profile={selected} onConnecting={setConnecting}
-        onOpened={session => {
-          setRemote({ ...session, profile: selected, projectName });
+      {selected && <SftpConnect key={`${selected.id}:${selected.revision}`} profile={selected} profiles={profiles} onConnecting={setConnecting}
+        onOpened={(session, route = []) => {
+          setRemote({ ...session, profile: selected, projectName, route });
           setActivePane("remote");
         }} />}
     </div>}
@@ -287,7 +289,10 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   </section>;
 }
 
-function SftpConnect({ profile, onConnecting, onOpened }: { profile: SshProfile; onConnecting: (busy: boolean) => void; onOpened: (session: Session) => void }) {
+function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
+  profile: SshProfile; profiles: SshProfile[]; onConnecting: (busy: boolean) => void; onOpened: (session: Session, route?: string[]) => void;
+}) {
+  const [routeDialog, setRouteDialog] = useState(false);
   const [info, setInfo] = useState<Host | null>(null);
   const [selected, setSelected] = useState("");
   const [compared, setCompared] = useState(false);
@@ -334,9 +339,11 @@ function SftpConnect({ profile, onConnecting, onOpened }: { profile: SshProfile;
     void perform(async () => onOpened(await invoke<Session>("open_sftp", { profile, confirmation, authentication })));
   }
 
-  return <form className="files-auth" data-step={info ? "review" : "inspect"} onSubmit={open}>
+  return <><form className="files-auth" data-step={info ? "review" : "inspect"} onSubmit={open}>
     <p className={`files-target ${profile.environment.toLowerCase()}`}>{profile.username}@{profile.host}:{profile.port} · {profile.environment}</p>
     {!info && <button type="button" className="secondary small" disabled={busy} onClick={inspect}>SSH 호스트 키 확인</button>}
+    {profiles.some(item => item.host !== profile.host || item.port !== profile.port) &&
+      <button type="button" className="secondary small" disabled={busy} onClick={() => setRouteDialog(true)}>경유 서버 사용</button>}
     {info && !info.token && <p className="form-note">저장된 SSH 호스트 키 <code>{info.keys[0]?.fingerprint}</code></p>}
     {info?.token && <fieldset className="files-trust" disabled={busy}>
       <legend>서버 지문 확인</legend>
@@ -366,7 +373,7 @@ function SftpConnect({ profile, onConnecting, onOpened }: { profile: SshProfile;
     </fieldset>}
     {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-  </form>;
+  </form>{routeDialog && <SftpRouteDialog target={profile} profiles={profiles} onBusy={onConnecting} onClose={() => setRouteDialog(false)} onOpened={onOpened} />}</>;
 }
 
 function directoryLocation({ path, location }: Directory): DirectoryLocation {
