@@ -1,7 +1,7 @@
-//! SQL for the SQLite object browser. Identifiers come from a schema snapshot,
+//! SQL clauses for database object browsers. Identifiers come from a schema snapshot,
 //! operators are fixed, and filter values are bound separately.
 
-use super::{quote_identifier, ColumnInfo, Result, Store};
+use super::{quote_identifier, Result, Store};
 use rusqlite::{types::Value, Connection};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -9,6 +9,12 @@ use std::collections::HashSet;
 #[derive(Deserialize)]
 pub struct TableQuery {
     object: String,
+    #[serde(flatten)]
+    clauses: TableQueryClauses,
+}
+
+#[derive(Default, Deserialize)]
+pub struct TableQueryClauses {
     filters: Vec<Filter>,
     conjunction: Conjunction,
     sort: Vec<Sort>,
@@ -37,15 +43,16 @@ enum Condition {
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-enum FilterValue {
+pub(crate) enum FilterValue {
     Text(String),
     Integer(String),
     Real(String),
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Conjunction {
+    #[default]
     All,
     Any,
 }
@@ -74,20 +81,64 @@ enum NullOrder {
 
 impl TableQuery {
     pub(crate) fn sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
+        let object = Store::read_object(db, &self.object)?;
+        let columns = Store::object_columns(db, &object.name)?;
+        let names = columns
+            .iter()
+            .filter(|column| column.hidden != 1)
+            .map(|column| column.name.as_str());
+        let mut keys: Vec<_> = columns
+            .iter()
+            .filter(|column| column.primary_key_position > 0 && column.hidden != 1)
+            .collect();
+        keys.sort_by_key(|column| column.primary_key_position);
+        let mut params = Vec::new();
+        let suffix = self.clauses.suffix(
+            "sp_source",
+            names,
+            keys.into_iter().map(|column| column.name.as_str()),
+            |value| {
+                params.push(value.sqlite_value()?);
+                Ok("?".into())
+            },
+            |column, parameter| format!("instr({column}, {parameter}) > 0"),
+        )?;
+        Ok((
+            format!(
+                "SELECT sp_source.*\nFROM main.{} AS sp_source{suffix}",
+                quote_identifier(&object.name)
+            ),
+            params,
+        ))
+    }
+}
+
+impl TableQueryClauses {
+    pub(crate) fn suffix<'a>(
+        &self,
+        qualifier: &str,
+        columns: impl IntoIterator<Item = &'a str>,
+        primary_keys: impl IntoIterator<Item = &'a str>,
+        mut bind: impl FnMut(&FilterValue) -> Result<String>,
+        contains: impl Fn(&str, &str) -> String,
+    ) -> Result<String> {
         if self.filters.len() > 16 || self.sort.len() > 8 {
             return Err("필터는 최대 16개, 정렬 열은 최대 8개까지 선택할 수 있습니다.".into());
         }
-        let object = Store::read_object(db, &self.object)?;
-        let columns = Store::object_columns(db, &object.name)?;
-        let mut sql = format!(
-            "SELECT sp_source.*\nFROM main.{} AS sp_source",
-            quote_identifier(&object.name)
-        );
-        let mut params = Vec::new();
+        let columns: HashSet<_> = columns.into_iter().collect();
+        let source_column = |name: &str| {
+            if !columns.contains(name) {
+                return Err(
+                    "테이블 또는 뷰에 표시되는 열만 필터와 정렬에 사용할 수 있습니다.".into(),
+                );
+            }
+            Ok::<_, String>(format!("{qualifier}.{}", quote_identifier(name)))
+        };
+        let mut sql = String::new();
         let mut conditions = Vec::new();
         for filter in &self.filters {
-            let column = source_column(&columns, &filter.column)?;
-            conditions.push(filter.condition.sql(&column, &mut params)?);
+            let column = source_column(&filter.column)?;
+            conditions.push(filter.condition.sql(&column, &mut bind, &contains)?);
         }
         if !conditions.is_empty() {
             let separator = match self.conjunction {
@@ -101,7 +152,7 @@ impl TableQuery {
         let mut seen = HashSet::new();
         let mut order = Vec::new();
         for sort in &self.sort {
-            let column = source_column(&columns, &sort.column)?;
+            let column = source_column(&sort.column)?;
             if !seen.insert(sort.column.as_str()) {
                 return Err("같은 열을 두 번 정렬할 수 없습니다.".into());
             }
@@ -118,26 +169,26 @@ impl TableQuery {
         }
         // An available primary key resolves ties in the requested sort and
         // also gives plain table browsing a predictable default order.
-        let mut primary_keys: Vec<_> = columns
-            .iter()
-            .filter(|column| column.primary_key_position > 0 && column.hidden != 1)
-            .collect();
-        primary_keys.sort_by_key(|column| column.primary_key_position);
         for key in primary_keys {
-            if !seen.contains(key.name.as_str()) {
-                order.push(format!("sp_source.{} ASC", quote_identifier(&key.name)));
+            if !seen.contains(key) {
+                order.push(format!("{qualifier}.{} ASC", quote_identifier(key)));
             }
         }
         if !order.is_empty() {
             sql.push_str("\nORDER BY ");
             sql.push_str(&order.join(", "));
         }
-        Ok((sql, params))
+        Ok(sql)
     }
 }
 
 impl Condition {
-    fn sql(&self, column: &str, params: &mut Vec<Value>) -> Result<String> {
+    fn sql(
+        &self,
+        column: &str,
+        bind: &mut impl FnMut(&FilterValue) -> Result<String>,
+        contains: &impl Fn(&str, &str) -> String,
+    ) -> Result<String> {
         let (operator, value) = match self {
             Self::Eq { value } => ("=", value),
             Self::Ne { value } => ("<>", value),
@@ -149,23 +200,29 @@ impl Condition {
                 if std::mem::discriminant(from) != std::mem::discriminant(to) {
                     return Err("범위의 시작 값과 끝 값은 형식이 같아야 합니다.".into());
                 }
-                params.push(from.sqlite_value()?);
-                params.push(to.sqlite_value()?);
-                return Ok(format!("{column} BETWEEN ? AND ?"));
+                return Ok(format!(
+                    "{column} BETWEEN {} AND {}",
+                    bind(from)?,
+                    bind(to)?
+                ));
             }
             Self::Contains { value } => {
-                params.push(text_value(value)?);
-                return Ok(format!("instr({column}, ?) > 0"));
+                return Ok(contains(column, &bind(&FilterValue::Text(value.clone()))?));
             }
             Self::IsNull => return Ok(format!("{column} IS NULL")),
             Self::IsNotNull => return Ok(format!("{column} IS NOT NULL")),
         };
-        params.push(value.sqlite_value()?);
-        Ok(format!("{column} {operator} ?"))
+        Ok(format!("{column} {operator} {}", bind(value)?))
     }
 }
 
 impl FilterValue {
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::Text(value) | Self::Integer(value) | Self::Real(value) => value,
+        }
+    }
+
     fn sqlite_value(&self) -> Result<Value> {
         match self {
             Self::Text(value) => text_value(value),
@@ -190,12 +247,4 @@ fn text_value(value: &str) -> Result<Value> {
         return Err("텍스트 필터 값은 4096자까지 입력할 수 있습니다.".into());
     }
     Ok(Value::Text(value.into()))
-}
-
-fn source_column(columns: &[ColumnInfo], name: &str) -> Result<String> {
-    let column = columns
-        .iter()
-        .find(|column| column.name == name && column.hidden != 1)
-        .ok_or("테이블 또는 뷰에 표시되는 열만 필터와 정렬에 사용할 수 있습니다.")?;
-    Ok(format!("sp_source.{}", quote_identifier(&column.name)))
 }

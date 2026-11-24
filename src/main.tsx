@@ -1386,7 +1386,7 @@ function App() {
             }}>중단 위치로 이동</button>}
           </div>}
         </div>}
-        {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
+        {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={clauses => void executeQuery({ kind: "table", request: { object: selectedObject.name, ...clauses } })} />}
         {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
           <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
           <pre>{result.generated_sql}</pre>

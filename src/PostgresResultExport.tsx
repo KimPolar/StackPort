@@ -4,7 +4,7 @@ import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter 
 import { ResultFileDialog, type ExportDriver, type ExportFileOptions, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 
 export type PostgresScope = { kind: "document" } | { kind: "selection"; start: number; end: number } | { kind: "current"; cursor: number };
-export type PostgresExportTarget = { session: string; source: string; scope: PostgresScope; title: string };
+export type PostgresExportTarget = { session: string; source: string; scope: PostgresScope; title: string; bindings?: PostgresBindings };
 type NativeOutcome = { status: "exported"; report: ExportReport } |
   { status: "failed"; error: string } |
   { status: "interrupted"; timed_out: boolean } |
@@ -36,7 +36,7 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
 
   const cancelQuery = (token: string) => invoke<boolean>("cancel_postgres_sql", { id: target.session, request: token });
   async function run(token: string, options: ExportFileOptions): Promise<ExportOutcome> {
-    let bindings: PostgresBindings | undefined;
+    let bindings = target.bindings;
     setWritten(0);
     try {
       for (;;) {
@@ -51,6 +51,7 @@ export function PostgresResultExport({ profile, target, onClosed, onClose, onExp
         if (response.status !== "parameters_required" || response.connection_closed) {
           throw new Error("PostgreSQL 연결을 확인한 뒤 다시 내보내세요.");
         }
+        if (target.bindings) throw new Error("그리드에서 필터를 다시 적용한 뒤 내보내세요.");
         setSubmitting(false); setCancelStatus("");
         const next = await new Promise<PostgresBindings | null>(resolve => {
           resolveValues.current = resolve;

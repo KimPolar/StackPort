@@ -45,6 +45,9 @@ async function startPostgres() {
        SELECT i, CASE i WHEN 1 THEN NULL WHEN 2 THEN repeat('한', 513) WHEN 3 THEN '' ELSE '행 ' || i END,
        9007199254740993.123, '마지막 열' FROM generate_series(1, 105) AS series(i);`.replace(/\s+/g, ' '),
     'CREATE VIEW report.visible AS SELECT id FROM report."quoted table" WHERE id=4;',
+    'CREATE TABLE report.filtered_dates (id integer PRIMARY KEY, "due date" date);',
+    "INSERT INTO report.filtered_dates VALUES (1, NULL), (2, '2025-12-31'), (3, '2026-01-02'), (4, '2026-01-31');",
+    'GRANT SELECT ON report.filtered_dates TO fixture_reader;',
     'CREATE TABLE report.denied (id integer);',
     'CREATE TABLE report.write_probe (id integer);',
     'CREATE TABLE report.plan_events (id integer PRIMARY KEY, payload text);',
@@ -250,6 +253,46 @@ async function verify(browser, fixture, gateway) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
+  const grid = (clauses, rowPage = 0, columnPage = 0, object = table.id) => command('postgres_page', {
+    id: session.id, object, rowPage, columnPage, query: { conjunction: 'all', filters: [], sort: [], ...clauses },
+  });
+  const filter = (column, condition) => ({ column, condition });
+  const text = value => ({ kind: 'text', value });
+  const exact = (column, value) => filter(column, { kind: 'eq', value: text(value) });
+  const range = (column, from, to) => filter(column, { kind: 'between', from: text(from), to: text(to) });
+  const sort = (column, direction = 'asc', nulls = 'default') => ({ column, direction, nulls });
+  const gridClauses = {
+    filters: [range('id', '2', '105'), exact('precise', '9007199254740993.123'), exact('extra_23', '마지막 열')],
+    sort: [sort('id', 'desc')],
+  };
+  const firstFiltered = await grid(gridClauses);
+  assert.ok(firstFiltered.column_names.includes('extra_23'));
+  assert.deepEqual(firstFiltered.parameter_types, [23, 23, 1700, 25]);
+  assert.match(firstFiltered.source, /WHERE "quoted table"\."id" BETWEEN \$1 AND \$2 AND .* \$4\nORDER BY "quoted table"\."id" DESC/);
+  assert.ok(!firstFiltered.source.includes('9007199254740993.123'));
+  assert.deepEqual([firstFiltered.rows[0][0].value, firstFiltered.rows[99][0].value, firstFiltered.has_next], ['105', '6', true]);
+  const secondFiltered = await grid(gridClauses, 1);
+  assert.deepEqual(secondFiltered.rows.map(row => row[0].value), ['5', '4', '3', '2']);
+  assert.equal(secondFiltered.has_next, false);
+  const lastColumns = await grid(gridClauses, 1, 1);
+  assert.deepEqual(lastColumns.rows.map(row => row[1].value), Array(4).fill('마지막 열'));
+  const either = await grid({
+    conjunction: 'any',
+    filters: [filter('note', { kind: 'is_null' }), filter('note', { kind: 'contains', value: '행 105' }), exact('note', '')],
+    sort: [sort('note', 'asc', 'first'), sort('id', 'desc')],
+  });
+  assert.deepEqual(either.rows.map(row => row[0].value), ['1', '3', '105']);
+  assert.match(either.source, /ORDER BY .*"note" ASC NULLS FIRST, .*"id" DESC/);
+  assert.match((await grid({ sort: [sort('note')] })).source, /ORDER BY .*"note" ASC, .*"id" ASC/);
+  const dates = await grid({
+    filters: [range('due date', '2026-01-01', '2026-01-31')], sort: [sort('due date', 'desc', 'last')],
+  }, 0, 0, findObject('filtered_dates'));
+  assert.deepEqual(dates.parameter_types, [1082, 1082]);
+  assert.deepEqual(dates.rows.map(row => row[0].value), ['4', '3']);
+  await assert.rejects(grid({ filters: [exact('id', '잘못된 값')] }), /필터 값의 형식/);
+  await assert.rejects(grid({ filters: [exact('missing', '1')] }), /표시되는 열/);
+  await assert.rejects(grid({ sort: [sort('id'), sort('id')] }), /두 번 정렬/);
+  assert.equal((await grid({ filters: [exact('note', "행 '105")] })).rows.length, 0);
   const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null, mode = undefined, file = undefined) =>
     command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings, mode, export: file });
   const explain = (sql, mode, bindings = null) => query(sql, undefined, undefined, bindings, mode);
@@ -525,6 +568,54 @@ async function verify(browser, fixture, gateway) {
   const exportedTable = fs.readFileSync(tableExport, 'utf8');
   assert.match(exportedTable, /"extra_23"\r\n1,\\N,9007199254740993\.123,/);
   assert.match(exportedTable, /\r\n105,"행 105",/);
+  await page.getByRole('button', { name: '이전 열 페이지', exact: true }).click();
+  await data.getByRole('columnheader', { name: /id.*PK 1/ }).waitFor();
+  const gridPane = page.getByRole('region', { name: 'PostgreSQL 조회 결과', exact: true });
+  const filters = gridPane.locator('.table-query-controls');
+  await filters.getByText('필터 및 정렬', { exact: true }).click();
+  await filters.getByRole('button', { name: '조건 추가', exact: true }).click();
+  await filters.getByLabel('필터 1 값', { exact: true }).fill('wrong-integer');
+  await filters.getByRole('button', { name: '적용', exact: true }).click();
+  await gridPane.getByRole('alert').getByText(/필터 값의 형식/).waitFor();
+  assert.equal(await filters.getByLabel('필터 1 값', { exact: true }).inputValue(), 'wrong-integer');
+  await filters.getByLabel('필터 1 연산자').selectOption('between');
+  await filters.getByLabel('필터 1 값', { exact: true }).fill('2');
+  await filters.getByLabel('필터 1 끝 값', { exact: true }).fill('105');
+  await filters.getByRole('button', { name: '조건 추가', exact: true }).click();
+  await filters.getByLabel('필터 2 열').selectOption('extra_23');
+  await filters.getByLabel('필터 2 값', { exact: true }).fill('마지막 열');
+  await filters.getByRole('button', { name: '정렬 열 추가', exact: true }).click();
+  await filters.getByLabel('정렬 1 방향').selectOption('desc');
+  await filters.getByRole('button', { name: '적용', exact: true }).click();
+  await data.getByRole('row').nth(1).getByRole('cell').first().getByText('105', { exact: true }).waitFor();
+  await gridPane.getByText('조회 SQL', { exact: true }).click();
+  const filterSql = await gridPane.getByLabel('PostgreSQL 그리드 조회 SQL').textContent();
+  assert.match(filterSql, /BETWEEN \$1 AND \$2.*\$3\nORDER BY .*"id" DESC/);
+  assert.ok(!filterSql.includes('마지막 열'));
+  await gridPane.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
+  await data.getByRole('row').nth(1).getByRole('cell').first().getByText('5', { exact: true }).waitFor();
+  assert.equal(await data.getByRole('row').count(), 5);
+  const filteredExport = path.join(root, 'postgres-filtered.csv');
+  await gridPane.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await exportDialog.getByLabel('새 CSV 파일 경로', { exact: true }).fill(filteredExport);
+  await exportDialog.getByRole('button', { name: 'CSV 저장', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+  await page.getByText('CSV 저장 완료 · 104행', { exact: true }).waitFor();
+  const filteredIds = fs.readFileSync(filteredExport, 'utf8').trimEnd().split('\r\n').slice(1)
+    .map(row => Number(row.slice(0, row.indexOf(','))));
+  assert.deepEqual(filteredIds, Array.from({ length: 104 }, (_, position) => 105 - position));
+  const filteredJson = path.join(root, 'postgres-filtered.json');
+  await gridPane.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(filteredJson);
+  await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+  await page.getByText('JSON 저장 완료 · 104행', { exact: true }).waitFor();
+  const filteredJsonRows = JSON.parse(fs.readFileSync(filteredJson, 'utf8')).rows;
+  assert.deepEqual(filteredJsonRows.map(row => Number(row[0])), filteredIds);
+  assert.ok(filteredJsonRows.every(row => row[2] === '9007199254740993.123' && row[25] === '마지막 열'));
+  await filters.getByRole('button', { name: '초기화', exact: true }).click();
+  await data.getByRole('row').nth(1).getByRole('cell').first().getByText('1', { exact: true }).waitFor();
   await openObject('meta_child');
   await structureButton();
   await structurePane.getByText('강제 적용', { exact: true }).waitFor();
@@ -757,7 +848,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (catalog structure, definitions, foreign keys, partitions, SQL, TLS and exports).');
+    console.log('Windows PostgreSQL E2E passed (grid filters, sort, whole exports, catalog structure, SQL and TLS).');
   } finally {
     await browser?.close();
     gateway?.close();

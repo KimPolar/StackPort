@@ -1,9 +1,10 @@
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
     export::EXPORT_TIMEOUT,
+    parameters::Value,
     sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
-use crate::{quote_identifier, Result, SshTunnelManager, Store};
+use crate::{quote_identifier, Result, SshTunnelManager, Store, TableQueryClauses};
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -106,6 +107,9 @@ pub struct PostgresPage {
     has_next: bool,
     primary_key_order: bool,
     primary_key_columns: Vec<String>,
+    column_names: Vec<String>,
+    source: String,
+    parameter_types: Vec<u32>,
 }
 
 pub struct PostgresManager {
@@ -293,11 +297,18 @@ impl PostgresManager {
         object: i64,
         row_page: u32,
         column_page: u32,
+        query: Option<TableQueryClauses>,
     ) -> Result<PostgresPage> {
         let session = self.session(id)?;
         timeout(
             QUERY_TIMEOUT,
-            browse(&session, object, row_page, column_page),
+            browse(
+                &session,
+                object,
+                row_page,
+                column_page,
+                query.unwrap_or_default(),
+            ),
         )
         .await
         .map_err(|_| "데이터 페이지를 읽는 시간이 초과되었습니다.")?
@@ -433,6 +444,7 @@ async fn browse(
     object: i64,
     row_page: u32,
     column_page: u32,
+    query: TableQueryClauses,
 ) -> Result<PostgresPage> {
     let mut client = session.client.lock().await;
     let tx = client
@@ -467,18 +479,31 @@ async fn browse(
     let total_columns = all_columns.len();
     let primary_key_columns = primary_key_columns(&all_columns);
     let primary_key_order = !primary_key_columns.is_empty();
-    let order = if primary_key_order {
-        format!(
-            " ORDER BY {}",
-            primary_key_columns
-                .iter()
-                .map(|name| quote_identifier(name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        String::new()
-    };
+    let column_names: Vec<_> = all_columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let table = quote_identifier(&name);
+    let mut values = Vec::new();
+    let suffix = query.suffix(
+        &table,
+        column_names.iter().map(String::as_str),
+        primary_key_columns.iter().map(String::as_str),
+        |value| {
+            let value = value.text();
+            if value.contains('\0') || value.chars().take(4097).count() > 4096 {
+                return Err("필터 값은 NUL 문자 없이 4096자 이하여야 합니다.".into());
+            }
+            values.push(Value::Text {
+                value: Zeroizing::new(value.to_owned()),
+            });
+            Ok(format!("${}", values.len()))
+        },
+        |column, parameter| {
+            format!("pg_catalog.strpos({column}::pg_catalog.text, {parameter}) > 0")
+        },
+    )?;
+    let from = format!("\nFROM {}.{table}{suffix}", quote_identifier(&schema));
     let start = usize::try_from(offset(column_page, COLUMN_SIZE)).unwrap_or(usize::MAX);
     if start >= total_columns && column_page != 0 {
         return Err("열 페이지를 다시 선택하세요.".into());
@@ -495,7 +520,7 @@ async fn browse(
             .iter()
             .map(|column| {
                 format!(
-                    "pg_catalog.left({}::pg_catalog.text, {})",
+                    "pg_catalog.left({table}.{}::pg_catalog.text, {})",
                     quote_identifier(&column.name),
                     VALUE_LENGTH + 1
                 )
@@ -503,15 +528,26 @@ async fn browse(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let sql = format!(
-        "SELECT {projection} FROM {}.{}{order} LIMIT 101 OFFSET $1",
-        quote_identifier(&schema),
-        quote_identifier(&name)
-    );
-    let result = tx
-        .query(&sql, &[&offset(row_page, ROW_SIZE)])
+    let row_offset = offset(row_page, ROW_SIZE);
+    let sql = format!("SELECT {projection}{from}\nLIMIT 101 OFFSET {row_offset}");
+    let statement =
+        tx.prepare(&sql)
+            .await
+            .map_err(|error| match error.code().map(|code| code.code()) {
+                Some("42883" | "42P18" | "42804") => {
+                    "선택한 열에서 해당 필터 또는 정렬을 사용할 수 없습니다.".into()
+                }
+                _ => pg_error(error),
+            })?;
+    let portal = tx
+        .bind_raw(&statement, values.iter())
         .await
-        .map_err(pg_error)?;
+        .map_err(|error| match error.code().map(|code| code.code()) {
+            Some(code) if code.starts_with("22") => "필터 값의 형식이나 범위를 확인하세요.".into(),
+            _ => pg_error(error),
+        })?;
+    let result = tx.query_portal(&portal, 0).await.map_err(pg_error)?;
+    let parameter_types = statement.params().iter().map(|ty| ty.oid()).collect();
     let has_next = result.len() > ROW_SIZE;
     let rows = preview_rows(&result, columns.len())?;
     tx.commit().await.map_err(pg_error)?;
@@ -525,6 +561,9 @@ async fn browse(
         has_next,
         primary_key_order,
         primary_key_columns,
+        column_names,
+        source: format!("SELECT *{from}"),
+        parameter_types,
     })
 }
 

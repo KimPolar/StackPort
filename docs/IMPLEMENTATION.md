@@ -14,6 +14,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 PostgreSQL 14 이상에서 시스템 스키마를 제외한 스키마와 테이블·파티션 테이블·뷰·구체화 뷰를 조회합니다. 연결과 조회 트랜잭션에 읽기 전용 정책을 적용하고 스키마 접근 권한과 테이블·뷰의 SELECT 권한을 표시합니다. 데이터는 한 번에 100행과 24열, 값 하나를 512자까지 표시합니다. 숫자는 서버가 반환한 문자열을 유지하며 NULL과 빈 문자열을 구분합니다. 기본 키가 있는 객체는 키 순서로 읽습니다. 다른 객체의 페이지 순서는 서버 실행 계획에 따라 달라질 수 있습니다. [PostgreSQL 세션 제한](https://www.postgresql.org/docs/current/runtime-config-client.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/current/sql-set-transaction.html)
 
+**필터 및 정렬**은 현재 열 페이지 밖의 열도 사용할 수 있습니다. 비교·범위·문자열 포함·NULL 조건을 최대 16개까지 AND 또는 OR로 결합합니다. 입력값은 PostgreSQL이 추론한 타입으로 바인딩합니다. 날짜 범위를 입력할 때는 날짜 선택기를 사용할 수 있습니다. 최대 8개 열에 방향과 NULL 순서를 지정할 수 있으며, 기본 키가 있으면 정렬 목록에 없는 키 열을 마지막에 적용해 동률을 구분합니다. 조건을 적용하거나 초기화하면 첫 행 페이지로 이동합니다. **조회 SQL**과 **SQL로 열기**는 필터 값 대신 `$1` 같은 매개변수를 표시합니다. SQL 편집기에서 문장을 별도로 실행할 때는 값을 입력합니다. [PostgreSQL 매개변수 타입 추론](https://www.postgresql.org/docs/18/sql-prepare.html) · [PostgreSQL 정렬](https://www.postgresql.org/docs/18/queries-order.html)
+
 객체의 **데이터**와 **구조**를 오갈 수 있습니다. 구조에서 현재 역할의 객체 권한과 행 수준 보안 상태를 확인하고, 열의 기본값·생성 식·정렬 규칙, 제약조건, 인덱스, 트리거, 파티션을 열어 봅니다. 선택한 항목만 읽기 전용 스냅샷으로 조회하며 목록은 32개씩 표시합니다. 현재 역할에 스키마 `USAGE`와 대상 `SELECT` 권한이 있으면 외래 키의 참조 대상이나 하위 파티션의 구조로 이동할 수 있습니다. [PostgreSQL 권한 검사 함수](https://www.postgresql.org/docs/18/functions-info.html) · [PostgreSQL 열 카탈로그](https://www.postgresql.org/docs/16/catalog-pg-attribute.html)
 
 서버에서 가져온 뷰의 조회 정의, 인덱스와 트리거의 생성 SQL, 열·제약조건·파티션의 정의 일부를 복사하거나 새 UTF-8 SQL 파일로 저장합니다. 정의가 16,384자를 넘으면 앞부분을 표시합니다. 복사와 저장은 화면에서 전체를 확인할 수 있는 정의에 제공됩니다. [PostgreSQL 정의 조회 함수](https://www.postgresql.org/docs/18/functions-info.html)
@@ -26,7 +28,7 @@ SQL은 읽기 전용 트랜잭션 안에서 단일 조회로 준비해 실행한
 
 PostgreSQL 편집기의 **실행 계획**은 선택 영역 또는 문서의 단일 조회를 `EXPLAIN`으로 분석해 예상 행과 비용, 계획 수립 시간, 스캔·조인·인덱스 단계를 표시합니다. **실행 분석**을 확인하면 같은 문장을 읽기 전용 트랜잭션에서 실제로 실행해 서버 시간, 루프당 실제 행과 시간, 공유·임시 버퍼 블록 및 정렬 방식을 측정합니다. 분석은 조회 미리보기의 100행 제한을 적용하지 않고, 서버의 8초 문장 제한과 취소 경로를 사용합니다. 루프 합산 시간이 가장 긴 리프와 예상·실제 행 수가 크게 다른 단계에 표시를 붙입니다. 같은 탭에서 단계·텍스트 계획과 이전 조회 결과를 오갈 수 있습니다. 표시 데이터는 계획의 객체 이름과 지표로 한정하며, 최대 2 MiB에서 200단계까지 읽습니다. [PostgreSQL EXPLAIN 옵션](https://www.postgresql.org/docs/18/sql-explain.html) · [PostgreSQL 실행 계획 해석](https://www.postgresql.org/docs/18/using-explain.html)
 
-테이블·뷰 또는 SQL 조회 결과에서 **결과 내보내기**를 눌러 전체 결과를 UTF-8 CSV·JSON으로 저장합니다. 테이블은 기본 키가 있으면 키 순서로 다시 조회합니다. SQL은 마지막 실행의 문장 범위를 사용하며, 매개변수 값은 다시 입력합니다. JSON은 열 이름과 PostgreSQL 타입을 순서대로 기록하고 셀을 서버의 전체 텍스트 표현 또는 JSON `null`로 저장합니다. 숫자의 정밀도, 중복 열 이름, NULL과 빈 문자열을 유지합니다. CSV에는 열 이름과 수식 접두사 보호 옵션이 있습니다. CSV의 NULL은 인용되지 않은 `\N`으로 기록합니다. [PostgreSQL 포털과 결과 형식](https://www.postgresql.org/docs/18/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY)
+테이블·뷰 또는 SQL 조회 결과에서 **결과 내보내기**를 눌러 전체 결과를 UTF-8 CSV·JSON으로 저장합니다. 그리드에서 내보낼 때는 적용한 필터 값과 정렬을 그대로 사용해 전체 열과 행을 다시 조회합니다. SQL 편집기는 마지막 실행의 문장 범위를 사용하며, 매개변수 값은 다시 입력합니다. JSON은 열 이름과 PostgreSQL 타입을 순서대로 기록하고 셀을 서버의 전체 텍스트 표현 또는 JSON `null`로 저장합니다. 숫자의 정밀도, 중복 열 이름, NULL과 빈 문자열을 유지합니다. CSV에는 열 이름과 수식 접두사 보호 옵션이 있습니다. CSV의 NULL은 인용되지 않은 `\N`으로 기록합니다. [PostgreSQL 포털과 결과 형식](https://www.postgresql.org/docs/18/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY)
 
 읽기 전용 조회를 스트리밍하며 기록한 행 수를 표시합니다. 조회와 임시 파일 완료 제한은 5분이며, 한 행에 32 MiB를 초과하는 텍스트가 있으면 오류를 표시합니다. 취소나 조회 오류 시 임시 파일을 정리합니다. 조회가 완료되면 임시 파일을 동기화한 뒤 기존 파일이 없는 경로에만 게시합니다. 성공 기록에는 연결과 작업 종류, 행 수를 남깁니다.
 
@@ -293,6 +295,8 @@ node tests/desktop-smoke.cjs
 PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한을 확인합니다. PostgreSQL 18.6에서 조회 제한, 쓰기 차단, 타입별 매개변수 바인딩과 Latin-1 인코딩 변환 오류, 예상·실제 실행 계획, 서버 취소·응답 시간 제한, SQL 초안과 파일·결과 탭, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검증합니다.
 
 객체 구조 검사에서는 복합 외래 키 열 순서, 생성 열, 부분 인덱스, 비활성 트리거, 하위 파티션의 직접 조회 권한, 구조 목록의 페이지 이동과 뷰 정의 파일의 내용을 확인합니다.
+
+그리드 검사는 날짜 범위와 NULL 순서, 정밀한 `numeric` 일치, 다른 열 페이지의 필터 조건, 입력 형식 오류 후 수정, 적용한 조건의 페이지 이동과 전체 CSV·JSON 행 순서를 확인합니다.
 
 ```powershell
 $env:STACKPORT_TEST_ROOT = '<출력된 테스트 폴더>'

@@ -12,7 +12,7 @@ use stackport_core::{
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
-    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
+    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
@@ -818,8 +818,11 @@ async fn postgres_objects(postgres: State<'_, PostgresManager>, id: String, sche
 }
 
 #[tauri::command]
-async fn postgres_page(postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32) -> Result<PostgresPage, String> {
-    postgres.page(&id, object, row_page, column_page).await
+async fn postgres_page(
+    postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32,
+    query: Option<TableQueryClauses>,
+) -> Result<PostgresPage, String> {
+    postgres.page(&id, object, row_page, column_page, query).await
 }
 
 #[tauri::command]

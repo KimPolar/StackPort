@@ -17,18 +17,20 @@ type Condition =
 type Conjunction = "all" | "any";
 type Sort = { column: string; direction: "asc" | "desc"; nulls: "default" | "first" | "last" };
 
-export type TableQuery = {
-  object: string;
+export type TableQueryClauses = {
   conjunction: Conjunction;
   filters: { column: string; condition: Condition }[];
   sort: Sort[];
 };
+export type TableQuery = TableQueryClauses & { object: string };
 type FilterDraft = { id: number; column: string; operator: Operator; kind: FilterValue["kind"] | "date"; value: string; to: string };
 type SortDraft = Sort & { id: number };
 
 export function defaultTableQuery(object: string): TableQuery {
-  return { object, conjunction: "all", filters: [], sort: [] };
+  return { object, ...emptyTableQueryClauses };
 }
+
+export const emptyTableQueryClauses: TableQueryClauses = { conjunction: "all", filters: [], sort: [] };
 
 function filterCondition(draft: FilterDraft): Condition {
   const { operator, value, to } = draft;
@@ -39,11 +41,12 @@ function filterCondition(draft: FilterDraft): Condition {
   return { kind: operator, value: { kind, value } };
 }
 
-export function TableQueryControls({ object, columns, busy, apply }: {
-  object: string;
+export function TableQueryControls({ columns, busy, apply, engine = "sqlite", errorId }: {
   columns: string[];
   busy: boolean;
-  apply: (query: TableQuery) => void;
+  apply: (query: TableQueryClauses) => void;
+  engine?: "sqlite" | "postgres";
+  errorId?: string;
 }) {
   const [conjunction, setConjunction] = useState<Conjunction>("all");
   const [filters, setFilters] = useState<FilterDraft[]>([]);
@@ -84,15 +87,14 @@ export function TableQueryControls({ object, columns, busy, apply }: {
     setConjunction("all");
     setFilters([]);
     setSort([]);
-    apply(defaultTableQuery(object));
+    apply(emptyTableQueryClauses);
   }
 
   return <details className="table-query-controls">
-    <summary><SlidersHorizontal size={14} /> 필터 및 정렬</summary>
-    <form onSubmit={event => {
+    <summary><SlidersHorizontal size={14} aria-hidden /> 필터 및 정렬</summary>
+    <form aria-describedby={errorId} onSubmit={event => {
       event.preventDefault();
       apply({
-        object,
         conjunction,
         filters: filters.map(row => ({ column: row.column, condition: filterCondition(row) })),
         sort: sort.map(({ column, direction, nulls }) => ({ column, direction, nulls })),
@@ -117,9 +119,11 @@ export function TableQueryControls({ object, columns, busy, apply }: {
               {operators.map(([operator, name]) => <option key={operator} value={operator}>{name}</option>)}
             </select>
             {hasValue && row.operator !== "contains" && <select aria-label={`${label} 값 형식`} value={row.kind} onChange={event => updateFilter(row.id, { kind: event.target.value as FilterDraft["kind"] })}>
-              <option value="text">텍스트</option>
-              <option value="integer">정수</option>
-              <option value="real">실수</option>
+              <option value="text">{engine === "postgres" ? "열의 형식" : "텍스트"}</option>
+              {engine === "sqlite" && <>
+                <option value="integer">정수</option>
+                <option value="real">실수</option>
+              </>}
               <option value="date">날짜 (YYYY-MM-DD)</option>
             </select>}
             {hasValue && <input type={row.kind === "date" && row.operator !== "contains" ? "date" : "text"} aria-label={`${label} 값`} placeholder={row.operator === "between" ? "시작 값" : "값"} value={row.value} maxLength={4096} required={row.kind !== "text" && row.operator !== "contains"} onChange={event => updateFilter(row.id, { value: event.target.value })} />}

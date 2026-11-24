@@ -89,7 +89,7 @@ PARTIAL = {
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 스키마 내 테이블·뷰 이름 검색",
-    "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
+    "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite 읽기 전용 연결과 쓰기 차단, PostgreSQL 읽기 전용 연결 및 스키마·SELECT 권한 확인",
@@ -100,8 +100,8 @@ PARTIAL = {
     "SP-DT-005": "SQLite 기본 키 검증과 키 없는 테이블 편집 차단",
     "SP-DT-006": "SQLite의 NULL·빈 문자열·숫자 구분과 단일 셀 입력, PostgreSQL의 NULL·빈 문자열 구분과 숫자 정밀도 유지",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집",
-    "SP-DT-010": "SQLite 테이블·뷰의 비교·범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시",
-    "SP-DT-011": "SQLite 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화",
+    "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시와 PostgreSQL 서버 타입 바인딩",
+    "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
     "SP-DT-020": "단일 셀 변경의 시작·성공·실패 감사 기록",
     "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
@@ -134,7 +134,7 @@ PARTIAL = {
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
-    "SP-MG-002": "SQLite·PostgreSQL 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
+    "SP-MG-002": "SQLite·PostgreSQL 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-005": "SQLite 저장 타입과 PostgreSQL 열 타입·정확한 텍스트·NULL 보존, CSV의 NULL·빈 문자열 구분",
     "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
@@ -349,6 +349,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/catalog.rs; src/PostgresObjectStructure.tsx"
                 if requirement_id in {"SP-DB-014", "SP-DB-018"}:
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-DT-010", "SP-DT-011"}:
+                evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
             if requirement_id in {

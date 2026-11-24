@@ -3,9 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
 import { PostgresObjectStructure, type PostgresObjectKind, type PostgresRelationLink } from "./PostgresObjectStructure";
 import { PostgresPager as Pager } from "./PostgresPager";
+import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
 import { PostgresResultExport, type PostgresExportTarget } from "./PostgresResultExport";
 import type { ExportReport } from "./ResultExportDialog";
+import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { usePostgresRead as useRead } from "./usePostgresRead";
 import "./postgresWorkspace.css";
 
@@ -19,12 +21,23 @@ type ObjectKind = PostgresObjectKind;
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
 type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null }[];
-  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean; primary_key_columns: string[] };
+  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean;
+  column_names: string[]; source: string; parameter_types: number[] };
 type Route = { id: string; name: string; port: number };
 const kindLabels: Record<ObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const number = new Intl.NumberFormat("ko-KR");
+
+function filterBindings(query: TableQueryClauses, types: number[]): PostgresBindings | undefined {
+  if (!types.length) return undefined;
+  const values = query.filters.flatMap(({ condition }) => {
+    if (condition.kind === "between") return [condition.from.value, condition.to.value];
+    if (condition.kind === "contains") return [condition.value];
+    return "value" in condition ? [condition.value.value] : [];
+  });
+  return { types, values: values.map(value => ({ kind: "text", value })) };
+}
 
 export function PostgresWorkspace({ profile, editor, onFileBusy }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
@@ -89,14 +102,10 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
       <div hidden={view !== "catalog"}>
-        <PostgresBrowse key={session.id} id={session.id} onFileBusy={onFileBusy} onOpenSql={(schema, table) => {
-          editor.add(`SELECT *\nFROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)};`);
+        <PostgresBrowse key={session.id} id={session.id} onFileBusy={onFileBusy} onOpenSql={source => {
+          editor.add(source + ";");
           setView("sql");
-        }} onExport={object => {
-          const order = object.primary_key_columns.length > 0 ? ` ORDER BY ${object.primary_key_columns.map(quoteIdentifier).join(", ")}` : "";
-          requestExport({ session: session.id, scope: { kind: "document" }, title: `${object.schema}.${object.name} 조회`,
-            source: `SELECT * FROM ${quoteIdentifier(object.schema)}.${quoteIdentifier(object.name)}${order}` });
-        }} />
+        }} onExport={requestExport} />
       </div>
     </>}
     <div hidden={view !== "sql"}><PostgresSqlWorkspace session={session?.id ?? null} editor={editor} onClosed={closedByQuery} onExport={requestExport} /></div>
@@ -155,7 +164,7 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
 }
 
 function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
-  id: string; onOpenSql: (schema: string, name: string) => void; onExport: (page: Page) => void; onFileBusy: (busy: boolean) => void;
+  id: string; onOpenSql: (source: string) => void; onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -168,31 +177,44 @@ function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
   const [refresh, setRefresh] = useState(0);
   const [structureOpen, setStructureOpen] = useState(false);
   const [structureRevision, setStructureRevision] = useState(0);
+  const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
+  const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
+  const errorId = useId();
   const schemaArgs = useMemo(() => ({ id, page: schemaPage }), [id, schemaPage]);
   const objectArgs = useMemo(() => schema ? { id, schema: schema.id, search: query, page: objectPage } : null, [id, schema, query, objectPage]);
-  const pageArgs = useMemo(() => object ? { id, object: object.id, rowPage, columnPage } : null, [id, object, rowPage, columnPage]);
+  const pageArgs = useMemo(() => object ? { id, object: object.id, rowPage, columnPage, query: tableQuery } : null,
+    [id, object, rowPage, columnPage, tableQuery]);
   const schemas = useRead<SchemaPage>("postgres_schemas", schemaArgs);
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
+  const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
+  const source = page.data?.source ?? (object && schema && !hasQuery
+    ? `SELECT *\nFROM ${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` : null);
+
+  useEffect(() => { if (page.data) setFilterColumns(page.data.column_names); }, [page.data]);
+
+  function selectObject(next: DatabaseObject | null, structure = false) {
+    setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(structure);
+    setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
+  }
 
   function chooseSchema(next: Schema | null) {
-    setSchema(next); setSearch(""); setQuery(""); setObjectPage(0); setObject(null);
+    setSchema(next); setSearch(""); setQuery(""); setObjectPage(0); selectObject(null);
   }
 
   function searchObjects(event: FormEvent) {
-    event.preventDefault(); setQuery(search.trim()); setObjectPage(0); setObject(null);
-  }
-
-  function chooseObject(next: DatabaseObject) {
-    if (next.id === object?.id) return;
-    setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(false);
+    event.preventDefault(); setQuery(search.trim()); setObjectPage(0); selectObject(null);
   }
 
   function follow(link: PostgresRelationLink) {
     if (!link.target) return;
     chooseSchema({ id: link.target.schema_id, name: link.schema, accessible: true });
-    setObject({ id: link.target.id, name: link.name, kind: link.target.kind, readable: true });
-    setRowPage(0); setColumnPage(0); setStructureOpen(true);
+    selectObject({ id: link.target.id, name: link.name, kind: link.target.kind, readable: true }, true);
+  }
+
+  function exportPage(data: Page) {
+    onExport({ session: id, source: data.source, scope: { kind: "document" }, title: `${data.schema}.${data.name} 조회`,
+      bindings: filterBindings(tableQuery, data.parameter_types) });
   }
 
   return <div className="postgres-layout">
@@ -216,17 +238,17 @@ function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
         {objects.data && <>
           {objects.data.objects.length ? <ul>{objects.data.objects.map(item => <li key={item.id}>
             <button type="button" aria-pressed={object?.id === item.id} disabled={!item.readable} title={item.name}
-              onClick={() => chooseObject(item)}><span>{item.name}</span><small>{item.readable ? kindLabels[item.kind] : "SELECT 권한 없음"}</small></button>
+              onClick={() => { if (object?.id !== item.id) selectObject(item); }}><span>{item.name}</span><small>{item.readable ? kindLabels[item.kind] : "SELECT 권한 없음"}</small></button>
           </li>)}</ul> : <p className="result-empty">표시할 테이블과 뷰가 없습니다.</p>}
-          <Pager label="객체" page={objectPage} next={objects.data.has_next} change={value => { setObjectPage(value); setObject(null); }} />
+          <Pager label="객체" page={objectPage} next={objects.data.has_next} change={value => { setObjectPage(value); selectObject(null); }} />
         </>}
       </>}
     </aside>
     <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={!structureOpen && page.loading}>
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
-          <button type="button" className="secondary small" onClick={() => onOpenSql(schema.name, object.name)}>SQL로 열기</button>
-          {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && onExport(page.data)}>결과 내보내기</button>}
+          <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
+          {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && exportPage(page.data)}>결과 내보내기</button>}
           <button type="button" className="secondary small" disabled={!structureOpen && page.loading}
             onClick={() => structureOpen ? setStructureRevision(value => value + 1) : setRefresh(value => value + 1)}>다시 조회</button>
         </div></div> :
@@ -240,10 +262,23 @@ function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />
       </>}
       <div hidden={structureOpen}>
-        {page.error && <p className="error-banner" role="alert">{page.error}</p>}
+        {object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns} engine="postgres"
+          busy={page.loading} errorId={page.error ? errorId : undefined} apply={next => {
+            if (next === tableQuery) setRefresh(value => value + 1);
+            setTableQuery(next); setRowPage(0);
+          }} />}
+        {page.error && <p id={errorId} className="error-banner" role="alert">{page.error}</p>}
         {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
         {page.data && <>
-          <p className="form-note postgres-page-note">{kindLabels[page.data.kind]} · {page.data.rows.length}행 · 전체 {page.data.total_columns}열 · {page.data.primary_key_order ? "기본 키 순서" : "고정 정렬 없음"}</p>
+          <p className="form-note postgres-page-note">{kindLabels[page.data.kind]} · {page.data.rows.length}행 · 전체 {page.data.total_columns}열
+            {tableQuery.filters.length > 0 && ` · 필터 ${tableQuery.filters.length}개`}
+            {tableQuery.sort.length > 0 ? ` · 정렬 ${tableQuery.sort.length}개` : page.data.primary_key_order ? " · 기본 키 순서" : " · 고정 정렬 없음"}
+          </p>
+          {hasQuery && <details className="table-query-sql">
+            <summary>조회 SQL</summary>
+            <pre tabIndex={0} aria-label="PostgreSQL 그리드 조회 SQL">{page.data.source}</pre>
+            {page.data.parameter_types.length > 0 && <p>필터 값은 $1부터 순서대로 바인딩됩니다.</p>}
+          </details>}
           {page.data.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
             <table aria-label="PostgreSQL 데이터"><thead><tr>{page.data.columns.map(column => <th key={column.name} scope="col">
               {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>

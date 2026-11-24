@@ -28,7 +28,7 @@ pub use rdp::{RdpAvailability, RdpManager, RdpRequest, RdpSession};
 mod restore;
 pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
-pub use table_query::TableQuery;
+pub use table_query::{TableQuery, TableQueryClauses};
 mod schema_diagram;
 pub use schema_diagram::{DiagramColumn, DiagramTable};
 mod schema_compare;
