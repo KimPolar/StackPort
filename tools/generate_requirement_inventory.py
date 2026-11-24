@@ -9,11 +9,11 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
-    "SP-UI-001": "프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제",
-    "SP-UI-002": "도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH·PostgreSQL 연결 탐색",
+    "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
+    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·SSH 연결 그룹, 주소·환경 표시와 SQLite 연결 아래의 테이블·뷰 탐색",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
-    "SP-UI-006": "명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결(SQLite·SSH·PostgreSQL)·선택한 SQLite 연결의 테이블과 뷰 검색",
+    "SP-UI-006": "탐색기에서 현재 프로젝트의 연결 이름·경로·주소·환경과 열린 SQLite 연결의 테이블·뷰 필터링, 명령 팔레트에서 도구·프로젝트 검색",
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
     "SP-UI-008": "Windows 상단·단축키에서 SSH·RDP·PostgreSQL 주소와 SQLite 파일 경로 판별, 현재 프로젝트 저장 연결 재사용, 새 대상 양식 채우기와 SSH 등록",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
@@ -368,6 +368,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 "SP-DT-006",
             }:
                 evidence += "; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-UI-001", "SP-UI-002", "SP-UI-006"}:
+                evidence += "; src/WorkspaceExplorer.tsx; src/workspaceExplorer.css"
+                if requirement_id != "SP-UI-006":
+                    evidence += "; tests/desktop-smoke.cjs"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006"}:
                 evidence += "; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row.rs; src/RowChangeDialog.tsx"
             if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-006", "SP-DT-022"}:

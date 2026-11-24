@@ -295,6 +295,14 @@ async function verify(browser, fixture, gateway, jump) {
   await quickConnect.getByLabel('연결 주소').fill(postgresAddress);
   await quickConnect.getByRole('button', { name: 'PG 검증 PROD', exact: true }).click();
   await quickConnect.waitFor({ state: 'detached' });
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기' });
+  const explorerSearch = explorer.getByRole('searchbox', { name: '탐색기 검색' });
+  await explorerSearch.fill(`postgres localhost ${fixture.port} prod`);
+  await explorer.getByRole('status').getByText('연결 1개 · 객체 0개', { exact: true }).waitFor();
+  await explorer.getByRole('button', { name: 'PostgreSQL PG 검증 열기', exact: true }).click();
+  await explorerSearch.fill('fixture_reader');
+  await explorer.getByRole('status').getByText('일치하는 연결이나 객체가 없습니다.').waitFor();
+  await explorerSearch.press('Escape');
   const close = id => command('close_postgres', { id });
   const open = (settings = profile, secret = password, confirmation = 'PROD', tunnelId = null, gridEdit = false) =>
     command('open_postgres', { profile: settings, password: secret, confirmation, tunnelId, gridEdit });

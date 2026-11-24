@@ -4,8 +4,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
-  Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
-  Pencil, Plug, Plus, RefreshCw, RotateCcw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
+  Database, FileCode2, FileDown, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
+  Plug, Plus, RefreshCw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
@@ -53,6 +53,7 @@ import type { TerminalDirectory } from "./terminalDirectory";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
+import { WorkspaceExplorer, type ExplorerProjectAction, type ExplorerSshAction } from "./WorkspaceExplorer";
 import { WorkspacePanes, WorkspaceSplitControls } from "./WorkspaceSplit";
 import {
   editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
@@ -177,7 +178,8 @@ function App() {
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
   const [profileId, setProfileId] = useState("");
-  const [objects, setObjects] = useState<DatabaseObject[]>([]);
+  const [catalog, setCatalog] = useState<{ profileId: string; objects: DatabaseObject[] } | null>(null);
+  const objects = catalog?.profileId === profileId ? catalog.objects : [];
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
   const [schemaDetailsOpen, setSchemaDetailsOpen] = useState(false);
   const [sqliteLayoutDialog, setSqliteLayoutDialog] = useState<string | null>(null);
@@ -219,7 +221,6 @@ function App() {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [environment, setEnvironment] = useState<Profile["environment"]>("DEV");
-  const [filter, setFilter] = useState("");
   const [loading, setLoading] = useState(false);
   const [querying, setQuerying] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -391,7 +392,7 @@ function App() {
     resetActiveQuery();
     objectGeneration.current++;
     setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null);
-    setProfileId(""); setObjects([]); setTableQueryResult(null);
+    setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => {
@@ -413,7 +414,7 @@ function App() {
     let live = true;
     resetActiveQuery();
     const generation = ++objectGeneration.current;
-    setObjects([]); setTableQueryResult(null); setResultMode("sql"); setError("");
+    setCatalog(null); setTableQueryResult(null); setResultMode("sql"); setError("");
     setSqlEditorOpen(true);
     setSqlSelection(null);
     setParameterRequest(null);
@@ -427,7 +428,7 @@ function App() {
     if (profileId) {
       setLoading(true);
       call<DatabaseObject[]>("list_objects", { profileId })
-        .then(items => { if (live && objectGeneration.current === generation) setObjects(items); })
+        .then(items => { if (live && objectGeneration.current === generation) setCatalog({ profileId, objects: items }); })
         .catch(e => { if (live && objectGeneration.current === generation) setError(errorText(e)); })
         .finally(() => { if (live && objectGeneration.current === generation) setLoading(false); });
     } else setLoading(false);
@@ -806,7 +807,7 @@ function App() {
     setLoading(true); setError("");
     try {
       const items = await call<DatabaseObject[]>("list_objects", { profileId });
-      if (objectGeneration.current === generation) setObjects(items);
+      if (objectGeneration.current === generation) setCatalog({ profileId, objects: items });
     } catch (e) { if (objectGeneration.current === generation) setError(errorText(e)); }
     finally { if (objectGeneration.current === generation) setLoading(false); }
   }
@@ -1053,6 +1054,22 @@ function App() {
     showTool("terminal");
   }
 
+  function runExplorerProjectAction(action: ExplorerProjectAction) {
+    if (action === "archived") setArchivedProjectsOpen(true);
+    else if (action === "copy") setWorkspaceCopyOpen(true);
+    else {
+      const modals = { create: "project", rename: "rename", duplicate: "duplicateProject", archive: "archiveProject", delete: "deleteProject" } as const;
+      openModal(modals[action]);
+    }
+  }
+
+  function runExplorerSshAction(action: ExplorerSshAction, item?: SshProfile) {
+    if (action === "import" || action === "export") setSshExchange(action);
+    else if (action === "refresh") {
+      if (projectId) void reloadSshProfiles(projectId).catch(error => setError(errorText(error)));
+    } else setSshProfileDialog({ mode: action, profile: item });
+  }
+
   function quickConnectMatches(target: QuickTarget) {
     function match(id: string, name: string, environment: string, open: () => void) {
       return { id, name, environment, open: () => { setQuickConnectOpen(false); open(); } };
@@ -1214,9 +1231,6 @@ function App() {
     finally { setSaving(false); }
   }
 
-  const filtered = objects.filter(item => item.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
-  const tables = filtered.filter(item => item.kind === "table");
-  const views = filtered.filter(item => item.kind === "view");
   const primaryKeys = objectDetails?.columns.filter(column => column.primary_key_position > 0).sort((a, b) => a.primary_key_position - b.primary_key_position) ?? [];
   const resultForObject = selectedObject && (
     executedQuery?.kind === "table" ? executedQuery.request.object === selectedObject.name
@@ -1680,51 +1694,13 @@ function App() {
         {resumeNotice?.retry && <button type="button" className="secondary small" onClick={retryResume}>이 창의 배치 저장</button>}
       </div>}
       <div className="body-layout">
-        <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={focusMode || !explorerOpen}>
-          <div className="explorer-top"><span>탐색기</span><button className="icon-button" onClick={() => openModal("project")} disabled={!desktop} aria-label="새 프로젝트"><Plus size={17} /></button></div>
-          <label className="select-label" htmlFor="project-select">프로젝트</label>
-          <div className="project-selector"><FolderOpen size={16} /><select id="project-select" value={projectId} onChange={event => setProjectId(event.target.value)} disabled={!projects.length}>
-            {!projects.length && <option value="">프로젝트 없음</option>}
-            {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select><ChevronDown size={15} /></div>
-          {project && <div className="project-actions"><button onClick={() => openModal("rename")}>이름 변경</button><button onClick={() => openModal("duplicateProject")}>복제</button><button onClick={() => openModal("archiveProject")}>보관</button><button onClick={() => openModal("deleteProject")}>삭제</button></div>}
-          <div className="project-actions">
-            <button disabled={!desktop} onClick={() => setArchivedProjectsOpen(true)}><Archive size={13} /> 보관된 프로젝트</button>
-            <button disabled={!desktop} onClick={() => setWorkspaceCopyOpen(true)}><FileDown size={13} /> 데이터 복사</button>
-          </div>
-          <div className="section-heading"><span>데이터베이스</span><div>
-            <button className="icon-button" onClick={() => { setRestoreOpen(true); showTool("workspace"); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
-            <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
-          </div></div>
-          {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
-          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${!postgresProfile && item.id === profileId ? "selected" : ""}`} onClick={() => selectSqliteProfile(item.id)}>
-            {item.id === profileId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Database size={15} /><span>{item.name}</span><small>{item.environment}</small>
-          </button>)}</div>
-          {profile && !postgresProfile && <div className="object-list">
-            <div className="object-toolbar"><span>객체</span><button className="icon-button" onClick={refreshObjects} disabled={loading} aria-label="객체 새로고침"><RefreshCw size={14} /></button></div>
-            <div className="object-search"><Search size={14} /><input aria-label="객체 검색" value={filter} onChange={e => setFilter(e.target.value)} placeholder="이름으로 찾기" /></div>
-            {loading ? <p className="sidebar-empty">불러오는 중…</p> : <>
-              <ObjectGroup name="테이블" items={tables} selected={selectedObject?.name} onSelect={openObject} />
-              <ObjectGroup name="뷰" items={views} selected={selectedObject?.name} onSelect={openObject} />
-            </>}
-          </div>}
-          <div className="section-heading"><span>PostgreSQL</span><div>
-            <button type="button" className="icon-button" disabled={!project} aria-label="PostgreSQL 연결 추가" title="PostgreSQL 연결 추가" onClick={() => setPostgresAction({ kind: "create" })}><Plus size={16} aria-hidden /></button>
-          </div></div>
-          <div className="profile-list">{postgresProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
-            <button type="button" className={`profile-row ${item.id === postgresId ? "selected" : ""}`} aria-label={`PostgreSQL ${item.settings.name} 열기`}
-              onClick={() => selectPostgresProfile(item.id)}><Database size={15} aria-hidden /><span>{item.settings.name}</span><small>{item.settings.environment}</small></button>
-            <button type="button" className="icon-button" aria-label={`${item.settings.name} PostgreSQL 연결 수정`} onClick={() => setPostgresAction({ kind: "edit", profile: item })}><Pencil size={14} aria-hidden /></button>
-            <button type="button" className="icon-button" aria-label={`${item.settings.name} PostgreSQL 연결 삭제`} onClick={() => setPostgresAction({ kind: "delete", profile: item })}><Trash2 size={14} aria-hidden /></button>
-          </div>)}</div>
-          <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => setSshExchange("import")} disabled={!project} aria-label="SSH 연결 가져오기" title="SSH 연결 가져오기"><FileUp size={14} /></button><button className="icon-button" onClick={() => setSshExchange("export")} disabled={!project || !sshProfiles.length} aria-label="SSH 연결 내보내기" title="SSH 연결 내보내기"><FileDown size={14} /></button><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
-          {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
-          <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
-            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => openSavedSsh(item)}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
-            <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
-            <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
-          </div>)}</div>
-        </aside>
+        <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects}
+          onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction}
+          sqlite={{ profiles, loadedId: profileId, active: !postgresProfile, objects, selected: postgresProfile ? undefined : selectedObject?.name,
+            loading, displayPath, open: selectSqliteProfile, openObject, refresh: refreshObjects,
+            add: () => openModal("profile"), restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
+          postgres={{ profiles: postgresProfiles, activeId: postgresId, open: selectPostgresProfile, action: setPostgresAction }}
+          ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
       <footer className="statusbar" id="workspace-status" hidden={focusMode}>
@@ -2025,11 +2001,6 @@ function SshTrustHistory() {
     </li>)}</ul> : <p className="audit-empty">아직 신뢰한 호스트 키가 없습니다.</p>}
     <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
   </div>;
-}
-
-function ObjectGroup({ name, items, selected, onSelect }: { name: string; items: DatabaseObject[]; selected?: string; onSelect: (object: DatabaseObject) => void }) {
-  return <section className="object-group"><div className="group-title"><ChevronDown size={13} /> {name} <span>{items.length}</span></div>{items.map(object => <button key={object.name} className="object-row"
-    aria-current={object.name === selected ? "true" : undefined} onClick={() => onSelect(object)}><Table2 size={14} /><span>{object.name}</span></button>)}</section>;
 }
 
 function EmptyState({ title, text, action, onAction }: { title: string; text: string; action?: string; onAction?: () => void }) {

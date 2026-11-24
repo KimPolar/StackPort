@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUpRight, Search, X, type LucideIcon } from "lucide-react";
+import { matchesWorkspaceSearch, normalizeWorkspaceSearch, workspaceSearchTerms } from "./workspaceSearch";
 
 export type WorkspaceCommand = {
   id: string;
@@ -11,7 +12,6 @@ export type WorkspaceCommand = {
   run: () => void;
 };
 
-const searchText = (value: string) => value.normalize("NFKC").toLocaleLowerCase("ko-KR");
 const resultLimit = 50;
 
 export function CommandPalette({ commands, recent, onClose, onRun }: {
@@ -26,12 +26,11 @@ export function CommandPalette({ commands, recent, onClose, onRun }: {
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  const needle = searchText(query.trim());
-  const terms = needle ? needle.split(/\s+/) : [];
+  const needle = normalizeWorkspaceSearch(query.trim());
+  const terms = workspaceSearchTerms(query);
   const ranked = commands.flatMap(command => {
-    const title = searchText(command.title);
-    const termsSource = searchText([command.title, command.group, command.detail, command.keywords].filter(Boolean).join(" "));
-    if (!terms.every(term => termsSource.includes(term))) return [];
+    if (!matchesWorkspaceSearch(terms, command.title, command.group, command.detail, command.keywords)) return [];
+    const title = normalizeWorkspaceSearch(command.title);
     const match = !needle ? 0 : title === needle ? 3 : title.startsWith(needle) ? 2 : title.includes(needle) ? 1 : 0;
     const recentIndex = recent.indexOf(command.id);
     return [{ command, match, recency: recentIndex >= 0 ? recent.length - recentIndex : 0 }];
