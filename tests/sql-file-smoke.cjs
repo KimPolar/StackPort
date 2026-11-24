@@ -333,8 +333,9 @@ async function main() {
     await add.click();
     assert.equal(await editor.inputValue(), '');
     await verifySqlBatch(page, editor, exportJson);
+    await verifySqlResultPins(page, editor, sqlTabs, add, exportJson);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, draft recovery, independent plans and results, batch execution, pagination and exact exports passed.');
+    console.log('SQL tabs, drafts, plans, batches, result pins and comparisons, pagination and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -675,6 +676,76 @@ async function verifySqlBatch(page, editor, exportJson) {
   await run();
   await batch.getByRole('alert').getByText(/문장 2.*매개변수/).waitFor();
   await cell('입력 전 결과').waitFor();
+}
+
+async function verifySqlResultPins(page, editor, sqlTabs, add, exportJson) {
+  const grid = page.locator('.database-results');
+  const pins = grid.getByRole('group', { name: '고정 결과', exact: true });
+  const pin = pins.getByRole('button', { name: /^고정 \d+$/ }).first();
+  const pinPage = grid.getByRole('button', { name: '현재 페이지 고정', exact: true });
+  const compare = grid.getByRole('button', { name: '결과 비교', exact: true });
+  const comparison = page.getByRole('dialog', { name: 'SQL 결과 비교', exact: true });
+  const cell = value => grid.getByRole('cell', { name: value, exact: true }).first();
+  const query = 'SELECT name, :tag AS label FROM people ORDER BY id;';
+  await editor.fill(query);
+  await editor.press('Control+Enter');
+  await page.getByLabel(':tag 값', { exact: true }).fill('고정할 입력');
+  await page.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await cell('사용자 1').waitFor();
+  await grid.getByRole('button', { name: '다음 페이지', exact: true }).click();
+  await cell('사용자 101').waitFor();
+  await pinPage.click();
+  await pin.waitFor();
+
+  const fixturePath = path.resolve(process.env.STACKPORT_TEST_DATABASE);
+  assert.equal(path.dirname(fixturePath), path.resolve(process.env.STACKPORT_TEST_ROOT));
+  const fixture = new DatabaseSync(fixturePath);
+  try {
+    assert.equal(fixture.prepare('UPDATE people SET name = ? WHERE id = 101').run('고정 이후 이름').changes, 1);
+  } finally { fixture.close(); }
+  const nextQuery = "SELECT '새 결과' AS other;";
+  await editor.fill(nextQuery);
+  await editor.press('Control+Enter');
+  await cell('새 결과').waitFor();
+  await pin.click();
+  await grid.getByText('고정된 2페이지', { exact: true }).waitFor();
+  await cell('사용자 101').waitFor();
+  await cell('고정할 입력').waitFor();
+  assert.equal(await grid.getByRole('button', { name: '결과 내보내기', exact: true }).count(), 0);
+  assert.equal(await grid.getByRole('button', { name: '다음 페이지', exact: true }).count(), 0);
+  await grid.getByText('고정된 SQL', { exact: true }).click();
+  assert.equal(await grid.getByLabel('고정된 SQL', { exact: true }).textContent(), query);
+  await compare.click();
+  await comparison.getByText(/같은 페이지 번호/).waitFor();
+  await comparison.getByRole('button', { name: '비교 닫기', exact: true }).click();
+
+  await grid.getByRole('button', { name: '고정 쿼리 재실행', exact: true }).click();
+  await cell('고정 이후 이름').waitFor();
+  await grid.getByText(/^고정 \d+ 재실행$/).waitFor();
+  await cell('고정할 입력').waitFor();
+  assert.equal(await editor.inputValue(), nextQuery);
+  assert.equal(await pins.getByRole('button', { name: '현재 결과', exact: true }).getAttribute('aria-pressed'), 'true');
+  await compare.click();
+  await comparison.getByRole('status').getByText(/셀 1개 변경/).waitFor();
+  const changes = comparison.getByRole('table', { name: '결과 값 차이', exact: true });
+  await changes.getByText('사용자 101', { exact: true }).waitFor();
+  await changes.getByText('고정 이후 이름', { exact: true }).waitFor();
+  await comparison.getByRole('button', { name: '비교 닫기', exact: true }).click();
+  const exported = await exportJson(grid, '고정 쿼리 재실행 결과.json');
+  assert.deepEqual(exported.columns, ['name', 'label']);
+  assert.deepEqual(exported.rows[100], ['고정 이후 이름', '고정할 입력']);
+
+  await pinPage.click();
+  assert.equal(await pins.getByRole('button', { name: /^고정 \d+$/ }).count(), 2);
+  const originalTab = await sqlTabs.getByRole('tab', { selected: true }).getAttribute('id');
+  await add.click();
+  assert.equal(await pins.count(), 0);
+  await sqlTabs.locator(`[id="${originalTab}"]`).click();
+  await pin.click();
+  await cell('사용자 101').waitFor();
+  await grid.getByRole('button', { name: '고정 해제', exact: true }).click();
+  assert.equal(await pins.getByRole('button', { name: /^고정 \d+$/ }).count(), 1);
+  await cell('고정 이후 이름').waitFor();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

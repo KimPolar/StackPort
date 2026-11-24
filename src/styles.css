@@ -290,6 +290,23 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-batch-statements, .sql-batch-stop { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; }
 .sql-batch-statements button[aria-pressed="true"] { border-color: #8abab0; background: #deeee8; color: #155e4e; }
 .sql-batch-stop [role="alert"] { color: #aa4439; overflow-wrap: anywhere; }
+.database-results .panel-heading { height: auto; min-height: 44px; padding-block: 6px; flex-wrap: wrap; gap: 6px 12px; }
+.database-results .results-actions { margin-inline-start: auto; max-width: 100%; }
+.sql-pinned-results, .sql-pinned-detail { padding: 8px 14px; border-bottom: 1px solid #e4ece7; background: #f8fbf9; color: #435e50; font-size: 12px; }
+.sql-pinned-results, .sql-pinned-tabs, .sql-pinned-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; }
+.sql-pinned-results { justify-content: space-between; }
+.sql-pinned-tabs button[aria-pressed="true"] { border-color: #8abab0; background: #deeee8; color: #155e4e; }
+@media (forced-colors: active) { .sql-pinned-tabs button[aria-pressed="true"] { outline: 1px solid Highlight; } }
+.sql-pinned-detail summary { margin-top: 5px; cursor: pointer; }
+.sql-pinned-detail pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; background: white; border: 1px solid #dce7df; border-radius: 5px; }
+.dialog.sql-result-comparison { width: min(860px, calc(100vw - 32px)); }
+.sql-result-comparison-body { padding: 0 21px 21px; font-size: 12px; }
+.sql-result-comparison-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 12px; }
+.sql-result-differences { max-height: 52vh; overflow: auto; border: 1px solid #e0e9e4; border-radius: 5px; }
+.sql-result-differences tbody th { position: static; }
+.sql-result-differences td { overflow-wrap: anywhere; white-space: normal; }
+.sql-result-differences td code { white-space: pre-wrap; }
+.sql-result-differences td small { display: block; margin-top: 3px; color: #526a5f; }
 .csv-options { display: grid; gap: 8px; margin: 12px 0; padding: 0; border: 0; color: #526a5f; font-size: 12px; }
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }

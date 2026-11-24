@@ -45,7 +45,7 @@ export function SqlParameterFields({ parameters, submit, dismiss }: {
     }
     submit(fields.map(({ kind, value }) => kind === "null" ? { kind } : { kind, value }));
   }}>
-    <p className="form-note">입력 값은 현재 조회와 페이지 이동에만 사용합니다.</p>
+    <p className="form-note">입력 값은 앱 실행 중 조회, 페이지 이동, 내보내기와 고정 쿼리 재실행에 사용합니다.</p>
     <div className="sql-parameters">
       {parameters.map((parameter, index) => {
         const field = fields[index];

@@ -30,6 +30,8 @@ import { SqlAliasRenameDialog } from "./SqlAliasRenameDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
 import type { EditorHoverInfo } from "./editorHover";
+import type { ResultComparisonSource } from "./SqlResultComparison";
+import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
@@ -48,13 +50,11 @@ import "./styles.css";
 type Project = { id: string; name: string };
 type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portable"; data_directory: string };
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
-type Cell = { kind: string; display: string; truncated: boolean };
-type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
 type BatchStop = SqlReferenceRange & { status: "error" | "cancelled" | "timed_out" | "parameters_required"; message: string };
 type SqlBatchOutcome = { status: "batch"; total: number; items: (SqlReferenceRange & { elapsed_ms: number; result: QueryPage })[]; stopped: BatchStop | null };
 type QueryOutcome = SqlBatchOutcome | { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
 type SqlDocumentRange = { source: string; offset: number };
-type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string; document?: SqlDocumentRange; batchIndex?: number };
+type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string; document?: SqlDocumentRange; batchIndex?: number; replayedFrom?: number };
 type QueryTarget = SqlQueryTarget | { kind: "table"; request: TableQuery };
 type QueryResult = { profileId: string; page: QueryPage; target: QueryTarget };
 type SqlBatchView = {
@@ -65,7 +65,14 @@ type SqlBatchView = {
   stopped: BatchStop | null;
   active: number;
 };
-type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: QueryPlan } | null; batch: SqlBatchView | null };
+type PinnedSqlResult = { id: number; profileId: string; page: QueryPage; target: SqlQueryTarget; bytes: number };
+type SqlQueryView = {
+  result: QueryResult | null;
+  plan: { sql: string; data: QueryPlan } | null;
+  batch: SqlBatchView | null;
+  pins: PinnedSqlResult[];
+  pinId: number | null;
+};
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
 type SqlDefinitionRequest = { profileId: string; tabId: string; source: string; result: Promise<SqlDefinitionResult> };
@@ -87,6 +94,7 @@ type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archivePro
 
 const desktop = isTauri();
 const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
+const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").then(module => ({ default: module.SqlResultComparison })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -94,7 +102,9 @@ const objectSelectSql = (name: string) => `SELECT *\nFROM ${quoteIdentifier(name
 const displayPath = (path: string) => path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.startsWith("\\\\?\\") ? path.slice(4) : path;
 const initialSqlTabs = (target: SqlTarget) => addSqlTab(emptySqlTabs, target);
 const hasDirtySqlTabs = (groups: Record<string, SqlTabSet>) => Object.values(groups).some(group => group.tabs.some(isSqlDraftDirty));
-const emptySqlQueryView: SqlQueryView = { result: null, plan: null, batch: null };
+const emptySqlQueryView: SqlQueryView = { result: null, plan: null, batch: null, pins: [], pinId: null };
+const maxResultPins = 8;
+const maxPinnedResultBytes = 8 * 1024 * 1024;
 
 function Dialog({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -150,6 +160,8 @@ function App() {
   const sqlEditor = useRef<HTMLTextAreaElement>(null);
   const statementRequest = useRef(0);
   const [sqlQueryViews, setSqlQueryViews] = useState<Record<string, SqlQueryView>>({});
+  const nextResultPin = useRef(0);
+  const [resultComparison, setResultComparison] = useState<{ tabId: string; sources: ResultComparisonSource[]; initial: number } | null>(null);
   const [tableQueryResult, setTableQueryResult] = useState<QueryResult | null>(null);
   const [resultMode, setResultMode] = useState<QueryTarget["kind"]>("sql");
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
@@ -212,10 +224,13 @@ function App() {
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
   const batch = resultMode === "sql" && sqlView.batch?.profileId === profileId ? sqlView.batch : null;
+  const pinned = resultMode === "sql" ? sqlView.pins.find(pin => pin.id === sqlView.pinId && pin.profileId === profileId) : undefined;
   const visibleQueryResult = resultMode === "table" ? tableQueryResult : batch ? batch.items[batch.active]?.query : sqlView.result;
-  const queryResult = visibleQueryResult?.profileId === profileId ? visibleQueryResult : null;
+  const liveQueryResult = visibleQueryResult?.profileId === profileId ? visibleQueryResult : null;
+  const queryResult = pinned ?? liveQueryResult;
   const result = queryResult?.page ?? null;
   const executedQuery = queryResult?.target ?? null;
+  const alreadyPinned = !!liveQueryResult && sqlView.pins.some(pin => pin.page === liveQueryResult.page);
   const queryPlan = sqlView.plan;
   const sql = sqlDraft?.document.text ?? "";
   const fileTarget = sqlFileAction && (sqlFileAction.mode === "save" ? sqlFileAction.draft : sqlFileAction.target);
@@ -534,6 +549,34 @@ function App() {
     setSqlQueryViews(current => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
   }
 
+  function pinResult() {
+    if (!sqlDraft || !liveQueryResult || liveQueryResult.target.kind !== "sql" || alreadyPinned ||
+      querying || sqlView.pins.length >= maxResultPins) return;
+    const { page, profileId, target: { sql, parameters } } = liveQueryResult;
+    const bytes = resultPageBytes(page) + sql.length * 2 + (parameters ?? []).reduce(
+      (size, parameter) => size + ("value" in parameter ? parameter.value.length * 2 : 0), 0);
+    if (bytes + sqlView.pins.reduce((total, pin) => total + pin.bytes, 0) > maxPinnedResultBytes) {
+      setError("이 SQL 탭에 고정할 수 있는 결과 크기를 초과했습니다. 고정 결과를 해제하거나 조회 열을 줄이세요.");
+      return;
+    }
+    const pin: PinnedSqlResult = { id: ++nextResultPin.current, page, profileId, bytes,
+      target: { kind: "sql", tabId: sqlDraft.id, sql, parameters } };
+    editSqlQueryView(sqlDraft.id, { pins: [...sqlView.pins, pin] });
+    setError("");
+  }
+
+  function showResultComparison() {
+    const sources: ResultComparisonSource[] = sqlView.pins.map(pin => ({ id: pin.id, label: `고정 ${pin.id}`, page: pin.page }));
+    if (liveQueryResult) sources.unshift({ id: 0, label: "현재 결과", page: liveQueryResult.page });
+    const initial = pinned?.id ?? sqlView.pins.at(-1)?.id;
+    if (sqlDraft && sources.length > 1 && initial !== undefined) setResultComparison({ tabId: sqlDraft.id, sources, initial });
+  }
+
+  function selectResultPin(id: number | null) {
+    if (sqlDraft) editSqlQueryView(sqlDraft.id, { pinId: id });
+    setExportReport(null);
+  }
+
   function removeSqlConnections(ids: Set<string>) {
     if (ids.has(profileId)) {
       resetActiveQuery();
@@ -554,6 +597,7 @@ function App() {
     activateSqlView();
     setSqlSelection(null);
     setParameterRequest(null);
+    setResultComparison(null);
     setExportReport(null);
     if (activeQuery.current?.kind === "sql") resetActiveQuery();
     else if (!activeQuery.current) setQueryNotice("");
@@ -668,6 +712,7 @@ function App() {
     setQuerying(false);
     setCancelling(false);
     setQueryNotice("");
+    setResultComparison(null);
   }
 
   function cancelCurrentQuery() {
@@ -731,7 +776,7 @@ function App() {
             if (target.batchIndex !== undefined && batch) {
               const items = batch.items.map((item, index) => index === target.batchIndex ? { ...item, query: result } : item);
               editSqlQueryView(target.tabId, { batch: { ...batch, items } });
-            } else editSqlQueryView(target.tabId, { result, batch: null });
+            } else editSqlQueryView(target.tabId, { result, batch: null, pinId: null });
           } else setTableQueryResult({ profileId, page: response.result, target });
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
         } else if (response.status === "batch" && target.kind === "sql" && target.document) {
@@ -741,7 +786,7 @@ function App() {
               kind: "sql" as const, tabId: target.tabId, sql: target.sql.slice(item.start, item.end), batchIndex,
             } },
           }));
-          editSqlQueryView(target.tabId, { result: null, batch: {
+          editSqlQueryView(target.tabId, { result: null, pinId: null, batch: {
             profileId, document: target.document, total: response.total, stopped: response.stopped, items, active: 0,
           } });
           if (task.cancelRequested && !response.stopped) setQueryNotice("중단 요청 전에 일괄 실행이 완료되었습니다.");
@@ -940,8 +985,8 @@ function App() {
     executedQuery?.kind === "table" ? executedQuery.request.object === selectedObject.name
       : executedQuery?.kind === "sql" && executedQuery.sql === objectSelectSql(selectedObject.name) && sql === executedQuery.sql
   );
-  const canEditRows = Boolean(profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && resultForObject);
-  const editUnavailableReason = selectedObject && objectDetails && result && !canEditRows
+  const canEditRows = Boolean(!pinned && profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && resultForObject);
+  const editUnavailableReason = !pinned && selectedObject && objectDetails && result && !canEditRows
     ? selectedObject.kind !== "table" ? "뷰는 편집할 수 없습니다."
       : !primaryKeys.length ? "기본 키가 없는 테이블은 편집할 수 없습니다."
       : "행 편집은 선택한 테이블의 조회 결과에서 사용할 수 있습니다."
@@ -1080,10 +1125,16 @@ function App() {
             {executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}
           </strong>
           {executedQuery?.kind === "sql" && sqlDraft && <span className="sql-result-source" title={sqlTabTitle(sqlDraft)}>{sqlTabTitle(sqlDraft)}</span>}
+          {!pinned && executedQuery?.kind === "sql" && executedQuery.replayedFrom !== undefined &&
+            <span className="sql-result-source">고정 {executedQuery.replayedFrom} 재실행</span>}
           {result && <span className="result-count">{result.rows.length}개 행</span>}
         </div>
         <div className="results-actions">
-          {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
+          {!pinned && liveQueryResult?.target.kind === "sql" && <button type="button" className="secondary small"
+            disabled={querying || alreadyPinned || sqlView.pins.length >= maxResultPins}
+            title={sqlView.pins.length >= maxResultPins ? "SQL 탭마다 최대 8개 페이지를 고정할 수 있습니다." : "현재 조회 페이지를 메모리에 고정합니다."}
+            onClick={pinResult}>{alreadyPinned ? "현재 페이지 고정됨" : "현재 페이지 고정"}</button>}
+          {!pinned && result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
             setExportReport(null);
             const query: ExportSource = executedQuery.kind === "table" ? executedQuery : {
               kind: "sql", sql: executedQuery.sql, parameters: executedQuery.parameters,
@@ -1092,7 +1143,30 @@ function App() {
           }}><FileDown size={14} /> 결과 내보내기</button>}
         </div>
       </div>
-        {batch && sqlDraft && <div className="sql-batch-results" aria-label="일괄 실행 결과" role="group">
+        {resultMode === "sql" && sqlDraft && sqlView.pins.length > 0 && <div className="sql-pinned-results">
+          <div className="sql-pinned-tabs" role="group" aria-label="고정 결과">
+            <button type="button" className="secondary small" aria-pressed={!pinned} disabled={querying}
+              onClick={() => selectResultPin(null)}>현재 결과</button>
+            {sqlView.pins.map(pin => <button key={pin.id} type="button" className="secondary small" aria-pressed={pinned?.id === pin.id}
+              title={`${pin.page.page + 1}페이지 · ${pin.page.rows.length}개 행`} disabled={querying}
+              onClick={() => selectResultPin(pin.id)}>고정 {pin.id}</button>)}
+          </div>
+          <button type="button" className="secondary small" disabled={querying || sqlView.pins.length + Number(!!liveQueryResult) < 2}
+            onClick={showResultComparison}>결과 비교</button>
+        </div>}
+        {pinned && sqlDraft && <div className="sql-pinned-detail">
+          <div className="sql-pinned-actions">
+            <span>고정된 {pinned.page.page + 1}페이지</span>
+            <button type="button" className="secondary small" disabled={querying}
+              onClick={() => void executeQuery({ ...pinned.target, replayedFrom: pinned.id }, pinned.page.page)}>고정 쿼리 재실행</button>
+            <button type="button" className="secondary small" disabled={querying} onClick={() => {
+              editSqlQueryView(sqlDraft.id, { pins: sqlView.pins.filter(pin => pin.id !== pinned.id), pinId: null });
+              setExportReport(null);
+            }}>고정 해제</button>
+          </div>
+          <details><summary>고정된 SQL</summary><pre aria-label="고정된 SQL">{pinned.target.sql}</pre></details>
+        </div>}
+        {!pinned && batch && sqlDraft && <div className="sql-batch-results" aria-label="일괄 실행 결과" role="group">
           <p>{batch.total}개 문장 중 {batch.items.length}개 완료
             {batch.items[batch.active] && ` · 선택한 문장 ${batch.items[batch.active].elapsedMs} ms`}</p>
           {!!batch.items.length && <div className="sql-batch-statements" aria-label="문장별 결과" role="group">
@@ -1128,7 +1202,7 @@ function App() {
         </details>}
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
         {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
-          <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
+          {!pinned && <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div>}</> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
       </section>
     </>}
     {!profile && error && <div className="error-banner" role="alert">{error}</div>}
@@ -1274,6 +1348,9 @@ function App() {
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
+    {resultComparison && resultComparison.tabId === sqlDraft?.id && <React.Suspense fallback={null}>
+      <SqlResultComparison sources={resultComparison.sources} initial={resultComparison.initial} onClose={() => setResultComparison(null)} />
+    </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
         setParameterRequest(null);

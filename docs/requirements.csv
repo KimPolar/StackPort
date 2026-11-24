@@ -190,7 +190,7 @@ SP-SQ-009,실행 취소,"실행 중 쿼리의 취소·타임아웃, 서버 측 �
 SP-SQ-010,파라미터 쿼리,"바인딩 변수·타입·값·기본값, 시크릿 변수 처리, 저장된 파라미터 세트.",partial,"SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-011,트랜잭션 관리,"자동 커밋 전환, BEGIN/COMMIT/ROLLBACK, 저장점, 열린 트랜잭션 경고.",not_started,,
 SP-SQ-012,쿼리 빌더,테이블 드래그·관계선·JOIN·WHERE·GROUP BY·HAVING·ORDER BY·LIMIT를 GUI로 구성.,not_started,,
-SP-SQ-013,결과 고정,여러 쿼리 결과를 탭에 고정하고 변경 결과 비교/재실행.,not_started,,
+SP-SQ-013,결과 고정,여러 쿼리 결과를 탭에 고정하고 변경 결과 비교/재실행.,partial,"SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",src/main.tsx; src/SqlResultComparison.tsx; src/sqlResults.ts; tests/sql-results.test.mjs; tests/sql-file-smoke.cjs
 SP-SQ-014,실행 계획,EXPLAIN·ANALYZE·SHOW PLAN 계열에서 텍스트/트리/그래픽 실행 계획 표시.,partial,SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리,crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-015,실행 계획 분석,"비용, 예상/실제 행 수, 스캔·조인·정렬·인덱스 사용량, 병목 단계 강조.",partial,SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분,crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-016,SQL 프로파일링,"서버 지원 범위에서 실행 시간·잠금 대기·IO/CPU 통계, 전후 비교.",not_started,,
