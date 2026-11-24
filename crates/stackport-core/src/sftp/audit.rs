@@ -20,6 +20,7 @@ pub(super) enum FileOperation {
     Delete,
     Edit,
     EditedCopy,
+    Synchronize,
 }
 
 impl FileOperation {
@@ -39,6 +40,7 @@ impl FileOperation {
             (Self::Edit, true) => "sftp.edit.cancel",
             (Self::EditedCopy, false) => "sftp.edit.copy",
             (Self::EditedCopy, true) => "sftp.edit.copy.cancel",
+            (Self::Synchronize, _) => "sftp.sync",
         }
     }
 }
@@ -106,6 +108,16 @@ impl FileAudit {
             Err(error) if !written => Err(format!("{error} {warning}")),
             Err(error) => Err(error),
         }
+    }
+
+    pub(super) async fn finish_sync(self, success: bool, applied: usize) -> Option<&'static str> {
+        let outcome = if success { "succeeded" } else { "failed" };
+        let written = matches!(
+            tokio::task::spawn_blocking(move || self.record(outcome, false, Some(applied as i64)))
+                .await,
+            Ok(Ok(()))
+        );
+        (!written).then_some("동기화 결과의 기록을 저장하지 못했습니다.")
     }
 
     fn record(&self, outcome: &'static str, cancelled: bool, count: Option<i64>) -> Result<()> {

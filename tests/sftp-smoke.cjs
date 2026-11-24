@@ -120,17 +120,21 @@ function sftpChannel(channel, uploads) {
   });
   channel.on('MKDIR', (id, remotePath, attributes) => {
     const name = path.posix.basename(remotePath);
-    const entries = directories.get(path.posix.dirname(remotePath));
+    const parent = path.posix.dirname(remotePath);
+    const entries = directories.get(parent) ?? uploads.comparisonDirectories.get(parent);
     if (!entries) return channel.status(id, code.NO_SUCH_FILE);
     if (name === '권한 제한') return channel.status(id, code.PERMISSION_DENIED);
     if (name === '동시 생성') {
       uploads.files.set(remotePath, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
     }
-    if (lookup(remotePath) || directories.has(remotePath)) return channel.status(id, code.FAILURE);
+    if (lookup(remotePath) || directories.has(remotePath) || uploads.comparisonDirectories.has(remotePath)) return channel.status(id, code.FAILURE);
     const entry = directory(name);
     entry.attrs.mode = 0o40000 | attributes.mode;
-    entries.push(entry);
-    directories.set(remotePath, []);
+    if (uploads.comparisonDirectories.has(parent)) uploads.comparisonDirectories.set(remotePath, []);
+    else {
+      entries.push(entry);
+      directories.set(remotePath, []);
+    }
     channel.status(id, code.OK);
   });
   channel.on('OPEN', (id, remotePath, flags, attributes) => {
@@ -140,7 +144,7 @@ function sftpChannel(channel, uploads) {
       if (!fixture) return channel.status(id, code.NO_SUCH_FILE);
       return newHandle(id, { fixture, stats: 0 });
     }
-    if (flags !== (READ | WRITE | CREAT | EXCL) || !directories.has(path.posix.dirname(remotePath))
+    if (flags !== (READ | WRITE | CREAT | EXCL) || !(directories.has(path.posix.dirname(remotePath)) || uploads.comparisonDirectories.has(path.posix.dirname(remotePath)))
       || !path.posix.basename(remotePath).startsWith('.stackport-upload-') || lookup(remotePath)) {
       return channel.status(id, code.PERMISSION_DENIED);
     }
@@ -214,14 +218,14 @@ function sftpChannel(channel, uploads) {
     const parent = path.posix.dirname(from);
     const destination = path.posix.dirname(to);
     if (destination !== parent) uploads.moves++;
-    if ((!fixture && !isFolder) || !directories.has(destination) || to.startsWith(from + '/')) {
+    if ((!fixture && !isFolder) || !(directories.has(destination) || uploads.comparisonDirectories.has(destination)) || to.startsWith(from + '/')) {
       return channel.status(id, code.FAILURE);
     }
     if (path.posix.basename(to) === '변경 금지.bin') return channel.status(id, code.PERMISSION_DENIED);
     if (fixture?.behavior === 'collision' || path.posix.basename(to) === '이름 변경 경쟁.bin' || (destination !== parent && uploads.moveCollision)) {
       uploads.files.set(to, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
     }
-    if (lookup(to) || directories.has(to)) return channel.status(id, code.FAILURE);
+    if (lookup(to) || directories.has(to) || uploads.comparisonDirectories.has(to)) return channel.status(id, code.FAILURE);
     if (isFolder) {
       const entries = directories.get(parent);
       const index = entries.findIndex(item => item.filename === path.posix.basename(from));
@@ -497,6 +501,7 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 900 });
 
     await verifyFolderComparison(page, local, server.uploads);
+    await verifySyncAdditions(page, remote, localPane, local, server.uploads);
     await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
@@ -1192,7 +1197,12 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     if (event.operation === 'sftp.delete') assert.equal(event.policy, 'sftp-delete-preview-prod-required');
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
-    assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
+    if (event.operation === 'sftp.sync') {
+      assert.equal(event.policy, 'sftp-pinned-host-sync-additions-no-overwrite');
+      assert.equal(event.affected_count, event.outcome === 'failed' ? 4 : null);
+    } else {
+      assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
+    }
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
   const serialized = JSON.stringify(fileEvents);
@@ -1210,6 +1220,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
   for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제', 'SFTP 편집 저장']) {
     expected.push({ action, state: '완료' }, { action, state: '실패' });
   }
+  expected.push({ action: 'SFTP 폴더 동기화', state: '시작' }, { action: 'SFTP 폴더 동기화', state: '실패' });
   const history = page.locator('.audit-card .audit-list');
   const older = page.getByRole('button', { name: '이전 기록 더 보기', exact: true });
   await history.waitFor();
@@ -1537,6 +1548,71 @@ async function verifyFolderComparison(page, local, uploads) {
   uploads.comparisonDirectories.clear();
   assert.deepEqual({ edits: uploads.edits, moves: uploads.moves, deletions: uploads.deletions }, before);
   for (const name of remoteFixtures) uploads.files.delete(name);
+}
+
+async function verifySyncAdditions(page, remote, localPane, local, uploads) {
+  const rootPath = '/home/stackport/동기화 시험';
+  const localRoot = path.join(local, '동기화 시험');
+  fs.mkdirSync(path.join(localRoot, '송신'), { recursive: true });
+  fs.mkdirSync(path.join(localRoot, '충돌 폴더'));
+  fs.writeFileSync(path.join(localRoot, '송신/안내.bin'), 'local payload');
+  fs.writeFileSync(path.join(localRoot, '충돌 폴더/건너뜀.bin'), 'must not copy');
+  fs.writeFileSync(path.join(localRoot, '바뀐 원본.bin'), 'before');
+  fs.writeFileSync(path.join(localRoot, '새 파일.bin'), 'new payload');
+  uploads.comparisonDirectories.set(rootPath, []);
+  uploads.comparisonDirectories.set(`${rootPath}/수신`, []);
+  function remoteFile(relative, text) {
+    const data = Buffer.from(text);
+    uploads.files.set(`${rootPath}/${relative}`, { data, attrs: { ...file('').attrs, size: data.length } });
+  }
+  remoteFile('수신/값.bin', 'remote payload');
+  const localPath = localPane.getByLabel('로컬 파일 경로', { exact: true });
+  await localPath.fill(localRoot);
+  await localPath.press('Enter');
+  await localPane.getByRole('button', { name: '송신', exact: true }).waitFor();
+  await remote.getByRole('button', { name: '원격 파일 새로고침' }).click();
+  await remote.getByRole('button', { name: '동기화 시험', exact: true }).click();
+  await remote.getByRole('button', { name: '수신', exact: true }).waitFor();
+  await page.getByRole('button', { name: '폴더 비교', exact: true }).click();
+  const comparison = page.getByRole('dialog', { name: '폴더 비교', exact: true });
+  await comparison.getByRole('checkbox', { name: '하위 폴더 포함', exact: true }).check();
+  await comparison.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
+  await comparison.getByRole('button', { name: '동기화 계획', exact: true }).click();
+  const plan = page.getByRole('dialog', { name: '동기화 계획 미리보기', exact: true });
+  await plan.getByRole('combobox', { name: '동기화 방향', exact: true }).selectOption('both');
+  await plan.getByRole('button', { name: '새 항목 실행 (8)', exact: true }).click();
+  const start = plan.getByRole('button', { name: '확인하고 시작', exact: true });
+  assert.equal(await start.isEnabled(), false);
+  await plan.getByRole('textbox', { name: '운영 연결 확인', exact: true }).fill('PROD');
+
+  remoteFile('새 파일.bin', 'existing target');
+  uploads.comparisonDirectories.set(`${rootPath}/충돌 폴더`, []);
+  fs.writeFileSync(path.join(localRoot, '바뀐 원본.bin'), 'changed length after comparison');
+  await start.click();
+  const result = plan.getByRole('table', { name: '동기화 실행 결과', exact: true });
+  const resultRow = name => result.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
+  await plan.getByText('완료 4개 · 실패 3개 · 건너뜀 1개', { exact: true }).waitFor();
+  await resultRow('바뀐 원본.bin').getByText(/원본의 크기 또는 수정 시각/).waitFor();
+  await resultRow('새 파일.bin').getByText(/같은 이름/).waitFor();
+  await resultRow('충돌 폴더/건너뜀.bin').getByText('건너뜀', { exact: true }).waitFor();
+  await resultRow('수신/값.bin').getByText('완료', { exact: true }).waitFor();
+  assert.equal(fs.readFileSync(path.join(localRoot, '수신/값.bin'), 'utf8'), 'remote payload');
+  assert.equal(uploads.files.get(`${rootPath}/송신/안내.bin`).data.toString(), 'local payload');
+  assert.equal(uploads.files.get(`${rootPath}/새 파일.bin`).data.toString(), 'existing target');
+  assert.equal(uploads.files.has(`${rootPath}/충돌 폴더/건너뜀.bin`), false);
+  assert.equal(uploads.files.has(`${rootPath}/바뀐 원본.bin`), false);
+  assert.equal([...uploads.files.keys()].some(name => name.startsWith(rootPath) && name.includes('.stackport-upload-')), false);
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await comparison.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
+  await comparison.getByRole('button', { name: '닫기', exact: true }).click();
+  await remote.getByRole('button', { name: '송신', exact: true }).waitFor();
+  await localPane.getByRole('button', { name: '수신', exact: true }).waitFor();
+  await remote.getByRole('button', { name: '원격 파일 상위 폴더' }).click();
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+  await localPane.getByRole('button', { name: '로컬 파일 상위 폴더' }).click();
+  await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
+  for (const name of [...uploads.files.keys()]) if (name.startsWith(rootPath + '/')) uploads.files.delete(name);
+  uploads.comparisonDirectories.clear();
 }
 
 async function verifyPreviews(page, remote, local) {

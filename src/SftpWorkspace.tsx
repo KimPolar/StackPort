@@ -245,7 +245,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
       onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
-    {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
+    {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result}
+      production={remote?.profile.environment === "PROD"} onExitGuard={onExitGuard} onClose={() => setComparison(null)}
+      onSynced={() => { setLocalRefresh(value => value + 1); setRemoteRefresh(value => value + 1); }} />}
     {comparison?.kind === "files" && <FilePairCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
   </section>;
 }

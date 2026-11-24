@@ -337,6 +337,9 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .folder-sync-options .field .form-note { font-weight: 400; }
 .folder-sync-delete { display: flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; }
 .folder-sync-table td:last-child { min-width: 160px; white-space: normal; overflow-wrap: anywhere; }
+.folder-sync-result-title { margin: 14px 0 4px; font-size: 14px; }
+.folder-sync-run { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.folder-sync-confirm { margin-top: 12px; padding: 8px 10px; border: 1px solid #dce9e1; border-radius: 6px; }
 .dialog.file-pair { width: min(680px, calc(100vw - 32px)); }
 .file-pair-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; }
 .file-pair-path { color: #526a5f; font-weight: 400; overflow-wrap: anywhere; }

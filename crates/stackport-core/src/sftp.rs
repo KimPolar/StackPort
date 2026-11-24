@@ -10,6 +10,7 @@ mod folder_tree;
 mod mutation;
 mod preview;
 mod remote_stage;
+mod sync;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
@@ -19,6 +20,7 @@ pub use editor::{SftpEditDocument, SftpEditSave};
 pub use folder_tree::{list_local_tree, FolderTree};
 pub use mutation::{SftpEntrySource, SftpMutationReport};
 pub use preview::{preview_local_file, FilePreview};
+pub use sync::{SyncAdditions, SyncProgress, SyncReport};
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
 

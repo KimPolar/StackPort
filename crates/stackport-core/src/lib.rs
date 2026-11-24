@@ -39,6 +39,7 @@ pub use sftp::{
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
     SftpManager, SftpMutationReport, SftpOpened,
     SftpTransferProgress, SftpTransferReport,
+    SyncAdditions, SyncProgress, SyncReport,
 };
 mod terminal;
 pub use terminal::{TerminalExit, TerminalInfo, TerminalManager, TerminalRead};
@@ -801,6 +802,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sftp.download" | "sftp.download.cancel" => "sftp-pinned-host-local-no-overwrite",
         "sftp.upload" | "sftp.upload.cancel" => "sftp-pinned-host-verified-remote-no-overwrite",
         "sftp.mkdir" => "sftp-pinned-host-new-directory",
+        "sftp.sync" => "sftp-pinned-host-sync-additions-no-overwrite",
         "sftp.rename" => "sftp-pinned-host-rename-no-overwrite",
         "sftp.move" => "sftp-pinned-host-move-no-overwrite",
         "sftp.copy" | "sftp.copy.cancel" => "sftp-pinned-host-verified-copy-no-overwrite",

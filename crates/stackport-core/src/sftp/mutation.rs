@@ -215,7 +215,7 @@ pub(super) async fn rename_to_vacant(
     }
 }
 
-async fn create_folder(files: &RawSftpSession, parent: SftpString, path: SftpString) -> Result<()> {
+pub(super) async fn create_folder(files: &RawSftpSession, parent: SftpString, path: SftpString) -> Result<()> {
     ensure_directory(files, parent).await?;
     ensure_vacant(files, &path).await?;
     let attrs = FileAttributes {

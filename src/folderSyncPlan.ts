@@ -66,7 +66,7 @@ function otherSide(side: Side): Side {
 }
 
 function supported(entry: Entry) {
-  return (entry.kind === "file" || entry.kind === "directory") && Boolean(entry.location);
+  return (entry.kind === "directory" || (entry.kind === "file" && entry.size !== null)) && Boolean(entry.location);
 }
 
 export function buildFolderSyncPlan(rows: readonly FolderTreeRow[], content: ReadonlyMap<string, ContentResult>, options: PlanOptions) {

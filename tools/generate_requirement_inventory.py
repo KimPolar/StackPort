@@ -56,7 +56,7 @@ PARTIAL = {
     "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
     "SP-FL-015": "현재 로컬·SFTP 폴더에서 각 파일 직접 선택, SHA-256(16 MiB), UTF-8 줄·HEX 차이(64 KiB), 변경 구간 선택 및 UTF-8 병합 결과 별도 저장",
     "SP-FL-016": "로컬·SFTP 하위 구조·크기·수정 시각과 미확인 상태, 선택한 쌍의 SHA-256 비교, 동기화 작업 미리보기",
-    "SP-FL-017": "폴더 비교의 단방향·양방향 dry-run, 단방향 삭제 후보, 제외 패턴, 충돌과 확인 필요 표시",
+    "SP-FL-017": "단방향·양방향 dry-run, 삭제 후보·제외·충돌 표시, 새 폴더·파일 복사 실행 및 항목별 결과·작업 기록",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
     "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
     "SP-FL-023": "SFTP 전송·복사·편집·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
@@ -206,7 +206,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-FL-016":
                 evidence = "src/FolderCompareDialog.tsx; src/folderComparison.ts; src/FolderSyncPlanDialog.tsx; crates/stackport-core/src/sftp/folder_tree.rs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-017":
-                evidence = "src/FolderSyncPlanDialog.tsx; src/folderSyncPlan.ts; tests/folder-sync-plan.test.mjs; tests/sftp-smoke.cjs"
+                evidence = "src/FolderSyncPlanDialog.tsx; src/folderSyncPlan.ts; crates/stackport-core/src/sftp/sync.rs; tests/folder-sync-plan.test.mjs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-019":
                 evidence = "crates/stackport-core/src/sftp/delete.rs; tests/sftp-smoke.cjs; src/SftpDeleteDialog.tsx"
             elif requirement_id == "SP-FL-008":

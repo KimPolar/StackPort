@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { buildFolderSyncPlan, parseSyncPatterns } from "../src/folderSyncPlan.ts";
 
 function entry(name, kind = "file") {
-  return { name, kind, location: name, name_is_lossy: false };
+  return { name, kind, location: name, size: kind === "file" ? "4" : null, name_is_lossy: false };
 }
 
 function only(path, side, kind = "file", props = {}) {

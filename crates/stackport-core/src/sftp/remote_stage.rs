@@ -1,6 +1,6 @@
 use super::{
     file_error,
-    mutation::{ensure_vacant, rename_to_vacant},
+    mutation::{ensure_current_directory, ensure_vacant, rename_to_vacant},
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
     SftpError, SftpTransferOutcome, MAX_REMOTE_PATH,
 };
@@ -34,8 +34,25 @@ pub(super) async fn stage_remote_file<F>(
 where
     F: Future<Output = Result<[u8; 32]>>,
 {
+    stage_new_file(files, target, transfer, progress, false, write_contents).await
+}
+
+pub(super) async fn stage_new_file<F>(
+    files: &RawSftpSession,
+    target: StagingTarget<'_>,
+    transfer: &Transfer,
+    progress: &impl Fn(u64, Option<u64>, bool),
+    strict_parent: bool,
+    write_contents: impl FnOnce(SftpHandle) -> F,
+) -> Result<SftpTransferOutcome>
+where
+    F: Future<Output = Result<[u8; 32]>>,
+{
     ensure_vacant(files, target.path).await?;
     stage_and_publish(files, target, transfer, progress, write_contents, |temporary| async move {
+        if strict_parent {
+            ensure_current_directory(files, target.directory).await?;
+        }
         ensure_vacant(files, target.path).await?;
         transfer.begin_publication()?;
         rename_to_vacant(

@@ -3,6 +3,7 @@
 use super::{
     audit::FileOperation,
     file_error,
+    sync::{ensure_local_parent, CopySnapshot},
     transfer::{
         check_remote_snapshot, read_chunk, remote_file_size, request, Transfer, CHUNK_SIZE,
     },
@@ -37,23 +38,24 @@ impl SftpManager {
             |session, transfer| async move {
                 let update = |received, total| progress(transfer.report(received, total, false));
                 update(0, None);
-                download_file(&session.files, source, destination, &transfer, update).await
+                download_file(&session.files, source, destination, &transfer, update, None).await
             },
         )
         .await
     }
 }
 
-async fn download_file(
+pub(super) async fn download_file(
     files: &RawSftpSession,
     source: SftpString,
     destination: String,
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>),
+    snapshot: Option<CopySnapshot>,
 ) -> Result<SftpTransferOutcome> {
     transfer.check()?;
     let (destination, temporary) =
-        tokio::task::spawn_blocking(move || prepare_destination(&destination))
+        tokio::task::spawn_blocking(move || prepare_destination(&destination, snapshot.is_some()))
             .await
             .map_err(|_| "다운로드 경로를 준비할 수 없습니다.")??;
     let (local, temporary) = temporary.into_parts();
@@ -64,6 +66,9 @@ async fn download_file(
         .map_err(file_error)?
         .attrs;
     let expected = remote_file_size(&listed)?;
+    if let Some(snapshot) = snapshot {
+        snapshot.check(expected, listed.mtime.map(u64::from))?;
+    }
     transfer.check()?;
     let handle = request(files.open(source, OpenFlags::READ, FileAttributes::empty()))
         .await
@@ -83,9 +88,14 @@ async fn download_file(
         .map_err(|_| "다운로드 파일을 디스크에 기록할 수 없습니다.")?;
     drop(local);
     transfer.begin_publication()?;
-    tokio::task::spawn_blocking(move || publish(temporary, destination))
-        .await
-        .map_err(|_| "다운로드 파일을 저장할 수 없습니다.")??;
+    tokio::task::spawn_blocking(move || {
+        if snapshot.is_some() {
+            ensure_local_parent(&destination)?;
+        }
+        publish(temporary, destination)
+    })
+    .await
+    .map_err(|_| "다운로드 파일을 저장할 수 없습니다.")??;
     Ok(SftpTransferOutcome::Saved {
         bytes: expected.to_string(),
         sha256: digest,
@@ -135,7 +145,7 @@ async fn copy_contents(
     Ok(format!("{:x}", checksum.finalize()))
 }
 
-fn prepare_destination(destination: &str) -> Result<(PathBuf, NamedTempFile)> {
+fn prepare_destination(destination: &str, strict_parent: bool) -> Result<(PathBuf, NamedTempFile)> {
     let path = Path::new(destination);
     let name = path
         .file_name()
@@ -147,11 +157,15 @@ fn prepare_destination(destination: &str) -> Result<(PathBuf, NamedTempFile)> {
     {
         return Err("새 다운로드 파일의 유효한 절대 경로를 입력하세요.".into());
     }
-    let parent = path
-        .parent()
-        .ok_or("다운로드 폴더를 지정하세요.")?
-        .canonicalize()
-        .map_err(|_| "다운로드 폴더를 열 수 없습니다.")?;
+    let parent = path.parent().ok_or("다운로드 폴더를 지정하세요.")?;
+    let parent = if strict_parent {
+        ensure_local_parent(path)?;
+        parent.to_path_buf()
+    } else {
+        parent
+            .canonicalize()
+            .map_err(|_| "다운로드 폴더를 열 수 없습니다.")?
+    };
     let destination = parent.join(name);
     match fs::symlink_metadata(&destination) {
         Ok(_) => return Err("같은 이름의 파일이 있습니다. 새 파일 이름을 입력하세요.".into()),
@@ -184,11 +198,12 @@ mod tests {
     fn local_destination_is_not_replaced_when_a_file_appears_during_download() {
         let folder = tempfile::tempdir().unwrap();
         let target = folder.path().join("새 파일.txt");
-        let (destination, mut temporary) = prepare_destination(target.to_str().unwrap()).unwrap();
+        let (destination, mut temporary) =
+            prepare_destination(target.to_str().unwrap(), false).unwrap();
         temporary.write_all(b"download").unwrap();
         fs::write(&target, b"keep").unwrap();
         assert!(publish(temporary.into_temp_path(), destination).is_err());
-        assert!(prepare_destination(target.to_str().unwrap()).is_err());
+        assert!(prepare_destination(target.to_str().unwrap(), false).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"keep");
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
     }

@@ -23,7 +23,14 @@ function Metadata({ entries }: { entries: Entry[] }) {
   </td>;
 }
 
-export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPair; initial: Promise<FolderComparison>; onClose: () => void }) {
+export function FolderCompareDialog({ pair, initial, production, onExitGuard, onSynced, onClose }: {
+  pair: FolderPair;
+  initial: Promise<FolderComparison>;
+  production: boolean;
+  onExitGuard: (guard: (() => void) | null) => void;
+  onSynced: () => void;
+  onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const resultList = useRef<HTMLDivElement>(null);
   const [pending, setPending] = useState(() => initial.then(asFolderTree));
@@ -36,6 +43,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   const [selection, setSelection] = useState<{ name: string; difference: ViewableDifference } | null>(null);
   const [showPlan, setShowPlan] = useState(false);
   const hashPending = useRef(false);
+  const syncChanged = useRef(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
     let live = true;
@@ -88,7 +96,10 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
     }
   }
 
-  return <><dialog ref={dialog} className="dialog files-compare" aria-labelledby="files-compare-title" onClose={onClose}>
+  return <><dialog ref={dialog} className="dialog files-compare" aria-labelledby="files-compare-title" onClose={() => {
+    onClose();
+    if (syncChanged.current) void pending.then(onSynced);
+  }}>
     <div className="dialog-heading">
       <h2 id="files-compare-title">폴더 비교</h2>
       <button type="button" className="icon-button" aria-label="닫기" onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
@@ -158,6 +169,14 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   </dialog>
     {selection && <FileDifferenceDialog {...selection} onClose={() => setSelection(null)} />}
     {showPlan && folders && <FolderSyncPlanDialog rows={rows} content={content} localPath={folders.local.path} remotePath={folders.remote.path}
-      target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete} onClose={() => setShowPlan(false)} />}
+      target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete}
+      sessionId={pair.id} localRoot={pair.local.location} remoteRoot={pair.remote.location} production={production} onExitGuard={onExitGuard}
+      onClose={executed => {
+        setShowPlan(false);
+        if (executed) {
+          syncChanged.current = true;
+          refresh(recursive);
+        }
+      }} />}
   </>;
 }

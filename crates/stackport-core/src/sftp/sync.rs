@@ -1,0 +1,414 @@
+//! Apply the non-replacing additions of a confirmed folder synchronization plan.
+
+use super::{
+    audit::{FileAudit, FileOperation},
+    download::download_file,
+    local_link,
+    mutation::{create_folder, ensure_current_directory, new_child_path},
+    upload::upload_file,
+    FilesSession, RemotePath, SftpManager, SftpTransferOutcome, MAX_REMOTE_PATH,
+};
+use crate::{local_file::valid_filename, Result};
+use russh_sftp::protocol::SftpString;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
+use uuid::Uuid;
+
+const MAX_ADDITIONS: usize = 8_000;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SyncAdditions {
+    local_root: String,
+    remote_root: String,
+    confirmation: String,
+    items: Vec<Addition>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum Side {
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum Kind {
+    File,
+    Directory,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Addition {
+    path: String,
+    target: Side,
+    kind: Kind,
+    size: Option<String>,
+    modified: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CopySnapshot {
+    size: u64,
+    modified: Option<u64>,
+}
+
+impl CopySnapshot {
+    pub(super) fn check(self, size: u64, modified: Option<u64>) -> Result<()> {
+        if size != self.size || self.modified.is_some_and(|time| Some(time) != modified) {
+            return Err("비교 후 원본의 크기 또는 수정 시각이 바뀌었습니다.".into());
+        }
+        Ok(())
+    }
+}
+
+struct ResolvedAddition {
+    relative: String,
+    target: Side,
+    local: PathBuf,
+    remote_parent: SftpString,
+    remote: SftpString,
+    snapshot: Option<CopySnapshot>,
+}
+
+#[derive(Serialize)]
+pub struct SyncProgress {
+    completed: usize,
+    total: usize,
+    path: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ItemOutcome {
+    Applied {
+        bytes: Option<String>,
+        sha256: Option<String>,
+    },
+    Failed {
+        reason: String,
+    },
+    Skipped {
+        reason: &'static str,
+    },
+}
+
+#[derive(Serialize)]
+struct ItemReport {
+    path: String,
+    target: Side,
+    #[serde(flatten)]
+    outcome: ItemOutcome,
+}
+
+#[derive(Serialize)]
+pub struct SyncReport {
+    items: Vec<ItemReport>,
+    audit_warning: Option<&'static str>,
+}
+
+pub(super) fn ensure_local_parent(path: &Path) -> Result<()> {
+    ensure_local_directory(
+        path.parent()
+            .ok_or("로컬 상위 폴더를 확인할 수 없습니다.")?,
+    )
+}
+
+fn ensure_local_directory(path: &Path) -> Result<()> {
+    if !path.is_absolute() || (cfg!(windows) && path.to_string_lossy().starts_with("\\.\\")) {
+        return Err("로컬 폴더의 절대 경로를 확인하세요.".into());
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| "로컬 폴더를 열 수 없습니다.")?;
+    if local_link(&metadata)
+        || !metadata.is_dir()
+        || !path.canonicalize().is_ok_and(|current| current == path)
+    {
+        return Err("로컬 폴더 경로가 바뀌었거나 링크입니다. 다시 비교하세요.".into());
+    }
+    Ok(())
+}
+
+fn resolve_additions(
+    input: SyncAdditions,
+    remote_root: &SftpString,
+) -> Result<Vec<ResolvedAddition>> {
+    if input.items.is_empty() || input.items.len() > MAX_ADDITIONS {
+        return Err("실행할 동기화 항목 수를 확인하세요.".into());
+    }
+    let local_root = Path::new(&input.local_root);
+    let mut unique = HashSet::new();
+    let mut additions = Vec::with_capacity(input.items.len());
+    for addition in input.items {
+        let name = if cfg!(windows) {
+            addition.path.to_uppercase()
+        } else {
+            addition.path.clone()
+        };
+        if !unique.insert(name) {
+            return Err("동기화 계획에 중복된 경로가 있습니다. 다시 비교하세요.".into());
+        }
+        let mut local = local_root.to_path_buf();
+        let mut remote = remote_root.clone();
+        let mut remote_parent = remote_root.clone();
+        for segment in addition.path.split('/') {
+            if segment.is_empty()
+                || matches!(segment, "." | "..")
+                || segment.contains(['\\', ':', '\0'])
+                || !valid_filename(segment)
+            {
+                return Err("동기화 계획의 상대 경로를 확인하세요.".into());
+            }
+            local.push(segment);
+            remote_parent = remote;
+            remote = if addition.target == Side::Remote {
+                new_child_path(&remote_parent, segment)?
+            } else {
+                remote_parent.join(segment.as_bytes())
+            };
+            if remote.len() > MAX_REMOTE_PATH {
+                return Err("동기화 계획의 원격 경로가 너무 깁니다.".into());
+            }
+        }
+        let snapshot = match addition.kind {
+            Kind::Directory => None,
+            Kind::File => Some(CopySnapshot {
+                size: addition
+                    .size
+                    .and_then(|value| value.parse().ok())
+                    .ok_or("비교한 원본 파일의 크기를 확인하세요.")?,
+                modified: addition.modified,
+            }),
+        };
+        additions.push(ResolvedAddition {
+            relative: addition.path,
+            target: addition.target,
+            local,
+            remote_parent,
+            remote,
+            snapshot,
+        });
+    }
+    // A directory must be created before any of its children.
+    additions.sort_by_key(|item| (item.snapshot.is_some(), item.relative.matches('/').count()));
+    Ok(additions)
+}
+
+impl SftpManager {
+    pub async fn apply_sync_additions(
+        &self,
+        id: &str,
+        input: SyncAdditions,
+        progress: impl Fn(SyncProgress),
+    ) -> Result<SyncReport> {
+        let session = self.session(id)?;
+        let _operation = session
+            .operation
+            .try_lock()
+            .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
+        if session.profile.environment == "PROD"
+            && input.items.iter().any(|item| item.target == Side::Remote)
+            && input.confirmation != "PROD"
+        {
+            return Err("운영 연결에 저장하려면 PROD를 입력하세요.".into());
+        }
+        let remote_root = RemotePath::Token(input.remote_root.clone()).into_path()?;
+        let local_root = input.local_root.clone();
+        let additions = resolve_additions(input, &remote_root)?;
+        tokio::task::spawn_blocking(move || ensure_local_directory(Path::new(&local_root)))
+            .await
+            .map_err(|_| "로컬 폴더를 확인할 수 없습니다.")??;
+        ensure_current_directory(&session.files, &remote_root).await?;
+        let correlation = Uuid::new_v4().to_string();
+        let audit = FileAudit::start(
+            &self.store,
+            &session.profile,
+            &correlation,
+            FileOperation::Synchronize,
+        )
+        .await?;
+
+        let total = additions.len();
+        let mut items = Vec::with_capacity(total);
+        let mut failed_folders = HashSet::new();
+        let mut applied = 0;
+        for item in additions {
+            progress(SyncProgress {
+                completed: items.len(),
+                total,
+                path: item.relative.clone(),
+            });
+            let outcome = if session.ssh.is_closed() {
+                ItemOutcome::Skipped {
+                    reason: "SFTP 연결이 종료되었습니다.",
+                }
+            } else if failed_ancestor(&failed_folders, item.target, &item.relative) {
+                ItemOutcome::Skipped {
+                    reason: "상위 폴더를 만들지 못했습니다.",
+                }
+            } else {
+                match apply_addition(&session, &item).await {
+                    Ok(outcome) => {
+                        applied += 1;
+                        outcome
+                    }
+                    Err(reason) => ItemOutcome::Failed { reason },
+                }
+            };
+            if item.snapshot.is_none() && !matches!(outcome, ItemOutcome::Applied { .. }) {
+                failed_folders.insert((item.target, item.relative.clone()));
+            }
+            items.push(ItemReport {
+                path: item.relative,
+                target: item.target,
+                outcome,
+            });
+        }
+        let audit_warning = audit.finish_sync(applied == total, applied).await;
+        Ok(SyncReport {
+            items,
+            audit_warning,
+        })
+    }
+}
+
+fn failed_ancestor(failed: &HashSet<(Side, String)>, target: Side, relative: &str) -> bool {
+    let mut parent = relative;
+    while let Some((next, _)) = parent.rsplit_once('/') {
+        if failed.contains(&(target, next.to_owned())) {
+            return true;
+        }
+        parent = next;
+    }
+    false
+}
+
+async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Result<ItemOutcome> {
+    let files = &session.files;
+    match (item.target, item.snapshot) {
+        (Side::Remote, None) => {
+            let local = item.local.clone();
+            tokio::task::spawn_blocking(move || ensure_local_directory(&local))
+                .await
+                .map_err(|_| "로컬 원본 폴더를 확인할 수 없습니다.")??;
+            ensure_current_directory(files, &item.remote_parent).await?;
+            create_folder(files, item.remote_parent.clone(), item.remote.clone()).await?;
+        }
+        (Side::Local, None) => {
+            ensure_current_directory(files, &item.remote).await?;
+            let local = item.local.clone();
+            tokio::task::spawn_blocking(move || {
+                ensure_local_parent(&local)?;
+                fs::create_dir(local)
+                    .map_err(|error| format!("새 로컬 폴더를 만들 수 없습니다. {error}"))
+            })
+            .await
+            .map_err(|_| "로컬 폴더 생성 작업을 확인할 수 없습니다.")??;
+        }
+        (target, Some(snapshot)) => {
+            let local = item
+                .local
+                .to_str()
+                .ok_or("로컬 파일 경로를 읽을 수 없습니다.")?
+                .to_owned();
+            let active = session.register_transfer()?;
+            let transfer = &active.transfer;
+            let outcome = match target {
+                Side::Remote => {
+                    upload_file(
+                        session,
+                        local,
+                        item.remote_parent.clone(),
+                        item.remote.clone(),
+                        transfer,
+                        |_| {},
+                        Some(snapshot),
+                    )
+                    .await?
+                }
+                Side::Local => {
+                    ensure_current_directory(files, &item.remote_parent).await?;
+                    download_file(
+                        files,
+                        item.remote.clone(),
+                        local,
+                        transfer,
+                        |_, _| {},
+                        Some(snapshot),
+                    )
+                    .await?
+                }
+            };
+            return match outcome {
+                SftpTransferOutcome::Saved { bytes, sha256 } => Ok(ItemOutcome::Applied {
+                    bytes: Some(bytes),
+                    sha256: Some(sha256),
+                }),
+                SftpTransferOutcome::Cancelled { cleanup_warning } => {
+                    Err(cleanup_warning.unwrap_or_else(|| "파일 복사가 중단되었습니다.".into()))
+                }
+            };
+        }
+    }
+    Ok(ItemOutcome::Applied {
+        bytes: None,
+        sha256: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(paths: &[&str]) -> SyncAdditions {
+        SyncAdditions {
+            local_root: std::env::current_dir().unwrap().to_str().unwrap().into(),
+            remote_root: String::new(),
+            confirmation: String::new(),
+            items: paths
+                .iter()
+                .map(|path| Addition {
+                    path: (*path).into(),
+                    target: Side::Remote,
+                    kind: Kind::Directory,
+                    size: None,
+                    modified: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn resolves_only_unique_relative_paths_and_orders_parents_first() {
+        let root = SftpString::from("/root");
+        let valid = resolve_additions(input(&["a/b", "a"]), &root).unwrap();
+        assert_eq!(valid[0].relative, "a");
+        assert_eq!(valid[1].remote.as_bytes(), b"/root/a/b");
+        for invalid in [
+            &["a", "a"][..],
+            &["a/../b"],
+            &["/a"],
+            &["a//b"],
+            &["D:/outside"],
+            &["a\\b"],
+        ] {
+            assert!(
+                resolve_additions(input(invalid), &root).is_err(),
+                "{invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_directories_block_only_their_target_descendants() {
+        let failed = HashSet::from([(Side::Remote, "parent".into())]);
+        assert!(failed_ancestor(&failed, Side::Remote, "parent/child/a"));
+        assert!(!failed_ancestor(&failed, Side::Local, "parent/child/a"));
+        assert!(!failed_ancestor(&failed, Side::Remote, "parentb/child/a"));
+    }
+}
