@@ -29,12 +29,12 @@ const sqliteRules = [
   /(?<comment>--[^\n]*|\/\*[\s\S]*?(?:\*\/|$))/,
   /(?<string>[xX]?'(?:''|[^'])*(?:'|$))/,
   /(?<identifier>"(?:""|[^"])*(?:"|$)|`(?:``|[^`])*(?:`|$)|\[[^\]]*(?:\]|$))/u,
-  /(?<parameter>\?[0-9]*|[:@$][\p{L}\p{N}_$]+)/u,
-  /(?<number>0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*|(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?)/,
-  /(?<word>[\p{L}_][\p{L}\p{M}\p{N}_$]*)/u,
+  /(?<parameter>\?[0-9]*|[:@$#](?:[A-Za-z0-9_$\u0080-\u{10ffff}]|::)+(?:\([^ \t\r\n\f)]*\)?)?)/u,
+  /(?<number>(?:0[xX][0-9a-fA-F][0-9a-fA-F_]*|(?:\d[\d_]*(?:\.[\d_]*)?|\.\d[\d_]*)(?:[eE][+-]?\d[\d_]*)?)[A-Za-z0-9_$\u0080-\u{10ffff}]*)/u,
+  /(?<word>[A-Za-z_\u0080-\u{10ffff}][A-Za-z0-9_$\u0080-\u{10ffff}]*)/u,
 ];
 const sqlite = syntaxGrammar(...sqliteRules);
-const sqliteLex = syntaxGrammar(...sqliteRules, /(?<punctuation>\S)/);
+const sqliteLex = syntaxGrammar(...sqliteRules, /(?<punctuation>->>|->|<=|>=|<>|!=|==|<<|>>|\|\||[^ \t\r\n\f])/);
 
 export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
 
@@ -46,7 +46,7 @@ export function sqliteEditorTokens(value: string): SqlEditorToken[] {
 }
 
 export function isSqliteKeyword(word: string) {
-  return sqliteKeywords.has(word.toUpperCase());
+  return /^[A-Za-z_]+$/.test(word) && sqliteKeywords.has(word.toUpperCase());
 }
 
 export function sqliteKeywordsStartingWith(prefix: string) {

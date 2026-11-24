@@ -45,6 +45,7 @@ async function main() {
     await verifySqlCompletion(page, editor, dev);
     await verifySqlDiagnostics(page, editor, dev);
     await verifySqlDefinition(page, editor, dev);
+    await verifySqlFormatting(page, editor);
     const colored = "\tSELECT \"FROM\", '한😀 ''x''' AS 값, ?12, 0xff; -- SELECT\n/* 첫 줄\n둘째 줄 */";
     await editor.fill(colored);
     const syntax = page.locator('.code-highlight-lines');
@@ -440,6 +441,58 @@ async function verifySqlDefinition(page, editor, dev) {
   await dialog.getByRole('alert').getByText(/여러 테이블이 이 이름을 사용합니다/).waitFor();
   await close();
   await dev.click();
+}
+
+async function verifySqlFormatting(page, editor) {
+  const dialog = page.getByRole('dialog', { name: 'SQL 서식', exact: true });
+  const apply = dialog.getByRole('button', { name: '서식 적용', exact: true });
+  const after = dialog.getByLabel('서식 결과 SQL', { exact: true });
+  const source = "SELECT  id,  name FROM people;\nSELECT '한😀  그대로';";
+  const formatted = "select\n    id,\n    name\nfrom\n    people;\nselect\n    '한😀  그대로';";
+  const waitForPreview = async text => {
+    await page.waitForFunction(expected => document.querySelector('[aria-label="서식 결과 SQL"]')?.textContent === expected, text);
+    assert.equal(await after.textContent(), text);
+  };
+
+  await editor.fill(source);
+  await editor.press('Control+Alt+f');
+  await dialog.getByText('SQLite · 문서 전체', { exact: true }).waitFor();
+  await dialog.getByLabel('키워드 대소문자').selectOption('lower');
+  await dialog.getByLabel('들여쓰기').selectOption('4');
+  await dialog.getByLabel('문장 사이 빈 줄').selectOption('0');
+  await waitForPreview(formatted);
+  assert.equal(await dialog.getByLabel('서식 적용 전 SQL', { exact: true }).textContent(), source);
+  assert.equal(await editor.inputValue(), source);
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), formatted);
+  await editor.press('Control+z');
+  assert.equal(await editor.inputValue(), source);
+
+  const prefix = 'SELECT  1;\n';
+  const fragment = "select   -- keep  \n    x'0a', $p::a(x;y);";
+  const suffix = '\nSELECT  3;';
+  const compacted = "select -- keep  \nx'0a', $p::a(x;y);";
+  const selectionSource = prefix + fragment + suffix;
+  await editor.fill(selectionSource);
+  await editor.evaluate((node, [start, end]) => node.setSelectionRange(start, end), [prefix.length, prefix.length + fragment.length]);
+  await page.getByRole('button', { name: 'SQL 서식', exact: true }).click();
+  await dialog.getByText('SQLite · 선택 영역', { exact: true }).waitFor();
+  assert.equal(await dialog.getByLabel('들여쓰기').inputValue(), '4');
+  await dialog.getByLabel('방식').selectOption('compact');
+  await waitForPreview(compacted);
+  assert.equal(await editor.inputValue(), selectionSource);
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), prefix + compacted + suffix);
+  assert.equal(await editor.evaluate(node => node.value.slice(node.selectionStart, node.selectionEnd)), compacted);
+  await editor.press('Control+z');
+  assert.equal(await editor.inputValue(), selectionSource);
+
+  await editor.press('Control+Alt+f');
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), selectionSource);
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

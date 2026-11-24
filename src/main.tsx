@@ -25,6 +25,7 @@ import { CodeTextarea } from "./CodeTextarea";
 import { sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlCompletionCatalog, type SqlDefinitionReference } from "./sqlCompletion";
 import { SqlDiagnostics } from "./SqlDiagnostics";
 import { SqlDefinitionDialog, type SqlDefinitionResult } from "./SqlDefinitionDialog";
+import { SqlFormatDialog } from "./SqlFormatDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
 import { NetworkWorkspace } from "./NetworkWorkspace";
@@ -55,6 +56,7 @@ type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: Que
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
 type SqlDefinitionRequest = { profileId: string; tabId: string; source: string; result: Promise<SqlDefinitionResult> };
+type SqlFormatSelection = { profileId: string; tabId: string; source: string; start: number; end: number };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
@@ -122,6 +124,7 @@ function App() {
   const [sqlTabSets, setSqlTabSets] = useState<Record<string, SqlTabSet>>({});
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
+  const [formatSelection, setFormatSelection] = useState<SqlFormatSelection | null>(null);
   const [closingSqlTab, setClosingSqlTab] = useState<SqlDraft | null>(null);
   const [exitPrompt, setExitPrompt] = useState(false);
   const [exitClosing, setExitClosing] = useState(false);
@@ -439,6 +442,30 @@ function App() {
     const result = reference ? readSqlDefinition(reference, profile.id).catch(error => ({ error: errorText(error) }))
       : Promise.resolve({ error: "현재 문장의 테이블, 별칭 또는 열 이름에 커서를 두세요." });
     setDefinition({ profileId: profile.id, tabId: sqlDraft.id, source, result });
+  }
+
+  function openSqlFormat() {
+    const editor = sqlEditor.current;
+    if (!editor || !sqlDraft || !profile || !editor.value.trim()) return;
+    const source = editor.value;
+    const selected = editor.selectionStart !== editor.selectionEnd;
+    setFormatSelection({ profileId: profile.id, tabId: sqlDraft.id, source,
+      start: selected ? editor.selectionStart : 0, end: selected ? editor.selectionEnd : source.length });
+  }
+
+  function applySqlFormat(selection: SqlFormatSelection, text: string) {
+    const editor = sqlEditor.current;
+    if (!editor || profile?.id !== selection.profileId || sqlDraft?.id !== selection.tabId || editor.value !== selection.source) {
+      setError("SQL 탭이나 내용이 바뀌었습니다. 서식을 다시 미리보세요.");
+      return;
+    }
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(selection.start, selection.end);
+    if (!document.execCommand("insertText", false, text)) {
+      setError("SQL 편집기에 서식을 적용할 수 없습니다.");
+    } else if (selection.start > 0 || selection.end < selection.source.length) {
+      revealEditorRange(editor, selection.start, selection.start + text.length);
+    }
   }
 
   function editSqlTabs(target: SqlTarget, edit: (group: SqlTabSet) => SqlTabSet) {
@@ -866,6 +893,7 @@ function App() {
       <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
       {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
+      {sqlDraft && <button type="button" className="secondary small" title="Ctrl+Alt+F" disabled={!sql.trim()} onClick={openSqlFormat}>SQL 서식</button>}
     </div>
     {sqlDraft && <span className="sql-file-state" role="status" title={sqlDraft.savedPath || undefined}>
       {isSqlDraftDirty(sqlDraft) ? "저장하지 않은 변경" : sqlDraft.savedPath ? "파일과 동일" : "Ctrl + Enter 실행"}
@@ -930,6 +958,11 @@ function App() {
                     return;
                   }
                   if (!(event.ctrlKey || event.metaKey)) return;
+                  if (event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+                    event.preventDefault();
+                    openSqlFormat();
+                    return;
+                  }
                   if (event.key === "Enter") {
                     event.preventDefault();
                     const { selectionStart, selectionEnd } = event.currentTarget;
@@ -1113,6 +1146,9 @@ function App() {
         const editor = sqlEditor.current;
         if (editor?.value === definition.source) revealEditorRange(editor, range.start, range.end);
       }} />}
+    {formatSelection && formatSelection.profileId === profile?.id && formatSelection.tabId === sqlDraft?.id && <SqlFormatDialog
+      source={formatSelection.source} start={formatSelection.start} end={formatSelection.end}
+      onClose={() => setFormatSelection(null)} onApply={text => applySqlFormat(formatSelection, text)} />}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}

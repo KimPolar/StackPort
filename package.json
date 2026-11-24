@@ -16,7 +16,8 @@
     "@xterm/xterm": "6.0.0",
     "lucide-react": "1.44.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "sql-formatter": "15.9.0"
   },
   "devDependencies": {
     "@types/react": "19.2.17",
