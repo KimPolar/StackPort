@@ -24,6 +24,36 @@ pub(super) struct StagingTarget<'a> {
     pub fsync_supported: bool,
 }
 
+pub(super) fn same_permissions(before: &FileAttributes, current: &FileAttributes) -> bool {
+    before.permissions == current.permissions && before.uid == current.uid && before.gid == current.gid
+}
+
+pub(super) fn can_preserve_permissions(attrs: &FileAttributes) -> bool {
+    attrs.permissions.is_some_and(|mode| mode & 0o7000 == 0) && attrs.uid.is_some() && attrs.gid.is_some()
+}
+
+pub(super) async fn preserve_permissions(files: &RawSftpSession, handle: SftpHandle, attrs: &FileAttributes) -> Result<()> {
+    request(files.fsetstat(handle.clone(), FileAttributes {
+        permissions: attrs.permissions.map(|mode| mode & 0o777),
+        uid: attrs.uid,
+        gid: attrs.gid,
+        ..FileAttributes::empty()
+    })).await.map_err(file_error)?;
+    let staged = request(files.fstat(handle)).await.map_err(file_error)?.attrs;
+    if !same_permissions(attrs, &staged) {
+        return Err("기존 파일의 소유자와 권한을 보존할 수 없습니다.".into());
+    }
+    Ok(())
+}
+
+pub(super) async fn publish_replacement(files: &RawSftpSession, temporary: SftpString, destination: SftpString) -> Result<()> {
+    match request(files.posix_rename(temporary, destination)).await {
+        Ok(_) => Ok(()),
+        Err(SftpError::Status(status)) => Err(file_error(SftpError::Status(status))),
+        Err(_) => Err("교체 응답을 받지 못했습니다. 원격 파일을 다시 확인하세요.".into()),
+    }
+}
+
 pub(super) async fn stage_remote_file<F>(
     files: &RawSftpSession,
     target: StagingTarget<'_>,
@@ -124,6 +154,7 @@ where
         Ok(SftpTransferOutcome::Saved {
             bytes: target.size.to_string(),
             sha256,
+            warning: None,
         })
     }
     .await;

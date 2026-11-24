@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { displayFilePath } from "./fileBrowse";
-import type { ContentResult } from "./fileCompare";
+import { compareFileContents, fileComparisonSnapshot, type ContentResult } from "./fileCompare";
 import type { FolderTreeRow } from "./folderComparison";
 import { buildFolderSyncPlan, parseSyncPatterns, syncActionLabels, type SyncAction, type SyncDirection } from "./folderSyncPlan";
 
@@ -17,7 +17,7 @@ const filters: [Filter, string][] = [
 type Target = "local" | "remote";
 type BatchProgress = { completed: number; total: number; path: string };
 type BatchItem = { path: string; target: Target } & (
-  | { status: "applied"; bytes: string | null; sha256: string | null }
+  | { status: "applied"; bytes: string | null; sha256: string | null; warning: string | null }
   | { status: "failed" | "skipped"; reason: string }
 );
 type BatchReport = { items: BatchItem[]; audit_warning: string | null };
@@ -25,7 +25,7 @@ const executionLabels = { applied: "완료", failed: "실패", skipped: "건너�
 const targetLabels = { local: "로컬", remote: "원격" };
 
 export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, target, recursive, incomplete,
-  sessionId, localRoot, remoteRoot, production, onExitGuard, onClose }: {
+  sessionId, localRoot, remoteRoot, production, onExitGuard, onVerified, onClose }: {
   rows: readonly FolderTreeRow[];
   content: ReadonlyMap<string, ContentResult>;
   localPath: string;
@@ -38,6 +38,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   remoteRoot: string;
   production: boolean;
   onExitGuard: (guard: (() => void) | null) => void;
+  onVerified: (result: Map<string, ContentResult>) => void;
   onClose: (executed: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -48,6 +49,8 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(0);
   const running = useRef(false);
+  const stopVerification = useRef(false);
+  const [verifying, setVerifying] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [progress, setProgress] = useState<BatchProgress | null>(null);
@@ -64,16 +67,32 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   const changes = plan.filter(item => proposed.has(item.action)).length;
   const conflicts = plan.filter(item => item.action === "conflict").length;
   const verification = plan.filter(item => item.action === "verify").length;
-  const additions = useMemo(() => {
-    const byPath = new Map(rows.map(row => [row.name, row]));
+  const byPath = useMemo(() => new Map(rows.map(row => [row.name, row])), [rows]);
+  const executable = useMemo(() => {
     return plan.flatMap(item => {
-      if (!item.target || (item.action !== "mkdir" && item.action !== "copy")) return [];
-      const source = byPath.get(item.path)?.[item.target === "local" ? "remote" : "local"][0];
+      if (!item.target || !["mkdir", "copy", "update"].includes(item.action)) return [];
+      const row = byPath.get(item.path);
+      const localTarget = item.target === "local";
+      const source = row?.[localTarget ? "remote" : "local"][0];
       if (!source) return [];
-      return [{ path: item.path, target: item.target, kind: source.kind, size: source.size, modified: source.modified }];
+      let replacement = null;
+      if (item.action === "update") {
+        const current = row?.[item.target][0];
+        const checked = content.get(item.path);
+        if (!current || current.size === null || !checked || "error" in checked || checked.matches) return [];
+        replacement = {
+          source_sha256: localTarget ? checked.remote_sha256 : checked.local_sha256,
+          target_sha256: localTarget ? checked.local_sha256 : checked.remote_sha256,
+          target_size: current.size, target_modified: current.modified, target_mode: current.mode,
+          target_uid: current.uid, target_gid: current.gid,
+        };
+      }
+      return [{ path: item.path, target: item.target, kind: source.kind, size: source.size, modified: source.modified, replacement }];
     });
-  }, [plan, rows]);
-  const needsProd = production && additions.some(item => item.target === "remote");
+  }, [plan, byPath, content]);
+  const uncheckedUpdates = plan.filter(item => item.action === "update" && !content.has(item.path));
+  const replacements = executable.filter(item => item.replacement !== null).length;
+  const needsProd = production && executable.some(item => item.target === "remote");
   const executing = progress !== null;
   const locked = confirming || executing;
   const reported = report?.items ?? [];
@@ -94,15 +113,15 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   }
 
   async function execute() {
-    if (!confirming || running.current || !additions.length || (needsProd && confirmation !== "PROD")) return;
+    if (!confirming || running.current || !executable.length || (needsProd && confirmation !== "PROD")) return;
     running.current = true;
-    setProgress({ completed: 0, total: additions.length, path: "" });
+    setProgress({ completed: 0, total: executable.length, path: "" });
     setError("");
     setExitNotice(false);
     const channel = new Channel<BatchProgress>(setProgress);
     try {
-      setReport(await invoke<BatchReport>("apply_sftp_sync_additions", {
-        id: sessionId, input: { local_root: localRoot, remote_root: remoteRoot, confirmation, items: additions }, progress: channel,
+      setReport(await invoke<BatchReport>("apply_sftp_sync_plan", {
+        id: sessionId, input: { local_root: localRoot, remote_root: remoteRoot, confirmation, items: executable }, progress: channel,
       }));
       goToPage(0);
     } catch (error) {
@@ -112,6 +131,33 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
       setProgress(null);
       setConfirming(false);
       setConfirmation("");
+      running.current = false;
+    }
+  }
+
+  async function verifyUpdates() {
+    if (running.current || !uncheckedUpdates.length) return;
+    running.current = true;
+    stopVerification.current = false;
+    setVerifying(true);
+    setError("");
+    setExitNotice(false);
+    const total = uncheckedUpdates.length;
+    const verified = new Map<string, ContentResult>();
+    try {
+      for (const item of uncheckedUpdates) {
+        if (stopVerification.current) break;
+        setProgress({ completed: verified.size, total, path: item.path });
+        const row = byPath.get(item.path);
+        if (!row) continue;
+        const local = fileComparisonSnapshot(row.local[0]);
+        const remote = fileComparisonSnapshot(row.remote[0]);
+        if (local && remote) verified.set(item.path, await compareFileContents(sessionId, local, remote));
+      }
+      onVerified(verified);
+    } finally {
+      setProgress(null);
+      setVerifying(false);
       running.current = false;
     }
   }
@@ -137,7 +183,8 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
             <tbody>{reported.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(item => <tr key={item.path}>
               <th scope="row" title={item.path}>{item.path}</th><td>{targetLabels[item.target]}</td><td>{executionLabels[item.status]}</td>
               <td>{item.status === "applied" ? (item.bytes === null ? "폴더 생성" :
-                <details><summary>{numbers.format(BigInt(item.bytes))} B</summary><code>{item.sha256}</code></details>) : item.reason}</td>
+                <details><summary>{numbers.format(BigInt(item.bytes))} B</summary><code>{item.sha256}</code></details>) : item.reason}
+                {item.status === "applied" && item.warning && <p className="form-note">{item.warning}</p>}</td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -203,12 +250,13 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
         </nav>}
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      {exitNotice && progress && <p className="form-note" role="status">동기화 작업을 마친 뒤 앱을 닫을 수 있습니다.</p>}
+      {exitNotice && progress && <p className="form-note" role="status">파일 작업을 마친 뒤 앱을 닫을 수 있습니다.</p>}
       {progress ? <div className="files-transfer" role="status">
-        <progress aria-label="동기화 진행률" max={progress.total} value={progress.completed} />
+        <progress aria-label={verifying ? "갱신 대상 검증 진행률" : "동기화 진행률"} max={progress.total} value={progress.completed} />
         <span>{numbers.format(progress.completed)} / {numbers.format(progress.total)} · {progress.path || "준비 중"}</span>
+        {verifying && <button type="button" className="secondary small" onClick={() => { stopVerification.current = true; }}>검증 중단</button>}
       </div> : confirming ? <div className="folder-sync-confirm">
-        <p className="form-note">새 폴더와 파일 {numbers.format(additions.length)}개를 만들거나 복사합니다. 갱신·삭제 후보는 이 실행에서 보류합니다.</p>
+        <p className="form-note">새 항목 {numbers.format(executable.length - replacements)}개를 추가하고, SHA-256을 확인한 기존 파일 {numbers.format(replacements)}개를 갱신합니다. 삭제 후보는 보류합니다.</p>
         {needsProd && <label className="field">운영 연결 확인
           <input value={confirmation} placeholder="PROD" onChange={event => setConfirmation(event.target.value)} />
         </label>}
@@ -217,10 +265,13 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
           <button type="button" className="primary small" disabled={needsProd && confirmation !== "PROD"}
             onClick={() => void execute()}>확인하고 시작</button>
         </div>
-      </div> : additions.length > 0 && <div className="folder-sync-run">
-        <button type="button" className="primary small" onClick={() => { setError(""); setConfirming(true); }}>
-          새 항목 실행 ({numbers.format(additions.length)})
-        </button>
+      </div> : (executable.length > 0 || uncheckedUpdates.length > 0) && <div className="folder-sync-run">
+        {uncheckedUpdates.length > 0 && <button type="button" className="secondary small" onClick={() => void verifyUpdates()}>
+          갱신 후보 검증 ({numbers.format(uncheckedUpdates.length)})
+        </button>}
+        {executable.length > 0 && <button type="button" className="primary small" onClick={() => { setError(""); setConfirming(true); }}>
+          {replacements > 0 ? "동기화 실행" : "새 항목 실행"} ({numbers.format(executable.length)})
+        </button>}
       </div>}
       </>}
     </div>

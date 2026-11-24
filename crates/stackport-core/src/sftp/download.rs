@@ -3,7 +3,7 @@
 use super::{
     audit::FileOperation,
     file_error,
-    sync::{ensure_local_parent, CopySnapshot},
+    sync::{ensure_local_parent, SyncCopy},
     transfer::{
         check_remote_snapshot, read_chunk, remote_file_size, request, Transfer, CHUNK_SIZE,
     },
@@ -51,13 +51,18 @@ pub(super) async fn download_file(
     destination: String,
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>),
-    snapshot: Option<CopySnapshot>,
+    copy: Option<SyncCopy>,
 ) -> Result<SftpTransferOutcome> {
     transfer.check()?;
-    let (destination, temporary) =
-        tokio::task::spawn_blocking(move || prepare_destination(&destination, snapshot.is_some()))
-            .await
-            .map_err(|_| "다운로드 경로를 준비할 수 없습니다.")??;
+    let replacement = copy.and_then(|copy| copy.replacement);
+    let (destination, temporary) = tokio::task::spawn_blocking(move || {
+        if let Some(replacement) = replacement {
+            replacement.verify_local(Path::new(&destination))?;
+        }
+        prepare_destination(&destination, copy.is_some(), replacement.is_some())
+    })
+    .await
+    .map_err(|_| "다운로드 경로를 준비할 수 없습니다.")??;
     let (local, temporary) = temporary.into_parts();
     let mut local = tokio::fs::File::from_std(local);
     transfer.check()?;
@@ -66,11 +71,11 @@ pub(super) async fn download_file(
         .map_err(file_error)?
         .attrs;
     let expected = remote_file_size(&listed)?;
-    if let Some(snapshot) = snapshot {
-        snapshot.check(expected, listed.mtime.map(u64::from))?;
+    if let Some(copy) = copy {
+        copy.source.check(expected, listed.mtime.map(u64::from))?;
     }
     transfer.check()?;
-    let handle = request(files.open(source, OpenFlags::READ, FileAttributes::empty()))
+    let handle = request(files.open(source.clone(), OpenFlags::READ, FileAttributes::empty()))
         .await
         .map_err(file_error)?
         .handle;
@@ -81,6 +86,16 @@ pub(super) async fn download_file(
     let closed = request(files.close(handle)).await.map_err(file_error);
     let digest = copied?;
     closed?;
+    if copy.is_some() {
+        let current = request(files.lstat(source))
+            .await
+            .map_err(file_error)?
+            .attrs;
+        check_remote_snapshot(&listed, &current, expected)?;
+    }
+    if let Some(replacement) = replacement {
+        replacement.check_source(&digest)?;
+    }
     transfer.check()?;
     local
         .sync_all()
@@ -88,17 +103,21 @@ pub(super) async fn download_file(
         .map_err(|_| "다운로드 파일을 디스크에 기록할 수 없습니다.")?;
     drop(local);
     transfer.begin_publication()?;
-    tokio::task::spawn_blocking(move || {
-        if snapshot.is_some() {
+    let warning = tokio::task::spawn_blocking(move || {
+        if let Some(replacement) = replacement {
+            return replacement.publish_local(temporary, &destination);
+        }
+        if copy.is_some() {
             ensure_local_parent(&destination)?;
         }
-        publish(temporary, destination)
+        publish(temporary, destination).map(|()| None)
     })
     .await
     .map_err(|_| "다운로드 파일을 저장할 수 없습니다.")??;
     Ok(SftpTransferOutcome::Saved {
         bytes: expected.to_string(),
         sha256: digest,
+        warning,
     })
 }
 
@@ -145,7 +164,11 @@ async fn copy_contents(
     Ok(format!("{:x}", checksum.finalize()))
 }
 
-fn prepare_destination(destination: &str, strict_parent: bool) -> Result<(PathBuf, NamedTempFile)> {
+fn prepare_destination(
+    destination: &str,
+    strict_parent: bool,
+    replacing: bool,
+) -> Result<(PathBuf, NamedTempFile)> {
     let path = Path::new(destination);
     let name = path
         .file_name()
@@ -168,7 +191,11 @@ fn prepare_destination(destination: &str, strict_parent: bool) -> Result<(PathBu
     };
     let destination = parent.join(name);
     match fs::symlink_metadata(&destination) {
+        Ok(metadata) if replacing && metadata.is_file() && !super::local_link(&metadata) => {}
         Ok(_) => return Err("같은 이름의 파일이 있습니다. 새 파일 이름을 입력하세요.".into()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && replacing => {
+            return Err("갱신 대상 파일이 사라졌습니다. 다시 비교하세요.".into())
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(_) => return Err("다운로드 경로에 접근할 수 없습니다.".into()),
     }
@@ -199,11 +226,11 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let target = folder.path().join("새 파일.txt");
         let (destination, mut temporary) =
-            prepare_destination(target.to_str().unwrap(), false).unwrap();
+            prepare_destination(target.to_str().unwrap(), false, false).unwrap();
         temporary.write_all(b"download").unwrap();
         fs::write(&target, b"keep").unwrap();
         assert!(publish(temporary.into_temp_path(), destination).is_err());
-        assert!(prepare_destination(target.to_str().unwrap(), false).is_err());
+        assert!(prepare_destination(target.to_str().unwrap(), false, false).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"keep");
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
     }

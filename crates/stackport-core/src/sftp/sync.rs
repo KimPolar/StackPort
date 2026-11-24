@@ -1,4 +1,4 @@
-//! Apply the non-replacing additions of a confirmed folder synchronization plan.
+//! Apply additions and verified file replacements in a confirmed folder synchronization plan.
 
 use super::{
     audit::{FileAudit, FileOperation},
@@ -18,15 +18,15 @@ use std::{
 };
 use uuid::Uuid;
 
-const MAX_ADDITIONS: usize = 8_000;
+const MAX_ITEMS_PER_SYNC: usize = 8_000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SyncAdditions {
+pub struct SyncPlan {
     local_root: String,
     remote_root: String,
     confirmation: String,
-    items: Vec<Addition>,
+    items: Vec<PlanItem>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
@@ -45,18 +45,25 @@ enum Kind {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Addition {
+struct PlanItem {
     path: String,
     target: Side,
     kind: Kind,
     size: Option<String>,
     modified: Option<u64>,
+    replacement: Option<super::sync_replace::ReplacementInput>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct CopySnapshot {
-    size: u64,
-    modified: Option<u64>,
+    pub(super) size: u64,
+    pub(super) modified: Option<u64>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SyncCopy {
+    pub(super) source: CopySnapshot,
+    pub(super) replacement: Option<super::sync_replace::Replacement>,
 }
 
 impl CopySnapshot {
@@ -68,13 +75,13 @@ impl CopySnapshot {
     }
 }
 
-struct ResolvedAddition {
+struct ResolvedItem {
     relative: String,
     target: Side,
     local: PathBuf,
     remote_parent: SftpString,
     remote: SftpString,
-    snapshot: Option<CopySnapshot>,
+    copy: Option<SyncCopy>,
 }
 
 #[derive(Serialize)]
@@ -90,6 +97,7 @@ enum ItemOutcome {
     Applied {
         bytes: Option<String>,
         sha256: Option<String>,
+        warning: Option<String>,
     },
     Failed {
         reason: String,
@@ -121,7 +129,7 @@ pub(super) fn ensure_local_parent(path: &Path) -> Result<()> {
 }
 
 fn ensure_local_directory(path: &Path) -> Result<()> {
-    if !path.is_absolute() || (cfg!(windows) && path.to_string_lossy().starts_with("\\.\\")) {
+    if !path.is_absolute() || (cfg!(windows) && path.to_string_lossy().starts_with(r"\\.\")) {
         return Err("로컬 폴더의 절대 경로를 확인하세요.".into());
     }
     let metadata = fs::symlink_metadata(path).map_err(|_| "로컬 폴더를 열 수 없습니다.")?;
@@ -134,11 +142,8 @@ fn ensure_local_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn resolve_additions(
-    input: SyncAdditions,
-    remote_root: &SftpString,
-) -> Result<Vec<ResolvedAddition>> {
-    if input.items.is_empty() || input.items.len() > MAX_ADDITIONS {
+fn resolve_items(input: SyncPlan, remote_root: &SftpString) -> Result<Vec<ResolvedItem>> {
+    if input.items.is_empty() || input.items.len() > MAX_ITEMS_PER_SYNC {
         return Err("실행할 동기화 항목 수를 확인하세요.".into());
     }
     let local_root = Path::new(&input.local_root);
@@ -175,35 +180,41 @@ fn resolve_additions(
                 return Err("동기화 계획의 원격 경로가 너무 깁니다.".into());
             }
         }
-        let snapshot = match addition.kind {
+        let copy = match addition.kind {
+            Kind::Directory if addition.replacement.is_some() => {
+                return Err("폴더는 파일 갱신 대상으로 지정할 수 없습니다.".into())
+            }
             Kind::Directory => None,
-            Kind::File => Some(CopySnapshot {
-                size: addition
-                    .size
-                    .and_then(|value| value.parse().ok())
-                    .ok_or("비교한 원본 파일의 크기를 확인하세요.")?,
-                modified: addition.modified,
+            Kind::File => Some(SyncCopy {
+                source: CopySnapshot {
+                    size: addition
+                        .size
+                        .and_then(|value| value.parse().ok())
+                        .ok_or("비교한 원본 파일의 크기를 확인하세요.")?,
+                    modified: addition.modified,
+                },
+                replacement: addition.replacement.map(TryInto::try_into).transpose()?,
             }),
         };
-        additions.push(ResolvedAddition {
+        additions.push(ResolvedItem {
             relative: addition.path,
             target: addition.target,
             local,
             remote_parent,
             remote,
-            snapshot,
+            copy,
         });
     }
     // A directory must be created before any of its children.
-    additions.sort_by_key(|item| (item.snapshot.is_some(), item.relative.matches('/').count()));
+    additions.sort_by_key(|item| (item.copy.is_some(), item.relative.matches('/').count()));
     Ok(additions)
 }
 
 impl SftpManager {
-    pub async fn apply_sync_additions(
+    pub async fn apply_sync_plan(
         &self,
         id: &str,
-        input: SyncAdditions,
+        input: SyncPlan,
         progress: impl Fn(SyncProgress),
     ) -> Result<SyncReport> {
         let session = self.session(id)?;
@@ -219,7 +230,7 @@ impl SftpManager {
         }
         let remote_root = RemotePath::Token(input.remote_root.clone()).into_path()?;
         let local_root = input.local_root.clone();
-        let additions = resolve_additions(input, &remote_root)?;
+        let additions = resolve_items(input, &remote_root)?;
         tokio::task::spawn_blocking(move || ensure_local_directory(Path::new(&local_root)))
             .await
             .map_err(|_| "로컬 폴더를 확인할 수 없습니다.")??;
@@ -252,7 +263,7 @@ impl SftpManager {
                     reason: "상위 폴더를 만들지 못했습니다.",
                 }
             } else {
-                match apply_addition(&session, &item).await {
+                match apply_item(&session, &item).await {
                     Ok(outcome) => {
                         applied += 1;
                         outcome
@@ -260,7 +271,7 @@ impl SftpManager {
                     Err(reason) => ItemOutcome::Failed { reason },
                 }
             };
-            if item.snapshot.is_none() && !matches!(outcome, ItemOutcome::Applied { .. }) {
+            if item.copy.is_none() && !matches!(outcome, ItemOutcome::Applied { .. }) {
                 failed_folders.insert((item.target, item.relative.clone()));
             }
             items.push(ItemReport {
@@ -288,9 +299,9 @@ fn failed_ancestor(failed: &HashSet<(Side, String)>, target: Side, relative: &st
     false
 }
 
-async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Result<ItemOutcome> {
+async fn apply_item(session: &FilesSession, item: &ResolvedItem) -> Result<ItemOutcome> {
     let files = &session.files;
-    match (item.target, item.snapshot) {
+    match (item.target, item.copy) {
         (Side::Remote, None) => {
             let local = item.local.clone();
             tokio::task::spawn_blocking(move || ensure_local_directory(&local))
@@ -310,7 +321,7 @@ async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Resu
             .await
             .map_err(|_| "로컬 폴더 생성 작업을 확인할 수 없습니다.")??;
         }
-        (target, Some(snapshot)) => {
+        (target, Some(copy)) => {
             let local = item
                 .local
                 .to_str()
@@ -327,7 +338,7 @@ async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Resu
                         item.remote.clone(),
                         transfer,
                         |_| {},
-                        Some(snapshot),
+                        Some(copy),
                     )
                     .await?
                 }
@@ -339,15 +350,20 @@ async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Resu
                         local,
                         transfer,
                         |_, _| {},
-                        Some(snapshot),
+                        Some(copy),
                     )
                     .await?
                 }
             };
             return match outcome {
-                SftpTransferOutcome::Saved { bytes, sha256 } => Ok(ItemOutcome::Applied {
+                SftpTransferOutcome::Saved {
+                    bytes,
+                    sha256,
+                    warning,
+                } => Ok(ItemOutcome::Applied {
                     bytes: Some(bytes),
                     sha256: Some(sha256),
+                    warning,
                 }),
                 SftpTransferOutcome::Cancelled { cleanup_warning } => {
                     Err(cleanup_warning.unwrap_or_else(|| "파일 복사가 중단되었습니다.".into()))
@@ -358,6 +374,7 @@ async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Resu
     Ok(ItemOutcome::Applied {
         bytes: None,
         sha256: None,
+        warning: None,
     })
 }
 
@@ -365,19 +382,20 @@ async fn apply_addition(session: &FilesSession, item: &ResolvedAddition) -> Resu
 mod tests {
     use super::*;
 
-    fn input(paths: &[&str]) -> SyncAdditions {
-        SyncAdditions {
+    fn input(paths: &[&str]) -> SyncPlan {
+        SyncPlan {
             local_root: std::env::current_dir().unwrap().to_str().unwrap().into(),
             remote_root: String::new(),
             confirmation: String::new(),
             items: paths
                 .iter()
-                .map(|path| Addition {
+                .map(|path| PlanItem {
                     path: (*path).into(),
                     target: Side::Remote,
                     kind: Kind::Directory,
                     size: None,
                     modified: None,
+                    replacement: None,
                 })
                 .collect(),
         }
@@ -386,7 +404,7 @@ mod tests {
     #[test]
     fn resolves_only_unique_relative_paths_and_orders_parents_first() {
         let root = SftpString::from("/root");
-        let valid = resolve_additions(input(&["a/b", "a"]), &root).unwrap();
+        let valid = resolve_items(input(&["a/b", "a"]), &root).unwrap();
         assert_eq!(valid[0].relative, "a");
         assert_eq!(valid[1].remote.as_bytes(), b"/root/a/b");
         for invalid in [
@@ -397,10 +415,7 @@ mod tests {
             &["D:/outside"],
             &["a\\b"],
         ] {
-            assert!(
-                resolve_additions(input(invalid), &root).is_err(),
-                "{invalid:?}"
-            );
+            assert!(resolve_items(input(invalid), &root).is_err(), "{invalid:?}");
         }
     }
 

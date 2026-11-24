@@ -4,7 +4,7 @@ use super::{
     audit::FileOperation,
     file_error,
     mutation::{direct_child_name, ensure_current_directory, new_child_path},
-    remote_stage::{stage_and_publish, stage_remote_file, StagingTarget},
+    remote_stage::{can_preserve_permissions, preserve_permissions, same_permissions, stage_and_publish, stage_remote_file, StagingTarget},
     transfer::{check_remote_snapshot, read_chunk, remote_file_size, request, CHUNK_SIZE},
     RemotePath, SftpEntrySource, SftpError, SftpManager, SftpTransferOutcome, SftpTransferProgress,
     SftpTransferReport, BROWSE_TIMEOUT,
@@ -86,10 +86,7 @@ impl SftpManager {
         let bytes = read_text_file(files, &path, &attrs).await?;
         let digest = Sha256::digest(&bytes).into();
         let (text, line_ending, bom) = decode_text(&bytes)?;
-        let replace_supported = session.posix_rename_supported
-            && attrs.permissions.is_some_and(|mode| mode & 0o7000 == 0)
-            && attrs.uid.is_some()
-            && attrs.gid.is_some();
+        let replace_supported = session.posix_rename_supported && can_preserve_permissions(&attrs);
         let token = Uuid::new_v4().to_string();
         let display_path = path.to_string_lossy().into_owned();
         *session.pending_edit.lock().map_err(|_| CLOSED)? = Some(PendingEdit {
@@ -189,15 +186,7 @@ impl SftpManager {
                         update(offset + block.len() as u64, Some(expected), false);
                     }
                     if replacing {
-                        let mode = attrs.permissions.map(|value| value & 0o777);
-                        request(files.fsetstat(handle.clone(), FileAttributes {
-                            permissions: mode, uid: attrs.uid, gid: attrs.gid,
-                            ..FileAttributes::empty()
-                        })).await.map_err(file_error)?;
-                        let staged = request(files.fstat(handle)).await.map_err(file_error)?.attrs;
-                        if !same_permissions(attrs, &staged) {
-                            return Err("원본의 소유자와 권한을 보존할 수 없습니다. 새 이름으로 저장하세요.".into());
-                        }
+                        preserve_permissions(files, handle, attrs).await?;
                     }
                     Ok(digest)
                 }
@@ -242,12 +231,6 @@ async fn ensure_unchanged(files: &RawSftpSession, edit: &PendingEdit) -> Result<
         return Err(CONFLICT.into());
     }
     Ok(())
-}
-
-fn same_permissions(before: &FileAttributes, current: &FileAttributes) -> bool {
-    before.permissions == current.permissions
-        && before.uid == current.uid
-        && before.gid == current.gid
 }
 
 fn same_snapshot(before: &FileAttributes, current: &FileAttributes) -> bool {

@@ -172,6 +172,7 @@ mod tests {
                 .finish_transfer(Ok(SftpTransferOutcome::Saved {
                     bytes: "3".into(),
                     sha256: "fixture".into(),
+                    warning: None,
                 }))
                 .await
                 .unwrap();

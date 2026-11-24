@@ -13,7 +13,7 @@ use stackport_core::{
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
-    SyncAdditions, SyncProgress, SyncReport,
+    SyncPlan, SyncProgress, SyncReport,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
     WorkspaceResumeRecord, WorkspaceResumeWrite,
@@ -812,13 +812,13 @@ async fn browse_sftp_folder_tree(
 }
 
 #[tauri::command]
-async fn apply_sftp_sync_additions(
+async fn apply_sftp_sync_plan(
     sftp: State<'_, SftpManager>,
     id: String,
-    input: SyncAdditions,
+    input: SyncPlan,
     progress: Channel<SyncProgress>,
 ) -> Result<SyncReport, String> {
-    sftp.apply_sync_additions(&id, input, |update| { let _ = progress.send(update); }).await
+    sftp.apply_sync_plan(&id, input, |update| { let _ = progress.send(update); }).await
 }
 
 #[tauri::command]
@@ -1113,7 +1113,7 @@ fn main() {
             browse_local_directory,
             browse_local_folder_tree,
             browse_sftp_folder_tree,
-            apply_sftp_sync_additions,
+            apply_sftp_sync_plan,
             compare_sftp_file_contents,
             save_merged_file,
             choose_merged_file_path,

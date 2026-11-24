@@ -7,7 +7,10 @@ use super::{
     RemotePath, SftpManager, BROWSE_TIMEOUT,
 };
 use crate::{local_file::write_new_file, text_draft::UTF8_BOM, Result};
-use russh_sftp::protocol::{FileAttributes, OpenFlags};
+use russh_sftp::{
+    client::RawSftpSession,
+    protocol::{FileAttributes, OpenFlags, SftpString},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{io::Read, time::UNIX_EPOCH};
@@ -56,8 +59,8 @@ struct HexRow {
     remote: Vec<u8>,
 }
 
-struct FileDigest {
-    sha256: String,
+pub(super) struct FileDigest {
+    pub(super) sha256: String,
     bytes: Option<Vec<u8>>,
 }
 
@@ -125,39 +128,52 @@ impl SftpManager {
             .attrs;
         let size = remote_file_size(&listed)?;
         check_listing(&source, size, listed.mtime.map(u64::from))?;
-        let handle = request(files.open(path.clone(), OpenFlags::READ, FileAttributes::empty()))
+        digest_remote_contents(files, &path, &listed).await
+    }
+}
+
+pub(super) async fn digest_remote_contents(
+    files: &RawSftpSession,
+    path: &SftpString,
+    listed: &FileAttributes,
+) -> Result<FileDigest> {
+    let size = remote_file_size(listed)?;
+    check_size(size)?;
+    let handle = request(files.open(path.clone(), OpenFlags::READ, FileAttributes::empty()))
+        .await
+        .map_err(file_error)?
+        .handle;
+    let digest = tokio::time::timeout(BROWSE_TIMEOUT, async {
+        let opened = request(files.fstat(handle.clone()))
             .await
             .map_err(file_error)?
-            .handle;
-        let digest = tokio::time::timeout(BROWSE_TIMEOUT, async {
-            let opened = request(files.fstat(handle.clone()))
-                .await
-                .map_err(file_error)?
-                .attrs;
-            check_remote_snapshot(&listed, &opened, size)?;
-            let mut offset = 0;
-            let mut digest = DigestReader::new(size);
-            while offset < size {
-                let amount = (size - offset).min(u64::from(CHUNK_SIZE)) as u32;
-                let data = read_chunk(files, &handle, offset, amount).await?;
-                offset += data.len() as u64;
-                digest.update(&data);
-            }
-            let finished = request(files.fstat(handle.clone()))
-                .await
-                .map_err(file_error)?
-                .attrs;
-            check_remote_snapshot(&listed, &finished, size)?;
-            let current = request(files.lstat(path)).await.map_err(file_error)?.attrs;
-            check_remote_snapshot(&listed, &current, size)?;
-            Ok::<_, String>(digest.finish())
-        })
-        .await;
-        let closed = request(files.close(handle)).await.map_err(file_error);
-        let digest = digest.map_err(|_| "파일 내용 비교 시간이 초과되었습니다.")??;
-        closed?;
-        Ok(digest)
-    }
+            .attrs;
+        check_remote_snapshot(listed, &opened, size)?;
+        let mut offset = 0;
+        let mut digest = DigestReader::new(size);
+        while offset < size {
+            let amount = (size - offset).min(u64::from(CHUNK_SIZE)) as u32;
+            let data = read_chunk(files, &handle, offset, amount).await?;
+            offset += data.len() as u64;
+            digest.update(&data);
+        }
+        let finished = request(files.fstat(handle.clone()))
+            .await
+            .map_err(file_error)?
+            .attrs;
+        check_remote_snapshot(listed, &finished, size)?;
+        let current = request(files.lstat(path.clone()))
+            .await
+            .map_err(file_error)?
+            .attrs;
+        check_remote_snapshot(listed, &current, size)?;
+        Ok::<_, String>(digest.finish())
+    })
+    .await;
+    let closed = request(files.close(handle)).await.map_err(file_error);
+    let digest = digest.map_err(|_| "파일 내용 비교 시간이 초과되었습니다.")??;
+    closed?;
+    Ok(digest)
 }
 
 fn check_listing(source: &ComparedFile, size: u64, modified: Option<u64>) -> Result<()> {
@@ -169,6 +185,10 @@ fn check_listing(source: &ComparedFile, size: u64, modified: Option<u64>) -> Res
     {
         return Err("목록을 읽은 뒤 파일이 변경되었습니다. 폴더를 다시 비교하세요.".into());
     }
+    check_size(size)
+}
+
+fn check_size(size: u64) -> Result<()> {
     if size > MAX_COMPARE_BYTES {
         return Err("내용 비교는 파일당 16 MiB까지 가능합니다.".into());
     }
@@ -210,6 +230,15 @@ fn digest_local_file(source: &ComparedFile) -> Result<FileDigest> {
         return Err("비교하는 동안 파일이 변경되었습니다. 폴더를 다시 비교하세요.".into());
     }
     Ok(digest.finish())
+}
+
+pub(super) fn local_sha256(path: &str, size: u64, modified: Option<u64>) -> Result<String> {
+    Ok(digest_local_file(&ComparedFile {
+        location: path.into(),
+        size: Some(size.to_string()),
+        modified,
+    })?
+    .sha256)
 }
 
 fn describe_difference(local: Option<Vec<u8>>, remote: Option<Vec<u8>>) -> FileDifference {

@@ -171,6 +171,7 @@ export function FolderCompareDialog({ pair, initial, production, onExitGuard, on
     {showPlan && folders && <FolderSyncPlanDialog rows={rows} content={content} localPath={folders.local.path} remotePath={folders.remote.path}
       target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete}
       sessionId={pair.id} localRoot={pair.local.location} remoteRoot={pair.remote.location} production={production} onExitGuard={onExitGuard}
+      onVerified={verified => setContent(current => new Map([...current, ...verified]))}
       onClose={executed => {
         setShowPlan(false);
         if (executed) {

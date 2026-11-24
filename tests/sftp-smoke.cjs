@@ -1198,13 +1198,15 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
     if (event.operation === 'sftp.sync') {
-      assert.equal(event.policy, 'sftp-pinned-host-sync-additions-no-overwrite');
-      assert.equal(event.affected_count, event.outcome === 'failed' ? 4 : null);
+      assert.equal(event.policy, 'sftp-pinned-host-sync-verified-plan');
+      if (event.outcome === 'started') assert.equal(event.affected_count, null);
     } else {
       assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
     }
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
+  assert.deepEqual(fileEvents.filter(event => event.operation === 'sftp.sync' && event.outcome === 'failed')
+    .map(event => event.affected_count).sort(), [1, 1, 4]);
   const serialized = JSON.stringify(fileEvents);
   for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', '편집 원본.txt', '편집 내용 유지', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
@@ -1604,6 +1606,7 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   assert.equal([...uploads.files.keys()].some(name => name.startsWith(rootPath) && name.includes('.stackport-upload-')), false);
   await plan.getByRole('button', { name: '닫기', exact: true }).click();
   await comparison.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
+  await verifySyncReplacements(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await comparison.getByRole('button', { name: '닫기', exact: true }).click();
   await remote.getByRole('button', { name: '송신', exact: true }).waitFor();
   await localPane.getByRole('button', { name: '수신', exact: true }).waitFor();
@@ -1613,6 +1616,84 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
   for (const name of [...uploads.files.keys()]) if (name.startsWith(rootPath + '/')) uploads.files.delete(name);
   uploads.comparisonDirectories.clear();
+}
+
+async function verifySyncReplacements(page, comparison, plan, localRoot, remoteRoot, uploads, remoteFile) {
+  const editCount = uploads.edits;
+  const uploadRace = '01-원격 경합.bin';
+  const uploadOk = '02-원격 갱신.bin';
+  const downloadSourceRace = '01-로컬 원본 경합.bin';
+  const downloadTargetRace = '02-로컬 대상 경합.bin';
+  const downloadOk = '03-로컬 갱신.bin';
+  const mtime = 1700000100;
+  function localFile(name, content) {
+    const target = path.join(localRoot, name);
+    fs.writeFileSync(target, content);
+    fs.utimesSync(target, mtime, mtime);
+  }
+  const localValue = name => fs.readFileSync(path.join(localRoot, name), 'utf8');
+  const remoteValue = name => uploads.files.get(`${remoteRoot}/${name}`);
+  function uploadFixture(name) {
+    localFile(name, 'new-local');
+    remoteFile(name, 'old-bytes');
+  }
+  function downloadFixture(name) {
+    localFile(name, 'old-bytes');
+    remoteFile(name, 'new-remote');
+  }
+  for (const name of [uploadRace, uploadOk]) uploadFixture(name);
+  for (const name of [downloadSourceRace, downloadTargetRace, downloadOk]) downloadFixture(name);
+
+  const earlierItems = ['송신', '수신', '충돌 폴더', '바뀐 원본.bin', '새 파일.bin'];
+  const result = plan.getByRole('table', { name: '동기화 실행 결과', exact: true });
+  const resultRow = name => result.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
+  async function verify(direction, excludes, count) {
+    await comparison.getByRole('button', { name: '동기화 계획', exact: true }).click();
+    await plan.getByRole('combobox', { name: '동기화 방향', exact: true }).selectOption(direction);
+    await plan.getByRole('textbox', { name: '제외 패턴', exact: true }).fill([...earlierItems, ...excludes].join('\n'));
+    const button = plan.getByRole('button', { name: `동기화 실행 (${count})`, exact: true });
+    assert.equal(await button.count(), 0);
+    await plan.getByRole('button', { name: `갱신 후보 검증 (${count})`, exact: true }).click();
+    await button.click();
+    return plan.getByRole('button', { name: '확인하고 시작', exact: true });
+  }
+  const refresh = comparison.getByRole('button', { name: '다시 비교', exact: true });
+  const relative = comparison.getByRole('columnheader', { name: '상대 경로', exact: true });
+  await refresh.click();
+  await relative.waitFor();
+  const upload = await verify('upload', [downloadSourceRace, downloadTargetRace, downloadOk], 2);
+  assert.equal(await upload.isEnabled(), false);
+  await plan.getByRole('textbox', { name: '운영 연결 확인', exact: true }).fill('PROD');
+  uploads.editRace = () => { remoteValue(uploadRace).data = Buffer.from('live-edit'); };
+  await upload.click();
+  await plan.getByText('완료 1개 · 실패 1개 · 건너뜀 0개', { exact: true }).waitFor();
+  await resultRow(uploadRace).getByText(/대상 파일이 바뀌었습니다/).waitFor();
+  await resultRow(uploadOk).getByText('완료', { exact: true }).waitFor();
+  assert.equal(remoteValue(uploadRace).data.toString(), 'live-edit');
+  assert.equal(remoteValue(uploadOk).data.toString(), 'new-local');
+  assert.equal(remoteValue(uploadOk).attrs.mode & 0o777, 0o640);
+  assert.equal(remoteValue(uploadOk).attrs.uid, 42);
+  assert.equal(remoteValue(uploadOk).attrs.gid, 9);
+  assert.equal(uploads.edits, editCount + 1);
+  uploads.edits = editCount;
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await relative.waitFor();
+  const download = await verify('download', [uploadRace, uploadOk], 3);
+  assert.equal(await download.isEnabled(), true);
+  remoteValue(downloadSourceRace).data = Buffer.from('new-change');
+  localFile(downloadTargetRace, 'live-edit');
+  await download.click();
+  await plan.getByText('완료 1개 · 실패 2개 · 건너뜀 0개', { exact: true }).waitFor();
+  await resultRow(downloadSourceRace).getByText(/원본 파일의 SHA-256이 바뀌었습니다/).waitFor();
+  await resultRow(downloadTargetRace).getByText(/대상 파일이 바뀌었습니다/).waitFor();
+  await resultRow(downloadOk).getByText('완료', { exact: true }).waitFor();
+  assert.equal(localValue(downloadSourceRace), 'old-bytes');
+  assert.equal(localValue(downloadTargetRace), 'live-edit');
+  assert.equal(localValue(downloadOk), 'new-remote');
+  assert.equal(fs.readdirSync(localRoot).some(name => name.startsWith('.stackport-download-') || name.startsWith('.stackport-sync-')), false);
+  assert.equal([...uploads.files.keys()].some(name => name.startsWith(remoteRoot) && name.includes('.stackport-upload-')), false);
+  await plan.getByRole('button', { name: '닫기', exact: true }).click();
+  await relative.waitFor();
 }
 
 async function verifyPreviews(page, remote, local) {

@@ -37,7 +37,7 @@ pub struct SftpTransferProgress {
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SftpTransferOutcome {
-    Saved { bytes: String, sha256: String },
+    Saved { bytes: String, sha256: String, #[serde(skip_serializing_if = "Option::is_none")] warning: Option<String> },
     Cancelled { cleanup_warning: Option<String> },
 }
 
