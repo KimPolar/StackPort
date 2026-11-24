@@ -140,6 +140,7 @@ function App() {
   selectedProject.current = projectId;
   const closeApproved = useRef(false);
   const closePending = useRef(false);
+  const sftpExitGuard = useRef<(() => void) | null>(null);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
     terminalCount.current = count;
@@ -150,6 +151,7 @@ function App() {
     setRdpClientCount(count);
   }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
+  const setSftpExitGuard = useCallback((guard: (() => void) | null) => { sftpExitGuard.current = guard; }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef<Record<string, string>>({});
@@ -287,7 +289,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (terminalCount.current > 0 || rdpCount.current > 0 || Object.values(drafts.current).some(draft => draft.trim()))) {
+      if (!closeApproved.current && (sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || Object.values(drafts.current).some(draft => draft.trim()))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -295,6 +297,27 @@ function App() {
     window.addEventListener("beforeunload", warnBeforeClose);
     return () => window.removeEventListener("beforeunload", warnBeforeClose);
   }, []);
+
+  const requestAppClose = useCallback(() => {
+    if (closeApproved.current || closePending.current) return;
+    if (sftpExitGuard.current) {
+      sftpExitGuard.current();
+      return;
+    }
+    const notes: string[] = [];
+    if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
+    if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
+    if (Object.values(drafts.current).some(draft => draft.trim())) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
+    if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
+    closePending.current = true;
+    void flushResume().then(() => {
+      closeApproved.current = true;
+      return getCurrentWindow().destroy();
+    }).catch(e => {
+      closeApproved.current = false;
+      setError(`창을 닫을 수 없습니다: ${errorText(e)}`);
+    }).finally(() => { closePending.current = false; });
+  }, [flushResume]);
 
   useEffect(() => {
     if (!desktop) return;
@@ -304,23 +327,10 @@ function App() {
     window.onCloseRequested(event => {
       if (closeApproved.current) return;
       event.preventDefault();
-      if (closePending.current) return;
-      const notes: string[] = [];
-      if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
-      if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
-      if (Object.values(drafts.current).some(draft => draft.trim())) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
-      if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
-      closePending.current = true;
-      void flushResume().then(() => {
-        closeApproved.current = true;
-        return window.destroy();
-      }).catch(e => {
-        closeApproved.current = false;
-        setError(`창을 닫을 수 없습니다: ${errorText(e)}`);
-      }).finally(() => { closePending.current = false; });
+      requestAppClose();
     }).then(remove => { if (live) unlisten = remove; else remove(); }).catch(e => { if (live) setError(`창 종료 확인을 설정할 수 없습니다: ${errorText(e)}`); });
     return () => { live = false; unlisten?.(); };
-  }, [flushResume]);
+  }, [requestAppClose]);
 
   function changeSql(value: string) {
     setSql(value);
@@ -697,7 +707,9 @@ function App() {
     </div>,
     network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body"><NetworkWorkspace /></div>,
     rdp: loadedPages.has("rdp") && <div id="workspace-pane-rdp" className="tool-body network-body"><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
-    files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body"><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>,
+    files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
+      <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard} onRequestExit={requestAppClose} />
+    </div>,
   };
 
   return <div className="app-shell">

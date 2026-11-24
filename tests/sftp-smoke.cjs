@@ -13,6 +13,12 @@ const password = 'fixture-sftp-password';
 const passphrase = 'fixture-encrypted-key';
 const { STATUS_CODE: code } = utils.sftp;
 const posixRename = 'posix-rename@openssh.com';
+
+function requestNativeClose(pid) {
+  if (!/^\d+$/.test(pid)) throw new Error('Set STACKPORT_TEST_WINDOW_PID to the isolated app PID.');
+  const script = `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class SftpEditorTestWindow { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }'; $p = Get-Process -Id ${pid} -ErrorAction Stop; if ($p.ProcessName -ne 'stackport' -or $p.MainWindowHandle -eq 0) { throw 'Invalid isolated StackPort window' }; [SftpEditorTestWindow]::PostMessage($p.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null`;
+  execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-Command', script], { stdio: 'pipe' });
+}
 const htmlSource = '<!doctype html><strong>보고서</strong>';
 const downloadFixtures = new Map([
   ['대시보드.txt', { data: Buffer.from('0123456789abcdef!') }],
@@ -191,6 +197,12 @@ function sftpChannel(channel, uploads) {
     fixture.attrs.size = fixture.data.length;
     if (offset === 0 && fixture.behavior === 'corrupt') fixture.data[0] ^= 0xff;
     const respond = () => { if (!channel.destroyed) channel.status(id, code.OK); };
+    if (uploads.holdWrite) {
+      const hold = uploads.holdWrite;
+      uploads.holdWrite = null;
+      hold(respond);
+      return;
+    }
     if (fixture.behavior === 'slow') setTimeout(respond, 90);
     else respond();
   });
@@ -920,12 +932,35 @@ async function verifyEditor(page, remote, uploads) {
 
   version.data = saved;
   uploads.editRace = () => { version.data = external; };
+  const windowPid = process.env.STACKPORT_TEST_WINDOW_PID;
+  let releaseWrite;
+  if (windowPid) uploads.holdWrite = respond => { releaseWrite = respond; };
   await save.click();
+  if (windowPid) {
+    for (let retries = 0; retries < 50 && !releaseWrite; retries++) await new Promise(resolve => setTimeout(resolve, 100));
+    assert.ok(releaseWrite, 'The synthetic server did not pause the edit write.');
+    try {
+      requestNativeClose(windowPid);
+      await dialog.getByRole('status').getByText('원격 파일 저장을 끝내거나 중단한 뒤 앱을 닫을 수 있습니다.').waitFor();
+      assert.equal(page.isClosed(), false);
+    } finally {
+      releaseWrite();
+    }
+  }
   await error(/원격 파일이 변경/);
   assert.equal(uploads.editRace, null);
   assert.equal(uploads.edits, 1);
   assert.deepEqual(uploads.files.get(filePath).data, external);
   noPartials();
+
+  if (windowPid) {
+    requestNativeClose(windowPid);
+    await dialog.getByRole('status').getByText(/앱을 닫기 전에 처리 방법/).waitFor();
+    await dialog.getByRole('button', { name: '변경 버리고 앱 종료', exact: true }).waitFor();
+    await dialog.getByRole('button', { name: '계속 편집', exact: true }).click();
+    assert.equal(page.isClosed(), false);
+    assert.equal(await text.inputValue(), draft);
+  }
 
   await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
   await dialog.getByRole('button', { name: '계속 편집', exact: true }).click();

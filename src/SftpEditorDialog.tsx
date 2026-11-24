@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { X } from "lucide-react";
 import { SftpTransferStatus, useSftpTransfer } from "./SftpTransferStatus";
 import type { TransferResult } from "./SftpTransferDialog";
@@ -21,12 +21,16 @@ export type SftpEditorSelection = {
 const numbers = new Intl.NumberFormat("ko-KR");
 const utf8 = new TextEncoder();
 
-export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
+type CloseScope = "editor" | "window";
+
+export function SftpEditorDialog({ id, target, selection, onClose, onSaved, onExitGuard, onRequestExit }: {
   id: string;
   target: string;
   selection: SftpEditorSelection;
   onClose: () => void;
   onSaved: (result: TransferResult) => void;
+  onExitGuard: (guard: (() => void) | null) => void;
+  onRequestExit: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const form = useRef<HTMLFormElement>(null);
@@ -35,11 +39,13 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
   const [saveAs, setSaveAs] = useState(false);
   const [name, setName] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [discarding, setDiscarding] = useState(false);
+  const [closeScope, setCloseScope] = useState<CloseScope | null>(null);
+  const [exitDuringSave, setExitDuringSave] = useState(false);
   const transfer = useSftpTransfer(id, "저장");
   const doc = result && "document" in result ? result.document : null;
   const copy = saveAs || !doc?.replace_supported;
-  const dirty = doc && text !== doc.text;
+  const dirty = !!doc && text !== doc.text;
+  const discarding = closeScope !== null;
   const bytes = utf8.encode(text).length + (doc?.bom ? 3 : 0) +
     (doc?.line_ending === "crlf" ? (text.match(/\n/g)?.length ?? 0) : 0);
   const oversized = !!doc && bytes > doc.max_bytes;
@@ -47,6 +53,14 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
     : dirty && (!doc.production || confirmation === "PROD"));
 
   useEffect(() => { dialog.current?.showModal(); }, []);
+  useLayoutEffect(() => {
+    if (!dirty && !transfer.running) return;
+    onExitGuard(() => {
+      if (transfer.running) setExitDuringSave(true);
+      else setCloseScope("window");
+    });
+    return () => onExitGuard(null);
+  }, [dirty, transfer.running, onExitGuard]);
   useEffect(() => {
     let mounted = true;
     void selection.result.then(value => {
@@ -59,13 +73,20 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
 
   function requestClose() {
     if (transfer.running) return;
-    if (dirty) setDiscarding(true);
+    if (dirty) setCloseScope("editor");
     else dialog.current?.close();
+  }
+
+  function finishClose(scope: CloseScope) {
+    onExitGuard(null);
+    dialog.current?.close();
+    if (scope === "window") onRequestExit();
   }
 
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!doc || !canSave || discarding) return;
+    setExitDuringSave(false);
     const report = await transfer.run("save_sftp_editor", {
       input: { token: doc.token, text, copy_name: copy ? name : null, confirmation },
     });
@@ -76,7 +97,11 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
   }
 
   return <dialog ref={dialog} className="dialog sftp-editor" aria-labelledby="sftp-editor-title" onClose={onClose}
-    onCancel={event => { event.preventDefault(); requestClose(); }}
+    onCancel={event => {
+      event.preventDefault();
+      if (closeScope) setCloseScope(null);
+      else requestClose();
+    }}
     onKeyDown={event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -109,12 +134,15 @@ export function SftpEditorDialog({ id, target, selection, onClose, onSaved }: {
             value={confirmation} disabled={transfer.running || discarding} onChange={event => setConfirmation(event.target.value)} /></label>}
       </>}
       <SftpTransferStatus transfer={transfer} />
-      {discarding && <p className="form-note" role="status">저장하지 않은 변경을 버리고 닫으시겠습니까?</p>}
+      {exitDuringSave && transfer.running && <p className="form-note" role="status">원격 파일 저장을 끝내거나 중단한 뒤 앱을 닫을 수 있습니다.</p>}
+      {closeScope && <p className="form-note" role="status">{closeScope === "window"
+        ? "원격 파일에 저장하지 않은 변경이 있습니다. 앱을 닫기 전에 처리 방법을 선택하세요."
+        : "저장하지 않은 변경을 버리고 닫으시겠습니까?"}</p>}
       <div className="dialog-actions">
         {transfer.running ? <button type="button" className="secondary" disabled={!transfer.canCancel}
-          onClick={() => void transfer.cancel()}>저장 중단</button> : discarding ? <>
-          <button type="button" className="secondary" onClick={() => setDiscarding(false)}>계속 편집</button>
-          <button type="button" className="danger" onClick={() => dialog.current?.close()}>변경 버리기</button>
+          onClick={() => void transfer.cancel()}>저장 중단</button> : closeScope ? <>
+          <button type="button" className="secondary" onClick={() => setCloseScope(null)}>계속 편집</button>
+          <button type="button" className="danger" onClick={() => finishClose(closeScope)}>{closeScope === "window" ? "변경 버리고 앱 종료" : "변경 버리기"}</button>
         </> : <>
           <button type="button" className="secondary" onClick={requestClose}>닫기</button>
           {doc && <button type="submit" className="primary" disabled={!canSave}>{copy ? "새 이름으로 저장" : "저장"}</button>}

@@ -19,7 +19,12 @@ const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: 
 const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료", edit: "원격 파일 저장 완료" };
 
-export function SftpWorkspace({ projectName, profiles }: { projectName: string; profiles: SshProfile[] }) {
+export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit }: {
+  projectName: string;
+  profiles: SshProfile[];
+  onExitGuard: (guard: (() => void) | null) => void;
+  onRequestExit: () => void;
+}) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
   const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string } | null>(null);
@@ -209,7 +214,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     {remote && deleteSelection && <SftpDeleteDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       selection={deleteSelection} onClose={closeDelete} onDeleted={(path, warning) => mutationSaved("delete", path, warning)} />}
     {remote && editorSelection && <SftpEditorDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
-      selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} />}
+      selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
