@@ -8,7 +8,7 @@ export const relationLabels = {
 type Relation = keyof typeof relationLabels;
 type PairedEntries = { local: Entry[]; remote: Entry[] };
 type Status = { relation: Relation; detail?: string };
-type FolderTreeRow = PairedEntries & Status & { name: string };
+export type FolderTreeRow = PairedEntries & Status & { name: string; localIssue?: string; remoteIssue?: string };
 type IndexedTree = ReturnType<typeof indexTree>;
 const names = new Intl.Collator("ko-KR", { numeric: true });
 
@@ -76,7 +76,7 @@ export function compareFolderTrees(local: FolderTree, remote: FolderTree) {
     const remoteIssue = right.incomplete.get(name);
     if (localIssue || remoteIssue) {
       const issues = [status.detail, localIssue && `로컬 · ${localIssue}`, remoteIssue && `원격 · ${remoteIssue}`].filter(Boolean);
-      return { name, ...row, relation: status.relation === "folder" ? "unknown" : status.relation, detail: issues.join(" · ") };
+      return { name, ...row, localIssue, remoteIssue, relation: status.relation === "folder" ? "unknown" : status.relation, detail: issues.join(" · ") };
     }
     return { name, ...row, ...status };
   }).sort((left, right) => names.compare(left.name, right.name));

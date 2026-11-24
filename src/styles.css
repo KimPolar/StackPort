@@ -318,7 +318,7 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-paths dd { margin: 4px 0 0; color: #30473b; font-size: 12px; overflow-wrap: anywhere; }
 .files-compare-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 8px; font-size: 12px; color: #526a5f; }
 .files-compare-tools select { padding: 5px; margin-inline-start: 3px; border: 1px solid #d6e4db; border-radius: 5px; background: white; color: #39594b; }
-.files-compare-tools button { margin-inline-start: auto; }
+.files-compare-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-inline-start: auto; }
 .files-compare-scope, .files-compare-pages { display: flex; align-items: center; gap: 6px; }
 .files-compare-pages { justify-content: flex-end; margin-top: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
 .files-compare-results { max-height: 50vh; overflow: auto; }
@@ -331,6 +331,12 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-hash summary { cursor: pointer; }
 .files-compare-hash dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; margin: 4px 0 0; }
 .files-compare-hash dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.folder-sync-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 6px 16px; margin: 12px 0; }
+.folder-sync-options .field { margin-bottom: 6px; }
+.folder-sync-options .field textarea { min-width: 0; padding: 8px; border: 1px solid #dce7df; border-radius: 5px; resize: vertical; font: inherit; font-weight: 400; }
+.folder-sync-options .field .form-note { font-weight: 400; }
+.folder-sync-delete { display: flex; align-items: center; gap: 5px; margin-top: 10px; font-size: 12px; }
+.folder-sync-table td:last-child { min-width: 160px; white-space: normal; overflow-wrap: anywhere; }
 .dialog.file-pair { width: min(680px, calc(100vw - 32px)); }
 .file-pair-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; }
 .file-pair-path { color: #526a5f; font-weight: 400; overflow-wrap: anywhere; }

@@ -5,6 +5,7 @@ import { asFolderTree, compareFileContents, fileComparisonSnapshot, loadFolderCo
   type ContentResult, type FileSnapshot, type FolderComparison, type FolderPair, type FolderTreeComparison } from "./fileCompare";
 import { FileComparisonResult, FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
 import { compareFolderTrees, relationLabels } from "./folderComparison";
+import { FolderSyncPlanDialog } from "./FolderSyncPlanDialog";
 
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "medium" });
@@ -33,6 +34,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   const [content, setContent] = useState(new Map<string, ContentResult>());
   const [hashing, setHashing] = useState<string | null>(null);
   const [selection, setSelection] = useState<{ name: string; difference: ViewableDifference } | null>(null);
+  const [showPlan, setShowPlan] = useState(false);
   const hashPending = useRef(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
@@ -114,8 +116,13 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
           </select></label>
           <span role="status">{numbers.format(shown.length)} / {numbers.format(rows.length)}개 항목</span>
         </>}
-        <button type="button" className="secondary small" disabled={!result || hashing !== null}
-          onClick={() => refresh(recursive)}><RefreshCw size={14} aria-hidden /> 다시 비교</button>
+        <div className="files-compare-actions">
+          <button type="button" className="secondary small" disabled={!result || hashing !== null}
+            onClick={() => refresh(recursive)}><RefreshCw size={14} aria-hidden /> 다시 비교</button>
+          {folders && <button type="button" className="secondary small" disabled={hashing !== null} onClick={() => setShowPlan(true)}>
+            동기화 계획
+          </button>}
+        </div>
       </div>
       {folders && shown.length > 0 && <div ref={resultList} className="files-compare-results" role="region" aria-label="폴더 비교 결과 스크롤 영역" tabIndex={0}>
         <table className="files-table" aria-label="폴더 비교 결과">
@@ -150,5 +157,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
     </div>
   </dialog>
     {selection && <FileDifferenceDialog {...selection} onClose={() => setSelection(null)} />}
+    {showPlan && folders && <FolderSyncPlanDialog rows={rows} content={content} localPath={folders.local.path} remotePath={folders.remote.path}
+      target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete} onClose={() => setShowPlan(false)} />}
   </>;
 }
