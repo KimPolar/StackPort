@@ -17,6 +17,7 @@ import { ResultExportDialog, type ExportReport, type ExportSource } from "./Resu
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
+import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import "./styles.css";
 
@@ -65,11 +66,12 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
-  const [page, setPage] = useState<"workspace" | "terminal" | "network" | "rdp">("workspace");
+  const [page, setPage] = useState<"workspace" | "terminal" | "network" | "rdp" | "files">("workspace");
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [terminalLoaded, setTerminalLoaded] = useState(false);
   const [rdpLoaded, setRdpLoaded] = useState(false);
+  const [filesLoaded, setFilesLoaded] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
@@ -402,11 +404,12 @@ function App() {
       <button className={`rail-item ${page === "terminal" ? "rail-active" : ""}`} aria-label="터미널" aria-current={page === "terminal" ? "page" : undefined} disabled={!desktop} onClick={() => { setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={20} /><span>터미널</span></button>
       <button className={`rail-item ${page === "network" ? "rail-active" : ""}`} aria-label="네트워크" aria-current={page === "network" ? "page" : undefined} disabled={!desktop} onClick={() => setPage("network")}><Network size={20} /><span>네트워크</span></button>
       <button className={`rail-item ${page === "rdp" ? "rail-active" : ""}`} aria-label="원격 화면" aria-current={page === "rdp" ? "page" : undefined} onClick={() => { setRdpLoaded(true); setPage("rdp"); }}><Monitor size={20} /><span>원격 화면</span></button>
+      <button className={`rail-item ${page === "files" ? "rail-active" : ""}`} aria-label="파일 탐색" aria-current={page === "files" ? "page" : undefined} disabled={!desktop} onClick={() => { setFilesLoaded(true); setPage("files"); }}><FolderOpen size={20} /><span>파일 탐색</span></button>
       <div className="rail-bottom"><CircleHelp size={19} /><span>로컬 우선</span></div>
     </aside>
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{{ workspace: "워크스페이스", terminal: "터미널", network: "네트워크", rdp: "원격 화면" }[page]}</span></div>
+        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{{ workspace: "워크스페이스", terminal: "터미널", network: "네트워크", rdp: "원격 화면", files: "파일 탐색" }[page]}</span></div>
         <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
           <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span /> {runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간"}</span>
           {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
@@ -512,6 +515,7 @@ function App() {
       <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense>}</div>
       {page === "network" && <div className="body-layout network-body"><NetworkWorkspace /></div>}
       {rdpLoaded && <div className="body-layout network-body" hidden={page !== "rdp"}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>}
+      {filesLoaded && <div className="body-layout network-body" hidden={page !== "files"}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>}
       <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>

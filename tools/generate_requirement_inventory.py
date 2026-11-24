@@ -39,6 +39,10 @@ PARTIAL = {
     "SP-NW-001": "Windows 로컬 IPv4·IPv6 TCP 연결·UDP 바인딩과 주소·PID·프로세스명 조회",
     "SP-NW-002": "네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적",
     "SP-NW-003": "Windows HTTP/HTTPS HEAD·GET, 최대 5회 가용성 측정, 상태 코드·헤더·경과 시간·TLS 정보",
+    "SP-FL-001": "현재 프로젝트의 저장된 SSH 연결과 동일한 호스트 키 저장소로 SFTP 탐색 시작",
+    "SP-FL-002": "로컬·SFTP 이중 패널의 파일 목록, 경로·하위/상위 폴더 이동과 새로고침",
+    "SP-FL-004": "확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",
+    "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",
     "SP-RG-002": "사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
@@ -151,6 +155,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/network.rs; tests/ports-smoke.cjs; src/NetworkDiagnosticsPanel.tsx; src-tauri/"
             elif requirement_id == "SP-NW-003":
                 evidence = "crates/stackport-core/tests/web_check.rs; tests/ports-smoke.cjs; src/WebDiagnosticResult.tsx; src-tauri/"
+            elif requirement_id.startswith("SP-FL-"):
+                evidence = "crates/stackport-core/src/sftp.rs; tests/sftp-smoke.cjs; src/SftpWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-RG-001", "SP-RG-002", "SP-RG-003", "SP-RG-004", "SP-RG-018"}:
                 evidence = "crates/stackport-core/src/rdp.rs; tests/rdp-smoke.cjs; src/RdpWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-CN-002":

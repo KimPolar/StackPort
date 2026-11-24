@@ -5,11 +5,12 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
-    local_ports, EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome,
+    list_local_directory, local_ports, BrowseDirectory, EditSession, NetworkDiagnostics, NetworkManager,
+    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
+    save_terminal_output, SftpAuthentication, SftpManager, SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
 };
@@ -548,13 +549,7 @@ async fn open_saved_ssh_terminal(
     let ssh = Arc::clone(ssh.inner());
     let terminals = Arc::clone(terminals.inner());
     worker(move || {
-        let current = store.ssh_profile(&profile.id)?;
-        if current != profile {
-            return Err("SSH 연결이 변경되었습니다. 새로고침하고 대상을 다시 확인하세요.".into());
-        }
-        if current.environment == "PROD" && confirmation != "PROD" {
-            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
-        }
+        let current = confirmed_ssh_profile(&store, &profile, &confirmation)?;
         let authentication = select_ssh_authentication(authentication, identity_path)?;
         let mut terminal = ssh.open_with_authentication(
             &terminals,
@@ -567,6 +562,66 @@ async fn open_saved_ssh_terminal(
         )?;
         terminal.environment = Some(current.environment);
         Ok(terminal)
+    })
+    .await
+}
+
+fn confirmed_ssh_profile(
+    store: &Store,
+    profile: &SshProfile,
+    confirmation: &str,
+) -> Result<SshProfile, String> {
+    let current = store.ssh_profile(&profile.id)?;
+    if &current != profile {
+        return Err("SSH 연결이 변경되었습니다. 새로고침하고 대상을 다시 확인하세요.".into());
+    }
+    if current.environment == "PROD" && confirmation != "PROD" {
+        return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+    }
+    Ok(current)
+}
+
+#[tauri::command]
+async fn open_sftp(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    sftp: State<'_, SftpManager>,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: SftpAuthentication,
+) -> Result<SftpOpened, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    let current = worker(move || confirmed_ssh_profile(&store, &profile, &confirmation)).await?;
+    sftp.open(ssh, current, authentication).await
+}
+
+#[tauri::command]
+async fn list_sftp_directory(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    path: RemotePath,
+) -> Result<BrowseDirectory, String> {
+    sftp.list(&id, path).await
+}
+
+#[tauri::command]
+async fn close_sftp(sftp: State<'_, SftpManager>, id: String) -> Result<(), String> {
+    sftp.close(&id).await
+}
+
+#[tauri::command]
+async fn browse_local_directory(path: String) -> Result<BrowseDirectory, String> {
+    worker(move || list_local_directory(&path)).await
+}
+
+#[tauri::command]
+async fn choose_local_browse_directory() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("탐색할 로컬 폴더 선택")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
     })
     .await
 }
@@ -700,6 +755,7 @@ fn main() {
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
+            app.manage(SftpManager::default());
             app.manage(Arc::new(NetworkManager::default()));
             app.manage(Arc::new(RdpManager::new(location.directory.clone())));
             app.manage(location);
@@ -762,6 +818,11 @@ fn main() {
             list_ssh_trust_events,
             open_ssh_terminal,
             open_saved_ssh_terminal,
+            open_sftp,
+            list_sftp_directory,
+            close_sftp,
+            browse_local_directory,
+            choose_local_browse_directory,
             choose_sqlite_file,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,

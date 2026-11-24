@@ -401,6 +401,12 @@ impl SshManager {
             .transpose()
     }
 
+    pub(crate) fn trusted_public_key(&self, host: &str, port: u16) -> Result<String> {
+        let key = self.lookup(host, port)?
+            .ok_or("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.")?;
+        Ok(format!("{} {}", key.algorithm, key.public_key))
+    }
+
     fn save(&self, host: &str, port: u16, key: &HostKey, expected: Option<&HostKey>) -> Result<()> {
         let mut db = self
             .database(true)?
