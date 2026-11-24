@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { compareTextLines, type FileDifference, type HexRow } from "./fileDifference";
 import { FileMergeDialog } from "./FileMergeDialog";
+import type { ContentResult } from "./fileCompare";
 
 const numbers = new Intl.NumberFormat("ko-KR");
 
@@ -76,7 +77,31 @@ function BinaryDifference({ rows, changedRows, differingBytes }: { rows: HexRow[
 
 export type ViewableDifference = Exclude<FileDifference, { kind: "too_large" }>;
 
-export function FileDifferenceDialog({ name, difference, onClose }: { name: string; difference: ViewableDifference; onClose: () => void }) {
+export function FileComparisonResult({ result, differenceLabel, onDifference }: {
+  result: ContentResult;
+  differenceLabel: string;
+  onDifference: (difference: ViewableDifference) => void;
+}) {
+  if ("error" in result) return <p className="form-error" role="alert">{result.error}</p>;
+  const { difference } = result;
+  return <>
+    <span role="status">{result.matches ? "내용 일치" : "내용 다름"}</span>
+    {difference && (difference.kind === "too_large"
+      ? <span className="files-compare-date">차이 보기는 양쪽 파일 64 KiB 이하에서 가능합니다.</span>
+      : <button type="button" className="secondary small" aria-label={differenceLabel} onClick={() => onDifference(difference)}>차이 보기</button>)}
+    <details><summary>SHA-256</summary><dl>
+      <dt>로컬</dt><dd><code>{result.local_sha256}</code></dd>
+      <dt>원격</dt><dd><code>{result.remote_sha256}</code></dd>
+    </dl></details>
+  </>;
+}
+
+export function FileDifferenceDialog({ name, outputName = name, difference, onClose }: {
+  name: string;
+  outputName?: string;
+  difference: ViewableDifference;
+  onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [merging, setMerging] = useState(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
@@ -95,6 +120,7 @@ export function FileDifferenceDialog({ name, difference, onClose }: { name: stri
       {difference.kind === "binary" && <BinaryDifference rows={difference.rows} changedRows={difference.changed_rows} differingBytes={difference.differing_bytes} />}
     </div>
   </dialog>
-    {merging && difference.kind === "text" && <FileMergeDialog name={name} local={difference.local} remote={difference.remote} onClose={() => setMerging(false)} />}
+    {merging && difference.kind === "text" && <FileMergeDialog name={name} outputName={outputName} local={difference.local}
+      remote={difference.remote} onClose={() => setMerging(false)} />}
   </>;
 }

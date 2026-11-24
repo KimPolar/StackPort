@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Copy, Download, Eye, File, FilePenLine, FolderInput, FolderOpen, FolderPlus, GitCompareArrows, HardDrive, Link, Pencil, RefreshCw, Search, Server, Trash2, Upload, X } from "lucide-react";
 import { displayFilePath, type BrowsePath, type Directory, type DirectoryLocation, type Entry } from "./fileBrowse";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
-import { FolderCompareDialog, loadFolderComparison, type FolderPair } from "./FolderCompareDialog";
+import { FolderCompareDialog } from "./FolderCompareDialog";
+import { FilePairCompareDialog } from "./FilePairCompareDialog";
+import { loadFolderComparison, type FolderPair } from "./fileCompare";
 import type { SshProfile } from "./ssh-profile-types";
 import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } from "./SftpDeleteDialog";
 import { SftpDestinationDialog, type SftpDestinationSelection } from "./SftpDestinationDialog";
@@ -34,7 +36,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
   const [localFolder, setLocalFolder] = useState<DirectoryLocation | null>(null);
-  const [comparison, setComparison] = useState<{ pair: FolderPair; result: ReturnType<typeof loadFolderComparison> } | null>(null);
+  const [comparison, setComparison] = useState<{ kind: "folder" | "files"; pair: FolderPair; result: ReturnType<typeof loadFolderComparison> } | null>(null);
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
   const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
@@ -150,13 +152,13 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     setRemoteRefresh(value => value + 1);
   }
 
-  function compareCurrentFolders() {
+  function openComparison(kind: "folder" | "files") {
     if (!localFolder || !remote) return;
     const pair = {
       id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`,
       local: localFolder, remote: directoryLocation(remote.directory),
     };
-    setComparison({ pair, result: loadFolderComparison(pair) });
+    setComparison({ kind, pair, result: loadFolderComparison(pair) });
   }
 
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
@@ -170,7 +172,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         </div>}
       </div>
       {remote && <div className="files-header-actions">
-        <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={compareCurrentFolders}>
+        <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={() => openComparison("files")}>파일 비교</button>
+        <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={() => openComparison("folder")}>
           <GitCompareArrows size={14} aria-hidden /> 폴더 비교
         </button>
         <button type="button" className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
@@ -242,7 +245,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
       onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
-    {comparison && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
+    {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
+    {comparison?.kind === "files" && <FilePairCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
   </section>;
 }
 

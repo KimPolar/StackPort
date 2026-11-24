@@ -18,7 +18,13 @@ function ChangeSource({ label, firstLine, lines }: { label: string; firstLine: n
   </div>;
 }
 
-export function FileMergeDialog({ name, local, remote, onClose }: { name: string; local: string; remote: string; onClose: () => void }) {
+export function FileMergeDialog({ name, outputName, local, remote, onClose }: {
+  name: string;
+  outputName: string;
+  local: string;
+  remote: string;
+  onClose: () => void;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pending = useRef(false);
   const plan = useMemo(() => prepareTextMerge(local, remote), [local, remote]);
@@ -47,8 +53,8 @@ export function FileMergeDialog({ name, local, remote, onClose }: { name: string
     setBusy(true);
     setError("");
     try {
-      const dot = name.lastIndexOf(".");
-      const suggested = dot > 0 ? `${name.slice(0, dot)}.merged${name.slice(dot)}` : `${name}.merged`;
+      const dot = outputName.lastIndexOf(".");
+      const suggested = dot > 0 ? `${outputName.slice(0, dot)}.merged${outputName.slice(dot)}` : `${outputName}.merged`;
       const value = await invoke<string | null>("choose_merged_file_path", { name: suggested });
       if (value) {
         setPath(value);

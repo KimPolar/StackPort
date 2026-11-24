@@ -329,6 +329,12 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-hash summary { cursor: pointer; }
 .files-compare-hash dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; margin: 4px 0 0; }
 .files-compare-hash dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.dialog.file-pair { width: min(680px, calc(100vw - 32px)); }
+.file-pair-inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; }
+.file-pair-path { color: #526a5f; font-weight: 400; overflow-wrap: anywhere; }
+.file-pair-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px 8px; }
+.file-pair .files-compare-hash { margin-top: 12px; }
+.file-pair .files-compare-hash details { max-width: none; }
 .file-difference-name { margin: 0 0 12px; overflow-wrap: anywhere; }
 .file-difference-file { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 12px; }
 .file-difference-file .file-difference-name { margin: 0; }

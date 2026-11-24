@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, X } from "lucide-react";
-import { displayFilePath, type Directory, type DirectoryLocation, type Entry } from "./fileBrowse";
-import { FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
-import type { FileDifference } from "./fileDifference";
+import { displayFilePath, type Directory, type Entry } from "./fileBrowse";
+import { compareFileContents, fileComparisonSnapshot, loadFolderComparison, type ContentResult, type FileSnapshot, type FolderComparison, type FolderPair } from "./fileCompare";
+import { FileComparisonResult, FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
 
 const names = new Intl.Collator("ko-KR", { numeric: true });
 const numbers = new Intl.NumberFormat("ko-KR");
@@ -16,23 +15,6 @@ const relationLabels = {
 type Relation = keyof typeof relationLabels;
 type Row = { name: string; local: Entry[]; remote: Entry[]; relation: Relation; detail?: string };
 type Visible = "all" | "issues" | "local" | "remote";
-export type FolderPair = { id: string; target: string; local: DirectoryLocation; remote: DirectoryLocation };
-type Comparison = { local: Directory; remote: Directory } | { errors: string[] };
-type FileSnapshot = { location: string; size: string | null; modified: number | null };
-type Content = { matches: boolean; local_sha256: string; remote_sha256: string; difference: FileDifference | null };
-type ContentResult = Content | { error: string };
-
-export async function loadFolderComparison(pair: FolderPair): Promise<Comparison> {
-  const [local, remote] = await Promise.allSettled([
-    invoke<Directory>("browse_local_directory", { path: pair.local.location }),
-    invoke<Directory>("list_sftp_directory", { id: pair.id, path: { kind: "token", value: pair.remote.location } }),
-  ]);
-  if (local.status === "fulfilled" && remote.status === "fulfilled") return { local: local.value, remote: remote.value };
-  const errors: string[] = [];
-  if (local.status === "rejected") errors.push(`로컬 폴더 · ${String(local.reason)}`);
-  if (remote.status === "rejected") errors.push(`원격 폴더 · ${String(remote.reason)}`);
-  return { errors };
-}
 
 function relation(row: Pick<Row, "local" | "remote">, localTruncated: boolean, remoteTruncated: boolean): Pick<Row, "relation" | "detail"> {
   const [local] = row.local;
@@ -70,12 +52,6 @@ function compareFolders(local: Directory, remote: Directory): Row[] {
     .sort((left, right) => names.compare(left.name, right.name));
 }
 
-function fileSnapshot(entries: Entry[]): FileSnapshot | null {
-  const [entry] = entries;
-  return entries.length === 1 && entry.kind === "file" && !entry.name_is_lossy && entry.location
-    ? { location: entry.location, size: entry.size, modified: entry.modified } : null;
-}
-
 function Metadata({ entries }: { entries: Entry[] }) {
   if (!entries.length) return <td>—</td>;
   if (entries.length > 1) return <td>{numbers.format(entries.length)}개 항목</td>;
@@ -86,10 +62,10 @@ function Metadata({ entries }: { entries: Entry[] }) {
   </td>;
 }
 
-export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPair; initial: Promise<Comparison>; onClose: () => void }) {
+export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPair; initial: Promise<FolderComparison>; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [pending, setPending] = useState(initial);
-  const [result, setResult] = useState<Comparison | null>(null);
+  const [result, setResult] = useState<FolderComparison | null>(null);
   const [visible, setVisible] = useState<Visible>("issues");
   const [content, setContent] = useState(new Map<string, ContentResult>());
   const [hashing, setHashing] = useState<string | null>(null);
@@ -122,10 +98,8 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
       return next;
     });
     try {
-      const result = await invoke<Content>("compare_sftp_file_contents", { id: pair.id, local, remote });
+      const result = await compareFileContents(pair.id, local, remote);
       setContent(current => new Map(current).set(name, result));
-    } catch (error) {
-      setContent(current => new Map(current).set(name, { error: String(error) }));
     } finally {
       hashPending.current = false;
       setHashing(null);
@@ -165,10 +139,9 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
       {folders && shown.length > 0 && <div className="files-compare-results"><table className="files-table" aria-label="폴더 비교 결과">
         <thead><tr><th scope="col">이름</th><th scope="col">비교 결과</th><th scope="col">로컬</th><th scope="col">원격</th></tr></thead>
         <tbody>{shown.map(row => {
-          const local = fileSnapshot(row.local);
-          const remote = fileSnapshot(row.remote);
+          const local = row.local.length === 1 ? fileComparisonSnapshot(row.local[0]) : null;
+          const remote = row.remote.length === 1 ? fileComparisonSnapshot(row.remote[0]) : null;
           const checked = content.get(row.name);
-          const difference = checked && "difference" in checked ? checked.difference : null;
           return <tr key={row.name}>
             <th scope="row" title={row.name}>{row.name}</th>
             <td>
@@ -178,17 +151,8 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
                   aria-label={`${row.name} 내용 비교`} title="SHA-256 · 파일당 16 MiB"
                   onClick={() => void compareFile(row.name, local, remote)}>내용 비교</button>
                 {hashing === row.name && <span role="status">내용을 읽는 중…</span>}
-                {checked && ("error" in checked ? <p className="form-error" role="alert">{checked.error}</p> : <>
-                  <span role="status">{checked.matches ? "내용 일치" : "내용 다름"}</span>
-                  {difference && (difference.kind === "too_large"
-                    ? <span className="files-compare-date">차이 보기는 양쪽 파일 64 KiB 이하에서 가능합니다.</span>
-                    : <button type="button" className="secondary small" aria-label={`${row.name} 차이 보기`}
-                      onClick={() => setSelection({ name: row.name, difference })}>차이 보기</button>)}
-                  <details><summary>SHA-256</summary><dl>
-                    <dt>로컬</dt><dd><code>{checked.local_sha256}</code></dd>
-                    <dt>원격</dt><dd><code>{checked.remote_sha256}</code></dd>
-                  </dl></details>
-                </>)}
+                {checked && <FileComparisonResult result={checked} differenceLabel={`${row.name} 차이 보기`}
+                  onDifference={difference => setSelection({ name: row.name, difference })} />}
               </div>}
             </td>
             <Metadata entries={row.local} /><Metadata entries={row.remote} />
