@@ -50,11 +50,22 @@ type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portab
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
-type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
-type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string };
+type BatchStop = SqlReferenceRange & { status: "error" | "cancelled" | "timed_out" | "parameters_required"; message: string };
+type SqlBatchOutcome = { status: "batch"; total: number; items: (SqlReferenceRange & { elapsed_ms: number; result: QueryPage })[]; stopped: BatchStop | null };
+type QueryOutcome = SqlBatchOutcome | { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
+type SqlDocumentRange = { source: string; offset: number };
+type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string; document?: SqlDocumentRange; batchIndex?: number };
 type QueryTarget = SqlQueryTarget | { kind: "table"; request: TableQuery };
 type QueryResult = { profileId: string; page: QueryPage; target: QueryTarget };
-type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: QueryPlan } | null };
+type SqlBatchView = {
+  profileId: string;
+  document: SqlDocumentRange;
+  total: number;
+  items: { elapsedMs: number; query: QueryResult }[];
+  stopped: BatchStop | null;
+  active: number;
+};
+type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: QueryPlan } | null; batch: SqlBatchView | null };
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
 type SqlDefinitionRequest = { profileId: string; tabId: string; source: string; result: Promise<SqlDefinitionResult> };
@@ -83,7 +94,7 @@ const objectSelectSql = (name: string) => `SELECT *\nFROM ${quoteIdentifier(name
 const displayPath = (path: string) => path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.startsWith("\\\\?\\") ? path.slice(4) : path;
 const initialSqlTabs = (target: SqlTarget) => addSqlTab(emptySqlTabs, target);
 const hasDirtySqlTabs = (groups: Record<string, SqlTabSet>) => Object.values(groups).some(group => group.tabs.some(isSqlDraftDirty));
-const emptySqlQueryView: SqlQueryView = { result: null, plan: null };
+const emptySqlQueryView: SqlQueryView = { result: null, plan: null, batch: null };
 
 function Dialog({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -200,7 +211,8 @@ function App() {
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
-  const visibleQueryResult = resultMode === "table" ? tableQueryResult : sqlView.result;
+  const batch = resultMode === "sql" && sqlView.batch?.profileId === profileId ? sqlView.batch : null;
+  const visibleQueryResult = resultMode === "table" ? tableQueryResult : batch ? batch.items[batch.active]?.query : sqlView.result;
   const queryResult = visibleQueryResult?.profileId === profileId ? visibleQueryResult : null;
   const result = queryResult?.page ?? null;
   const executedQuery = queryResult?.target ?? null;
@@ -665,10 +677,14 @@ function App() {
     void requestCancellation(task);
   }
 
-  function runQuery(query: string, explain = false) {
+  function runQuery(query: string, explain = false, document?: SqlDocumentRange) {
     if (!sqlDraft || !query.trim()) return;
     if (queryPlan) editSqlQueryView(sqlDraft.id, { plan: null });
-    void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: explain ? sql : undefined });
+    void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: explain ? sql : undefined, document });
+  }
+
+  function runDocument(start: number, end: number) {
+    runQuery(sql.slice(start, end), false, { source: sql, offset: start });
   }
 
   async function runCurrentStatement() {
@@ -705,14 +721,30 @@ function App() {
       if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
       const args = { token: task.token, profileId, page };
       const response = target.kind === "sql"
-        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: planning })
+        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: planning, document: !!target.document })
         : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
-          const result = { profileId, page: response.result, target };
-          if (target.kind === "sql") editSqlQueryView(target.tabId, { result });
-          else setTableQueryResult(result);
+          if (target.kind === "sql") {
+            const result = { profileId, page: response.result, target: { ...target, document: undefined } };
+            const batch = sqlView.batch;
+            if (target.batchIndex !== undefined && batch) {
+              const items = batch.items.map((item, index) => index === target.batchIndex ? { ...item, query: result } : item);
+              editSqlQueryView(target.tabId, { batch: { ...batch, items } });
+            } else editSqlQueryView(target.tabId, { result, batch: null });
+          } else setTableQueryResult({ profileId, page: response.result, target });
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
+        } else if (response.status === "batch" && target.kind === "sql" && target.document) {
+          const items = response.items.map((item, batchIndex) => ({
+            elapsedMs: item.elapsed_ms,
+            query: { profileId, page: item.result, target: {
+              kind: "sql" as const, tabId: target.tabId, sql: target.sql.slice(item.start, item.end), batchIndex,
+            } },
+          }));
+          editSqlQueryView(target.tabId, { result: null, batch: {
+            profileId, document: target.document, total: response.total, stopped: response.stopped, items, active: 0,
+          } });
+          if (task.cancelRequested && !response.stopped) setQueryNotice("중단 요청 전에 일괄 실행이 완료되었습니다.");
         } else if (response.status === "plan" && target.kind === "sql" && target.planSource !== undefined) {
           editSqlQueryView(target.tabId, { plan: { sql: target.planSource, data: response.plan } });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
@@ -975,7 +1007,10 @@ function App() {
           <button className="secondary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun, true)}>실행 계획</button>
           <button type="button" className="secondary small" disabled={!sql.trim()} title="Ctrl+Shift+Enter"
             onClick={() => void runCurrentStatement()} aria-label="현재 문장 실행">현재 문장</button>
-          <button className="primary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun)}>
+          {sqlSelection && <button type="button" className="secondary small" disabled={!sql.trim()} title="Ctrl+Alt+Enter"
+            onClick={() => runDocument(0, sql.length)}>문서 전체 실행</button>}
+          <button className="primary small" disabled={!sqlToRun.trim()} title="Ctrl+Enter"
+            onClick={() => runDocument(sqlSelection?.start ?? 0, sqlSelection?.end ?? sql.length)}>
             <Play size={14} fill="currentColor" /> {sqlSelection ? "선택 영역 실행" : "쿼리 실행"}
           </button>
           </div>}
@@ -1014,7 +1049,10 @@ function App() {
                     event.preventDefault();
                     const { selectionStart, selectionEnd } = event.currentTarget;
                     if (event.shiftKey) void runCurrentStatement();
-                    else if (!querying) runQuery(selectionStart === selectionEnd ? sql : sql.slice(selectionStart, selectionEnd));
+                    else if (!querying) {
+                      const whole = event.altKey || selectionStart === selectionEnd;
+                      runDocument(whole ? 0 : selectionStart, whole ? sql.length : selectionEnd);
+                    }
                   } else if (event.key.toLowerCase() === "s") {
                     event.preventDefault();
                     openSqlFileDialog("save");
@@ -1054,6 +1092,34 @@ function App() {
           }}><FileDown size={14} /> 결과 내보내기</button>}
         </div>
       </div>
+        {batch && sqlDraft && <div className="sql-batch-results" aria-label="일괄 실행 결과" role="group">
+          <p>{batch.total}개 문장 중 {batch.items.length}개 완료
+            {batch.items[batch.active] && ` · 선택한 문장 ${batch.items[batch.active].elapsedMs} ms`}</p>
+          {!!batch.items.length && <div className="sql-batch-statements" aria-label="문장별 결과" role="group">
+            {batch.items.map((item, index) => <button key={index} type="button" className="secondary small"
+              aria-pressed={batch.active === index} disabled={querying} title={item.query.page.columns.join(", ")}
+              onClick={() => { editSqlQueryView(sqlDraft.id, { batch: { ...batch, active: index } }); setExportReport(null); }}>
+              문장 {index + 1}
+            </button>)}
+          </div>}
+          {batch.stopped && <div className="sql-batch-stop">
+            <span role={batch.stopped.status === "cancelled" ? "status" : "alert"}>
+              문장 {batch.items.length + 1} · {batch.stopped.message}
+            </span>
+            {sql === batch.document.source && <button type="button" className="secondary small" onClick={() => {
+              const editor = sqlEditor.current;
+              const { stopped, document: { offset, source } } = batch;
+              if (editor?.value === source && stopped) {
+                setSqlEditorOpen(true);
+                requestAnimationFrame(() => {
+                  if (sqlEditor.current === editor && editor.value === source) {
+                    revealEditorRange(editor, offset + stopped.start, offset + stopped.end);
+                  }
+                });
+              }
+            }}>중단 위치로 이동</button>}
+          </div>}
+        </div>}
         {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
         {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
           <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>

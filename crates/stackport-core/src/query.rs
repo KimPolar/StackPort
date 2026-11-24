@@ -3,13 +3,16 @@
 use super::{
     db_error, display_value, insert_audit, open_schema_db, open_user_db,
     result_export::{ExportFile, ExportFormat},
-    set_read_authorizer, AuditRecord, CsvOptions, ExportQuery, ExportReport, QueryPage, Result,
-    Store, TableQuery, PAGE_SIZE,
+    set_read_authorizer,
+    sql_statement::statement_ranges,
+    AuditRecord, CsvOptions, ExportQuery, ExportReport, QueryPage, Result, Store, TableQuery,
+    PAGE_SIZE,
 };
 use rusqlite::{params_from_iter, types::Value, Connection, InterruptHandle};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    mem::size_of,
     path::Path,
     sync::{
         atomic::{AtomicU64, AtomicU8, Ordering},
@@ -25,6 +28,9 @@ const PREPARE_LIFETIME: Duration = Duration::from_secs(60);
 const MAX_PARAMETERS: usize = 32;
 const MAX_PARAMETER_BYTES: usize = 16 * 1024;
 const MAX_PLAN_STEPS: usize = 200;
+const MAX_BATCH_SQL_BYTES: usize = 256 * 1024;
+const MAX_BATCH_STATEMENTS: usize = 16;
+const MAX_BATCH_RESULT_BYTES: usize = 8 * 1024 * 1024;
 const RUNNING: u8 = 0;
 const CANCELLED: u8 = 1;
 const TIMED_OUT: u8 = 2;
@@ -33,12 +39,41 @@ const PUBLISHING: u8 = 3;
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum QueryOutcome {
-    Completed { result: QueryPage },
-    Plan { plan: QueryPlan },
-    Exported { report: ExportReport },
-    ParametersRequired { parameters: Vec<SqlParameter> },
+    Completed {
+        result: QueryPage,
+    },
+    Plan {
+        plan: QueryPlan,
+    },
+    Exported {
+        report: ExportReport,
+    },
+    ParametersRequired {
+        parameters: Vec<SqlParameter>,
+    },
+    Batch {
+        total: usize,
+        items: Vec<BatchResult>,
+        stopped: Option<BatchStop>,
+    },
     Cancelled,
     TimedOut,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchResult {
+    start: usize,
+    end: usize,
+    elapsed_ms: u64,
+    result: QueryPage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchStop {
+    start: usize,
+    end: usize,
+    status: &'static str,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -305,6 +340,7 @@ enum QuerySource<'a> {
 
 enum QueryDelivery<'a> {
     Page(u32),
+    BatchPage(&'a mut usize),
     Export {
         destination: &'a str,
         format: ExportFormat,
@@ -481,6 +517,110 @@ impl Store {
         )
     }
 
+    pub fn query_document_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        sql: &str,
+        parameters: Option<&[SqlParameterValue]>,
+    ) -> Result<QueryOutcome> {
+        let guard = self.queries.claim(token)?;
+        let control = &guard.control;
+        if sql.contains('\0') {
+            return Err("NUL 문자가 있는 SQL은 실행할 수 없습니다.".into());
+        }
+        let ranges: Vec<_> = statement_ranges(sql)
+            .take(MAX_BATCH_STATEMENTS + 1)
+            .collect();
+        if ranges.len() < 2 {
+            return query_outcome(self.query_inner(
+                profile_id,
+                QuerySource::Sql {
+                    sql,
+                    parameters,
+                    explain: false,
+                },
+                QueryDelivery::Page(0),
+                control,
+                QUERY_TIMEOUT,
+            ));
+        }
+        if sql.len() > MAX_BATCH_SQL_BYTES || ranges.len() > MAX_BATCH_STATEMENTS {
+            return Err("일괄 실행은 UTF-8로 256 KiB 이하, 최대 16개 문장을 지원합니다.".into());
+        }
+        if parameters.is_some() {
+            return Err("일괄 실행에서 매개변수가 있는 SQL은 문장별로 실행하세요.".into());
+        }
+        let execute = || {
+            let deadline = Instant::now() + QUERY_TIMEOUT;
+            control.check()?;
+            let profile = self.profile(profile_id).map_err(QueryFailure::Error)?;
+            let db = open_user_db(Path::new(&profile.path)).map_err(QueryFailure::Error)?;
+            configure_query(&db, control, deadline)?;
+            let total = ranges.len();
+            let mut items = Vec::with_capacity(total);
+            let mut budget = MAX_BATCH_RESULT_BYTES;
+            let mut stopped = None;
+            for range in ranges {
+                let start = sql[..range.start].encode_utf16().count();
+                let end = start + sql[range.clone()].encode_utf16().count();
+                let began = Instant::now();
+                let outcome = Self::query_on_connection(
+                    &db,
+                    QuerySource::Sql {
+                        sql: &sql[range],
+                        parameters: None,
+                        explain: false,
+                    },
+                    QueryDelivery::BatchPage(&mut budget),
+                    control,
+                    deadline,
+                );
+                match outcome {
+                    Ok(QueryOutput::Rows(result)) => items.push(BatchResult {
+                        start,
+                        end,
+                        elapsed_ms: began.elapsed().as_millis() as u64,
+                        result,
+                    }),
+                    outcome => {
+                        let (status, message) = match outcome {
+                            Err(QueryFailure::Cancelled) => {
+                                ("cancelled", "일괄 실행을 중단했습니다.".into())
+                            }
+                            Err(QueryFailure::TimedOut) => {
+                                ("timed_out", "일괄 실행이 10초를 초과했습니다.".into())
+                            }
+                            Err(QueryFailure::ParametersRequired(_)) => (
+                                "parameters_required",
+                                "매개변수가 있는 문장은 현재 문장으로 실행해 값을 입력하세요."
+                                    .into(),
+                            ),
+                            Err(QueryFailure::Error(error)) => ("error", error),
+                            Ok(_) => ("error", "이 문장의 조회 결과를 받을 수 없습니다.".into()),
+                        };
+                        stopped = Some(BatchStop {
+                            start,
+                            end,
+                            status,
+                            message,
+                        });
+                        break;
+                    }
+                }
+            }
+            Ok(QueryOutcome::Batch {
+                total,
+                items,
+                stopped,
+            })
+        };
+        match execute() {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => query_outcome(Err(error)),
+        }
+    }
+
     pub fn explain_prepared(
         &self,
         token: &str,
@@ -569,15 +709,21 @@ impl Store {
             QuerySource::Object(_) => open_schema_db(path),
         }
         .map_err(QueryFailure::Error)?;
-        control.attach(&db)?;
-        let progress = Arc::clone(control);
-        db.progress_handler(
-            1_000,
-            Some(move || progress.check_deadline(deadline).is_err()),
-        );
+        configure_query(&db, control, deadline)?;
+        Self::query_on_connection(&db, source, delivery, control, deadline)
+    }
+
+    fn query_on_connection(
+        db: &Connection,
+        source: QuerySource<'_>,
+        delivery: QueryDelivery<'_>,
+        control: &QueryControl,
+        deadline: Instant,
+    ) -> std::result::Result<QueryOutput, QueryFailure> {
         control.check_deadline(deadline)?;
-        let page = match delivery {
-            QueryDelivery::Page(page) => Some(page),
+        let page = match &delivery {
+            QueryDelivery::Page(page) => Some(*page),
+            QueryDelivery::BatchPage(_) => Some(0),
             QueryDelivery::Export { .. } => None,
         };
         let page_clause = page
@@ -592,10 +738,21 @@ impl Store {
                 parameters,
                 explain,
             } => {
-                let sql = sql.trim().trim_end_matches(';').trim_end();
-                if sql.is_empty() {
-                    return Err(QueryFailure::Error("조회할 SQL을 입력하세요.".into()));
+                if sql.contains('\0') {
+                    return Err(QueryFailure::Error(
+                        "NUL 문자가 있는 SQL은 실행할 수 없습니다.".into(),
+                    ));
                 }
+                let mut statements = statement_ranges(sql);
+                let range = statements
+                    .next()
+                    .ok_or_else(|| QueryFailure::Error("조회할 SQL을 입력하세요.".into()))?;
+                if statements.next().is_some() {
+                    return Err(QueryFailure::Error(
+                        "이 작업은 SQL 문장 하나만 지원합니다.".into(),
+                    ));
+                }
+                let sql = sql[range].trim_end().trim_end_matches(';').trim_end();
                 // Prepare before pagination to retain the authorizer's useful errors.
                 let original = db.prepare(sql).map_err(|e| control.sqlite_error(e))?;
                 if !original.readonly() || original.column_count() == 0 {
@@ -645,11 +802,11 @@ impl Store {
                 )
             }
             QuerySource::Object(request) => {
-                let generated = request.sql(&db);
+                let generated = request.sql(db);
                 control.check()?;
                 let (sql, values) = generated.map_err(QueryFailure::Error)?;
                 // Schema PRAGMAs are only needed for the fixed metadata queries.
-                set_read_authorizer(&db, false);
+                set_read_authorizer(db, false);
                 (format!("{sql}{page_clause}"), values, true, false)
             }
         };
@@ -678,7 +835,11 @@ impl Store {
         if explain {
             return read_plan(&mut cursor, control).map(QueryOutput::Plan);
         }
-        if let QueryDelivery::Export { destination, format } = delivery {
+        if let QueryDelivery::Export {
+            destination,
+            format,
+        } = delivery
+        {
             let mut file =
                 ExportFile::create(destination, format, &columns).map_err(QueryFailure::Error)?;
             let mut rows = 0;
@@ -697,18 +858,29 @@ impl Store {
                 .map(QueryOutput::Export)
                 .map_err(QueryFailure::Error);
         }
+        let mut budget = match delivery {
+            QueryDelivery::BatchPage(bytes) => Some(bytes),
+            _ => None,
+        };
+        charge_batch_result(
+            &mut budget,
+            columns
+                .iter()
+                .map(|name| name.len() + size_of::<String>())
+                .sum(),
+        )?;
         let mut rows = Vec::with_capacity(PAGE_SIZE + 1);
         while let Some(row) = cursor.next().map_err(|e| control.sqlite_error(e))? {
-            control.check()?;
+            control.check_deadline(deadline)?;
             let mut cells = Vec::with_capacity(row.as_ref().column_count());
             for index in 0..row.as_ref().column_count() {
-                cells.push(display_value(
-                    row.get_ref(index).map_err(|e| control.sqlite_error(e))?,
-                ));
+                let cell = display_value(row.get_ref(index).map_err(|e| control.sqlite_error(e))?);
+                charge_batch_result(&mut budget, cell.display.len() + size_of::<crate::Cell>())?;
+                cells.push(cell);
             }
             rows.push(cells);
         }
-        control.check()?;
+        control.check_deadline(deadline)?;
         let has_more = rows.len() > PAGE_SIZE;
         if has_more {
             rows.pop();
@@ -721,6 +893,34 @@ impl Store {
             generated_sql: show_sql.then_some(bounded_sql),
         }))
     }
+}
+
+fn configure_query(
+    db: &Connection,
+    control: &Arc<QueryControl>,
+    deadline: Instant,
+) -> std::result::Result<(), QueryFailure> {
+    control.attach(db)?;
+    let progress = Arc::clone(control);
+    db.progress_handler(
+        1_000,
+        Some(move || progress.check_deadline(deadline).is_err()),
+    );
+    control.check_deadline(deadline)
+}
+
+fn charge_batch_result(
+    budget: &mut Option<&mut usize>,
+    cost: usize,
+) -> std::result::Result<(), QueryFailure> {
+    if let Some(remaining) = budget {
+        **remaining = remaining.checked_sub(cost).ok_or_else(|| {
+            QueryFailure::Error(
+                "일괄 결과의 메모리 한도에 도달했습니다. 문장을 나누어 실행하세요.".into(),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn read_plan(

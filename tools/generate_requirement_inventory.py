@@ -97,8 +97,8 @@ PARTIAL = {
     "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정보를 호버와 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
-    "SP-SQ-007": "전체 입력·선택 영역·커서 위치의 SQLite 읽기 전용 문장 실행, 구분자·문자열·주석·트리거 경계와 실제 실행 범위 내보내기",
-    "SP-SQ-008": "열린 SQLite SQL 탭마다 마지막 조회 결과와 페이지 및 실행 계획을 메모리에 보관, 탭의 실행 입력으로 내보내기",
+    "SP-SQ-007": "SQLite 문서 전체·선택 영역 일괄 실행과 커서 위치의 개별 실행, 구분자·문자열·주석·트리거 경계 처리",
+    "SP-SQ-008": "각 SQL 탭의 개별·일괄 조회 결과 보관, 문장별 시간·페이지·내보내기, 오류나 중단 위치로 이동",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
@@ -251,7 +251,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-SQ-018", "SP-SQ-025"}:
                 evidence = "crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-007":
-                evidence = "src/main.tsx; crates/stackport-core/src/sql_statement.rs; crates/stackport-core/tests/sql_statement.rs; tests/sql-file-smoke.cjs"
+                evidence = "src/main.tsx; crates/stackport-core/src/query.rs; crates/stackport-core/src/sql_statement.rs; crates/stackport-core/tests/sql_statement.rs; crates/stackport-core/tests/query_cancel.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-008":
                 evidence = "src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:

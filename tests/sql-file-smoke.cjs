@@ -332,8 +332,9 @@ async function main() {
     await page.getByText('열린 SQL 탭이 없습니다.', { exact: true }).waitFor();
     await add.click();
     assert.equal(await editor.inputValue(), '');
+    await verifySqlBatch(page, editor, exportJson);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, draft recovery, independent plans and results, pagination and exact exports passed.');
+    console.log('SQL tabs, draft recovery, independent plans and results, batch execution, pagination and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -614,6 +615,66 @@ async function verifySqlHover(page, editor, dev) {
   await dialog.getByRole('button', { name: '닫기', exact: true }).click();
   await popup.waitFor({ state: 'hidden' });
   await dev.click();
+}
+
+async function verifySqlBatch(page, editor, exportJson) {
+  const grid = page.locator('.database-results');
+  const batch = grid.getByRole('group', { name: '일괄 실행 결과', exact: true });
+  const first = batch.getByRole('button', { name: '문장 1', exact: true });
+  const second = batch.getByRole('button', { name: '문장 2', exact: true });
+  const run = () => editor.press('Control+Enter');
+  const cell = text => grid.getByRole('cell', { name: text, exact: true });
+  await editor.fill("SELECT '첫😀; 결과' AS marker;\n-- 구분자 ;\nSELECT name FROM people ORDER BY id;");
+  await run();
+  await batch.getByText(/2개 문장 중 2개 완료/).waitFor();
+  await cell('첫😀; 결과').waitFor();
+  await second.click();
+  await cell('사용자 1').waitFor();
+  await grid.getByRole('button', { name: '다음 페이지', exact: true }).click();
+  await cell('사용자 101').waitFor();
+  await first.click();
+  await cell('첫😀; 결과').waitFor();
+  await second.click();
+  await cell('사용자 101').waitFor();
+  const exported = await exportJson(grid, '일괄 문장 결과.json');
+  assert.deepEqual(exported.columns, ['name']);
+  assert.equal(exported.rows.length, 205);
+
+  const outside = "SELECT '선택 영역 밖😀';\n";
+  const selected = "SELECT '남은 결과😀;' AS marker;\n-- 내부 ;\nDELETE FROM people;\nSELECT '실행하지 않은 문장';";
+  const source = outside + selected;
+  await editor.fill(source);
+  await editor.evaluate((node, start) => node.setSelectionRange(start, node.value.length), outside.length);
+  await run();
+  await batch.getByRole('alert').getByText(/문장 2.*읽기 전용/).waitFor();
+  await batch.getByText(/3개 문장 중 1개 완료/).waitFor();
+  await cell('남은 결과😀;').waitFor();
+  assert.equal(await second.count(), 0);
+  await batch.getByRole('button', { name: '중단 위치로 이동', exact: true }).click();
+  await page.waitForFunction(() => {
+    const sql = document.getElementById('sql-editor');
+    return sql.value.slice(sql.selectionStart, sql.selectionEnd) === 'DELETE FROM people;';
+  });
+  await page.getByRole('button', { name: '문서 전체 실행', exact: true }).click();
+  await batch.getByText(/4개 문장 중 2개 완료/).waitFor();
+  await cell('선택 영역 밖😀').waitFor();
+
+  await editor.fill("SELECT '중단 전 결과' AS marker;\nWITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n;\nSELECT 9;");
+  await run();
+  const cancel = page.getByRole('button', { name: '쿼리 중단', exact: true });
+  await cancel.waitFor();
+  await page.waitForTimeout(150);
+  await cancel.click();
+  await batch.getByRole('status').getByText(/문장 2.*실행을 중단했습니다/).waitFor();
+  await cell('중단 전 결과').waitFor();
+  await run();
+  await batch.getByRole('alert').getByText(/문장 2.*10초/).waitFor();
+  await cell('중단 전 결과').waitFor();
+
+  await editor.fill("SELECT '입력 전 결과'; SELECT :value; SELECT 3;");
+  await run();
+  await batch.getByRole('alert').getByText(/문장 2.*매개변수/).waitFor();
+  await cell('입력 전 결과').waitFor();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

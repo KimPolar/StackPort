@@ -83,3 +83,69 @@ fn completed_or_failed_requests_are_not_reported_as_cancelled() {
         .is_err());
     assert!(!store.cancel_query(&failed).unwrap());
 }
+
+#[test]
+fn document_runs_in_order_and_keeps_the_prefix_when_a_statement_fails() {
+    let (_dir, store, profile) = fixture();
+    let prefix = "SELECT '한😀; 결과' AS marker;\n-- comment ;\n";
+    let blocked = "CREATE TABLE blocked (id);";
+    let sql = format!("{prefix}{blocked}\nSELECT 3;");
+    let token = store.prepare_query().unwrap();
+    let report = store
+        .query_document_prepared(&token, &profile, &sql, None)
+        .unwrap();
+    let report = serde_json::to_value(report).unwrap();
+    assert_eq!(report["status"], "batch");
+    assert_eq!(report["total"], 3);
+    assert_eq!(report["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        report["items"][0]["result"]["rows"][0][0]["display"],
+        "한😀; 결과"
+    );
+    assert_eq!(report["stopped"]["status"], "error");
+    assert_eq!(report["stopped"]["start"], prefix.encode_utf16().count());
+    assert_eq!(
+        report["stopped"]["end"],
+        prefix.encode_utf16().count() + blocked.len()
+    );
+    assert!(!store.cancel_query(&token).unwrap());
+    assert!(store.query(&profile, "SELECT id FROM blocked", 0).is_err());
+}
+
+#[test]
+fn document_bounds_statement_count_and_buffered_previews() {
+    let (_dir, store, profile) = fixture();
+    let token = store.prepare_query().unwrap();
+    assert!(store
+        .query_document_prepared(&token, &profile, &"SELECT 1;".repeat(17), None)
+        .unwrap_err()
+        .contains("16개"));
+    let fields = vec!["printf('%05000d',x)"; 24].join(",");
+    let script = format!("SELECT 1; WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<101) SELECT {fields} FROM n; SELECT 3;");
+    let token = store.prepare_query().unwrap();
+    let report = serde_json::to_value(
+        store
+            .query_document_prepared(&token, &profile, &script, None)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["items"].as_array().unwrap().len(), 1);
+    assert_eq!(report["stopped"]["status"], "error");
+    assert!(report["stopped"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("메모리 한도"));
+}
+
+#[test]
+fn a_single_document_statement_accepts_trailing_comments() {
+    let (_dir, store, profile) = fixture();
+    let token = store.prepare_query().unwrap();
+    let QueryOutcome::Completed { result } = store
+        .query_document_prepared(&token, &profile, "SELECT 5 AS value; -- ;", None)
+        .unwrap()
+    else {
+        panic!("expected a single result");
+    };
+    assert_eq!(result.rows[0][0].display, "5");
+}

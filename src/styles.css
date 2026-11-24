@@ -285,6 +285,11 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sqlite-plan-kind.temporary, .sqlite-plan-kind.scan { background: #fff1d7; color: #765621; }
 .sqlite-plan-branch { color: #71877c; }
 .results-actions { flex-wrap: wrap; justify-content: flex-end; }
+.sql-batch-results { display: grid; gap: 8px; padding: 10px 14px; border-bottom: 1px solid #e4ece7; background: #f8fbf9; color: #435e50; font-size: 12px; }
+.sql-batch-results p { margin: 0; }
+.sql-batch-statements, .sql-batch-stop { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; }
+.sql-batch-statements button[aria-pressed="true"] { border-color: #8abab0; background: #deeee8; color: #155e4e; }
+.sql-batch-stop [role="alert"] { color: #aa4439; overflow-wrap: anywhere; }
 .csv-options { display: grid; gap: 8px; margin: 12px 0; padding: 0; border: 0; color: #526a5f; font-size: 12px; }
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }
