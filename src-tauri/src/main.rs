@@ -18,6 +18,7 @@ use stackport_core::{
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage, PostgresStatementStats, PostgresStatementStatsInput,
     PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget,
+    PostgresGridLayout,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -849,8 +850,9 @@ async fn search_postgres_objects(postgres: State<'_, PostgresManager>, id: Strin
 async fn postgres_page(
     postgres: State<'_, PostgresManager>, id: String, object: i64, row_page: u32, column_page: u32,
     query: Option<TableQueryClauses>,
+    layout: Option<PostgresGridLayout>,
 ) -> Result<PostgresPage, String> {
-    postgres.page(&id, object, row_page, column_page, query).await
+    postgres.page(&id, object, row_page, column_page, query, layout).await
 }
 
 #[tauri::command]

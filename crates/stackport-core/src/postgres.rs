@@ -1,6 +1,7 @@
 mod catalog;
 mod edit;
 mod export;
+mod grid_layout;
 mod monitor;
 mod parameters;
 mod plan;
@@ -18,6 +19,7 @@ pub use edit::{
     PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
 };
 pub use export::PostgresExportOptions;
+pub use grid_layout::PostgresGridLayout;
 pub use monitor::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, SCHEMA};

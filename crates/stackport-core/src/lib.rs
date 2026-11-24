@@ -21,6 +21,7 @@ mod postgres;
 pub use postgres::{PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::PostgresDisconnect;
+pub use postgres::PostgresGridLayout;
 pub use postgres::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use postgres::{PostgresSearchInput, PostgresSearchPage};
 pub use postgres::{PostgresStatementStats, PostgresStatementStatsInput};

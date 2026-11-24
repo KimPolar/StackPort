@@ -1,0 +1,12 @@
+.dialog.grid-column-layout-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); }
+.grid-layout-profiles { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; align-items: end; margin-bottom: 12px; }
+.grid-layout-profiles .field { margin: 0; }
+.grid-layout-profiles > button { min-height: 38px; }
+.grid-layout-columns { max-height: min(43vh, 430px); }
+.grid-layout-columns tbody th { position: static; background: transparent; color: var(--text); }
+.grid-layout-columns :is(th, td) { padding: 6px 9px; }
+.grid-layout-columns input[type="number"] { width: 75px; border: 1px solid var(--control-border); border-radius: 4px; padding: 5px; color: var(--text); background: var(--surface); }
+.grid-layout-order { display: inline-flex; }
+.table-wrap th.grid-sticky-column { z-index: 3; }
+.table-wrap td.grid-sticky-column { position: sticky; z-index: 1; background: var(--surface); }
+.table-wrap :is(td, th).grid-sticky-column { box-shadow: 1px 0 var(--divider); }

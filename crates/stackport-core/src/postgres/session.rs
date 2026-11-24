@@ -6,6 +6,7 @@ use super::{
         PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     },
     export::EXPORT_TIMEOUT,
+    grid_layout::PostgresGridLayout,
     monitor::{self, PostgresActivityInput, PostgresActivitySnapshot},
     parameters::Value,
     sql, sql_range,
@@ -119,7 +120,7 @@ pub struct PostgresObjectPage {
     has_next: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Column {
     name: String,
     data_type: String,
@@ -143,6 +144,9 @@ pub struct PostgresPage {
     columns: Vec<Column>,
     rows: Vec<Vec<Cell>>,
     total_columns: usize,
+    visible_columns: usize,
+    pinned_columns: usize,
+    has_next_columns: bool,
     has_next: bool,
     primary_key_order: bool,
     primary_key_columns: Vec<String>,
@@ -543,6 +547,7 @@ impl PostgresManager {
         row_page: u32,
         column_page: u32,
         query: Option<TableQueryClauses>,
+        layout: Option<PostgresGridLayout>,
     ) -> Result<PostgresPage> {
         let session = self.session(id)?;
         timeout(
@@ -553,6 +558,7 @@ impl PostgresManager {
                 row_page,
                 column_page,
                 query.unwrap_or_default(),
+                layout.unwrap_or_default(),
             ),
         )
         .await
@@ -941,6 +947,7 @@ async fn browse(
     row_page: u32,
     column_page: u32,
     query: TableQueryClauses,
+    layout: PostgresGridLayout,
 ) -> Result<PostgresPage> {
     let mut client = session.client.lock().await;
     let tx = client
@@ -1011,14 +1018,11 @@ async fn browse(
         },
     )?;
     let from = format!("\nFROM {}.{table}{suffix}", quote_identifier(&schema));
-    let start = usize::try_from(offset(column_page, COLUMN_SIZE)).unwrap_or(usize::MAX);
-    if start >= total_columns && column_page != 0 {
-        return Err("열 페이지를 다시 선택하세요.".into());
-    }
-    let columns: Vec<_> = all_columns
-        .into_iter()
-        .skip(start)
-        .take(COLUMN_SIZE)
+    let column_view = layout.page(&column_names, column_page, COLUMN_SIZE)?;
+    let columns: Vec<_> = column_view
+        .indices
+        .iter()
+        .map(|&index| all_columns[index].clone())
         .collect();
     let mut projection = if columns.is_empty() {
         "NULL::pg_catalog.text".into()
@@ -1103,6 +1107,9 @@ async fn browse(
         columns,
         rows,
         total_columns,
+        visible_columns: column_view.visible_count,
+        pinned_columns: column_view.pinned_count,
+        has_next_columns: column_view.has_next,
         has_next,
         primary_key_order,
         primary_key_columns,

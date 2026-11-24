@@ -369,8 +369,8 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
-  const grid = (clauses, rowPage = 0, columnPage = 0, object = table.id) => command('postgres_page', {
-    id: session.id, object, rowPage, columnPage, query: { conjunction: 'all', filters: [], sort: [], ...clauses },
+  const grid = (clauses, rowPage = 0, columnPage = 0, object = table.id, layout) => command('postgres_page', {
+    id: session.id, object, rowPage, columnPage, layout, query: { conjunction: 'all', filters: [], sort: [], ...clauses },
   });
   const filter = (column, condition) => ({ column, condition });
   const text = value => ({ kind: 'text', value });
@@ -392,6 +392,24 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(secondFiltered.has_next, false);
   const lastColumns = await grid(gridClauses, 1, 1);
   assert.deepEqual(lastColumns.rows.map(row => row[1].value), Array(4).fill('마지막 열'));
+  const columnLayout = { order: ['extra_23', 'precise', 'missing', 'precise'], hidden: ['note'], pinned: ['extra_23', 'note'] };
+  const arranged = await grid(gridClauses, 1, 0, table.id, columnLayout);
+  assert.equal(arranged.total_columns, 26);
+  assert.equal(arranged.visible_columns, 25);
+  assert.equal(arranged.pinned_columns, 1);
+  assert.equal(arranged.has_next_columns, true);
+  assert.deepEqual(arranged.columns.slice(0, 3).map(column => column.name), ['extra_23', 'precise', 'id']);
+  assert.deepEqual(arranged.rows[0].slice(0, 3).map(cell => cell.value), ['마지막 열', '9007199254740993.123', '5']);
+  assert.equal(arranged.source, secondFiltered.source);
+  assert.deepEqual(arranged.parameter_types, secondFiltered.parameter_types);
+  assert.ok(arranged.column_names.includes('note'));
+  const nextArrangement = await grid(gridClauses, 1, 1, table.id, columnLayout);
+  assert.deepEqual(nextArrangement.columns.map(column => column.name), ['extra_23', 'extra_22']);
+  assert.equal(nextArrangement.pinned_columns, 1);
+  assert.equal(nextArrangement.has_next_columns, false);
+  assert.equal(nextArrangement.rows[0][0].value, '마지막 열');
+  assert.deepEqual((await grid({}, 0, 0, table.id, { hidden: first.column_names })).columns.map(column => column.name), ['id']);
+  await assert.rejects(grid({}, 0, 2, table.id, columnLayout), /열 페이지/);
   const either = await grid({
     conjunction: 'any',
     filters: [filter('note', { kind: 'is_null' }), filter('note', { kind: 'contains', value: '행 105' }), exact('note', '')],
@@ -784,6 +802,45 @@ async function verify(browser, fixture, gateway, jump) {
   await page.getByRole('button', { name: /denied SELECT 권한 없음/ }).waitFor();
   await page.getByRole('button', { name: /quoted table/ }).click();
   await data.getByRole('columnheader', { name: /id.*PK 1/ }).waitFor();
+  const columnButton = page.getByRole('button', { name: '열 설정', exact: true });
+  const columnDialog = page.getByRole('dialog', { name: '열 설정', exact: true });
+  const applyColumns = async () => {
+    await columnDialog.getByRole('button', { name: '적용', exact: true }).click();
+    await columnDialog.waitFor({ state: 'detached' });
+  };
+  await columnButton.click();
+  await columnDialog.getByLabel('note 표시', { exact: true }).uncheck();
+  await columnDialog.getByLabel('extra_23 고정', { exact: true }).check();
+  await columnDialog.getByLabel('extra_23 폭', { exact: true }).fill('170');
+  await columnDialog.getByRole('button', { name: 'precise 위로', exact: true }).click();
+  await columnDialog.getByRole('button', { name: 'precise 위로', exact: true }).click();
+  await columnDialog.getByLabel('프로필 이름').fill('PG 요약');
+  await columnDialog.getByRole('button', { name: '프로필 저장', exact: true }).click();
+  await applyColumns();
+  const lockedHeader = data.getByRole('columnheader', { name: /extra_23/ });
+  await lockedHeader.waitFor();
+  assert.match(await data.getByRole('columnheader').first().textContent(), /^extra_23/);
+  assert.match(await data.getByRole('columnheader').nth(1).textContent(), /^precise/);
+  assert.equal(await data.getByRole('columnheader', { name: /^note\b/ }).count(), 0);
+  assert.ok(Math.abs((await lockedHeader.boundingBox()).width - 170) < 2);
+  const gridScroller = page.getByRole('region', { name: 'PostgreSQL 데이터 스크롤', exact: true });
+  await gridScroller.evaluate(element => { element.scrollLeft = 400; });
+  assert.ok(await gridScroller.evaluate(element => element.scrollLeft > 200));
+  assert.ok(Math.abs((await lockedHeader.boundingBox()).x - (await gridScroller.boundingBox()).x) < 4);
+  await page.getByRole('button', { name: '다음 열 페이지', exact: true }).click();
+  await data.getByRole('columnheader', { name: /extra_22/ }).waitFor();
+  assert.equal(await data.getByRole('columnheader').count(), 2);
+  assert.match(await data.getByRole('columnheader').first().textContent(), /^extra_23/);
+  await data.getByText('마지막 열', { exact: true }).first().waitFor();
+  await page.getByRole('button', { name: '다시 조회', exact: true }).click();
+  await data.getByRole('columnheader', { name: /extra_22/ }).waitFor();
+  assert.equal(await data.getByRole('columnheader').count(), 2);
+  await columnButton.click();
+  await columnDialog.getByLabel('보기 프로필').selectOption('PG 요약');
+  assert.equal(await columnDialog.getByLabel('extra_23 폭', { exact: true }).inputValue(), '170');
+  await columnDialog.getByRole('button', { name: '기본 배치', exact: true }).click();
+  await applyColumns();
+  await data.getByRole('columnheader', { name: /^note\b/ }).waitFor();
   assert.equal(await data.getByRole('row').count(), 101);
   await data.getByText('9007199254740993.123', { exact: true }).first().waitFor();
   await data.getByRole('row').nth(1).getByRole('cell').nth(1).getByText('NULL', { exact: true }).waitFor();
@@ -1624,7 +1681,7 @@ async function main() {
     await verify(browser, fixture, gateway, jump);
     withoutPreload = await startPostgres(false);
     await verifyStatsWithoutPreload(browser, withoutPreload);
-    console.log('Windows PostgreSQL E2E passed (cell representations, large cells, statement stats, grid editing and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (column layouts, cell representations, statement stats, grid editing and SSH jump recovery).');
   } finally {
     await browser?.close();
     withoutPreload?.close();

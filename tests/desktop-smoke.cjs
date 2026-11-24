@@ -4,6 +4,7 @@
  * See docs/IMPLEMENTATION.md for setup and security boundaries.
  */
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
+const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
 const { createHash, randomUUID } = require('crypto');
@@ -90,6 +91,42 @@ async function main() {
   const editor = page.getByLabel('SQL 쿼리');
   await editor.waitFor({ state: 'hidden' });
   await page.getByText('사용자 1', { exact: true }).waitFor();
+  const layoutButton = page.getByRole('button', { name: '열 설정', exact: true });
+  const layoutDialog = page.getByRole('dialog', { name: '열 설정', exact: true });
+  const applyLayout = async () => {
+    await layoutDialog.getByRole('button', { name: '적용', exact: true }).click();
+    await layoutDialog.waitFor({ state: 'detached' });
+  };
+  const gridHeaders = page.locator('.database-results .table-wrap table').getByRole('columnheader');
+  await layoutButton.click();
+  await layoutDialog.getByLabel('id 표시', { exact: true }).uncheck();
+  await layoutDialog.getByLabel('name 고정', { exact: true }).check();
+  await layoutDialog.getByLabel('name 폭', { exact: true }).fill('48');
+  await layoutDialog.getByRole('button', { name: '적용', exact: true }).click();
+  await layoutDialog.getByRole('alert').getByText(/열 폭/).waitFor();
+  await layoutDialog.getByLabel('name 폭', { exact: true }).fill('210');
+  await layoutDialog.getByLabel('프로필 이름').fill('간단 보기');
+  await layoutDialog.getByRole('button', { name: '프로필 저장', exact: true }).click();
+  await applyLayout();
+  assert.deepEqual(await gridHeaders.allTextContents(), ['#', 'name', 'note', '작업']);
+  assert.ok(Math.abs((await gridHeaders.nth(1).boundingBox()).width - 210) < 2);
+  await page.getByRole('button', { name: '1행 편집', exact: true }).click();
+  const edit = page.getByRole('dialog', { name: 'SQLite 셀 편집', exact: true });
+  await edit.getByText('기본 키: id = 1', { exact: true }).waitFor();
+  await edit.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await edit.waitFor({ state: 'detached' });
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption({ label: 'E2E 테스트' });
+  await explorer.getByRole('button', { name: /테스트 DB/ }).click();
+  await people.click();
+  await page.getByText('사용자 1', { exact: true }).waitFor();
+  assert.deepEqual(await gridHeaders.allTextContents(), ['#', 'name', 'note', '작업']);
+  await layoutButton.click();
+  await layoutDialog.getByLabel('보기 프로필').selectOption('간단 보기');
+  assert.equal(await layoutDialog.getByLabel('name 폭', { exact: true }).inputValue(), '210');
+  await layoutDialog.getByRole('button', { name: '기본 배치', exact: true }).click();
+  await applyLayout();
+  assert.deepEqual(await gridHeaders.allTextContents(), ['#', 'id', 'name', 'note', '작업']);
   await page.locator('details.schema-card summary').click();
   const columns = page.getByRole('table', { name: 'people 열 구조' });
   await columns.getByRole('cell', { name: 'PK 1' }).waitFor();

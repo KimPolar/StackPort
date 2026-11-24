@@ -166,7 +166,7 @@ SP-DT-009,FK 선택,외래키 셀을 참조 대상 테이블의 검색 가능한
 SP-DT-010,필터,"컬럼별 연산자·날짜 범위·NULL·다중 조건 AND/OR, 조건 저장/재사용, 필터 SQL 표시.",partial,"SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx
 SP-DT-011,정렬,"단일·다중 컬럼, NULL 정렬, 서버 측 정렬, 순서 초기화.",partial,"SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx
 SP-DT-012,탐색·검색,"셀·행/열 검색, 정규식(가능 범위), 찾기/바꾸기, 데이터베이스 전체 검색.",not_started,,
-SP-DT-013,컬럼 설정,숨김/고정/순서·폭·형식·타입별 색상·표시 자릿수·날짜 포맷·프로필 저장.,not_started,,
+SP-DT-013,컬럼 설정,숨김/고정/순서·폭·형식·타입별 색상·표시 자릿수·날짜 포맷·프로필 저장.,partial,"SQLite·PostgreSQL 연결·객체별 열 표시·왼쪽 고정·순서·폭과 보기 프로필 저장, PostgreSQL 열 페이지에 고정 열 반복",src/GridColumnLayout.ts; src/GridColumnLayoutDialog.tsx; crates/stackport-core/src/postgres/grid_layout.rs; tests/desktop-smoke.cjs; tests/postgres-smoke.cjs
 SP-DT-014,집계·통계,"행 수, 합계, 평균, 최소/최대, NULL 비율, 고유값 수, 분포/히스토그램, 누락 데이터 분석.",not_started,,
 SP-DT-015,데이터 프로파일링,타입·패턴·카디널리티·빈도·이상치·중복 가능성 및 컬럼 간 관계 요약.,not_started,,
 SP-DT-016,참조 탐색,선택한 행에서 FK 부모/자식 관계로 이동하고 관련 행을 별도 탭으로 표시.,not_started,,

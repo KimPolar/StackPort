@@ -10,6 +10,8 @@ import {
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
 import { Dialog } from "./Dialog";
+import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
+import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
@@ -176,6 +178,8 @@ function App() {
   const [objects, setObjects] = useState<DatabaseObject[]>([]);
   const [selectedObject, setSelectedObject] = useState<DatabaseObject | null>(null);
   const [schemaDetailsOpen, setSchemaDetailsOpen] = useState(false);
+  const [sqliteLayoutDialog, setSqliteLayoutDialog] = useState<string | null>(null);
+  const sqliteLayoutButton = useRef<HTMLButtonElement>(null);
   const [objectDetails, setObjectDetails] = useState<ObjectDetails | null>(null);
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -1163,6 +1167,22 @@ function App() {
       : executedQuery?.kind === "sql" && executedQuery.sql === objectSelectSql(selectedObject.name) && sql === executedQuery.sql
   );
   const canEditRows = Boolean(!pinned && profile && selectedObject?.kind === "table" && objectDetails && primaryKeys.length && result && resultForObject);
+  const tableLayoutTarget = profile && resultForObject && result && !pinned && executedQuery?.kind === "table"
+    ? { engine: "sqlite" as const, profile: profile.id, object: executedQuery.request.object } : null;
+  const tableLayoutKey = tableLayoutTarget ? JSON.stringify([tableLayoutTarget.profile, tableLayoutTarget.object]) : null;
+  const sqliteGrid = useGridLayout(tableLayoutTarget);
+  const sourceColumns = new Map(result?.columns.map((name, index) => [name, index]));
+  const displayColumns = tableLayoutTarget && result ? visibleColumns(result.columns, sqliteGrid.layout.active)
+    .map(column => ({ name: column.name, index: sourceColumns.get(column.name)!, pinned: column.pinned }))
+    : result?.columns.map((name, index) => ({ name, index, pinned: false })) ?? [];
+  const rowNumberWidth = 50;
+  const actionWidth = 96;
+  const sqliteGeometry = tableLayoutTarget && gridGeometry(displayColumns.map(column => column.name), sqliteGrid.layout.active,
+    displayColumns.filter(column => column.pinned).length, rowNumberWidth + (canEditRows ? actionWidth : 0));
+  function closeSqliteLayout() {
+    setSqliteLayoutDialog(null);
+    requestAnimationFrame(() => sqliteLayoutButton.current?.focus());
+  }
   const editUnavailableReason = !pinned && selectedObject && objectDetails && result && !canEditRows
     ? selectedObject.kind !== "table" ? "뷰는 편집할 수 없습니다."
       : !primaryKeys.length ? "기본 키가 없는 테이블은 편집할 수 없습니다."
@@ -1333,6 +1353,8 @@ function App() {
           {result && <span className="result-count">{result.rows.length}개 행</span>}
         </div>
         <div className="results-actions">
+          {tableLayoutKey && !!result?.columns.length && <button ref={sqliteLayoutButton} type="button" className="secondary small"
+            onClick={() => setSqliteLayoutDialog(tableLayoutKey)}>열 설정</button>}
           {!pinned && liveQueryResult?.target.kind === "sql" && <button type="button" className="secondary small"
             disabled={querying || alreadyPinned || sqlView.pins.length >= maxResultPins}
             title={sqlView.pins.length >= maxResultPins ? "SQL 탭마다 최대 8개 페이지를 고정할 수 있습니다." : "현재 조회 페이지를 메모리에 고정합니다."}
@@ -1407,9 +1429,36 @@ function App() {
         </details>}
         {result?.metrics && <SqlQueryMetrics metrics={result.metrics} />}
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
-        {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
+        {sqliteGrid.error && <p className="form-note" role="status">{sqliteGrid.error}</p>}
+        {result ? <><div className="table-wrap"><table style={sqliteGeometry ? { tableLayout: "fixed", width: sqliteGeometry.total } : undefined}>
+          {sqliteGeometry && <colgroup><col style={{ width: rowNumberWidth }} />
+            {sqliteGeometry.widths.map((width, index) => <col key={index} style={{ width }} />)}
+            {canEditRows && <col style={{ width: actionWidth }} />}</colgroup>}
+          <thead><tr><th scope="col" className="row-number">#</th>
+            {displayColumns.map((column, position) => <th scope="col" key={column.index} title={column.name}
+              className={column.pinned ? "grid-sticky-column" : undefined} style={{ insetInlineStart: sqliteGeometry?.pins[position] }}>{column.name}</th>)}
+            {canEditRows && <th scope="col">작업</th>}</tr></thead>
+          <tbody>{result.rows.map((row, rowIndex) => {
+            const keys = keysForRow(row);
+            const rowNumber = result.page * 100 + rowIndex + 1;
+            return <tr key={rowIndex}><td className="row-number">{rowNumber}</td>
+              {displayColumns.map((column, position) => {
+                const cell = row[column.index];
+                const classes = [cell.kind === "null" && "null-cell", column.pinned && "grid-sticky-column"].filter(Boolean).join(" ");
+                return <td key={column.index} className={classes} style={{ insetInlineStart: sqliteGeometry?.pins[position] }}
+                  title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>;
+              })}
+              {canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying}
+                aria-label={`${rowNumber}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button>
+                : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}
+            </tr>;
+          })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
           {!pinned && <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div>}</> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
       </section>
+      {sqliteLayoutDialog && sqliteLayoutDialog === tableLayoutKey && tableLayoutTarget && result &&
+        <GridColumnLayoutDialog title={tableLayoutTarget.object} columns={result.columns} layout={sqliteGrid.layout}
+          onProfiles={profiles => sqliteGrid.apply({ active: sqliteGrid.layout.active, profiles })}
+          onClose={closeSqliteLayout} onApply={next => { sqliteGrid.apply(next); closeSqliteLayout(); }} />}
     </>}
     {!profile && error && <div className="error-banner" role="alert">{error}</div>}
   </div>;

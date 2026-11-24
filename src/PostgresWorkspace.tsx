@@ -7,6 +7,8 @@ import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type Postg
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
 import { PostgresServerMonitor } from "./PostgresServerMonitor";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
+import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
+import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
@@ -28,7 +30,8 @@ type ObjectKind = PostgresObjectKind;
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
 type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null; editable: boolean; value_kind: "binary" | "text" | "json" | "xml" | null }[];
-  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean;
+  rows: PostgresCell[][]; total_columns: number; visible_columns: number; pinned_columns: number;
+  has_next: boolean; has_next_columns: boolean; primary_key_order: boolean;
   column_names: string[]; source: string; parameter_types: number[]; row_stamps: (PostgresRowStamp | null)[] | null;
   value_rows: PostgresValueRow[] | null; edit_reason: string | null };
 type Route = { id: string; name: string; port: number };
@@ -257,20 +260,25 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const [structureRevision, setStructureRevision] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [filterColumns, setFilterColumns] = useState<string[] | null>(null);
+  const [layoutOpen, setLayoutOpen] = useState(false);
   const [edit, setEdit] = useState<{ object: number; stamp: PostgresRowStamp; column: string; trigger: HTMLButtonElement } | null>(null);
   const [value, setValue] = useState<{ target: PostgresValueTarget; title: string; format: PostgresValueFormat | null; trigger: HTMLButtonElement } | null>(null);
   const [editNotice, setEditNotice] = useState("");
   const dataPanel = useRef<HTMLElement>(null);
+  const columnSettings = useRef<HTMLButtonElement>(null);
   const errorId = useId();
+  const grid = useGridLayout(schema && object ? { engine: "postgres", profile: profile.id, schema: schema.name, object: object.name } : null);
+  const projection = useMemo(() => postgresProjection(grid.layout.active), [grid.layout.active]);
   const schemaArgs = useMemo(() => unavailable ? null : { id, page: schemaPage }, [id, schemaPage, unavailable]);
   const objectArgs = useMemo(() => schema && !unavailable ? { id, schema: schema.id, search: query, page: objectPage } : null,
     [id, schema, query, objectPage, unavailable]);
-  const pageArgs = useMemo(() => object && !unavailable && gridRequested ? { id, object: object.id, rowPage, columnPage, query: tableQuery } : null,
-    [id, object, rowPage, columnPage, tableQuery, unavailable, gridRequested]);
+  const pageArgs = useMemo(() => object && !unavailable && gridRequested ? { id, object: object.id, rowPage, columnPage, query: tableQuery, layout: projection } : null,
+    [id, object, rowPage, columnPage, tableQuery, projection, unavailable, gridRequested]);
   const schemas = useRead<SchemaPage>("postgres_schemas", schemaArgs);
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
   const result = page.data;
+  const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns);
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
     ? `SELECT *\nFROM ${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` : null);
@@ -279,6 +287,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
 
   function selectObject(next: DatabaseObject | null, section?: PostgresStructureSection) {
     setObject(next); setRowPage(0); setColumnPage(0); setStructureOpen(Boolean(section));
+    setLayoutOpen(false);
     setGridRequested(next !== null && section === undefined);
     setStructureStart(current => ({ section: section ?? "overview", version: current.version + 1 }));
     setTableQuery(emptyTableQueryClauses); setFilterColumns(null);
@@ -309,6 +318,11 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   function exportPage(data: Page) {
     onExport({ session: id, source: data.source, scope: { kind: "document" }, title: `${data.schema}.${data.name} 조회`,
       bindings: filterBindings(tableQuery, data.parameter_types) });
+  }
+
+  function closeLayout() {
+    setLayoutOpen(false);
+    requestAnimationFrame(() => columnSettings.current?.focus());
   }
 
   function closeEdit(refreshGrid = false) {
@@ -357,8 +371,16 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         <div className="sql-editor-actions">
           <button type="button" className="secondary small" disabled={!source} onClick={() => source && onOpenSql(source)}>SQL로 열기</button>
           {page.data && !structureOpen && <button type="button" className="secondary small" onClick={() => page.data && exportPage(page.data)}>결과 내보내기</button>}
+          {!structureOpen && !!filterColumns?.length && <button ref={columnSettings} type="button" className="secondary small"
+            onClick={() => setLayoutOpen(true)}>열 설정</button>}
           <button type="button" className="secondary small" disabled={!structureOpen && page.loading}
-            onClick={() => structureOpen ? setStructureRevision(value => value + 1) : setRefresh(value => value + 1)}>다시 조회</button>
+            onClick={() => {
+              if (structureOpen) setStructureRevision(value => value + 1);
+              else {
+                if (page.error === "열 페이지를 다시 선택하세요.") setColumnPage(0);
+                setRefresh(value => value + 1);
+              }
+            }}>다시 조회</button>
         </div></div> :
         <p className="result-empty">스키마와 조회할 테이블 또는 뷰를 선택하세요.</p>}
       {object && schema && <>
@@ -371,6 +393,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />}
       </>}
       <div hidden={structureOpen}>
+        {grid.error && <p className="form-note" role="status">{grid.error}</p>}
         {editNotice && <p className="success-banner" role="status">{editNotice}</p>}
         {schema && object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns}
           target={{ engine: "postgres", profile_id: profile.id, revision: profile.revision, schema: schema.name, object: object.name }}
@@ -383,6 +406,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         {result && <>
           {result.edit_reason && <p className="form-note postgres-page-note">{result.edit_reason}</p>}
           <p className="form-note postgres-page-note">{kindLabels[result.kind]} · {result.rows.length}행 · 전체 {result.total_columns}열
+            {result.visible_columns < result.total_columns && ` · 표시 ${result.visible_columns}열`}
             {tableQuery.filters.length > 0 && ` · 필터 ${tableQuery.filters.length}개`}
             {tableQuery.sort.length > 0 ? ` · 정렬 ${tableQuery.sort.length}개` : result.primary_key_order ? " · 기본 키 순서" : " · 고정 정렬 없음"}
           </p>
@@ -392,7 +416,11 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
             {result.parameter_types.length > 0 && <p>필터 값은 $1부터 순서대로 바인딩됩니다.</p>}
           </details>}
           {result.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
-            <table aria-label="PostgreSQL 데이터"><thead><tr>{result.columns.map(column => <th key={column.name} scope="col">
+            <table aria-label="PostgreSQL 데이터" style={geometry ? { tableLayout: "fixed", width: geometry.total } : undefined}>
+              {geometry && <colgroup>{geometry.widths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>}
+              <thead><tr>{result.columns.map((column, index) => <th key={column.name} scope="col"
+                className={index < result.pinned_columns ? "grid-sticky-column" : undefined}
+                style={{ insetInlineStart: geometry?.pins[index] }}>
               {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
             </th>)}</tr></thead>
               <tbody>{result.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => {
@@ -405,7 +433,8 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                   && (format || field.value_kind === "binary" || (field.value_kind === "text" && cell.truncated));
                 const canEdit = field.editable && stamp && object;
                 const rowNumber = rowPage * 100 + index + 1;
-                return <td key={column}>{canPreview || canEdit ? <div className="postgres-editable-cell">
+                return <td key={column} className={column < result.pinned_columns ? "grid-sticky-column" : undefined}
+                  style={{ insetInlineStart: geometry?.pins[column] }}>{canPreview || canEdit ? <div className="postgres-editable-cell">
                   <PostgresValue cell={cell} />
                   {canPreview && <button type="button" className="icon-button" aria-label={`${rowNumber}행 ${field.name} 원본 열기`}
                     onClick={event => setValue({ target: { object: object.id, column: field.name, row: valueRow },
@@ -421,7 +450,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
           {result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
           <div className="postgres-paging">
             <Pager label="데이터" page={rowPage} next={result.has_next} change={setRowPage} />
-            {result.total_columns > 24 && <Pager label="열" page={columnPage} next={(columnPage + 1) * 24 < result.total_columns} change={setColumnPage} />}
+            <Pager label="열" page={columnPage} next={result.has_next_columns} change={setColumnPage} />
           </div>
         </>}
       </div>
@@ -429,6 +458,10 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   </div>
       {searchOpen && !unavailable && <PostgresSearchDialog id={id} database={profile.settings.database} schema={schema}
         onClose={() => setSearchOpen(false)} onOpen={openSearchHit} />}
+      {layoutOpen && !unavailable && filterColumns && schema && object &&
+        <GridColumnLayoutDialog title={`${schema.name}.${object.name}`} columns={filterColumns} layout={grid.layout} pinLimit={postgresPinLimit}
+          onProfiles={profiles => grid.apply({ active: grid.layout.active, profiles })}
+          onClose={closeLayout} onApply={next => { grid.apply(next); setColumnPage(0); closeLayout(); }} />}
       {value && <PostgresValueDialog id={id} target={value.target} title={value.title} format={value.format} unavailable={unavailable} onBusy={onFileBusy} onClose={() => {
         const trigger = value.trigger;
         setValue(null);
