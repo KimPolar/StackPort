@@ -86,6 +86,7 @@ PARTIAL = {
     "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
     "SP-SQ-001": "접을 수 있는 연결별 다중 SQL 탭, 새 탭에서 파일 열기와 탭별 메모리 초안 및 닫기 확인",
     "SP-SQ-007": "전체 입력 또는 선택 영역의 SQLite 읽기 전용 문장 하나 실행, 선택 영역 실행 계획과 실제 실행 범위 내보내기",
+    "SP-SQ-008": "열린 SQLite SQL 탭마다 마지막 조회 결과와 페이지 및 실행 계획을 메모리에 보관, 탭의 실행 입력으로 내보내기",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
@@ -211,7 +212,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id in {"SP-SQ-018", "SP-SQ-025"}:
                 evidence = "crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; tests/sql-file-smoke.cjs"
-            elif requirement_id == "SP-SQ-007":
+            elif requirement_id in {"SP-SQ-007", "SP-SQ-008"}:
                 evidence = "src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
                 evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/"

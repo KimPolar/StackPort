@@ -123,6 +123,7 @@ h1, h2, p { margin-top: 0; }
 .database-results .result-identity { min-width: 0; }
 .result-identity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .result-identity > :not(strong), .database-results .results-actions { flex-shrink: 0; }
+.result-identity > .sql-result-source { min-width: 0; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #526a5f; }
 .database-results .table-wrap th, .database-results .table-wrap td { padding-block: 7px; }
 .main-content .database-results, .main-content > .schema-card { margin-top: 12px; }
 .subtle { color: #9baaa4; font-size: 11px; font-weight: 400; }

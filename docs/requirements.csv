@@ -185,7 +185,7 @@ SP-SQ-004,코드 인텔리전스,"호버 설명, 사용 위치 찾기, 정의로
 SP-SQ-005,리팩터링,식별자 이름 변경·별칭 변경·쿼리 포맷 변경 시 해당 범위의 참조 일관성 유지.,not_started,,
 SP-SQ-006,서식 도구,"SQL 포맷/축약, 대소문자·들여쓰기·줄바꿈 규칙, 방언별 사용자 서식 저장.",not_started,,
 SP-SQ-007,실행 범위,"전체/현재 문장/선택 영역/배치 실행, 세미콜론 및 프로시저 블록의 방언별 구분.",partial,"전체 입력 또는 선택 영역의 SQLite 읽기 전용 문장 하나 실행, 선택 영역 실행 계획과 실제 실행 범위 내보내기",src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs
-SP-SQ-008,결과 탭,"여러 결과 집합, 메시지·서버 통계·영향받은 행·실행 시간·에러 위치 분리.",not_started,,
+SP-SQ-008,결과 탭,"여러 결과 집합, 메시지·서버 통계·영향받은 행·실행 시간·에러 위치 분리.",partial,"열린 SQLite SQL 탭마다 마지막 조회 결과와 페이지 및 실행 계획을 메모리에 보관, 탭의 실행 입력으로 내보내기",src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs
 SP-SQ-009,실행 취소,"실행 중 쿼리의 취소·타임아웃, 서버 측 취소 성공 여부와 트랜잭션 상태 제시.",partial,"SQLite 조회 중단과 시간 초과, 완료 여부 표시",crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-SQ-010,파라미터 쿼리,"바인딩 변수·타입·값·기본값, 시크릿 변수 처리, 저장된 파라미터 세트.",partial,"SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-011,트랜잭션 관리,"자동 커밋 전환, BEGIN/COMMIT/ROLLBACK, 저장점, 열린 트랜잭션 경고.",not_started,,

@@ -30,6 +30,7 @@ async function waitForSavedLayout(invoke, verify) {
 }
 
 async function writeLayout(page, invoke) {
+  const editor = page.getByRole('textbox', { name: 'SQL 쿼리', exact: true });
   const secondProject = await invoke('create_project', { name: secondProjectName });
   const project = await invoke('create_project', { name: projectName });
   await invoke('create_sqlite_profile', {
@@ -46,12 +47,12 @@ async function writeLayout(page, invoke) {
   const projectSelect = page.getByLabel('프로젝트', { exact: true });
   await projectSelect.selectOption(secondProject.id);
   await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
-  await page.getByLabel('SQL 쿼리').fill(discardedDraft);
+  await editor.fill(discardedDraft);
   await projectSelect.selectOption(project.id);
   await page.getByRole('button', { name: new RegExp(profileName) }).click();
-  await page.getByLabel('SQL 쿼리').fill(draft);
+  await editor.fill(draft);
   await page.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
-  await page.getByLabel('SQL 쿼리').fill(discardedDraft + ' -- same connection');
+  await editor.fill(discardedDraft + ' -- same connection');
   await page.getByRole('tab', { name: 'SQL 1', exact: true }).click();
   await page.getByRole('button', { name: '화면 분할', exact: true }).click();
   await page.getByText('배치 설정', { exact: true }).click();
@@ -83,7 +84,7 @@ async function writeLayout(page, invoke) {
   await pending.getByText(`${secondProjectName} · ${secondProfileName}`, { exact: true }).waitFor();
   await exit.getByRole('button', { name: '계속 작업', exact: true }).click();
   await exit.waitFor({ state: 'detached' });
-  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
+  assert.equal(await editor.inputValue(), draft);
 
   toClose();
   await pending.getByRole('button', { name: `${projectName} · ${profileName} · SQL 1 SQL 파일로 저장`, exact: true }).click();
@@ -108,6 +109,7 @@ async function writeLayout(page, invoke) {
 }
 
 async function readLayout(page, invoke) {
+  const editor = page.getByRole('textbox', { name: 'SQL 쿼리', exact: true });
   await page.getByRole('heading', { name: new RegExp(profileName) }).waitFor();
   const record = await invoke('get_workspace_resume');
   assert.deepEqual(Object.keys(record.state).sort(), ['explorer_open', 'layout', 'profile_id', 'project_id']);
@@ -119,7 +121,7 @@ async function readLayout(page, invoke) {
   const rootSeparator = page.getByRole('separator', { name: '데이터베이스 · 터미널 창 크기', exact: true });
   assert.equal(await rootSeparator.getAttribute('aria-valuenow'), '60');
   assert.equal(await page.locator('#workspace-panes > .workspace-pane-slot:visible').count(), 4);
-  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), '');
+  assert.equal(await editor.inputValue(), '');
   await page.getByText('열린 터미널이 없습니다', { exact: true }).waitFor();
   await page.getByText('열린 원격 데스크톱 창이 없습니다.', { exact: true }).waitFor();
   await page.getByRole('button', { name: '탐색기 펼치기', exact: true }).click();
@@ -131,10 +133,10 @@ async function readLayout(page, invoke) {
   await fileDialog.getByLabel('SQL 파일 경로', { exact: true }).fill(savedFile());
   await fileDialog.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
   await fileDialog.waitFor({ state: 'detached' });
-  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), draft);
+  assert.equal(await editor.inputValue(), draft);
   await project.selectOption({ label: secondProjectName });
   await page.getByRole('button', { name: new RegExp(secondProfileName) }).click();
-  assert.equal(await page.getByLabel('SQL 쿼리').inputValue(), '');
+  assert.equal(await editor.inputValue(), '');
 }
 
 async function main() {

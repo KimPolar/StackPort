@@ -28,7 +28,7 @@ async function main() {
     await page.reload();
     const dev = page.getByRole('button', { name: /개발 DB DEV/ });
     const prod = page.getByRole('button', { name: /운영 DB PROD/ });
-    const editor = page.getByLabel('SQL 쿼리');
+    const editor = page.getByRole('textbox', { name: 'SQL 쿼리', exact: true });
     const sqlTabs = page.getByRole('tablist', { name: 'SQL 문서', exact: true });
     const initialTab = sqlTabs.getByRole('tab', { name: 'SQL 1', exact: true });
     const open = page.getByRole('button', { name: 'SQL 파일 열기', exact: true });
@@ -92,18 +92,65 @@ async function main() {
     await page.getByRole('cell', { name: '사용자 2', exact: true }).waitFor();
     assert.equal(await page.getByRole('cell', { name: '선택하지 않은 쿼리', exact: true }).count(), 0);
     await editor.press('Control+Enter');
-    await page.getByRole('button', { name: '결과 내보내기', exact: true }).click();
-    const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
-    const jsonPath = path.join(root, '선택 영역.json');
-    await exportDialog.getByLabel('파일 형식').selectOption('JSON');
-    await exportDialog.getByLabel('새 JSON 파일 경로').fill(jsonPath);
-    await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
-    await page.getByRole('status').getByText('JSON 내보내기 완료').waitFor();
-    const exported = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    const results = title => page.getByRole('region', { name: `${title} 쿼리 결과`, exact: true });
+    async function exportJson(result, fileName) {
+      const jsonPath = path.join(root, fileName);
+      await result.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+      const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+      await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+      await exportDialog.getByLabel('새 JSON 파일 경로').fill(jsonPath);
+      await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+      await page.getByRole('status').getByText('JSON 내보내기 완료').waitFor();
+      return JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+    }
+    const exported = await exportJson(results('새 쿼리.sql'), '선택 영역.json');
     assert.deepEqual(exported.columns, ['name']);
     assert.deepEqual(exported.rows, [['사용자 2']]);
     await editor.press('End');
     await page.getByRole('button', { name: '쿼리 실행', exact: true }).waitFor();
+
+    await initialTab.click();
+    const mainResult = results('SQL 1');
+    await mainResult.getByText('아직 조회 결과가 없습니다', { exact: true }).waitFor();
+    await editor.fill('SELECT name FROM people WHERE id >= :first ORDER BY id;');
+    async function runWithStart(button) {
+      await page.getByRole('button', { name: button, exact: true }).click();
+      await page.getByLabel(':first 형식').selectOption('integer');
+      await page.getByLabel(':first 값', { exact: true }).fill('3');
+      await page.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+    }
+    await runWithStart('쿼리 실행');
+    await mainResult.getByRole('cell', { name: '사용자 3', exact: true }).waitFor();
+    await mainResult.getByRole('button', { name: '다음 페이지', exact: true }).click();
+    await mainResult.getByRole('cell', { name: '사용자 103', exact: true }).waitFor();
+    await runWithStart('실행 계획');
+    await plan.getByText(/SEARCH people USING INTEGER PRIMARY KEY/).waitFor();
+    await copiedTab.click();
+    await results('새 쿼리.sql').getByRole('cell', { name: '사용자 2', exact: true }).waitFor();
+    assert.equal(await plan.count(), 0);
+    await initialTab.click();
+    await mainResult.getByRole('cell', { name: '사용자 103', exact: true }).waitFor();
+    await plan.getByText(/SEARCH people USING INTEGER PRIMARY KEY/).waitFor();
+    await prod.click();
+    await results('SQL 1').getByText('아직 조회 결과가 없습니다', { exact: true }).waitFor();
+    await dev.click();
+    await mainResult.getByRole('cell', { name: '사용자 103', exact: true }).waitFor();
+    await editor.fill('WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers');
+    await page.getByRole('button', { name: '쿼리 실행', exact: true }).click();
+    await page.getByRole('button', { name: '쿼리 중단', exact: true }).waitFor();
+    await copiedTab.click();
+    await results('새 쿼리.sql').getByRole('cell', { name: '사용자 2', exact: true }).waitFor();
+    await initialTab.click();
+    await mainResult.getByRole('cell', { name: '사용자 103', exact: true }).waitFor();
+    const unexecuted = "SELECT '실행하지 않은 변경';";
+    await editor.fill(unexecuted);
+    assert.equal(await plan.count(), 0);
+    const storedResult = await exportJson(mainResult, '실행한 결과.json');
+    assert.deepEqual(storedResult.columns, ['name']);
+    assert.equal(storedResult.rows.length, 203);
+    assert.deepEqual(storedResult.rows[0], ['사용자 3']);
+    assert.deepEqual(storedResult.rows.at(-1), ['사용자 205']);
+    await copiedTab.click();
 
     const pendingClose = page.getByRole('alertdialog', { name: 'SQL 탭 닫기', exact: true });
     const closingText = await editor.inputValue();
@@ -122,7 +169,7 @@ async function main() {
     await pendingClose.waitFor({ state: 'detached' });
     assert.equal(fs.readFileSync(recovery, 'utf8'), '\uFEFF' + closingText.replace(/\n/g, '\r\n'));
     assert.equal(await copiedTab.count(), 0);
-    assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
+    assert.equal(await editor.inputValue(), unexecuted);
 
     const add = page.getByRole('button', { name: '새 SQL 탭', exact: true });
     await add.click();
@@ -131,14 +178,14 @@ async function main() {
     await extra.press('Delete');
     await pendingClose.getByRole('button', { name: '변경 버리고 닫기', exact: true }).click();
     assert.equal(await extra.count(), 0);
-    assert.equal(await editor.inputValue(), "SELECT '기존 초안';");
+    assert.equal(await editor.inputValue(), unexecuted);
     await initialTab.press('Delete');
     await pendingClose.getByRole('button', { name: '변경 버리고 닫기', exact: true }).click();
     await page.getByText('열린 SQL 탭이 없습니다.', { exact: true }).waitFor();
     await add.click();
     assert.equal(await editor.inputValue(), '');
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, independent documents, close recovery, selection plan, query and export passed.');
+    console.log('SQL tabs, draft recovery, independent plans and results, pagination and exact exports passed.');
   } finally {
     await browser.close();
   }

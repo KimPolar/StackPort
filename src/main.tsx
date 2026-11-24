@@ -46,8 +46,10 @@ type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: I
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
 type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
-type SqlQueryTarget = { kind: "sql"; sql: string; parameters?: SqlParameterValue[]; explain?: boolean };
+type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string };
 type QueryTarget = SqlQueryTarget | { kind: "table"; request: TableQuery };
+type QueryResult = { profileId: string; page: QueryPage; target: QueryTarget };
+type SqlQueryView = { result: QueryResult | null; plan: { sql: string; data: QueryPlan } | null };
 type ActiveQuery = { kind: QueryTarget["kind"]; token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type SqlFileAction = { mode: "open"; target: SqlTarget } | { mode: "save"; draft: SqlDraft; closeAfter?: boolean };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
@@ -72,6 +74,7 @@ const objectSelectSql = (name: string) => `SELECT *\nFROM ${quoteIdentifier(name
 const displayPath = (path: string) => path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.startsWith("\\\\?\\") ? path.slice(4) : path;
 const initialSqlTabs = (target: SqlTarget) => addSqlTab(emptySqlTabs, target);
 const hasDirtySqlTabs = (groups: Record<string, SqlTabSet>) => Object.values(groups).some(group => group.tabs.some(isSqlDraftDirty));
+const emptySqlQueryView: SqlQueryView = { result: null, plan: null };
 
 function Dialog({ title, children, onClose, busy }: { title: string; children: React.ReactNode; onClose: () => void; busy: boolean }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -120,12 +123,12 @@ function App() {
   const [exitError, setExitError] = useState("");
   const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
   const [sqlSelection, setSqlSelection] = useState<{ start: number; end: number } | null>(null);
-  const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
+  const [sqlQueryViews, setSqlQueryViews] = useState<Record<string, SqlQueryView>>({});
+  const [tableQueryResult, setTableQueryResult] = useState<QueryResult | null>(null);
+  const [resultMode, setResultMode] = useState<QueryTarget["kind"]>("sql");
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[] } | null>(null);
-  const [queryPlan, setQueryPlan] = useState<{ sql: string; plan: QueryPlan } | null>(null);
-  const [result, setResult] = useState<QueryPage | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
@@ -181,6 +184,12 @@ function App() {
   } : null;
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
+  const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
+  const visibleQueryResult = resultMode === "table" ? tableQueryResult : sqlView.result;
+  const queryResult = visibleQueryResult?.profileId === profileId ? visibleQueryResult : null;
+  const result = queryResult?.page ?? null;
+  const executedQuery = queryResult?.target ?? null;
+  const queryPlan = sqlView.plan;
   const sql = sqlDraft?.document.text ?? "";
   const fileTarget = sqlFileAction && (sqlFileAction.mode === "save" ? sqlFileAction.draft : sqlFileAction.target);
   const sqlToRun = sqlSelection ? sql.slice(sqlSelection.start, sqlSelection.end) : sql;
@@ -269,11 +278,10 @@ function App() {
 
   useEffect(() => {
     let live = true;
-    abandonQuery();
+    resetActiveQuery();
     objectGeneration.current++;
-    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setExecutedQuery(null);
+    setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setTableQueryResult(null);
     setRestoreReport(null);
-    queryGeneration.current++;
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => {
         if (!live) return;
@@ -291,20 +299,16 @@ function App() {
 
   useEffect(() => {
     let live = true;
-    abandonQuery();
+    resetActiveQuery();
     const generation = ++objectGeneration.current;
-    setObjects([]); setResult(null); setExecutedQuery(null); setError("");
+    setObjects([]); setTableQueryResult(null); setResultMode("sql"); setError("");
     setSqlEditorOpen(true);
     setSqlSelection(null);
     setParameterRequest(null);
-    setQueryPlan(null);
     setExportReport(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
-    queryGeneration.current++;
-    setQuerying(false);
-    setCancelling(false); setQueryNotice("");
     if (profileId) {
       setLoading(true);
       call<DatabaseObject[]>("list_objects", { profileId })
@@ -385,7 +389,7 @@ function App() {
         ? { ...draft, document: { ...draft.document, text: value } } : draft),
     }));
     setSqlSelection(null);
-    setQueryPlan(null);
+    if (queryPlan) editSqlQueryView(sqlDraft.id, { plan: null });
   }
 
   function editSqlTabs(target: SqlTarget, edit: (group: SqlTabSet) => SqlTabSet) {
@@ -394,26 +398,44 @@ function App() {
     }));
   }
 
+  function editSqlQueryView(id: string, changes: Partial<SqlQueryView>) {
+    setSqlQueryViews(current => ({ ...current, [id]: { ...(current[id] ?? emptySqlQueryView), ...changes } }));
+  }
+
+  function forgetSqlQueryViews(ids: Set<string>) {
+    setSqlQueryViews(current => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
+  }
+
+  function removeSqlConnections(ids: Set<string>) {
+    if (ids.has(profileId)) {
+      resetActiveQuery();
+      setParameterRequest(null);
+    }
+    const tabs = [...ids].flatMap(id => sqlTabSets[id]?.tabs ?? []);
+    setSqlTabSets(current => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
+    forgetSqlQueryViews(new Set(tabs.map(draft => draft.id)));
+  }
+
+  function activateSqlView() {
+    if (resultMode !== "sql") setExportReport(null);
+    setResultMode("sql");
+  }
+
   function resetSqlView() {
+    activateSqlView();
     setSqlSelection(null);
-    setQueryPlan(null);
     setParameterRequest(null);
-    if (activeQuery.current?.kind === "sql") {
-      abandonQuery();
-      queryGeneration.current++;
-      setQuerying(false);
-      setCancelling(false);
-    }
-    if (!activeQuery.current) setQueryNotice("");
-    if (executedQuery?.kind === "sql") {
-      setResult(null);
-      setExecutedQuery(null);
-      setExportReport(null);
-    }
+    setExportReport(null);
+    if (activeQuery.current?.kind === "sql") resetActiveQuery();
+    else if (!activeQuery.current) setQueryNotice("");
   }
 
   function selectSqlTab(id: string) {
-    if (!sqlTarget || id === sqlTabs.activeId) return;
+    if (!sqlTarget) return;
+    if (id === sqlTabs.activeId) {
+      activateSqlView();
+      return;
+    }
     resetSqlView();
     editSqlTabs(sqlTarget, group => ({ ...group, activeId: id }));
   }
@@ -434,6 +456,7 @@ function App() {
     const activeId = wasActive ? (remaining[index] ?? remaining[index - 1])?.id ?? "" : group.activeId;
     if (wasActive && draft.profileId === profileId) resetSqlView();
     editSqlTabs(draft, previous => ({ ...previous, tabs: previous.tabs.filter(item => item.id !== draft.id), activeId }));
+    forgetSqlQueryViews(new Set([draft.id]));
     setClosingSqlTab(null);
     requestAnimationFrame(() => document.getElementById(activeId ? sqlTabButtonId(activeId) : "new-sql-tab")?.focus());
   }
@@ -509,6 +532,14 @@ function App() {
     if (task) { activeQuery.current = null; void requestCancellation(task); }
   }
 
+  function resetActiveQuery() {
+    abandonQuery();
+    queryGeneration.current++;
+    setQuerying(false);
+    setCancelling(false);
+    setQueryNotice("");
+  }
+
   function cancelCurrentQuery() {
     const task = activeQuery.current;
     if (!task || task.cancelRequested) return;
@@ -517,37 +548,39 @@ function App() {
   }
 
   function runQuery(query: string, explain = false) {
-    if (!query.trim()) return;
-    setQueryPlan(null);
-    void executeQuery({ kind: "sql", sql: query, explain });
+    if (!sqlDraft || !query.trim()) return;
+    if (queryPlan) editSqlQueryView(sqlDraft.id, { plan: null });
+    void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: explain ? sql : undefined });
   }
 
   async function executeQuery(target: QueryTarget, page = 0) {
-    if (!profileId) return;
+    if (!profileId || (target.kind === "sql" && target.tabId !== sqlDraft?.id)) return;
     abandonQuery();
     const generation = ++queryGeneration.current;
     const task: ActiveQuery = { kind: target.kind, token: null, cancelRequested: false, cancellation: null };
     activeQuery.current = task;
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
-    const sameQuery = target === executedQuery
-      || (target.kind === "sql" && !target.parameters && executedQuery?.kind === "sql" && !executedQuery.parameters && target.sql === executedQuery.sql);
-    if (!sameQuery && !(target.kind === "sql" && target.explain)) {
-      setResult(null);
-      setExecutedQuery(null);
+    const planning = target.kind === "sql" && target.planSource !== undefined;
+    if (!planning) {
+      if (resultMode !== target.kind) setExportReport(null);
+      setResultMode(target.kind);
+      if (target.kind === "table" && target !== tableQueryResult?.target) setTableQueryResult(null);
     }
     try {
       task.token = await call<string>("prepare_query");
       if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
       const args = { token: task.token, profileId, page };
       const response = target.kind === "sql"
-        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: target.explain })
+        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: planning })
         : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
-          setResult(response.result); setExecutedQuery(target);
+          const result = { profileId, page: response.result, target };
+          if (target.kind === "sql") editSqlQueryView(target.tabId, { result });
+          else setTableQueryResult(result);
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
-        } else if (response.status === "plan" && target.kind === "sql") {
-          setQueryPlan({ sql, plan: response.plan });
+        } else if (response.status === "plan" && target.kind === "sql" && target.planSource !== undefined) {
+          editSqlQueryView(target.tabId, { plan: { sql: target.planSource, data: response.plan } });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
           if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters });
           else setQueryNotice("쿼리 실행을 중단했습니다.");
@@ -717,13 +750,12 @@ function App() {
         await reloadProfiles(project.id, created.id);
       } else if (modal === "deleteProject" && project) {
         await call("delete_project", { id: project.id });
-        const removedProfiles = new Set(profiles.map(item => item.id));
-        setSqlTabSets(current => Object.fromEntries(Object.entries(current).filter(([id, group]) =>
-          !removedProfiles.has(id) && group.tabs[0]?.projectId !== project.id)));
+        const removedProfiles = Object.entries(sqlTabSets).filter(([, group]) => group.tabs[0]?.projectId === project.id).map(([id]) => id);
+        removeSqlConnections(new Set([...removedProfiles, ...profiles.map(item => item.id)]));
         await reloadProjects();
       } else if (modal === "deleteProfile" && project && profile) {
         await call("delete_profile", { id: profile.id });
-        setSqlTabSets(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== profile.id)));
+        removeSqlConnections(new Set([profile.id]));
         await reloadProfiles(project.id, "");
       } else if (modal === "backup" && profile) {
         const report = await call<BackupReport>("backup_sqlite", { profileId: profile.id, destination: path });
@@ -837,13 +869,25 @@ function App() {
       {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
       {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
       {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
-      {sqlEditorOpen && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
-      <div className="results-card database-results" aria-busy={querying}><div className="panel-heading">
-        <div className="result-identity"><Table2 size={16} aria-hidden /><strong title={executedQuery?.kind === "table" ? executedQuery.request.object : undefined}>{executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
+      {sqlEditorOpen && sqlDraft && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.data}
+        dismiss={() => editSqlQueryView(sqlDraft.id, { plan: null })} />}
+      <section className="results-card database-results" aria-label={resultMode === "sql" && sqlDraft ? `${sqlTabTitle(sqlDraft)} 쿼리 결과` : "쿼리 결과"}
+        aria-busy={querying && activeQuery.current?.kind === resultMode}><div className="panel-heading">
+        <div className="result-identity">
+          <Table2 size={16} aria-hidden />
+          <strong title={executedQuery?.kind === "table" ? executedQuery.request.object : undefined}>
+            {executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}
+          </strong>
+          {executedQuery?.kind === "sql" && sqlDraft && <span className="sql-result-source" title={sqlTabTitle(sqlDraft)}>{sqlTabTitle(sqlDraft)}</span>}
+          {result && <span className="result-count">{result.rows.length}개 행</span>}
+        </div>
         <div className="results-actions">
           {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
             setExportReport(null);
-            setExportRequest({ profile, query: executedQuery });
+            const query: ExportSource = executedQuery.kind === "table" ? executedQuery : {
+              kind: "sql", sql: executedQuery.sql, parameters: executedQuery.parameters,
+            };
+            setExportRequest({ profile, query });
           }}><FileDown size={14} /> 결과 내보내기</button>}
         </div>
       </div>
@@ -856,7 +900,7 @@ function App() {
         {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
         {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
           <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
-      </div>
+      </section>
     </>}
     {!profile && error && <div className="error-banner" role="alert">{error}</div>}
   </div>;
