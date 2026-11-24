@@ -1,7 +1,8 @@
-//! Read and hash a pair of files selected from the folder comparison.
+//! Hash a pair of files and generate a bounded comparison from the hashed bytes.
 
 use super::{
     file_error, open_local_file,
+    preview::utf8_prefix,
     transfer::{check_remote_snapshot, read_chunk, remote_file_size, request, CHUNK_SIZE},
     RemotePath, SftpManager, BROWSE_TIMEOUT,
 };
@@ -12,6 +13,9 @@ use sha2::{Digest, Sha256};
 use std::{io::Read, time::UNIX_EPOCH};
 
 const MAX_COMPARE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DIFFERENCE_BYTES: u64 = 64 * 1024;
+const HEX_ROW_BYTES: usize = 16;
+const MAX_HEX_ROWS: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +30,62 @@ pub struct FileContentComparison {
     matches: bool,
     local_sha256: String,
     remote_sha256: String,
+    difference: Option<FileDifference>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FileDifference {
+    Text {
+        local: String,
+        remote: String,
+    },
+    Binary {
+        differing_bytes: usize,
+        changed_rows: usize,
+        rows: Vec<HexRow>,
+    },
+    TooLarge,
+}
+
+#[derive(Serialize)]
+struct HexRow {
+    offset: usize,
+    local: Vec<u8>,
+    remote: Vec<u8>,
+}
+
+struct FileDigest {
+    sha256: String,
+    bytes: Option<Vec<u8>>,
+}
+
+struct DigestReader {
+    sha: Sha256,
+    bytes: Option<Vec<u8>>,
+}
+
+impl DigestReader {
+    fn new(size: u64) -> Self {
+        Self {
+            sha: Sha256::new(),
+            bytes: (size <= MAX_DIFFERENCE_BYTES).then(|| Vec::with_capacity(size as usize)),
+        }
+    }
+
+    fn update(&mut self, chunk: &[u8]) {
+        self.sha.update(chunk);
+        if let Some(bytes) = &mut self.bytes {
+            bytes.extend_from_slice(chunk);
+        }
+    }
+
+    fn finish(self) -> FileDigest {
+        FileDigest {
+            sha256: format!("{:x}", self.sha.finalize()),
+            bytes: self.bytes,
+        }
+    }
 }
 
 impl SftpManager {
@@ -37,18 +97,20 @@ impl SftpManager {
     ) -> Result<FileContentComparison> {
         let local = tokio::task::spawn_blocking(move || digest_local_file(&local));
         let (local, remote) = tokio::join!(local, self.digest_remote_file(id, remote));
-        let local_sha256 = local
+        let local = local
             .map_err(|_| "로컬 파일의 비교 작업을 완료할 수 없습니다.")?
             .map_err(|error| format!("로컬 파일 · {error}"))?;
-        let remote_sha256 = remote.map_err(|error| format!("원격 파일 · {error}"))?;
+        let remote = remote.map_err(|error| format!("원격 파일 · {error}"))?;
+        let matches = local.sha256 == remote.sha256;
         Ok(FileContentComparison {
-            matches: local_sha256 == remote_sha256,
-            local_sha256,
-            remote_sha256,
+            matches,
+            difference: (!matches).then(|| describe_difference(local.bytes, remote.bytes)),
+            local_sha256: local.sha256,
+            remote_sha256: remote.sha256,
         })
     }
 
-    async fn digest_remote_file(&self, id: &str, source: ComparedFile) -> Result<String> {
+    async fn digest_remote_file(&self, id: &str, source: ComparedFile) -> Result<FileDigest> {
         let session = self.session(id)?;
         let _operation = session
             .operation
@@ -73,12 +135,12 @@ impl SftpManager {
                 .attrs;
             check_remote_snapshot(&listed, &opened, size)?;
             let mut offset = 0;
-            let mut sha = Sha256::new();
+            let mut digest = DigestReader::new(size);
             while offset < size {
                 let amount = (size - offset).min(u64::from(CHUNK_SIZE)) as u32;
                 let data = read_chunk(files, &handle, offset, amount).await?;
                 offset += data.len() as u64;
-                sha.update(data);
+                digest.update(&data);
             }
             let finished = request(files.fstat(handle.clone()))
                 .await
@@ -87,13 +149,13 @@ impl SftpManager {
             check_remote_snapshot(&listed, &finished, size)?;
             let current = request(files.lstat(path)).await.map_err(file_error)?.attrs;
             check_remote_snapshot(&listed, &current, size)?;
-            Ok::<_, String>(format!("{:x}", sha.finalize()))
+            Ok::<_, String>(digest.finish())
         })
         .await;
         let closed = request(files.close(handle)).await.map_err(file_error);
-        let sha = digest.map_err(|_| "파일 내용 비교 시간이 초과되었습니다.")??;
+        let digest = digest.map_err(|_| "파일 내용 비교 시간이 초과되었습니다.")??;
         closed?;
-        Ok(sha)
+        Ok(digest)
     }
 }
 
@@ -112,7 +174,7 @@ fn check_listing(source: &ComparedFile, size: u64, modified: Option<u64>) -> Res
     Ok(())
 }
 
-fn digest_local_file(source: &ComparedFile) -> Result<String> {
+fn digest_local_file(source: &ComparedFile) -> Result<FileDigest> {
     let mut file = open_local_file(&source.location)?;
     let listed = file
         .metadata()
@@ -128,7 +190,7 @@ fn digest_local_file(source: &ComparedFile) -> Result<String> {
     )?;
     let mut reader = (&mut file).take(size + 1);
     let mut buffer = [0; CHUNK_SIZE as usize];
-    let mut sha = Sha256::new();
+    let mut digest = DigestReader::new(size);
     let mut received = 0;
     loop {
         let count = reader
@@ -137,7 +199,7 @@ fn digest_local_file(source: &ComparedFile) -> Result<String> {
         if count == 0 {
             break;
         }
-        sha.update(&buffer[..count]);
+        digest.update(&buffer[..count]);
         received += count as u64;
     }
     let current = file
@@ -146,7 +208,54 @@ fn digest_local_file(source: &ComparedFile) -> Result<String> {
     if received != size || current.len() != size || current.modified().ok() != modified {
         return Err("비교하는 동안 파일이 변경되었습니다. 폴더를 다시 비교하세요.".into());
     }
-    Ok(format!("{:x}", sha.finalize()))
+    Ok(digest.finish())
+}
+
+fn describe_difference(local: Option<Vec<u8>>, remote: Option<Vec<u8>>) -> FileDifference {
+    let (Some(local), Some(remote)) = (local, remote) else {
+        return FileDifference::TooLarge;
+    };
+    if let (Some(left), Some(right)) = (
+        utf8_prefix(&local, local.len() as u64),
+        utf8_prefix(&remote, remote.len() as u64),
+    ) {
+        return FileDifference::Text {
+            local: left.to_owned(),
+            remote: right.to_owned(),
+        };
+    }
+
+    let mut differing_bytes = 0;
+    let mut changed_rows = 0;
+    let mut rows = Vec::new();
+    let end = local.len().max(remote.len());
+    for offset in (0..end).step_by(HEX_ROW_BYTES) {
+        let local_row = local
+            .get(offset..local.len().min(offset + HEX_ROW_BYTES))
+            .unwrap_or_default();
+        let remote_row = remote
+            .get(offset..remote.len().min(offset + HEX_ROW_BYTES))
+            .unwrap_or_default();
+        let changed = (0..local_row.len().max(remote_row.len()))
+            .filter(|&index| local_row.get(index) != remote_row.get(index))
+            .count();
+        if changed > 0 {
+            differing_bytes += changed;
+            changed_rows += 1;
+            if rows.len() < MAX_HEX_ROWS {
+                rows.push(HexRow {
+                    offset,
+                    local: local_row.to_vec(),
+                    remote: remote_row.to_vec(),
+                });
+            }
+        }
+    }
+    FileDifference::Binary {
+        differing_bytes,
+        changed_rows,
+        rows,
+    }
 }
 
 #[cfg(test)]
@@ -166,13 +275,11 @@ mod tests {
             modified: None,
         };
         assert_eq!(
-            digest_local_file(&source).unwrap(),
+            digest_local_file(&source).unwrap().sha256,
             format!("{:x}", Sha256::digest(original))
         );
         fs::write(&path, b"new size").unwrap();
-        assert!(digest_local_file(&source)
-            .unwrap_err()
-            .contains("다시 비교"));
+        assert!(matches!(digest_local_file(&source), Err(error) if error.contains("다시 비교")));
     }
 
     #[test]
@@ -185,5 +292,34 @@ mod tests {
         assert!(check_listing(&source, MAX_COMPARE_BYTES + 1, None)
             .unwrap_err()
             .contains("16 MiB"));
+    }
+
+    #[test]
+    fn describes_text_unchanged_bytes_and_bounded_binary_rows() {
+        let left = "\u{feff}가\r\n".as_bytes().to_vec();
+        let right = "가\n".as_bytes().to_vec();
+        assert!(matches!(
+            describe_difference(Some(left.clone()), Some(right.clone())),
+            FileDifference::Text { local, remote } if local.as_bytes() == left && remote.as_bytes() == right
+        ));
+        assert!(matches!(
+            describe_difference(Some(left), None),
+            FileDifference::TooLarge
+        ));
+
+        let size = HEX_ROW_BYTES * (MAX_HEX_ROWS + 3);
+        let left = vec![0; size];
+        let mut right = left.clone();
+        for offset in (HEX_ROW_BYTES..size).step_by(HEX_ROW_BYTES) {
+            right[offset] = 0xff;
+        }
+        right.push(0xff);
+        assert!(matches!(
+            describe_difference(Some(left), Some(right)),
+            FileDifference::Binary { differing_bytes, changed_rows, rows }
+                if differing_bytes == MAX_HEX_ROWS + 3 && changed_rows == differing_bytes
+                    && rows.len() == MAX_HEX_ROWS && rows[0].offset == HEX_ROW_BYTES
+                    && rows[0].local[0] == 0 && rows[0].remote[0] == 0xff
+        ));
     }
 }

@@ -214,7 +214,7 @@ fn present(bytes: &[u8], size: u64) -> FilePreview {
     }
 }
 
-fn utf8_prefix(bytes: &[u8], size: u64) -> Option<&str> {
+pub(super) fn utf8_prefix(bytes: &[u8], size: u64) -> Option<&str> {
     let text = match std::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(error) if error.error_len().is_none() && size > bytes.len() as u64 => {

@@ -329,6 +329,20 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-hash summary { cursor: pointer; }
 .files-compare-hash dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; margin: 4px 0 0; }
 .files-compare-hash dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
+.file-difference-name { margin: 0 0 12px; overflow-wrap: anywhere; }
+.file-difference-scroll { max-height: 55vh; overflow: auto; border: 1px solid #dce9e1; border-radius: 6px; }
+.file-difference-table { font-variant-numeric: tabular-nums; }
+.file-difference-table td { vertical-align: top; }
+.file-difference-table tbody th { position: static; background: transparent; }
+.file-difference-lines td:last-child { width: 100%; }
+.file-difference-table td code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-difference-table .file-difference-gap td { background: #f5f8f6; color: #526a5f; text-align: center; }
+.file-difference-table .file-difference-added td { background: #eaf6ed; color: #26553b; }
+.file-difference-table .file-difference-removed td { background: #fcf0ed; color: #783d2c; }
+.file-difference-marker { display: inline-block; min-width: 15px; font-weight: 700; }
+.file-difference-ending { margin-inline: 4px; padding: 1px 3px; border: 1px solid currentColor; border-radius: 3px; font-size: 10px; }
+.file-difference-table td .file-difference-hex { display: inline-flex; gap: 4px; white-space: nowrap; }
+.file-difference-hex mark { padding: 0 1px; border-radius: 2px; background: #f9e4d4; color: #773815; font-weight: 700; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }

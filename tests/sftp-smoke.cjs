@@ -1253,6 +1253,15 @@ async function verifyFolderComparison(page, local, uploads) {
   remoteFile('비교 일치.txt', 'wxyz');
   localFile('비교 차이.txt', 'a');
   remoteFile('비교 차이.txt', 'long', time + 1);
+  localFile('줄 비교.txt', '\uFEFF머리\r\n원래 줄\r\n그대로\r\n마지막');
+  remoteFile('줄 비교.txt', '머리\n추가 줄\n다음 줄\n그대로\r\n마지막');
+  const originalBinary = Buffer.alloc(18, 0);
+  const changedBinary = Buffer.concat([originalBinary, Buffer.from([0xfe])]);
+  changedBinary[17] = 0xff;
+  localFile('바이트 비교.bin', originalBinary);
+  remoteFile('바이트 비교.bin', changedBinary);
+  localFile('큰 비교.bin', Buffer.alloc(65537, 0));
+  remoteFile('큰 비교.bin', Buffer.alloc(65537, 0xff));
   localFile('속성 확인.txt', 'test');
   remoteEntry('속성 확인.txt', { data: Buffer.from('test'), attrs: { mode: 0o100640 } });
   localFile('정리', 'directory mismatch');
@@ -1285,6 +1294,44 @@ async function verifyFolderComparison(page, local, uploads) {
   await compared.getByText(createHash('sha256').update('wxyz').digest('hex'), { exact: true }).waitFor();
   await filter.selectOption('issues');
   await compared.getByText('내용 다름', { exact: true }).waitFor();
+
+  const difference = page.getByRole('dialog', { name: '파일 차이', exact: true });
+  async function openDifference(name) {
+    const item = row(name);
+    await item.getByRole('button', { name: `${name} 내용 비교`, exact: true }).click();
+    await item.getByRole('button', { name: `${name} 차이 보기`, exact: true }).click();
+    await difference.getByText(name, { exact: true }).waitFor();
+  }
+  await openDifference('줄 비교.txt');
+  const text = difference.getByRole('table', { name: '텍스트 줄 비교', exact: true });
+  await difference.getByText('UTF-8 · 2줄 삭제 · 3줄 추가', { exact: true }).waitFor();
+  await text.getByText('BOM', { exact: true }).waitFor();
+  await text.getByText('CRLF', { exact: true }).first().waitFor();
+  const retained = text.getByRole('row').filter({ hasText: '그대로' });
+  assert.deepEqual(await retained.getByRole('cell').allTextContents(), ['3', '4', '그대로']);
+  await difference.getByRole('checkbox', { name: '공백 표시', exact: true }).check();
+  await text.getByText('추가·줄', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  await difference.waitFor({ state: 'hidden' });
+  await compare.waitFor();
+
+  await openDifference('바이트 비교.bin');
+  await difference.getByText('바이너리 · 같은 오프셋에서 2바이트 차이', { exact: true }).waitFor();
+  const bytes = difference.getByRole('table', { name: '바이너리 바이트 비교', exact: true });
+  const byteRow = bytes.getByRole('row').filter({ hasText: '00000010' });
+  assert.deepEqual(await byteRow.locator('mark').allTextContents(), ['00', '──', 'FF', 'FE']);
+  await difference.getByRole('button', { name: '닫기', exact: true }).click();
+  await difference.waitFor({ state: 'hidden' });
+  await compare.waitFor();
+
+  await filter.selectOption('all');
+  const large = row('큰 비교.bin');
+  await large.getByRole('button', { name: '큰 비교.bin 내용 비교', exact: true }).click();
+  await large.getByText('내용 다름', { exact: true }).waitFor();
+  await large.getByText(/차이 보기는 양쪽 파일 64 KiB 이하/).waitFor();
+  assert.equal(await large.getByRole('button', { name: '큰 비교.bin 차이 보기', exact: true }).count(), 0);
+  await filter.selectOption('issues');
+
   const changed = uploads.files.get(`${rootPath}/비교 일치.txt`);
   changed.data = Buffer.from('abcd');
   changed.attrs.mtime = time + 1;

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, X } from "lucide-react";
 import { displayFilePath, type Directory, type DirectoryLocation, type Entry } from "./fileBrowse";
+import { FileDifferenceDialog, type ViewableDifference } from "./FileDifferenceDialog";
+import type { FileDifference } from "./fileDifference";
 
 const names = new Intl.Collator("ko-KR", { numeric: true });
 const numbers = new Intl.NumberFormat("ko-KR");
@@ -17,7 +19,7 @@ type Visible = "all" | "issues" | "local" | "remote";
 export type FolderPair = { id: string; target: string; local: DirectoryLocation; remote: DirectoryLocation };
 type Comparison = { local: Directory; remote: Directory } | { errors: string[] };
 type FileSnapshot = { location: string; size: string | null; modified: number | null };
-type Content = { matches: boolean; local_sha256: string; remote_sha256: string };
+type Content = { matches: boolean; local_sha256: string; remote_sha256: string; difference: FileDifference | null };
 type ContentResult = Content | { error: string };
 
 export async function loadFolderComparison(pair: FolderPair): Promise<Comparison> {
@@ -91,6 +93,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
   const [visible, setVisible] = useState<Visible>("issues");
   const [content, setContent] = useState(new Map<string, ContentResult>());
   const [hashing, setHashing] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ name: string; difference: ViewableDifference } | null>(null);
   const hashPending = useRef(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
@@ -129,7 +132,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
     }
   }
 
-  return <dialog ref={dialog} className="dialog files-compare" aria-labelledby="files-compare-title" onClose={onClose}>
+  return <><dialog ref={dialog} className="dialog files-compare" aria-labelledby="files-compare-title" onClose={onClose}>
     <div className="dialog-heading">
       <h2 id="files-compare-title">폴더 비교</h2>
       <button type="button" className="icon-button" aria-label="닫기" onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
@@ -165,6 +168,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
           const local = fileSnapshot(row.local);
           const remote = fileSnapshot(row.remote);
           const checked = content.get(row.name);
+          const difference = checked && "difference" in checked ? checked.difference : null;
           return <tr key={row.name}>
             <th scope="row" title={row.name}>{row.name}</th>
             <td>
@@ -176,6 +180,10 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
                 {hashing === row.name && <span role="status">내용을 읽는 중…</span>}
                 {checked && ("error" in checked ? <p className="form-error" role="alert">{checked.error}</p> : <>
                   <span role="status">{checked.matches ? "내용 일치" : "내용 다름"}</span>
+                  {difference && (difference.kind === "too_large"
+                    ? <span className="files-compare-date">차이 보기는 양쪽 파일 64 KiB 이하에서 가능합니다.</span>
+                    : <button type="button" className="secondary small" aria-label={`${row.name} 차이 보기`}
+                      onClick={() => setSelection({ name: row.name, difference })}>차이 보기</button>)}
                   <details><summary>SHA-256</summary><dl>
                     <dt>로컬</dt><dd><code>{checked.local_sha256}</code></dd>
                     <dt>원격</dt><dd><code>{checked.remote_sha256}</code></dd>
@@ -189,5 +197,7 @@ export function FolderCompareDialog({ pair, initial, onClose }: { pair: FolderPa
       </table></div>}
       {folders && shown.length === 0 && <p className="form-note">이 조건에 해당하는 항목이 없습니다.</p>}
     </div>
-  </dialog>;
+  </dialog>
+    {selection && <FileDifferenceDialog {...selection} onClose={() => setSelection(null)} />}
+  </>;
 }
