@@ -5,7 +5,8 @@
  */
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const path = require('path');
-const { randomUUID } = require('crypto');
+const fs = require('fs');
+const { createHash, randomUUID } = require('crypto');
 const { execFileSync } = require('child_process');
 const database = process.env.STACKPORT_TEST_DATABASE;
 if (!database) throw new Error('Set STACKPORT_TEST_DATABASE to the isolated fixture path.');
@@ -155,9 +156,29 @@ async function main() {
   await page.getByLabel('새 백업 파일 경로').fill(backupPath);
   await page.getByRole('button', { name: '백업 만들기' }).click();
   await page.getByText('백업 생성 완료 · 무결성 검사 통과').waitFor();
+  const restoredPath = path.join(path.dirname(database), `restored-${randomUUID()}.sqlite`);
+  const originalBackup = fs.readFileSync(backupPath);
+  const backupSha = createHash('sha256').update(originalBackup).digest('hex');
+  mutateFixture("UPDATE people SET name='백업 이후 변경' WHERE id=1");
+  await page.getByRole('button', { name: 'SQLite 백업 복원' }).click();
+  await page.getByLabel('백업 파일 경로').fill(backupPath);
+  await page.getByLabel('새 복원 파일 경로').fill(database);
+  await page.getByRole('button', { name: '복원 미리보기' }).click();
+  await page.getByRole('alert').getByText('복원 대상 파일이 이미 있습니다.', { exact: false }).waitFor();
+  await page.getByLabel('새 복원 파일 경로').fill(restoredPath);
+  await page.getByRole('button', { name: '복원 미리보기' }).click();
+  const restoreDialog = page.getByRole('dialog', { name: 'SQLite 백업 복원' });
+  await restoreDialog.getByText(backupSha, { exact: true }).waitFor();
+  await restoreDialog.getByText('객체 1개 · 일반 테이블 1개 · 205행', { exact: false }).waitFor();
+  await page.keyboard.press('Enter');
+  if (fs.existsSync(restoredPath)) throw new Error('Preview published a file before restore confirmation.');
+  await page.getByRole('button', { name: '새 파일로 복원' }).click();
+  await page.getByRole('status').getByText('SQLite 복원 완료 · 검증 통과').waitFor();
+  if (!fs.readFileSync(restoredPath).equals(originalBackup)) throw new Error('Restored database differs from the verified backup.');
+  if (scalar('SELECT name FROM people WHERE id=1') !== '백업 이후 변경') throw new Error('Restore altered the active database.');
   await page.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).first().click();
-  await page.getByLabel('이름', { exact: true }).fill('백업 검증');
-  await page.getByLabel('SQLite 파일 경로').fill(backupPath);
+  await page.getByLabel('이름', { exact: true }).fill('복원 검증');
+  await page.getByLabel('SQLite 파일 경로').fill(restoredPath);
   await page.getByRole('button', { name: '저장' }).click();
   await page.getByRole('button', { name: 'people' }).click();
   await page.getByText('100개 행', { exact: true }).waitFor();
@@ -170,15 +191,16 @@ async function main() {
   await page.getByRole('button', { name: '작업 기록' }).click();
   await page.getByRole('heading', { name: '작업 기록' }).waitFor();
   await page.getByText('SQLite 백업', { exact: true }).first().waitFor();
+  await page.getByText('SQLite 복원', { exact: true }).first().waitFor();
   await page.getByText('SQLite 셀 변경', { exact: true }).first().waitFor();
   await page.getByText('실패', { exact: true }).first().waitFor();
   await page.getByText('완료', { exact: true }).first().waitFor();
   const history = await page.locator('.audit-panel').innerText();
-  if (history.includes(database) || history.includes('DELETE FROM people') || history.includes('수정된 사용자') || history.includes('운영 메모') || history.includes('concurrent-change')) {
+  if ([database, backupPath, restoredPath, backupSha, 'DELETE FROM people', '수정된 사용자', '운영 메모', 'concurrent-change'].some(privateValue => history.includes(privateValue))) {
     throw new Error('Audit UI unexpectedly included a file path, SQL text, or row data.');
   }
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite filters, sorting, pagination, query cancellation, editing, PROD confirmation, verified backup, and audit passed.');
+  console.log('SQLite browsing, query cancellation, editing, PROD confirmation, backup, verified restore, and audit passed.');
   await browser.close();
 }
 

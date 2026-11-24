@@ -5,6 +5,7 @@
 //! remain read-only. These restrictions avoid hidden cascading changes until a
 //! full impact planner exists.
 
+use super::quote_identifier as quote;
 use super::{
     display_value, insert_audit, open_schema_db, AuditRecord, Cell, ObjectDetails, Profile, Result,
     Store,
@@ -709,9 +710,6 @@ fn key_predicate(keys: &[(String, Value)]) -> (String, Vec<Value>) {
 fn schema_version(db: &Connection) -> Result<i64> {
     db.pragma_query_value(None, "schema_version", |row| row.get(0))
         .map_err(super::db_error)
-}
-fn quote(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 fn file_handle(path: impl AsRef<Path>) -> Result<Handle> {
     Handle::from_path(path).map_err(|e| format!("데이터베이스 파일을 확인할 수 없습니다: {e}"))

@@ -2,7 +2,7 @@
 
 use stackport_core::{
     AuditPage, BackupReport, DatabaseObject, EditInput, EditKey, EditPreview, EditResult,
-    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome,
+    EditSession, NetworkDiagnostics, NetworkManager, ObjectDetails, Profile, Project, QueryOutcome, RestorePreview, RestoreReport,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo, TerminalManager, TerminalRead,
 };
@@ -479,6 +479,40 @@ async fn backup_sqlite(
     worker(move || store.backup_sqlite(&profile_id, &destination)).await
 }
 
+#[tauri::command]
+async fn preview_sqlite_restore(
+    store: State<'_, Store>,
+    project_id: String,
+    source: String,
+    destination: String,
+) -> Result<RestorePreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_sqlite_restore(&project_id, &source, &destination)).await
+}
+
+#[tauri::command]
+async fn restore_sqlite(
+    store: State<'_, Store>,
+    token: String,
+    confirmed: bool,
+) -> Result<RestoreReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.restore_sqlite(&token, confirmed)).await
+}
+
+#[tauri::command]
+async fn choose_sqlite_restore_destination() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("새 SQLite 복원 파일 선택")
+            .set_file_name("stackport-restored.sqlite")
+            .add_filter("SQLite", &["sqlite", "sqlite3", "db", "db3"])
+            .save_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
@@ -542,7 +576,10 @@ fn main() {
             choose_ssh_identity_file,
             choose_ssh_profile_export_directory,
             choose_backup_directory,
-            backup_sqlite
+            backup_sqlite,
+            preview_sqlite_restore,
+            choose_sqlite_restore_destination,
+            restore_sqlite
         ])
         .run(tauri::generate_context!())
         .expect("StackPort 실행 실패");

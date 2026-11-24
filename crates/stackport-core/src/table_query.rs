@@ -1,7 +1,7 @@
 //! SQL for the SQLite object browser. Identifiers come from a schema snapshot,
 //! operators are fixed, and filter values are bound separately.
 
-use super::{ColumnInfo, Result, Store};
+use super::{quote_identifier, ColumnInfo, Result, Store};
 use rusqlite::{types::Value, Connection};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -198,8 +198,4 @@ fn source_column(columns: &[ColumnInfo], name: &str) -> Result<String> {
         .find(|column| column.name == name && column.hidden != 1)
         .ok_or("테이블 또는 뷰에 표시되는 열만 필터와 정렬에 사용할 수 있습니다.")?;
     Ok(format!("sp_source.{}", quote_identifier(&column.name)))
-}
-
-pub(crate) fn quote_identifier(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
 }

@@ -64,21 +64,22 @@ PARTIAL = {
     "SP-BK-002": "SQLite 온라인 백업 API",
     "SP-BK-003": "복원 가능한 SQLite 바이너리 파일",
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
-    "SP-BK-014": "백업 무결성 검사와 복원 테스트 상태 구분",
+    "SP-BK-013": "독립된 SQLite 백업의 새 복원 경로·버전·객체/행 수·SHA-256 미리보기",
+    "SP-BK-014": "SQLite 백업 검사와 별도 복원본을 열어 무결성·객체/행 수·SHA-256 검증",
     "SP-ST-006": "프로젝트와 연결 정의 저장",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
     "SP-SEC-003": "SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·고정과 변경 차단, 신뢰·교체 이력",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·복원·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
     "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1·v2 작업 공간을 백업한 뒤 트랜잭션으로 v3 이관",
     "SP-AT-025": "v1·v2 백업 후 v3 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
-    "SP-AT-016": "SQLite 백업 파일의 데이터·객체 재조회와 무결성 검사",
+    "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
@@ -106,7 +107,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         subset = PARTIAL.get(requirement_id, "")
         evidence = ""
         if subset:
-            if requirement_id.startswith("SP-BK-") or requirement_id == "SP-AT-016":
+            if requirement_id in {"SP-BK-013", "SP-BK-014", "SP-AT-016"}:
+                evidence = "crates/stackport-core/tests/restore.rs; tests/desktop-smoke.cjs; src/SqliteRestoreDialog.tsx; src-tauri/"
+            elif requirement_id.startswith("SP-BK-"):
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018", "SP-DB-022"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"

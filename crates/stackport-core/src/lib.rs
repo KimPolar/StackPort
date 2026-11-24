@@ -10,6 +10,8 @@ mod network;
 pub use network::{NetworkDiagnostics, NetworkManager};
 mod query;
 pub use query::QueryOutcome;
+mod restore;
+pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
 pub use table_query::TableQuery;
 mod ssh;
@@ -198,6 +200,7 @@ pub struct Store {
     path: PathBuf,
     edits: Arc<edit::EditManager>,
     queries: Arc<query::QueryManager>,
+    restore: Arc<restore::RestoreManager>,
 }
 
 impl Store {
@@ -211,6 +214,7 @@ impl Store {
             path: path.to_owned(),
             edits: Arc::new(edit::EditManager::default()),
             queries: Arc::new(query::QueryManager::default()),
+            restore: Arc::new(restore::RestoreManager::default()),
         };
         let mut db = store.connect()?;
         let version: i64 = db
@@ -734,6 +738,7 @@ impl Store {
 fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
     let policy = match record.operation {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }
@@ -853,6 +858,10 @@ fn valid_name(name: &str) -> Result<&str> {
     } else {
         Ok(name)
     }
+}
+
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 fn require_changed(changed: usize, message: &str) -> Result<()> {

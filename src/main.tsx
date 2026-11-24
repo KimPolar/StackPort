@@ -5,11 +5,12 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
   Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3,
-  Pencil, Plus, RefreshCw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
+  Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
+import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -85,6 +86,8 @@ function App() {
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editRequest, setEditRequest] = useState<EditRequest | null>(null);
   const [editReport, setEditReport] = useState<EditResult | null>(null);
@@ -132,6 +135,7 @@ function App() {
     abandonQuery();
     objectGeneration.current++;
     setProfiles([]); setSshProfiles([]); setProfileId(""); setObjects([]); setResult(null); setSql(""); setExecutedQuery(null);
+    setRestoreReport(null);
     queryGeneration.current++;
     if (projectId) {
       call<Profile[]>("list_profiles", { projectId }).then(items => { if (live) setProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
@@ -362,7 +366,10 @@ function App() {
             {projects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select><ChevronDown size={15} /></div>
           {project && <div className="project-actions"><button onClick={() => openModal("rename")}>이름 변경</button><button onClick={() => openModal("deleteProject")}>삭제</button></div>}
-          <div className="section-heading"><span>데이터베이스</span><button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button></div>
+          <div className="section-heading"><span>데이터베이스</span><div>
+            <button className="icon-button" onClick={() => { setRestoreOpen(true); setHistoryOpen(false); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
+            <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
+          </div></div>
           {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
           <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => setProfileId(item.id)}>
             {item.id === profileId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Database size={15} /><span>{item.name}</span><small>{item.environment}</small>
@@ -385,13 +392,20 @@ function App() {
           <div className="explorer-foot"><ShieldCheck size={15} /><span>연결 정보는 이 장치에 저장됩니다.</span></div>
         </aside>
         <main className="main-content">
+          {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
+            <strong>SQLite 복원 완료 · 검증 통과</strong>
+            <span>{displayPath(restoreReport.path)}</span>
+            <span>{restoreCounts(restoreReport)} · 무결성 및 SHA-256 일치</span>
+            <code>{restoreReport.sha256}</code>
+            {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
+          </div>}
           {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
           !project ? <EmptyState title="작업을 시작해 보세요" text="프로젝트를 만들고 SQLite 데이터베이스를 연결하세요." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
           !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
             <div className="content-header"><div><div className="breadcrumbs">{project.name} <ChevronRight size={14} /> 데이터베이스</div><h1><Database size={21} /> {profile.name} <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} /> {displayPath(profile.path)}</p></div>
               <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
             </div>
-            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>격리된 환경에서의 복원 테스트는 수행하지 않았습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
+            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
             {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
             <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button> : <button className="primary small" disabled={!sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>}</div>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
@@ -428,6 +442,7 @@ function App() {
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : "저장"}</button></div>
     </form></Dialog>}
     {editRequest && <EditDialog request={editRequest} onClose={() => setEditRequest(null)} onApplied={report => { setEditRequest(null); setEditReport(report); if (result && executedQuery) void executeQuery(executedQuery, result.page); }} />}
+    {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
@@ -475,6 +490,7 @@ function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mo
 const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.delete": "프로젝트 삭제",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
+  "sqlite.restore": "SQLite 복원",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
 };
