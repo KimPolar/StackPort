@@ -9,7 +9,7 @@
 .schema-compare-list .object-search { margin: 0 0 10px; }
 .schema-compare-list .field { margin-bottom: 6px; }
 .schema-compare-list ul { list-style: none; display: grid; gap: 4px; margin: 0; padding: 2px; max-height: 45vh; overflow: auto; }
-.schema-compare-list li { min-width: 0; }
+.schema-compare-list li { min-width: 0; display: flex; align-items: center; gap: 5px; }
 .schema-compare-list li button { display: grid; gap: 2px; width: 100%; padding: 6px 7px; border: 0; border-radius: 5px; background: transparent; color: var(--text); text-align: start; font-size: 12px; }
 .schema-compare-list li button:hover, .schema-compare-list li button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-accent); }
 .schema-compare-list li strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -26,5 +26,7 @@
 .schema-compare-ddl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px; }
 .schema-compare-ddl h4 { margin: 6px 0 2px; }
 .schema-compare-pages { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.schema-compare-body .schema-sync-review { padding: 0; font-size: 12px; }
+.schema-sync-review pre { max-height: 34vh; overflow: auto; background: var(--surface-inset); padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
 @media (max-width: 760px) { .schema-compare-grid { grid-template-columns: 1fr; } .schema-compare-list ul { max-height: 135px; } }
 @media (forced-colors: active) { .schema-compare-list button[aria-pressed="true"] { outline: 1px solid Highlight; } }

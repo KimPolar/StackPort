@@ -347,7 +347,7 @@ async function main() {
     await verifySqlSchemaDocument(page, editor);
     await verifySqlSchemaComparison(page, editor, invoke, isolatedPath);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, schema comparison, plans, batches, result pins and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, schema comparison and sync, plans, batches, result pins and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -1167,6 +1167,28 @@ async function verifySqlSchemaComparison(page, editor, invoke, source) {
   await page.getByRole('option', { name: /SQLite 스키마 비교/, selected: true }).waitFor();
   await commands.press('Enter');
   await targetSelect.waitFor();
+  await targetSelect.selectOption({ label: '스키마 비교 별도 프로젝트 / 스키마 대상 · STAGING' });
+  await run.click();
+  await search.fill('staff');
+  await list.getByRole('checkbox', { name: 'staff 적용 선택', exact: true }).check();
+  await dialog.getByRole('button', { name: '선택한 변경 검토 (1)', exact: true }).click();
+  assert.match(await dialog.getByLabel('적용할 SQL').textContent(), /CREATE TABLE staff/);
+  const backup = path.join(process.env.STACKPORT_TEST_ROOT, 'schema-target-before.sqlite');
+  await dialog.getByRole('textbox', { name: '대상 사전 백업 경로', exact: true }).fill(backup);
+  await dialog.getByRole('checkbox', { name: '선택한 대상 백업과 SQL을 검토했습니다.', exact: true }).check();
+  await dialog.getByRole('button', { name: '백업 후 적용', exact: true }).click();
+  await dialog.getByText('객체 1개 적용 및 검증 완료', { exact: true }).waitFor();
+  await dialog.getByText(/^일치 1개 ·/).waitFor();
+  const updated = new DatabaseSync(target, { readOnly: true });
+  const snapshot = new DatabaseSync(backup, { readOnly: true });
+  try {
+    assert.equal(updated.prepare('SELECT count(*) AS count FROM staff').get().count, 0);
+    assert.equal(snapshot.prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name = 'staff'").get().count, 0);
+  } finally {
+    updated.close();
+    snapshot.close();
+  }
+  assert.deepEqual(fs.readFileSync(source), originalSource);
   await dialog.getByRole('button', { name: '스키마 비교 닫기', exact: true }).click();
   await dialog.waitFor({ state: 'detached' });
 }

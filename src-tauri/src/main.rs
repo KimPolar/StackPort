@@ -6,7 +6,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
-    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport,
+    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaComparison, SchemaComparisonConnection, SchemaDocumentFormat, SchemaDocumentReport, SchemaSyncPreview, SchemaSyncReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
@@ -325,6 +325,25 @@ async fn compare_sqlite_schema(store: State<'_, Store>, source_id: String, targe
 async fn schema_comparison_connections(store: State<'_, Store>) -> Result<Vec<SchemaComparisonConnection>, String> {
     let store = store.inner().clone();
     worker(move || store.schema_comparison_connections()).await
+}
+
+#[tauri::command]
+async fn preview_schema_sync(store: State<'_, Store>, source_id: String, target_id: String, objects: Vec<String>) -> Result<SchemaSyncPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_schema_sync(&source_id, &target_id, &objects)).await
+}
+
+#[tauri::command]
+async fn cancel_schema_sync(store: State<'_, Store>, token: String) -> Result<(), String> {
+    store.cancel_schema_sync(&token)
+}
+
+#[tauri::command]
+async fn apply_schema_sync(
+    store: State<'_, Store>, token: String, destination: String, confirmed: bool, production: String,
+) -> Result<SchemaSyncReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.apply_schema_sync(&token, &destination, confirmed, &production)).await
 }
 
 #[tauri::command]
@@ -1233,6 +1252,9 @@ fn main() {
             sqlite_schema_diagram,
             compare_sqlite_schema,
             schema_comparison_connections,
+            preview_schema_sync,
+            cancel_schema_sync,
+            apply_schema_sync,
             choose_sqlite_schema_document_path,
             export_sqlite_schema_document,
             sql_completion_catalog,

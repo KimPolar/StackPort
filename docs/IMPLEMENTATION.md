@@ -14,7 +14,9 @@ SQLite 연결 헤더의 **관계도** 또는 명령 팔레트에서 읽기 전�
 
 관계도나 명령 팔레트의 **SQLite 데이터 사전**에서 선택한 스키마 객체 또는 기본 스키마의 전체 테이블·뷰를 UTF-8 Markdown 또는 단일 HTML 파일로 저장합니다. 열 유형·기본값·생성 열 특성, 선언된 키와 외래 키 대응, 인덱스와 트리거를 문서화합니다. SQLite에 저장된 생성 SQL을 함께 실으므로 해당 정의의 제약식과 주석을 읽을 수 있습니다. 한 읽기 스냅샷에서 최대 512개 객체의 스키마 메타데이터를 가져와 최대 16 MiB의 새 파일로 저장합니다. 작업 기록에는 연결과 객체 수가 남습니다. [SQLite 스키마](https://www.sqlite.org/fileformat2.html) · [SQLite 메타데이터 PRAGMA](https://www.sqlite.org/pragma.html)
 
-관계도나 명령 팔레트의 **SQLite 스키마 비교**에서 활성 프로젝트의 기준·대상 연결을 선택합니다. 각 파일의 독립 읽기 스냅샷에서 기본 스키마의 최대 512개 객체를 읽고, 한쪽에만 있는 객체와 달라진 정의를 보여줍니다. 열·키·인덱스·트리거와 저장된 정의 SQL을 비교합니다. 정의 SQL의 주석과 공백 차이도 표시 범위에 포함됩니다. 기준에만 있는 일반 테이블·뷰의 생성, 대상에만 있는 객체의 삭제, 양쪽에 있는 뷰의 재정의는 복사할 수 있는 SQL 초안으로 제공합니다. 이 화면에서 지원하는 작업은 조회와 초안 검토입니다. [SQLite ALTER TABLE](https://sqlite.org/lang_altertable.html)
+관계도나 명령 팔레트의 **SQLite 스키마 비교**에서 보관되지 않은 프로젝트의 기준·대상 연결을 선택합니다. 각 파일의 독립 읽기 스냅샷에서 기본 스키마의 최대 512개 객체를 읽고, 한쪽에만 있는 객체와 달라진 정의를 보여줍니다. 열·키·인덱스·트리거와 저장된 정의 SQL을 비교합니다. 정의 SQL의 주석과 내부 공백 차이도 표시 범위에 포함됩니다. 기준에만 있는 일반 테이블·뷰의 생성, 대상에만 있는 객체의 삭제, 양쪽에 있는 뷰의 재정의는 복사할 수 있는 SQL 초안으로 제공합니다. [SQLite ALTER TABLE](https://sqlite.org/lang_altertable.html)
+
+**선택한 변경 검토**에서 한 번에 최대 32개의 새 일반 테이블·뷰와 출력 열이 같은 뷰 재정의를 검토합니다. `PROD` 대상에는 직접 확인 입력이 필요합니다. 적용할 때 양쪽 파일과 스키마가 검토와 일치하는지 확인하고, 대상 쓰기 잠금을 얻은 상태에서 새 백업 파일을 생성하고 무결성을 검사합니다. 이어 한 트랜잭션에서 적용한 뒤 선택한 정의·뷰 열·외래 키를 검사합니다. 적용이나 검증에 실패하면 대상 구조를 되돌리고 사전 백업 파일을 보존합니다. 테이블 행 복사와 기존 테이블 변경·삭제는 미리보기의 적용 범위에서 제외됩니다. [SQLite Online Backup API](https://sqlite.org/c3ref/backup_finish.html) · [SQLite PRAGMA](https://sqlite.org/pragma.html)
 
 공통 작업 공간의 상단에는 현재 프로젝트와 작업 기록, 도구 전환을 배치합니다. 어느 도구에서든 프로젝트 탐색기를 펼치거나 접을 수 있습니다. 탐색기에서 SQLite 연결·객체를 선택하면 데이터베이스 화면이 열리고, 저장된 SSH 연결을 선택하면 해당 연결 설정과 터미널로 이동합니다. 도구 버튼에 초점이 있을 때 좌우 화살표와 Home·End로 이동하고 Enter로 엽니다. 열려 있는 터미널과 RDP 작업 수는 다른 도구에서도 표시합니다. 원격 파일 화면의 연결 표시는 연결할 때의 프로젝트와 서버를 계속 보여줍니다. [PuTTY의 저장된 세션](https://the.earth.li/~sgtatham/putty/latest/htmldoc/Chapter4.html#config-saving) · [Navicat의 객체 탐색](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html) · [MobaXterm의 세션 관리](https://mobaxterm.mobatek.net/documentation.html)
 

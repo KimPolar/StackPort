@@ -1545,7 +1545,9 @@ function App() {
         onClose={() => setDiagramProfile(null)} />
     </React.Suspense>}
     {profile && schemaComparisonSource === profile.id && <React.Suspense fallback={null}>
-      <SchemaComparisonDialog initial={schemaComparisonSource} onClose={() => setSchemaComparisonSource(null)} />
+      <SchemaComparisonDialog initial={schemaComparisonSource} onClose={() => setSchemaComparisonSource(null)}
+        onBusy={busy => { localFileBusy.current = busy; }}
+        onApplied={id => { if (id === profileId) void refreshObjects(); }} />
     </React.Suspense>}
     {profile && schemaDocumentRequest?.profileId === profile.id && <React.Suspense fallback={null}>
       <SchemaDocumentDialog profile={profile} object={schemaDocumentRequest.object}
@@ -1609,6 +1611,7 @@ const auditOperationNames: Record<string, string> = {
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.schema.export": "SQLite 데이터 사전 저장",
+  "sqlite.schema.sync": "SQLite 스키마 변경 적용",
   "sqlite.restore": "SQLite 복원",
   "sqlite.export.csv": "SQLite CSV 내보내기",
   "sqlite.export.json": "SQLite JSON 내보내기",

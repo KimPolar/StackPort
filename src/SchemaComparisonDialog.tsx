@@ -15,8 +15,11 @@ type Difference = {
   target_ddl: string | null;
   members: Member[];
   draft_sql: string | null;
+  can_apply: boolean;
 };
 type Comparison = { unchanged: number; changes: Difference[] };
+type SyncPreview = { token: string; objects: string[]; sql: string; requires_production_confirmation: boolean };
+type SyncReport = { objects: number; backup_path: string; audit_warning: string | null };
 const labels: Record<Status, string> = { source_only: "기준에만 있음", target_only: "대상에만 있음", changed: "정의가 다름" };
 const describeKind = (kind: string | null) => kind === null ? "없음" : kind === "view" ? "뷰" : "테이블";
 const displayName = (name: string) => name || "(빈 이름)";
@@ -64,9 +67,11 @@ function ObjectDifference({ change }: { change: Difference }) {
   </section>;
 }
 
-export function SchemaComparisonDialog({ initial, onClose }: {
+export function SchemaComparisonDialog({ initial, onClose, onBusy, onApplied }: {
   initial: string;
   onClose: () => void;
+  onBusy: (busy: boolean) => void;
+  onApplied: (target: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pending = useRef(false);
@@ -79,6 +84,13 @@ export function SchemaComparisonDialog({ initial, onClose }: {
   const [filter, setFilter] = useState<Status | "all">("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  const [applyNames, setApplyNames] = useState<string[]>([]);
+  const [review, setReview] = useState<SyncPreview | null>(null);
+  const [backup, setBackup] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [production, setProduction] = useState("");
+  const [reviewFailed, setReviewFailed] = useState(false);
+  const [applied, setApplied] = useState<SyncReport | null>(null);
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
     let live = true;
@@ -92,7 +104,55 @@ export function SchemaComparisonDialog({ initial, onClose }: {
     return () => { live = false; };
   }, [initial]);
 
-  function clear() { setResult(null); setError(""); setSelected(null); }
+  function clear() { setResult(null); setError(""); setSelected(null); setApplyNames([]); setApplied(null); }
+
+  function closeReview() {
+    if (review) void invoke("cancel_schema_sync", { token: review.token }).catch(() => {});
+    setReview(null);
+    setError("");
+  }
+
+  async function prepareReview() {
+    if (pending.current || !applyNames.length) return;
+    pending.current = true;
+    setBusy(true); setError(""); setConfirmed(false); setProduction(""); setReviewFailed(false);
+    try {
+      setReview(await invoke<SyncPreview>("preview_schema_sync", { sourceId: source, targetId: target, objects: applyNames }));
+    } catch (reason) { setError(String(reason)); }
+    finally { pending.current = false; setBusy(false); }
+  }
+
+  async function chooseBackup() {
+    if (pending.current) return;
+    pending.current = true;
+    setBusy(true); onBusy(true);
+    try {
+      const folder = await invoke<string | null>("choose_backup_directory");
+      if (folder !== null) {
+        const separator = /[\\/]$/.test(folder) ? "" : folder.includes("\\") ? "\\" : "/";
+        setBackup(folder + separator + "StackPort-before-schema.sqlite");
+      }
+    } catch (reason) { setError(String(reason)); }
+    finally { pending.current = false; setBusy(false); onBusy(false); }
+  }
+
+  async function applyReview() {
+    if (!review || pending.current || reviewFailed || !confirmed || !backup.trim()
+      || (review.requires_production_confirmation && production !== "PROD")) return;
+    pending.current = true;
+    setBusy(true); onBusy(true); setError("");
+    try {
+      const report = await invoke<SyncReport>("apply_schema_sync", { token: review.token, destination: backup.trim(), confirmed, production });
+      clear();
+      setReview(null); setApplied(report);
+      onApplied(target);
+      try {
+        setResult(await invoke<Comparison>("compare_sqlite_schema", { sourceId: source, targetId: target }));
+      } catch (reason) { setError(String(reason)); }
+    } catch (reason) {
+      setError(String(reason)); setReviewFailed(true);
+    } finally { pending.current = false; setBusy(false); onBusy(false); }
+  }
 
   async function compare() {
     if (pending.current || !source || !target || source === target) return;
@@ -116,12 +176,39 @@ export function SchemaComparisonDialog({ initial, onClose }: {
     {profile.project_name} / {profile.name} · {profile.environment}
   </option>);
 
-  return <dialog ref={dialog} className="dialog schema-comparison-dialog" aria-labelledby="schema-comparison-title" onClose={onClose}
+  return <dialog ref={dialog} className="dialog schema-comparison-dialog" aria-labelledby="schema-comparison-title"
+    onClose={() => { closeReview(); onClose(); }}
     onCancel={event => { if (busy) event.preventDefault(); }}>
     <div className="dialog-heading"><h2 id="schema-comparison-title">SQLite 스키마 비교</h2>
       <button type="button" className="icon-button" disabled={busy} aria-label="스키마 비교 닫기" onClick={() => dialog.current?.close()}><X size={17} aria-hidden /></button>
     </div>
     <div className="schema-compare-body">
+      {review ? <form className="schema-sync-review" onSubmit={event => { event.preventDefault(); void applyReview(); }}>
+        <h3>스키마 변경 검토</h3>
+        <p className="form-note">대상 연결 {profiles?.find(profile => profile.id === target)?.project_name} / {profiles?.find(profile => profile.id === target)?.name}</p>
+        <p className="form-note">선택한 객체 {review.objects.length}개 · {review.objects.map(displayName).join(", ")}</p>
+        <pre aria-label="적용할 SQL" tabIndex={0}>{review.sql}</pre>
+        <div className="field">
+          <label htmlFor="schema-sync-backup">대상 사전 백업 경로</label>
+          <div className="file-input">
+            <input id="schema-sync-backup" required value={backup} disabled={busy} onChange={event => setBackup(event.target.value)}
+              placeholder="새 .sqlite 파일의 절대 경로" />
+            <button type="button" className="secondary" disabled={busy} onClick={() => void chooseBackup()}>폴더 선택</button>
+          </div>
+        </div>
+        <label className="files-check"><input type="checkbox" checked={confirmed} disabled={busy}
+          onChange={event => setConfirmed(event.target.checked)} />선택한 대상 백업과 SQL을 검토했습니다.</label>
+        {review.requires_production_confirmation && <label className="field">운영 환경 확인
+          <input value={production} placeholder="PROD" disabled={busy} onChange={event => setProduction(event.target.value)} />
+        </label>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        {busy && <p className="form-note" role="status">스키마 변경을 처리하고 있습니다…</p>}
+        <div className="dialog-actions">
+          <button type="button" className="secondary" disabled={busy} onClick={closeReview}>비교로 돌아가기</button>
+          <button type="submit" className="primary" disabled={busy || reviewFailed || !confirmed || !backup.trim()
+            || (review.requires_production_confirmation && production !== "PROD")}>백업 후 적용</button>
+        </div>
+      </form> : <>
       {!profiles && !error && <p className="form-note" role="status">SQLite 연결을 불러오는 중…</p>}
       {profiles && profiles.length < 2 && <p className="form-note" role="status">비교할 SQLite 연결을 두 개 이상 등록하세요.</p>}
       {profiles && profiles.length >= 2 && <form className="schema-compare-controls" onSubmit={event => { event.preventDefault(); void compare(); }}>
@@ -139,6 +226,11 @@ export function SchemaComparisonDialog({ initial, onClose }: {
       </form>}
       {busy && <p role="status" className="form-note">스키마를 읽고 있습니다…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
+      {applied && <div className="success-banner" role="status">
+        <strong>객체 {applied.objects}개 적용 및 검증 완료</strong>
+        <span>사전 백업 {applied.backup_path}</span>
+        {applied.audit_warning && <span>{applied.audit_warning}</span>}
+      </div>}
       {result && <>
         <p role="status" className="form-note">
           일치 {result.unchanged}개 · 기준에만 {result.changes.filter(change => change.status === "source_only").length}개
@@ -158,11 +250,22 @@ export function SchemaComparisonDialog({ initial, onClose }: {
               <button type="button" aria-pressed={current?.name === change.name} onClick={() => setSelected(change.name)}>
                 <strong>{displayName(change.name)}</strong><small>{labels[change.status]}</small>
               </button>
+              {change.can_apply && <input type="checkbox" aria-label={displayName(change.name) + " 적용 선택"}
+                disabled={busy || (applyNames.length >= 32 && !applyNames.includes(change.name))}
+                checked={applyNames.includes(change.name)} onChange={event => {
+                  const checked = event.target.checked;
+                  setApplyNames(current => checked ? [...current, change.name] : current.filter(name => name !== change.name));
+                }} />}
             </li>)}</ul>
             {!found.length && <p role="status" className="form-note">조건에 맞는 객체가 없습니다.</p>}
           </aside>
           {current && <ObjectDifference key={current.name} change={current} />}
         </div>}
+        {result.changes.some(change => change.can_apply) && <div className="dialog-actions">
+          <button type="button" className="secondary" disabled={busy || !applyNames.length}
+            onClick={() => void prepareReview()}>선택한 변경 검토 ({applyNames.length})</button>
+        </div>}
+      </>}
       </>}
     </div>
   </dialog>;

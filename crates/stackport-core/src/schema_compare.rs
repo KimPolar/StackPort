@@ -44,6 +44,7 @@ pub struct SchemaObjectDifference {
     pub target_ddl: Option<String>,
     pub members: Vec<SchemaMemberDifference>,
     pub draft_sql: Option<String>,
+    pub can_apply: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,7 +122,7 @@ impl Store {
     }
 }
 
-fn catalog_names(db: &Connection) -> Result<BTreeMap<String, String>> {
+pub(super) fn catalog_names(db: &Connection) -> Result<BTreeMap<String, String>> {
     let names = Store::schema_object_names(db, true, None, MAX_OBJECTS + 1)?;
     if names.len() > MAX_OBJECTS {
         return Err(format!(
@@ -134,6 +135,19 @@ fn catalog_names(db: &Connection) -> Result<BTreeMap<String, String>> {
         .collect())
 }
 
+pub(super) fn object_difference(
+    source: &Connection,
+    source_name: &str,
+    target: &Connection,
+    target_name: Option<&str>,
+) -> Result<Option<SchemaObjectDifference>> {
+    let source = read_object(source, source_name)?;
+    let target = target_name
+        .map(|name| read_object(target, name))
+        .transpose()?;
+    Ok(compare_object(Some(source), target))
+}
+
 struct ComparedObject {
     details: ObjectDetails,
     definitions: Vec<SchemaDefinition>,
@@ -141,15 +155,25 @@ struct ComparedObject {
 }
 
 fn read_object(db: &Connection, name: &str) -> Result<ComparedObject> {
-    let details = Store::describe_object_on(db, name)
+    let mut details = Store::describe_object_on(db, name)
         .map_err(|error| format!("{name} 구조를 읽을 수 없습니다. {error}"))?;
+    let mut definitions = Store::schema_definitions(db, name)?;
+    // SQLite can retain the newline before a script's terminating semicolon.
+    for sql in details
+        .object
+        .ddl
+        .iter_mut()
+        .chain(definitions.iter_mut().map(|definition| &mut definition.sql))
+    {
+        sql.truncate(sql.trim_ascii_end().len());
+    }
     let mut keys = BTreeMap::<_, Vec<_>>::new();
     for key in &details.foreign_keys {
         keys.entry(key.id).or_default().push(key.clone());
     }
     Ok(ComparedObject {
         details,
-        definitions: Store::schema_definitions(db, name)?,
+        definitions,
         keys: keys.into_values().collect(),
     })
 }
@@ -254,6 +278,16 @@ fn compare_object(
         }
         _ => None,
     };
+    let can_apply = draft_sql.is_some()
+        && match (&status, source.as_ref(), target.as_ref()) {
+            (SchemaDifferenceStatus::SourceOnly, _, _) => true,
+            (SchemaDifferenceStatus::Changed, Some(source), Some(target)) => {
+                source.details.object.kind == "view"
+                    && target.details.object.kind == "view"
+                    && source.details.columns == target.details.columns
+            }
+            _ => false,
+        };
     Some(SchemaObjectDifference {
         name,
         status,
@@ -263,6 +297,7 @@ fn compare_object(
         target_ddl,
         members,
         draft_sql,
+        can_apply,
     })
 }
 

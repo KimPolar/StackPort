@@ -255,11 +255,11 @@ SP-MG-010,전송 타입 매핑,소스/타깃 타입·길이·정밀도·인코�
 SP-MG-011,전송 범위,전체 테이블·부분 열·필터·조건 쿼리·분할 범위·정렬 키·증분 기준 선택.,not_started,,
 SP-MG-012,구조 포함 전송,"테이블 생성과 데이터 삽입을 한 작업으로 처리, 지원하지 않는 DDL은 수동 수정 안내.",not_started,,
 SP-MG-013,구조 비교,테이블/컬럼/인덱스/뷰/제약/함수 등 객체 차이 분석 및 적용 스크립트 생성.,partial,"SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs
-SP-MG-014,구조 동기화,"소스→대상 구조 변경 계획, 선택 적용, 백업/롤백 스크립트 생성 가능 여부 표기.",not_started,,
+SP-MG-014,구조 동기화,"소스→대상 구조 변경 계획, 선택 적용, 백업/롤백 스크립트 생성 가능 여부 표기.",partial,SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용,crates/stackport-core/src/schema_sync.rs; crates/stackport-core/tests/schema_sync.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs
 SP-MG-015,데이터 비교,"PK/사용자 키 기반 행 수준 추가·삭제·변경 탐지, 양쪽 값 시각적 비교.",not_started,,
 SP-MG-016,데이터 동기화,"소스→대상/양방향 정책, 충돌 해결(우선순위·수동), 삭제/삽입/수정 선택.",not_started,,
 SP-MG-017,조건부 동기화,"소스·대상별 WHERE 조건, 특정 테이블·열·행 범위와 동기화 제외 규칙.",not_started,,
-SP-MG-018,동기화 검증,"실행 전 변경 건수/예시/SQL 미리보기, 실행 후 검증 건수·체크섬·불일치 보고.",not_started,,
+SP-MG-018,동기화 검증,"실행 전 변경 건수/예시/SQL 미리보기, 실행 후 검증 건수·체크섬·불일치 보고.",partial,"SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",crates/stackport-core/src/schema_sync.rs; crates/stackport-core/tests/schema_sync.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs
 SP-MG-019,테스트 데이터 생성,타입·길이·정규식·범위·분포·NULL 비율·유일성·FK 일관성을 만족하는 데이터 생성.,not_started,,
 SP-MG-020,생성 규칙,이름·주소·이메일 등 형식 템플릿과 숫자/날짜/UUID/문자열 사용자 정의 생성기.,not_started,,
 SP-MG-021,데이터 마스킹,"치환, 셔플, 난수 교란, 해싱, NULL 처리, 부분 마스킹, 규칙별 범위 적용.",not_started,,

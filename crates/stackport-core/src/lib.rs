@@ -31,6 +31,8 @@ mod schema_diagram;
 pub use schema_diagram::{DiagramColumn, DiagramTable};
 mod schema_compare;
 pub use schema_compare::{SchemaComparison, SchemaComparisonConnection, SchemaDifferenceStatus, SchemaMemberDifference, SchemaObjectDifference};
+mod schema_sync;
+pub use schema_sync::{SchemaSyncPreview, SchemaSyncReport};
 mod schema_document;
 pub use schema_document::{SchemaDocumentFormat, SchemaDocumentReport};
 mod ssh;
@@ -277,6 +279,7 @@ pub struct Store {
     edits: Arc<edit::EditManager>,
     queries: Arc<query::QueryManager>,
     restore: Arc<restore::RestoreManager>,
+    schema_sync: Arc<schema_sync::SchemaSyncManager>,
 }
 
 impl Store {
@@ -291,6 +294,7 @@ impl Store {
             edits: Arc::new(edit::EditManager::default()),
             queries: Arc::new(query::QueryManager::default()),
             restore: Arc::new(restore::RestoreManager::default()),
+            schema_sync: Arc::new(schema_sync::SchemaSyncManager::default()),
         };
         let mut db = store.connect()?;
         let version: i64 = db
@@ -874,6 +878,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
         "sqlite.schema.export" => "sqlite-readonly-schema-no-overwrite",
+        "sqlite.schema.sync" => "sqlite-reviewed-schema-sync-with-backup",
         "project.duplicate" => "local-project-metadata-only",
         "workspace.copy" => "local-verified-copy-no-overwrite",
         "sftp.download" | "sftp.download.cancel" => "sftp-pinned-host-local-no-overwrite",

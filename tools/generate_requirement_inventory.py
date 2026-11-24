@@ -122,6 +122,8 @@ PARTIAL = {
     "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
     "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
+    "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
+    "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
     "SP-MG-024": "SQLite 선택 객체 또는 전체 스키마의 열·키·관계·규칙과 생성 SQL 주석을 Markdown·HTML로 내보내기",
     "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·CSV 보호 필드 수 보고와 작업 기록",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
@@ -186,6 +188,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:
                 evidence = "crates/stackport-core/src/schema_compare.rs; crates/stackport-core/tests/schema_compare.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
+            elif requirement_id in {"SP-MG-014", "SP-MG-018"}:
+                evidence = "crates/stackport-core/src/schema_sync.rs; crates/stackport-core/tests/schema_sync.rs; src/SchemaComparisonDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-MD-016", "SP-MD-020", "SP-MG-024"}:
                 evidence = "crates/stackport-core/src/schema_document.rs; crates/stackport-core/tests/schema.rs; src/SchemaDocumentDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):
