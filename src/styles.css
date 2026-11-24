@@ -23,6 +23,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .palette-trigger kbd { padding: 2px 4px; border-radius: 3px; background: #2b4348; color: #d0dfdd; font-size: 10px; }
 .workspace-toolbar { display: flex; align-items: stretch; gap: 8px; padding: 0 14px; border-bottom: 1px solid #d3ded9; background: #eaf0ed; flex-shrink: 0; min-height: 43px; }
 .workspace-toolbar .explorer-toggle { align-self: center; flex: 0 0 auto; color: #526b64; }
+.workspace-resume-notice { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 10px; padding: 7px 16px; border-bottom: 1px solid #e5d7b8; color: #6b4c16; background: #fff7e5; font-size: 12px; }
 .tool-strip { min-width: 0; display: flex; gap: 3px; align-items: stretch; overflow: auto; padding: 4px 0 0; }
 .tool-tab { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; color: #536b63; background: transparent; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .tool-tab:not(:disabled):hover { background: #f4f7f5; color: #285b50; }

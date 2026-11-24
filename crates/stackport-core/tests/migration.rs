@@ -81,7 +81,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -115,7 +115,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         backups(dir.path()).len(),
         1,
-        "v4 must not make another migration backup"
+        "a current workspace must not make another migration backup"
     );
 }
 
@@ -135,7 +135,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        4
+        5
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);
@@ -244,6 +244,49 @@ fn failed_archive_migration_preserves_version_three_and_its_backup() {
             "view"
         );
     }
+}
+
+#[test]
+fn version_four_migration_backs_up_the_previous_format_before_adding_resume() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    create_v3(&path, false);
+    Connection::open(&path).unwrap().execute_batch(
+        "CREATE TABLE project_archives (project_id TEXT PRIMARY KEY REFERENCES projects(id), archived_at TEXT NOT NULL);
+         INSERT INTO project_archives VALUES ('project-1', '2026-11-20T00:00:00Z');
+         PRAGMA user_version=4;",
+    ).unwrap();
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.workspace_resume().unwrap().revision, 0);
+    assert_eq!(store.list_archived_projects().unwrap()[0].id, "project-1");
+    let backup_path = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.file_name().unwrap().to_string_lossy().contains(".v4-"))
+        .unwrap();
+    let backup = Connection::open(backup_path).unwrap();
+    assert_eq!(
+        backup
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        backup
+            .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+            .unwrap(),
+        "ok"
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT count(*) FROM sqlite_schema WHERE name='workspace_resume'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

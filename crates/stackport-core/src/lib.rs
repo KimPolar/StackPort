@@ -46,6 +46,11 @@ mod terminal_output;
 pub use terminal_output::{save_terminal_output, TerminalOutputFormat};
 mod workspace_copy;
 pub use workspace_copy::{WorkspaceCopyPreview, WorkspaceCopyReport};
+mod workspace_resume;
+pub use workspace_resume::{
+    ResumeDirection, ResumeLayout, ResumeTool, WorkspaceResume, WorkspaceResumeRecord,
+    WorkspaceResumeWrite,
+};
 #[cfg(windows)]
 mod windows_system;
 
@@ -65,7 +70,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -315,6 +320,7 @@ impl Store {
                 tx.execute_batch(AUDIT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(workspace_resume::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -337,7 +343,10 @@ impl Store {
                 if current < 3 {
                     tx.execute_batch(SSH_PROFILE_SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
+                if current < 4 {
+                    tx.execute_batch(PROJECT_ARCHIVE_SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(workspace_resume::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

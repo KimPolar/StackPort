@@ -26,6 +26,7 @@ import {
   editTool, paneTools, removePaneTool, replacePaneTool, resizePane, splitPane, toolPane,
   type SplitDirection, type WorkspaceLayout,
 } from "./WorkspaceLayout";
+import { restoreLayout, saveLayout, useWorkspaceResume, type ResumeRecord } from "./WorkspaceResume";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -87,6 +88,8 @@ function App() {
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [loadedPages, setLoadedPages] = useState<ReadonlySet<WorkspacePage>>(() => new Set(["workspace"]));
   const [projects, setProjects] = useState<Project[]>([]);
+  const [startupLoaded, setStartupLoaded] = useState(!desktop);
+  const [resumeReadError, setResumeReadError] = useState(false);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -136,6 +139,8 @@ function App() {
   const selectedProject = useRef(projectId);
   selectedProject.current = projectId;
   const closeApproved = useRef(false);
+  const closePending = useRef(false);
+  const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
     terminalCount.current = count;
     setTerminalTabCount(count);
@@ -149,7 +154,16 @@ function App() {
   // must not silently write them to browser storage or workspace metadata.
   const drafts = useRef<Record<string, string>>({});
   const project = projects.find(item => item.id === projectId);
-  const profile = profiles.find(item => item.id === profileId);
+  const profile = profiles.find(item => item.id === profileId && item.project_id === projectId);
+  const restoringProfile = startupProfile.current?.projectId === projectId ? startupProfile.current.profileId : null;
+  const { initialize: initializeResume, flush: flushResume, notice: resumeNotice, retry: retryResume } = useWorkspaceResume(
+    desktop && startupLoaded ? {
+      project_id: project?.id ?? null,
+      profile_id: profile?.id ?? restoringProfile,
+      explorer_open: explorerOpen,
+      layout: saveLayout(layout),
+    } : null,
+  );
 
   const reloadProjects = useCallback(async (select?: string) => {
     const next = await call<Project[]>("list_projects");
@@ -169,8 +183,39 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (desktop) reloadProjects().catch(e => setError(errorText(e)));
-  }, [reloadProjects]);
+    if (!desktop) return;
+    let live = true;
+    void Promise.allSettled([call<Project[]>("list_projects"), call<ResumeRecord>("get_workspace_resume")]).then(([projectResult, resume]) => {
+      if (!live) return;
+      const saved = resume.status === "fulfilled" ? resume.value.state : null;
+      if (projectResult.status === "fulfilled") {
+        const next = projectResult.value;
+        const restoredProject = next.find(item => item.id === saved?.project_id);
+        const initialProject = restoredProject?.id ?? next[0]?.id ?? "";
+        const initialProfile = restoredProject ? saved?.profile_id ?? null : null;
+        if (initialProfile) startupProfile.current = { projectId: initialProject, profileId: initialProfile };
+        setProjects(next);
+        setProjectId(initialProject);
+        if (resume.status === "fulfilled") initializeResume(resume.value, {
+          project_id: initialProject || null,
+          profile_id: initialProfile,
+          explorer_open: saved?.explorer_open ?? true,
+          layout: saved?.layout ?? toolPane("workspace"),
+        });
+      } else {
+        setError(errorText(projectResult.reason));
+      }
+      if (resume.status === "rejected") setResumeReadError(true);
+      if (saved) {
+        const restored = restoreLayout(saved.layout, () => ++nextSplit.current);
+        setExplorerOpen(saved.explorer_open);
+        setLoadedPages(new Set(["workspace", ...paneTools(restored)]));
+        setLayout(restored);
+      }
+      setStartupLoaded(true);
+    });
+    return () => { live = false; };
+  }, [initializeResume]);
 
   useEffect(() => {
     function openCommandPalette(event: globalThis.KeyboardEvent) {
@@ -201,7 +246,15 @@ function App() {
     setRestoreReport(null);
     queryGeneration.current++;
     if (projectId) {
-      call<Profile[]>("list_profiles", { projectId }).then(items => { if (live) setProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      call<Profile[]>("list_profiles", { projectId }).then(items => {
+        if (!live) return;
+        if (startupProfile.current?.projectId === projectId) {
+          const restoredProfile = startupProfile.current.profileId;
+          startupProfile.current = null;
+          if (items.some(item => item.id === restoredProfile)) setProfileId(restoredProfile);
+        }
+        setProfiles(items);
+      }).catch(e => { if (live) setError(errorText(e)); });
       call<SshProfile[]>("list_ssh_profiles", { projectId }).then(items => { if (live) setSshProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
@@ -247,16 +300,27 @@ function App() {
     if (!desktop) return;
     let live = true;
     let unlisten: (() => void) | undefined;
-    getCurrentWindow().onCloseRequested(event => {
+    const window = getCurrentWindow();
+    window.onCloseRequested(event => {
+      if (closeApproved.current) return;
+      event.preventDefault();
+      if (closePending.current) return;
       const notes: string[] = [];
       if (terminalCount.current) notes.push(`열린 터미널 ${terminalCount.current}개와 연결된 작업이 종료됩니다.`);
       if (rdpCount.current) notes.push(`열린 RDP 클라이언트 ${rdpCount.current}개가 종료됩니다.`);
       if (Object.values(drafts.current).some(draft => draft.trim())) notes.push("저장하지 않은 SQL 초안이 사라집니다.");
-      if (notes.length && !window.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) event.preventDefault();
-      else closeApproved.current = true;
+      if (notes.length && !globalThis.confirm(`${notes.join("\n")}\n앱을 종료하시겠습니까?`)) return;
+      closePending.current = true;
+      void flushResume().then(() => {
+        closeApproved.current = true;
+        return window.destroy();
+      }).catch(e => {
+        closeApproved.current = false;
+        setError(`창을 닫을 수 없습니다: ${errorText(e)}`);
+      }).finally(() => { closePending.current = false; });
     }).then(remove => { if (live) unlisten = remove; else remove(); }).catch(e => { if (live) setError(`창 종료 확인을 설정할 수 없습니다: ${errorText(e)}`); });
     return () => { live = false; unlisten?.(); };
-  }, []);
+  }, [flushResume]);
 
   function changeSql(value: string) {
     setSql(value);
@@ -555,6 +619,8 @@ function App() {
     return keys;
   }
 
+  if (!startupLoaded) return <main className="empty-state" role="status">작업 공간을 불러오는 중…</main>;
+
   const databasePane = <div id="workspace-pane-workspace" className="main-content">
     {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
       <strong>SQLite 복원 완료 · 검증 통과</strong>
@@ -658,6 +724,10 @@ function App() {
           onDirectionChange={direction => setLayout(current => current.kind === "split" ? { ...current, direction } : current)}
           onAdd={addPane} onRemove={closePane} onGrid={openGrid} />}
       </div>
+      {(resumeReadError || resumeNotice) && <div className="workspace-resume-notice" role="status">
+        <span>{resumeReadError ? "작업 공간 배치를 읽을 수 없습니다." : resumeNotice?.message}</span>
+        {resumeNotice?.retry && <button type="button" className="secondary small" onClick={retryResume}>이 창의 배치 저장</button>}
+      </div>}
       <div className="body-layout">
         <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={!explorerOpen}>
           <div className="explorer-top"><span>탐색기</span><button className="icon-button" onClick={() => openModal("project")} disabled={!desktop} aria-label="새 프로젝트"><Plus size={17} /></button></div>

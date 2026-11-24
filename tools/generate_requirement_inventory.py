@@ -17,6 +17,7 @@ PARTIAL = {
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
+    "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
@@ -99,7 +100,8 @@ PARTIAL = {
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-013": "독립된 SQLite 백업의 새 복원 경로·버전·객체/행 수·SHA-256 미리보기",
     "SP-BK-014": "SQLite 백업 검사와 별도 복원본을 열어 무결성·객체/행 수·SHA-256 검증",
-    "SP-ST-006": "프로젝트와 연결 정의 저장",
+    "SP-ST-006": "프로젝트와 연결 정의, 작업 공간 배치 저장 및 손상된 배치의 이전 스냅샷 복원",
+    "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
     "SP-ST-014": "Windows 작업 공간과 선택한 SSH 신뢰 파일을 검증하여 새 폴더에 백업",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
@@ -111,8 +113,8 @@ PARTIAL = {
     "SP-SEC-015": "SQLite PROD 단일 셀 변경, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
-    "SP-NFR-006": "v1~v3 작업 공간을 백업한 뒤 트랜잭션으로 v4 이관",
-    "SP-AT-025": "v1~v3 백업 후 v4 이관·이관 실패 시 원본 보존",
+    "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
+    "SP-AT-025": "v1~v4 백업 후 v5 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
@@ -157,12 +159,16 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx"
             elif requirement_id == "SP-SEC-009":
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
-            elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:
+            elif requirement_id == "SP-AT-025":
                 evidence = "crates/stackport-core/tests/migration.rs"
+            elif requirement_id == "SP-NFR-006":
+                evidence = "crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/workspace_resume.rs"
             elif requirement_id in {"SP-ST-011", "SP-ST-014"}:
                 evidence = "src-tauri/src/data_location.rs; tests/portable-smoke.cjs; crates/stackport-core/tests/workspace_copy.rs; tests/desktop-smoke.cjs"
-            elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
+            elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-UI-012", "SP-ST-006", "SP-ST-017"}:
+                evidence = "crates/stackport-core/src/workspace_resume.rs; crates/stackport-core/tests/workspace_resume.rs; tests/workspace-resume-smoke.cjs; src/WorkspaceResume.ts; src/main.tsx"
             elif requirement_id in {"SP-UI-006", "SP-UI-007", "SP-UI-016"}:
                 evidence = "src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-004":

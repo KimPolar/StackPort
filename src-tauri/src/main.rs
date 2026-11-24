@@ -13,7 +13,8 @@ use stackport_core::{
     save_terminal_output, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
-    WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
+    WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
+    WorkspaceResumeRecord, WorkspaceResumeWrite,
 };
 use std::sync::Arc;
 use tauri::{ipc::Channel, Manager, RunEvent, State};
@@ -37,6 +38,22 @@ async fn list_projects(store: State<'_, Store>) -> Result<Vec<Project>, String> 
 #[tauri::command]
 fn get_runtime_info(location: State<'_, DataLocation>) -> RuntimeInfo {
     location.info()
+}
+
+#[tauri::command]
+async fn get_workspace_resume(store: State<'_, Store>) -> Result<WorkspaceResumeRecord, String> {
+    let store = store.inner().clone();
+    worker(move || store.workspace_resume()).await
+}
+
+#[tauri::command]
+async fn save_workspace_resume(
+    store: State<'_, Store>,
+    expected_revision: i64,
+    state: WorkspaceResume,
+) -> Result<WorkspaceResumeWrite, String> {
+    let store = store.inner().clone();
+    worker(move || store.save_workspace_resume(expected_revision, state)).await
 }
 
 #[tauri::command]
@@ -913,6 +930,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             get_runtime_info,
+            get_workspace_resume,
+            save_workspace_resume,
             preview_workspace_copy,
             copy_workspace,
             list_local_ports,
