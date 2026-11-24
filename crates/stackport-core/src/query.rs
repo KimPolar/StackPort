@@ -21,6 +21,7 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(10);
 const PREPARE_LIFETIME: Duration = Duration::from_secs(60);
 const MAX_PARAMETERS: usize = 32;
 const MAX_PARAMETER_BYTES: usize = 16 * 1024;
+const MAX_PLAN_STEPS: usize = 200;
 const RUNNING: u8 = 0;
 const CANCELLED: u8 = 1;
 const TIMED_OUT: u8 = 2;
@@ -29,9 +30,29 @@ const TIMED_OUT: u8 = 2;
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum QueryOutcome {
     Completed { result: QueryPage },
+    Plan { plan: QueryPlan },
     ParametersRequired { parameters: Vec<SqlParameter> },
     Cancelled,
     TimedOut,
+}
+
+#[derive(Debug, Serialize)]
+pub struct QueryPlan {
+    steps: Vec<PlanStep>,
+    truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PlanStep {
+    id: i64,
+    parent: i64,
+    detail: String,
+    kind: &'static str,
+}
+
+enum QueryOutput {
+    Rows(QueryPage),
+    Plan(QueryPlan),
 }
 
 #[derive(Debug, Serialize)]
@@ -232,7 +253,11 @@ enum QueryFailure {
 }
 
 enum QuerySource<'a> {
-    Sql(&'a str, Option<&'a [SqlParameterValue]>),
+    Sql {
+        sql: &'a str,
+        parameters: Option<&'a [SqlParameterValue]>,
+        explain: bool,
+    },
     Object(&'a TableQuery),
 }
 
@@ -267,7 +292,35 @@ impl Store {
         page: u32,
         parameters: Option<&[SqlParameterValue]>,
     ) -> Result<QueryOutcome> {
-        self.execute_prepared(token, profile_id, QuerySource::Sql(sql, parameters), page)
+        self.execute_prepared(
+            token,
+            profile_id,
+            QuerySource::Sql {
+                sql,
+                parameters,
+                explain: false,
+            },
+            page,
+        )
+    }
+
+    pub fn explain_prepared(
+        &self,
+        token: &str,
+        profile_id: &str,
+        sql: &str,
+        parameters: Option<&[SqlParameterValue]>,
+    ) -> Result<QueryOutcome> {
+        self.execute_prepared(
+            token,
+            profile_id,
+            QuerySource::Sql {
+                sql,
+                parameters,
+                explain: true,
+            },
+            0,
+        )
     }
 
     pub fn query_object_prepared(
@@ -289,7 +342,8 @@ impl Store {
     ) -> Result<QueryOutcome> {
         let guard = self.queries.claim(token)?;
         match self.query_inner(profile_id, source, page, &guard.control, QUERY_TIMEOUT) {
-            Ok(result) => Ok(QueryOutcome::Completed { result }),
+            Ok(QueryOutput::Rows(result)) => Ok(QueryOutcome::Completed { result }),
+            Ok(QueryOutput::Plan(plan)) => Ok(QueryOutcome::Plan { plan }),
             Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
             Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
             Err(QueryFailure::ParametersRequired(parameters)) => {
@@ -303,12 +357,17 @@ impl Store {
     pub fn query(&self, profile_id: &str, sql: &str, page: u32) -> Result<QueryPage> {
         match self.query_inner(
             profile_id,
-            QuerySource::Sql(sql, None),
+            QuerySource::Sql {
+                sql,
+                parameters: None,
+                explain: false,
+            },
             page,
             &Arc::new(QueryControl::default()),
             QUERY_TIMEOUT,
         ) {
-            Ok(result) => Ok(result),
+            Ok(QueryOutput::Rows(result)) => Ok(result),
+            Ok(QueryOutput::Plan(_)) => Err("조회가 실행 계획을 반환했습니다.".into()),
             Err(QueryFailure::Cancelled) => Err("쿼리가 중단되었습니다.".into()),
             Err(QueryFailure::TimedOut) => Err("쿼리 실행 시간이 초과되어 중단되었습니다.".into()),
             Err(QueryFailure::ParametersRequired(_)) => {
@@ -325,14 +384,14 @@ impl Store {
         page: u32,
         control: &Arc<QueryControl>,
         timeout: Duration,
-    ) -> std::result::Result<QueryPage, QueryFailure> {
+    ) -> std::result::Result<QueryOutput, QueryFailure> {
         let started = Instant::now();
         control.check()?;
         let profile = self.profile(profile_id).map_err(QueryFailure::Error)?;
         control.check()?;
         let path = Path::new(&profile.path);
         let db = match source {
-            QuerySource::Sql(_, _) => open_user_db(path),
+            QuerySource::Sql { .. } => open_user_db(path),
             QuerySource::Object(_) => open_schema_db(path),
         }
         .map_err(QueryFailure::Error)?;
@@ -359,8 +418,12 @@ impl Store {
         control.check()?;
         let offset = i64::from(page) * PAGE_SIZE as i64;
         let page_clause = format!("LIMIT {} OFFSET {offset}", PAGE_SIZE + 1);
-        let (bounded_sql, values, show_sql) = match source {
-            QuerySource::Sql(sql, parameters) => {
+        let (bounded_sql, values, show_sql, explain) = match source {
+            QuerySource::Sql {
+                sql,
+                parameters,
+                explain,
+            } => {
                 let sql = sql.trim().trim_end_matches(';').trim_end();
                 if sql.is_empty() {
                     return Err(QueryFailure::Error("조회할 SQL을 입력하세요.".into()));
@@ -405,10 +468,12 @@ impl Store {
                     }
                     None => Vec::new(),
                 };
+                let prefix = if explain { "EXPLAIN QUERY PLAN " } else { "" };
                 (
-                    format!("SELECT * FROM (\n{sql}\n) {page_clause}"),
+                    format!("{prefix}SELECT * FROM (\n{sql}\n) {page_clause}"),
                     values,
                     false,
+                    explain,
                 )
             }
             QuerySource::Object(request) => {
@@ -417,7 +482,7 @@ impl Store {
                 let (sql, values) = generated.map_err(QueryFailure::Error)?;
                 // Schema PRAGMAs are only needed for the fixed metadata queries.
                 set_read_authorizer(&db, false);
-                (format!("{sql}\n{page_clause}"), values, true)
+                (format!("{sql}\n{page_clause}"), values, true, false)
             }
         };
         control.check()?;
@@ -442,6 +507,9 @@ impl Store {
         let mut cursor = stmt
             .query(params_from_iter(&values))
             .map_err(|e| control.sqlite_error(e))?;
+        if explain {
+            return read_plan(&mut cursor, control).map(QueryOutput::Plan);
+        }
         let mut rows = Vec::with_capacity(PAGE_SIZE + 1);
         while let Some(row) = cursor.next().map_err(|e| control.sqlite_error(e))? {
             control.check()?;
@@ -458,14 +526,47 @@ impl Store {
         if has_more {
             rows.pop();
         }
-        Ok(QueryPage {
+        Ok(QueryOutput::Rows(QueryPage {
             columns,
             rows,
             page,
             has_more,
             generated_sql: show_sql.then_some(bounded_sql),
-        })
+        }))
     }
+}
+
+fn read_plan(
+    cursor: &mut rusqlite::Rows<'_>,
+    control: &QueryControl,
+) -> std::result::Result<QueryPlan, QueryFailure> {
+    let mut steps = Vec::new();
+    let mut truncated = false;
+    while let Some(row) = cursor.next().map_err(|error| control.sqlite_error(error))? {
+        control.check()?;
+        if steps.len() == MAX_PLAN_STEPS {
+            truncated = true;
+            break;
+        }
+        let detail: String = row.get(3).map_err(|error| control.sqlite_error(error))?;
+        let kind = if detail.starts_with("SCAN ") {
+            "scan"
+        } else if detail.starts_with("SEARCH ") {
+            "search"
+        } else if detail.starts_with("USE TEMP B-TREE") {
+            "temporary"
+        } else {
+            "other"
+        };
+        steps.push(PlanStep {
+            id: row.get(0).map_err(|error| control.sqlite_error(error))?,
+            parent: row.get(1).map_err(|error| control.sqlite_error(error))?,
+            detail,
+            kind,
+        });
+    }
+    control.check()?;
+    Ok(QueryPlan { steps, truncated })
 }
 
 #[cfg(test)]
@@ -488,7 +589,11 @@ mod tests {
         let control = Arc::new(QueryControl::default());
         let result = store.query_inner(
             &profile.id,
-            QuerySource::Sql("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers", None),
+            QuerySource::Sql {
+                sql: "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM numbers WHERE n < 1000000000) SELECT sum(n) FROM numbers",
+                parameters: None,
+                explain: false,
+            },
             0,
             &control,
             Duration::from_millis(5),

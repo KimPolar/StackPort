@@ -12,6 +12,7 @@ import { SshProfileExchange } from "./SshProfileExchange";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
+import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -23,8 +24,9 @@ type ForeignKeyInfo = { id: number; sequence: number; target_table: string; from
 type ObjectDetails = { object: DatabaseObject; columns: ColumnInfo[]; indexes: IndexInfo[]; foreign_keys: ForeignKeyInfo[] };
 type Cell = { kind: string; display: string; truncated: boolean };
 type QueryPage = { columns: string[]; rows: Cell[][]; page: number; has_more: boolean; generated_sql?: string };
-type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
-type QueryTarget = { kind: "sql"; sql: string; parameters?: SqlParameterValue[] } | { kind: "table"; request: TableQuery };
+type QueryOutcome = { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
+type SqlQueryTarget = { kind: "sql"; sql: string; parameters?: SqlParameterValue[]; explain?: boolean };
+type QueryTarget = SqlQueryTarget | { kind: "table"; request: TableQuery };
 type ActiveQuery = { token: string | null; cancelRequested: boolean; cancellation: Promise<void> | null };
 type BackupReport = { path: string; size_bytes: number; integrity: "ok"; audit_warning: string | null };
 type AuditEvent = { sequence: number; id: string; correlation_id: string; occurred_at: string; actor: string; operation: string; project_id: string | null; profile_id: string | null; environment: string | null; object_name: string | null; outcome: string; policy: string; affected_count: number | null };
@@ -74,7 +76,8 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
-  const [parameterRequest, setParameterRequest] = useState<{ sql: string; parameters: SqlParameter[] } | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[] } | null>(null);
+  const [queryPlan, setQueryPlan] = useState<{ sql: string; plan: QueryPlan } | null>(null);
   const [result, setResult] = useState<QueryPage | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [name, setName] = useState("");
@@ -152,6 +155,7 @@ function App() {
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
     setParameterRequest(null);
+    setQueryPlan(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
     setEditReport(null);
@@ -195,6 +199,7 @@ function App() {
 
   function changeSql(value: string) {
     setSql(value);
+    setQueryPlan(null);
     if (profileId) drafts.current[profileId] = value;
   }
 
@@ -248,8 +253,10 @@ function App() {
     void requestCancellation(task);
   }
 
-  function runQuery(query: string) {
-    if (query.trim()) void executeQuery({ kind: "sql", sql: query });
+  function runQuery(query: string, explain = false) {
+    if (!query.trim()) return;
+    setQueryPlan(null);
+    void executeQuery({ kind: "sql", sql: query, explain });
   }
 
   async function executeQuery(target: QueryTarget, page = 0) {
@@ -261,7 +268,7 @@ function App() {
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
     const sameQuery = target === executedQuery
       || (target.kind === "sql" && !target.parameters && executedQuery?.kind === "sql" && !executedQuery.parameters && target.sql === executedQuery.sql);
-    if (!sameQuery) {
+    if (!sameQuery && !(target.kind === "sql" && target.explain)) {
       setResult(null);
       setExecutedQuery(null);
     }
@@ -270,14 +277,16 @@ function App() {
       if (task.cancelRequested || queryGeneration.current !== generation) await requestCancellation(task);
       const args = { token: task.token, profileId, page };
       const response = target.kind === "sql"
-        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters })
+        ? await call<QueryOutcome>("run_query", { ...args, sql: target.sql, parameters: target.parameters, explain: target.explain })
         : await call<QueryOutcome>("run_object_query", { ...args, request: target.request });
       if (queryGeneration.current === generation) {
         if (response.status === "completed") {
           setResult(response.result); setExecutedQuery(target);
           setQueryNotice(task.cancelRequested ? "중단 요청 전에 쿼리가 완료되었습니다." : "");
+        } else if (response.status === "plan" && target.kind === "sql") {
+          setQueryPlan({ sql: target.sql, plan: response.plan });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
-          if (!task.cancelRequested) setParameterRequest({ sql: target.sql, parameters: response.parameters });
+          if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters });
           else setQueryNotice("쿼리 실행을 중단했습니다.");
         } else if (response.status === "cancelled") {
           setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
@@ -416,13 +425,19 @@ function App() {
             </div>
             {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
             {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
-            <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button> : <button className="primary small" disabled={!sql.trim()} onClick={() => void runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>}</div>
+            <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying
+              ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
+              : <div className="sql-editor-actions">
+                <button className="secondary small" disabled={!sql.trim()} onClick={() => runQuery(sql, true)}>실행 계획</button>
+                <button className="primary small" disabled={!sql.trim()} onClick={() => runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>
+              </div>}</div>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
               <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
             </div>
             {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
             {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
+            {queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
             <div className="results-card"><div className="panel-heading"><div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div><span className="subtle">페이지당 최대 100개 행</span></div>
               {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
               {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
@@ -455,7 +470,7 @@ function App() {
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
         setParameterRequest(null);
-        void executeQuery({ kind: "sql", sql: parameterRequest.sql, parameters });
+        void executeQuery({ ...parameterRequest.target, parameters });
       }} />
     </Dialog>}
     {sshProfileDialog && project && <SshProfileDialog mode={sshProfileDialog.mode} profile={sshProfileDialog.profile} projectId={project.id} onClose={() => setSshProfileDialog(null)} onChanged={() => { setSshProfileDialog(null); void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}

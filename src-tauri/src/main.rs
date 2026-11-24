@@ -190,10 +190,16 @@ async fn run_query(
     sql: String,
     page: u32,
     parameters: Option<Vec<SqlParameterValue>>,
+    explain: Option<bool>,
 ) -> Result<QueryOutcome, String> {
     let store = store.inner().clone();
     worker(move || {
-        store.query_prepared_with_parameters(&token, &profile_id, &sql, page, parameters.as_deref())
+        let parameters = parameters.as_deref();
+        if explain.unwrap_or(false) {
+            store.explain_prepared(&token, &profile_id, &sql, parameters)
+        } else {
+            store.query_prepared_with_parameters(&token, &profile_id, &sql, page, parameters)
+        }
     })
     .await
 }

@@ -100,3 +100,61 @@ fn discovers_sqlite_slots_and_binds_repeatable_typed_values() {
         2
     );
 }
+
+#[test]
+fn explains_the_read_only_query_without_running_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("plan.sqlite");
+    let db = Connection::open(&source).unwrap();
+    db.execute_batch(
+        "CREATE TABLE inventory (id INTEGER PRIMARY KEY, sku TEXT, notes TEXT);
+         CREATE INDEX by_sku ON inventory(sku);
+         INSERT INTO inventory VALUES (1, 'fixture', 'sample');",
+    )
+    .unwrap();
+    let store = Store::open(directory.path().join("workspace.sqlite")).unwrap();
+    let project = store.create_project("plans").unwrap();
+    let profile = store
+        .create_sqlite_profile(&project.id, "fixture", source.to_str().unwrap(), "DEV")
+        .unwrap();
+    let sql = "SELECT notes, json(:invalid) FROM inventory WHERE sku = :sku ORDER BY notes";
+    let token = store.prepare_query().unwrap();
+    let outcome = store
+        .explain_prepared(&token, &profile.id, sql, None)
+        .unwrap();
+    assert!(matches!(outcome, QueryOutcome::ParametersRequired { .. }));
+    let inputs = [
+        SqlParameterValue::Text("this-json-must-not-be-evaluated".into()),
+        SqlParameterValue::Text("fixture".into()),
+    ];
+    let token = store.prepare_query().unwrap();
+    let QueryOutcome::Plan { plan } = store
+        .explain_prepared(&token, &profile.id, sql, Some(&inputs))
+        .unwrap()
+    else {
+        panic!("expected an execution plan");
+    };
+    let text = serde_json::to_string(&plan).unwrap();
+    assert!(text.contains("SEARCH inventory USING INDEX by_sku"));
+    assert!(text.contains("USE TEMP B-TREE FOR ORDER BY"));
+    assert!(!text.contains("this-json-must-not-be-evaluated"));
+    let token = store.prepare_query().unwrap();
+    assert!(store
+        .query_prepared_with_parameters(&token, &profile.id, sql, 0, Some(&inputs))
+        .is_err());
+    let token = store.prepare_query().unwrap();
+    assert!(store
+        .explain_prepared(
+            &token,
+            &profile.id,
+            "UPDATE inventory SET notes='changed'",
+            None
+        )
+        .is_err());
+    assert_eq!(
+        db.query_row("SELECT notes FROM inventory", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        "sample"
+    );
+}

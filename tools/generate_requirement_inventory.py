@@ -62,6 +62,8 @@ PARTIAL = {
     "SP-SQ-007": "단일 읽기 전용 SQL 실행",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
+    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
+    "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
     "SP-BK-002": "SQLite 온라인 백업 API",
     "SP-BK-003": "복원 가능한 SQLite 바이너리 파일",
@@ -83,7 +85,7 @@ PARTIAL = {
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
-    "SP-AT-011": "SQLite 바인딩 쿼리와 페이지 이동·취소·시간 초과 확인",
+    "SP-AT-011": "SQLite 바인딩 쿼리와 실행 계획, 페이지 이동·취소·시간 초과 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
 }
@@ -130,8 +132,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/network.rs; crates/stackport-core/src/network.rs; tests/ssh-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
-            elif requirement_id in {"SP-SQ-010", "SP-AT-011"}:
-                evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src-tauri/"
+            elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
+                evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/"
             elif requirement_id == "SP-CN-008":
                 evidence = "crates/stackport-core/src/ssh.rs; tests/ssh-key-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-008", "SP-CN-007", "SP-CN-009", "SP-CN-010", "SP-CN-024", "SP-TM-002", "SP-SEC-004", "SP-SEC-008", "SP-AT-001"}:

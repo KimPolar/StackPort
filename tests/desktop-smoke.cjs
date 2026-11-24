@@ -107,7 +107,29 @@ async function main() {
   await page.getByRole('button', { name: '다음 페이지' }).click();
   await resultRows.first().getByText('사용자 102', { exact: true }).waitFor();
 
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await page.getByLabel(':first 형식').selectOption('integer');
+  await page.getByLabel(':first 값', { exact: true }).fill('2');
+  await page.getByLabel(':key 값', { exact: true }).fill(parameterSecret);
+  await page.getByRole('button', { name: '매개변수로 실행' }).click();
+  const plan = page.getByRole('region', { name: 'SQLite 실행 계획' });
+  await plan.getByText(/SEARCH people USING INTEGER PRIMARY KEY/).waitFor();
+  await resultRows.first().getByText('사용자 102', { exact: true }).waitFor();
+  if ((await plan.innerText()).includes(parameterSecret)) throw new Error('Query plan exposed a parameter value.');
+  await page.getByLabel('SQL 쿼리').fill('SELECT name FROM people ORDER BY note DESC');
+  await plan.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await plan.getByText('USE TEMP B-TREE FOR ORDER BY', { exact: true }).waitFor();
+  await page.getByLabel('SQL 쿼리').fill('SELECT name FROM people WHERE id = 1 UNION ALL SELECT name FROM people WHERE id = 2');
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await plan.getByText('COMPOUND QUERY', { exact: true }).waitFor();
+  await plan.locator('.sqlite-plan-branch').first().waitFor();
+  await plan.getByRole('button', { name: '실행 계획 닫기' }).click();
+  await plan.waitFor({ state: 'detached' });
+
   await page.getByLabel('SQL 쿼리').fill('DELETE FROM people');
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await page.getByRole('alert').getByText('이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.').waitFor();
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('alert').getByText('이 연결에서는 읽기 전용 쿼리만 실행할 수 있습니다.').waitFor();
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
