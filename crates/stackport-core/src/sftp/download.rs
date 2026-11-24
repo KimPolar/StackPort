@@ -1,9 +1,10 @@
 //! Stream verified SFTP reads into a local file, then publish without replacing a destination.
 
 use super::{
+    audit::{Direction, TransferAudit},
     file_error,
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
-    RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress,
+    RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
 };
 use crate::Result;
 use russh_sftp::{
@@ -26,7 +27,7 @@ impl SftpManager {
         source: RemotePath,
         destination: String,
         progress: impl Fn(SftpTransferProgress),
-    ) -> Result<SftpTransferOutcome> {
+    ) -> Result<SftpTransferReport> {
         let source = source.into_path()?;
         let session = self.session(id)?;
         let _operation = session
@@ -35,15 +36,20 @@ impl SftpManager {
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
         let active = session.register_transfer()?;
         let transfer = &active.transfer;
+        let audit =
+            TransferAudit::start(&self.store, &session.profile, &transfer.id, Direction::Download)
+                .await?;
         let update = |received, total| progress(transfer.report(received, total, false));
         update(0, None);
         let result = download_file(&session.files, source, destination, transfer, update).await;
-        if transfer.cancelled() {
-            return Ok(SftpTransferOutcome::Cancelled {
+        let result = if transfer.cancelled() {
+            Ok(SftpTransferOutcome::Cancelled {
                 cleanup_warning: None,
-            });
-        }
-        result
+            })
+        } else {
+            result
+        };
+        audit.finish(result).await
     }
 }
 
@@ -54,6 +60,7 @@ async fn download_file(
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>),
 ) -> Result<SftpTransferOutcome> {
+    transfer.check()?;
     let (destination, temporary) =
         tokio::task::spawn_blocking(move || prepare_destination(&destination))
             .await

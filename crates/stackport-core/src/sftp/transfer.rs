@@ -39,7 +39,7 @@ pub enum SftpTransferOutcome {
 }
 
 pub(super) struct Transfer {
-    id: String,
+    pub(super) id: String,
     phase: AtomicU8,
     started: Instant,
 }

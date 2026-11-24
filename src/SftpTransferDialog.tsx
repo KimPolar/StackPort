@@ -2,13 +2,16 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 
-export type TransferResult = { kind: TransferSelection["kind"]; path: string; bytes: string; sha256: string };
+export type TransferResult = { kind: TransferSelection["kind"]; path: string; bytes: string; sha256: string; auditWarning: string | null };
 export type FileSelection = { name: string; location: string };
 export type TransferSelection = FileSelection & (
   | { kind: "download"; folder: string }
   | { kind: "upload"; remotePath: string; remoteDirectory: string }
 );
-type Outcome = { status: "saved"; bytes: string; sha256: string } | { status: "cancelled"; cleanup_warning: string | null };
+type Outcome = { audit_warning: string | null } & (
+  | { status: "saved"; bytes: string; sha256: string }
+  | { status: "cancelled"; cleanup_warning: string | null }
+);
 type Progress = { transfer_id: string; transferred: string; total: string | null; elapsed_ms: number; verifying: boolean };
 const integer = new Intl.NumberFormat("ko-KR");
 
@@ -65,10 +68,10 @@ export function SftpTransferDialog({ id, target, file, onClose, onSaved }: {
         });
       if (outcome.status === "saved") {
         const path = file.kind === "download" ? destination : `${file.remotePath.replace(/\/$/, "")}/${destination}`;
-        onSaved({ kind: file.kind, path, bytes: outcome.bytes, sha256: outcome.sha256 });
+        onSaved({ kind: file.kind, path, bytes: outcome.bytes, sha256: outcome.sha256, auditWarning: outcome.audit_warning });
       } else {
         setNotice(`${action}가 중단되었습니다.`);
-        if (outcome.cleanup_warning) setError(outcome.cleanup_warning);
+        setError([outcome.cleanup_warning, outcome.audit_warning].filter(Boolean).join(" "));
       }
     } catch (error) { setError(String(error)); }
     finally {

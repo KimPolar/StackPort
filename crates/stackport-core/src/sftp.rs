@@ -1,13 +1,16 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
+mod audit;
 mod download;
 mod preview;
 mod transfer;
 mod upload;
+pub use audit::SftpTransferReport;
 pub use preview::{preview_local_file, FilePreview};
-pub use transfer::{SftpTransferOutcome, SftpTransferProgress};
+pub use transfer::SftpTransferProgress;
+use transfer::SftpTransferOutcome;
 
-use crate::{ssh, Result, SshManager, SshProfile};
+use crate::{ssh, Result, SshManager, SshProfile, Store};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use russh::{
     client::{self, Handle},
@@ -116,20 +119,13 @@ pub struct SftpOpened {
 }
 
 pub struct SftpManager {
+    store: Store,
     sessions: Mutex<HashMap<String, Arc<FilesSession>>>,
     permits: Arc<Semaphore>,
 }
 
-impl Default for SftpManager {
-    fn default() -> Self {
-        Self {
-            sessions: Mutex::new(HashMap::new()),
-            permits: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
-        }
-    }
-}
-
 struct FilesSession {
+    profile: SshProfile,
     ssh: Handle<PinnedHost>,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
@@ -154,6 +150,14 @@ impl client::Handler for PinnedHost {
 }
 
 impl SftpManager {
+    pub fn new(store: Store) -> Self {
+        Self {
+            store,
+            sessions: Mutex::new(HashMap::new()),
+            permits: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
+        }
+    }
+
     fn session(&self, id: &str) -> Result<Arc<FilesSession>> {
         self.sessions
             .lock()
@@ -188,7 +192,7 @@ impl SftpManager {
             .map_err(|_| "열린 SFTP 연결이 너무 많습니다. 사용하지 않는 연결을 닫으세요.")?;
         let ready = timeout(
             START_TIMEOUT,
-            start_session(host, port, username, pinned, auth, permit),
+            start_session(profile, host, port, username, pinned, auth, permit),
         )
         .await
         .map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
@@ -240,6 +244,7 @@ impl SftpManager {
 }
 
 async fn start_session(
+    profile: SshProfile,
     host: String,
     port: u16,
     username: String,
@@ -329,6 +334,7 @@ async fn start_session(
     let directory = read_directory(&files, SftpString::from(".")).await?;
     Ok((
         FilesSession {
+            profile,
             ssh,
             files,
             operation: AsyncMutex::new(()),

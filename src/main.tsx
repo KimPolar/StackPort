@@ -597,8 +597,10 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.export.json": "SQLite JSON 내보내기",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
+  "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
+  "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",
 };
-const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패" };
+const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
 
 function EditDialog({ request, onClose, onApplied }: { request: EditRequest; onClose: () => void; onApplied: (result: EditResult) => void }) {
   const [session, setSession] = useState<EditSession | null>(null);
@@ -689,13 +691,16 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
   }, [cursor, refresh]);
 
   return <section className="audit-panel" aria-labelledby="audit-title">
-    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite 작업과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
+    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite 작업, SFTP 전송과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
     <p className="audit-note">SQL, 행 데이터, 암호와 파일 경로는 기록하지 않습니다. 실행자는 로컬 사용자로만 표시되며 개인 계정 식별과 변조 방지는 아직 제공되지 않습니다.</p>
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
-      {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => <li key={event.id}>
-        <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${event.outcome}`}>{auditOutcomeNames[event.outcome] ?? event.outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
-      </li>)}</ul> : <p className="audit-empty">아직 기록된 작업이 없습니다.</p>}
+      {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => {
+        const outcome = event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel") ? "cancelled" : event.outcome;
+        return <li key={event.id}>
+          <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${outcome}`}>{auditOutcomeNames[outcome] ?? outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
+        </li>;
+      })}</ul> : <p className="audit-empty">아직 기록된 작업이 없습니다.</p>}
       <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
     </div>
     <details className="ssh-history" onToggle={event => setSshOpen(event.currentTarget.open)}><summary>SSH 호스트 키 신뢰 기록</summary>{sshOpen && <SshTrustHistory />}</details>

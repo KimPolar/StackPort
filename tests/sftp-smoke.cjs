@@ -292,11 +292,52 @@ async function main() {
     await assert.rejects(command('open_sftp', { profile, confirmation: 'PROD', authentication }), /호스트 키/);
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
+    await verifyTransferAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, file navigation and previews, verified uploads/downloads, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, file navigation and previews, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
+  }
+}
+
+async function verifyTransferAudit(page, command, project, profile, localPath) {
+  const { events } = await command('list_audit_events', { before: null });
+  const transfers = events.filter(event => event.operation.startsWith('sftp.'));
+  const groups = Map.groupBy(transfers, event => event.correlation_id);
+  for (const records of groups.values()) {
+    assert.equal(records.length, 2);
+    const [end, start] = records;
+    assert.notEqual(start.id, end.id);
+    assert.equal(start.outcome, 'started');
+    assert.ok(end.operation === start.operation || end.operation === `${start.operation}.cancel`);
+  }
+  for (const operation of ['sftp.download', 'sftp.upload']) {
+    for (const outcome of ['started', 'succeeded', 'failed']) {
+      assert.ok(transfers.some(event => event.operation === operation && event.outcome === outcome));
+    }
+    assert.ok(transfers.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
+  }
+  for (const event of transfers) {
+    assert.equal(event.project_id, project.id);
+    assert.equal(event.profile_id, profile.id);
+    assert.equal(event.environment, 'PROD');
+    assert.equal(event.actor, 'local');
+    assert.equal(event.object_name, null);
+    assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
+    assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
+  }
+  const serialized = JSON.stringify(transfers);
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '전송.bin', password, passphrase]) {
+    assert.equal(serialized.includes(privateValue), false);
+  }
+  await page.getByRole('button', { name: '작업 기록', exact: true }).click();
+  await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
+  for (const action of ['SFTP 다운로드', 'SFTP 업로드']) {
+    const rows = page.getByRole('listitem').filter({ hasText: action });
+    for (const state of ['시작', '완료', '실패', '중단']) {
+      await rows.getByText(state, { exact: true }).first().waitFor();
+    }
   }
 }
 

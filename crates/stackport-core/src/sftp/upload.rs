@@ -1,9 +1,11 @@
 //! Verify a remote staging file before asking the server to publish it.
 
 use super::{
+    audit::{Direction, TransferAudit},
     file_error, open_local_file,
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
-    RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, MAX_REMOTE_PATH,
+    RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
+    MAX_REMOTE_PATH,
 };
 use crate::Result;
 use russh_sftp::{
@@ -25,7 +27,7 @@ impl SftpManager {
         directory: RemotePath,
         filename: String,
         progress: impl Fn(SftpTransferProgress),
-    ) -> Result<SftpTransferOutcome> {
+    ) -> Result<SftpTransferReport> {
         validate_name(&filename)?;
         let directory = directory.into_path()?;
         let session = self.session(id)?;
@@ -35,6 +37,9 @@ impl SftpManager {
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
         let active = session.register_transfer()?;
         let transfer = &active.transfer;
+        let audit =
+            TransferAudit::start(&self.store, &session.profile, &transfer.id, Direction::Upload)
+                .await?;
         let update = |bytes, total, verifying| progress(transfer.report(bytes, total, verifying));
         update(0, None, false);
         let outcome = upload_file(
@@ -47,12 +52,13 @@ impl SftpManager {
             update,
         )
         .await;
-        match outcome {
+        let outcome = match outcome {
             Err(_) if transfer.cancelled() => Ok(SftpTransferOutcome::Cancelled {
                 cleanup_warning: None,
             }),
             outcome => outcome,
-        }
+        };
+        audit.finish(outcome).await
     }
 }
 
@@ -65,6 +71,7 @@ async fn upload_file(
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>, bool),
 ) -> Result<SftpTransferOutcome> {
+    transfer.check()?;
     let source = tokio::task::spawn_blocking(move || open_local_file(&source))
         .await
         .map_err(|_| "업로드할 로컬 파일을 열 수 없습니다.")??;

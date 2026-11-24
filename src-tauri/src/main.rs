@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpTransferOutcome, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -627,7 +627,7 @@ async fn download_sftp_file(
     source: RemotePath,
     destination: String,
     progress: Channel<SftpTransferProgress>,
-) -> Result<SftpTransferOutcome, String> {
+) -> Result<SftpTransferReport, String> {
     sftp.download(&id, source, destination, |update| {
             let _ = progress.send(update);
         })
@@ -642,7 +642,7 @@ async fn upload_sftp_file(
     directory: RemotePath,
     filename: String,
     progress: Channel<SftpTransferProgress>,
-) -> Result<SftpTransferOutcome, String> {
+) -> Result<SftpTransferReport, String> {
     sftp.upload(&id, source, directory, filename, |update| {
             let _ = progress.send(update);
         })
@@ -801,10 +801,10 @@ fn main() {
             }
             let path = location.directory.join("workspace.sqlite");
             let store = Store::open(path).map_err(std::io::Error::other)?;
+            app.manage(SftpManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
-            app.manage(SftpManager::default());
             app.manage(Arc::new(NetworkManager::default()));
             app.manage(Arc::new(RdpManager::new(location.directory.clone())));
             app.manage(location);

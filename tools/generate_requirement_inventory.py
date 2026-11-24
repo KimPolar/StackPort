@@ -13,7 +13,7 @@ PARTIAL = {
     "SP-UI-002": "프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색",
     "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
-    "SP-UI-011": "프로젝트·SQLite 작업, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
+    "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
     "SP-UI-016": "로컬 터미널 탭의 키보드 이동과 Ctrl+Shift+F 출력 검색",
@@ -48,6 +48,7 @@ PARTIAL = {
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시간과 숨김 표시, SFTP의 권한·소유자/그룹 ID",
     "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
     "SP-FL-021": "SFTP 업로드의 원본·원격 SHA-256 비교, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
+    "SP-FL-023": "SFTP 업·다운로드의 시작·완료·실패·중단, 시각과 연결 ID를 로컬에 기록",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 다중 클라이언트, 창·전체 화면·다중 모니터, 창 해상도·색 깊이 설정",
     "SP-RG-002": "사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
@@ -98,7 +99,7 @@ PARTIAL = {
     "SP-SEC-003": "SQLite 운영 환경 셀 변경 시 대상·미리보기와 PROD 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SSH 연결 정의와 키 신뢰·교체 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·복원·CSV 및 JSON 내보내기·셀 편집, SFTP 전송, SSH 연결 정의와 키 신뢰·교체 이력 기록",
     "SP-SEC-015": "SQLite PROD 단일 셀 변경에 추가 확인 적용",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
@@ -142,8 +143,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):
                 evidence = "crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/"
-            elif requirement_id in {"SP-UI-011", "SP-SEC-011"}:
-                evidence = "crates/stackport-core/tests/audit.rs; crates/stackport-core/src/ssh.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-UI-011", "SP-SEC-011", "SP-FL-023"}:
+                evidence = "crates/stackport-core/tests/audit.rs; crates/stackport-core/src/sftp/audit.rs; tests/sftp-smoke.cjs; tests/ssh-smoke.cjs; src/main.tsx"
             elif requirement_id == "SP-SEC-009":
                 evidence = "crates/stackport-core/tests/audit.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-NFR-006", "SP-AT-025"}:

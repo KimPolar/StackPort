@@ -83,6 +83,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     {finished && <div className="success-banner files-download-result" role="status">
       <strong>{finished.kind === "download" ? "다운로드 완료" : "업로드 완료"}</strong><span>{displayPath(finished.path)} · {numbers.format(BigInt(finished.bytes))} B</span>
       <details><summary>SHA-256</summary><code>{finished.sha256}</code></details>
+      {finished.auditWarning && <strong className="audit-warning">{finished.auditWarning}</strong>}
     </div>}
     <div className="files-panes">
       <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
