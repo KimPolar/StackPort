@@ -307,6 +307,26 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-result-differences td { overflow-wrap: anywhere; white-space: normal; }
 .sql-result-differences td code { white-space: pre-wrap; }
 .sql-result-differences td small { display: block; margin-top: 3px; color: #526a5f; }
+.dialog.sql-template-library { width: min(820px, calc(100vw - 32px)); }
+.sql-template-library-body { padding: 0 21px 21px; color: #435e50; font-size: 12px; }
+.sql-template-controls, .sql-template-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.sql-template-controls > strong { flex: 1; min-width: min(100%, 120px); overflow-wrap: anywhere; }
+.sql-template-filters { margin: 12px 0; }
+.sql-template-filters input[type="search"] { flex: 1 1 170px; min-width: 0; }
+.sql-template-filters :is(input[type="search"], select) { max-width: 100%; min-height: 32px; padding: 0 8px; border: 1px solid #dce7df; border-radius: 5px; background: white; color: #30473b; }
+.sql-template-filters label { white-space: nowrap; }
+.sql-template-browser { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; }
+.sql-template-list { display: grid; align-content: start; gap: 4px; max-height: 42vh; min-width: 0; overflow: auto; padding: 4px; margin: 0; list-style: none; border: 1px solid #dce7df; border-radius: 5px; }
+.sql-template-list button { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; width: 100%; padding: 7px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #30473b; text-align: start; overflow-wrap: anywhere; }
+.sql-template-list button[aria-pressed="true"] { border-color: #a4c8b8; background: #e3f0e9; }
+.sql-template-list small { flex-basis: 100%; color: #526a5f; }
+.sql-template-preview { min-width: 0; overflow-wrap: anywhere; }
+.sql-template-preview pre, .sql-template-editor-field textarea { padding: 9px; border: 1px solid #dce7df; border-radius: 5px; font: 12px/1.6 Consolas, monospace; }
+.sql-template-preview pre { min-height: 70px; max-height: 34vh; overflow: auto; background: #f6f9f7; }
+.sql-template-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0 12px; min-width: 0; padding: 0; margin: 0; border: 0; }
+.sql-template-editor-field { grid-column: 1 / -1; }
+@media (max-width: 580px) { .sql-template-browser { grid-template-columns: 1fr; } .sql-template-list { max-height: 22vh; } }
+@media (forced-colors: active) { .sql-template-list button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -1px; } }
 .csv-options { display: grid; gap: 8px; margin: 12px 0; padding: 0; border: 0; color: #526a5f; font-size: 12px; }
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }

@@ -11,7 +11,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
-    open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument,
+    open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
@@ -996,6 +996,30 @@ async fn write_sql_document(destination: String, document: SqlDocument) -> Resul
 }
 
 #[tauri::command]
+async fn list_sql_templates(store: State<'_, Store>, project_id: String) -> Result<Vec<SqlTemplateSummary>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_sql_templates(&project_id)).await
+}
+
+#[tauri::command]
+async fn read_sql_template(store: State<'_, Store>, project_id: String, id: String) -> Result<SqlTemplate, String> {
+    let store = store.inner().clone();
+    worker(move || store.read_sql_template(&project_id, &id)).await
+}
+
+#[tauri::command]
+async fn save_sql_template(store: State<'_, Store>, project_id: String, write: SqlTemplateWrite) -> Result<SqlTemplate, String> {
+    let store = store.inner().clone();
+    worker(move || store.save_sql_template(&project_id, write)).await
+}
+
+#[tauri::command]
+async fn delete_sql_template(store: State<'_, Store>, project_id: String, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_sql_template(&project_id, &id, revision)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1234,6 +1258,10 @@ fn main() {
             choose_sql_document_path,
             read_sql_document,
             write_sql_document,
+            list_sql_templates,
+            read_sql_template,
+            save_sql_template,
+            delete_sql_template,
             choose_sqlite_file,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,

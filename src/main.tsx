@@ -95,6 +95,7 @@ type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archivePro
 const desktop = isTauri();
 const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(module => ({ default: module.TerminalWorkspace })));
 const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").then(module => ({ default: module.SqlResultComparison })));
+const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(module => ({ default: module.SqlTemplateLibrary })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -148,6 +149,7 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sqlTabSets, setSqlTabSets] = useState<Record<string, SqlTabSet>>({});
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
+  const [templateLibrary, setTemplateLibrary] = useState<{ projectId: string; source: string; selection: boolean } | null>(null);
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
   const [formatSelection, setFormatSelection] = useState<SqlFormatSelection | null>(null);
   const [aliasRename, setAliasRename] = useState<SqlAliasRenameRequest | null>(null);
@@ -645,13 +647,33 @@ function App() {
     else if (sqlDraft) setSqlFileAction({ mode, draft: { ...sqlDraft, ...sqlTarget } });
   }
 
+  function openSqlTemplates() {
+    if (!desktop || !project) return;
+    const editor = sqlEditor.current;
+    const selection = !!editor && sqlEditorOpen && editor.selectionStart !== editor.selectionEnd;
+    const source = selection ? editor.value.slice(editor.selectionStart, editor.selectionEnd) : sql;
+    setTemplateLibrary({ projectId: project.id, source, selection });
+  }
+
+  function openSqlTemplate(template: { name: string; sql: string }, owner: string) {
+    if (sqlTarget?.projectId !== owner) return;
+    showTool("workspace");
+    setSqlEditorOpen(true);
+    resetSqlView();
+    editSqlTabs(sqlTarget, group => addSqlTab(group, sqlTarget, {
+      ...emptySqlDocument, text: template.sql.replace(/\r\n?/g, "\n"),
+    }, { templateName: template.name }));
+    setTemplateLibrary(null);
+    requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
+  }
+
   function finishSqlFile(action: SqlFileAction, contents: SqlDocument, path: string) {
     if (action.mode === "open") {
       if (action.target.profileId === profileId) {
         resetSqlView();
         requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
       }
-      editSqlTabs(action.target, group => addSqlTab(group, action.target, contents, path));
+      editSqlTabs(action.target, group => addSqlTab(group, action.target, contents, { path }));
     } else if (action.closeAfter) {
       removeSqlTab(action.draft);
     } else {
@@ -911,6 +933,8 @@ function App() {
         { id: "create:sqlite", title: "SQLite 연결 추가", group: "작업", Icon: Database, run: () => openModal("profile") },
         { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
       );
+      if (desktop) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
+        keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
     for (const item of projects) commands.push({
       id: `project:${item.id}`, title: item.name, group: "프로젝트",
@@ -1009,6 +1033,7 @@ function App() {
     <div className="sql-file-actions">
       <button type="button" className="secondary small" onClick={() => openSqlFileDialog("open")}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+      <button type="button" className="secondary small" onClick={openSqlTemplates}><FileCode2 size={14} aria-hidden /> SQL 템플릿</button>
       {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
       {sqlDraft && <button type="button" className="secondary small" title="F2" disabled={!sql.trim()} onClick={openSqlAliasRename}>별칭 변경</button>}
       {sqlDraft && <button type="button" className="secondary small" title="Ctrl+Alt+F" disabled={!sql.trim()} onClick={openSqlFormat}>SQL 서식</button>}
@@ -1301,11 +1326,11 @@ function App() {
       onClose={() => setPaletteOpen(false)} onRun={runWorkspaceCommand} />}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
-      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite 및 SSH 연결 정의를 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}
+      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite·SSH 연결 정의와 SQL 템플릿을 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}
       {modal === "archiveProject" && <p className="confirm-copy"><strong>{project?.name}</strong>을 활성 목록에서 숨깁니다. 연결 정의와 파일은 보존되며 보관된 프로젝트 목록에서 다시 활성화할 수 있습니다.</p>}
       {modal === "profile" && <><label className="field">SQLite 파일 경로<span className="file-input"><input required value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" /><button type="button" className="secondary" onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label><label className="field">환경<select value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label><p className="form-note">기존 파일만 열 수 있습니다. SQL은 읽기 전용이며 지원되는 셀은 별도 미리보기와 승인 후 수정할 수 있습니다.</p></>}
       {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
-      {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개 및 해당 SQL 초안을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
+      {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개, SQL 초안 및 템플릿을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : modal === "duplicateProject" ? "프로젝트 복제" : modal === "archiveProject" ? "프로젝트 보관" : "저장"}</button></div>
@@ -1350,6 +1375,11 @@ function App() {
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
     {resultComparison && resultComparison.tabId === sqlDraft?.id && <React.Suspense fallback={null}>
       <SqlResultComparison sources={resultComparison.sources} initial={resultComparison.initial} onClose={() => setResultComparison(null)} />
+    </React.Suspense>}
+    {templateLibrary && project && templateLibrary.projectId === project.id && <React.Suspense fallback={null}>
+      <SqlTemplateLibrary key={project.id} projectId={project.id} projectName={project.name}
+        source={templateLibrary.source} selection={templateLibrary.selection} canOpen={sqlTarget?.projectId === project.id}
+        onOpen={template => openSqlTemplate(template, project.id)} onClose={() => setTemplateLibrary(null)} />
     </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
@@ -1404,6 +1434,8 @@ function SshProfileDialog({ mode, profile, projectId, onClose, onChanged }: { mo
 const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
+  "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
+  "sql_template.delete": "SQL 템플릿 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.restore": "SQLite 복원",

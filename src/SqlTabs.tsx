@@ -9,22 +9,24 @@ export type SqlDraft = SqlTarget & {
   document: SqlDocument;
   savedText: string;
   savedPath: string;
+  templateName?: string;
 };
 export type SqlTabSet = { tabs: SqlDraft[]; activeId: string; nextNumber: number };
 
 export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom: false };
 export const emptySqlTabs: SqlTabSet = { tabs: [], activeId: "", nextNumber: 1 };
 
-export function addSqlTab(group: SqlTabSet, target: SqlTarget, document = emptySqlDocument, path = ""): SqlTabSet {
+export function addSqlTab(group: SqlTabSet, target: SqlTarget, document = emptySqlDocument,
+  { path = "", templateName }: { path?: string; templateName?: string } = {}): SqlTabSet {
   const number = group.nextNumber;
   const draft = {
     ...target, id: `${target.profileId}-${number}`, number,
-    document, savedText: document.text, savedPath: path,
+    document, savedText: document.text, savedPath: path, templateName,
   };
   return { tabs: [...group.tabs, draft], activeId: draft.id, nextNumber: number + 1 };
 }
 
-export const sqlTabTitle = (draft: SqlDraft) => draft.savedPath.split(/[/\\]/).at(-1) || `SQL ${draft.number}`;
+export const sqlTabTitle = (draft: SqlDraft) => draft.savedPath.split(/[/\\]/).at(-1) || draft.templateName || `SQL ${draft.number}`;
 export const isSqlDraftDirty = (draft: SqlDraft) => draft.document.text !== draft.savedText;
 export const sqlTabButtonId = (id: string) => `sql-tab-${id}`;
 export const sqlTabPanelId = (id: string) => `sql-panel-${id}`;

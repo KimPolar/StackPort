@@ -104,6 +104,7 @@ PARTIAL = {
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
     "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
+    "SP-SQ-017": "SQLite 프로젝트별 SQL 템플릿 저장·편집·삭제, 폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭에서 실행 시 매개변수 입력",
     "SP-SQ-018": "1 MiB 이하 UTF-8 SQL 파일 열기와 새 파일 저장, BOM·LF/CRLF 유지 및 편집기에서 명시 실행",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
@@ -257,6 +258,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-013":
                 evidence = "src/main.tsx; src/SqlResultComparison.tsx; src/sqlResults.ts; tests/sql-results.test.mjs; tests/sql-file-smoke.cjs"
+            elif requirement_id == "SP-SQ-017":
+                evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-SQ-010", "SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
                 evidence = "crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/"
             elif requirement_id == "SP-CN-008":

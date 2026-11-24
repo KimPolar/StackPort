@@ -194,7 +194,7 @@ SP-SQ-013,결과 고정,여러 쿼리 결과를 탭에 고정하고 변경 결�
 SP-SQ-014,실행 계획,EXPLAIN·ANALYZE·SHOW PLAN 계열에서 텍스트/트리/그래픽 실행 계획 표시.,partial,SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리,crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-015,실행 계획 분석,"비용, 예상/실제 행 수, 스캔·조인·정렬·인덱스 사용량, 병목 단계 강조.",partial,SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분,crates/stackport-core/tests/query_parameters.rs; crates/stackport-core/tests/query_cancel.rs; tests/desktop-smoke.cjs; src/SqlParameterFields.tsx; src/SqliteQueryPlan.tsx; src-tauri/
 SP-SQ-016,SQL 프로파일링,"서버 지원 범위에서 실행 시간·잠금 대기·IO/CPU 통계, 전후 비교.",not_started,,
-SP-SQ-017,쿼리 템플릿,"사용자 정의 스니펫, 변수, 즐겨찾기, 폴더/프로젝트 공유, 최근 쿼리.",not_started,,
+SP-SQ-017,쿼리 템플릿,"사용자 정의 스니펫, 변수, 즐겨찾기, 폴더/프로젝트 공유, 최근 쿼리.",partial,"SQLite 프로젝트별 SQL 템플릿 저장·편집·삭제, 폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭에서 실행 시 매개변수 입력",crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; tests/sql-file-smoke.cjs
 SP-SQ-018,SQL 파일,"가져오기/저장/실행, 인코딩 및 구문 구분, 매우 큰 파일의 스트리밍 실행.",partial,"1 MiB 이하 UTF-8 SQL 파일 열기와 새 파일 저장, BOM·LF/CRLF 유지 및 편집기에서 명시 실행",crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; tests/sql-file-smoke.cjs
 SP-SQ-019,SQL 콘솔,일반 쿼리 편집기와 별도로 DB 엔진의 명령 기반 상호작용 제공(지원 시).,not_started,,
 SP-SQ-020,PL/SQL·PL/pgSQL 개발,해당 언어 지원 편집·구문 검사·컴파일 결과와 함수/프로시저 실행.,not_started,,

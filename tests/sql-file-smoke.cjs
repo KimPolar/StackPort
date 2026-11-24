@@ -334,8 +334,9 @@ async function main() {
     assert.equal(await editor.inputValue(), '');
     await verifySqlBatch(page, editor, exportJson);
     await verifySqlResultPins(page, editor, sqlTabs, add, exportJson);
+    await verifySqlTemplates(page, editor, sqlTabs);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, plans, batches, result pins and comparisons, pagination and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, plans, batches, result pins, comparisons and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -746,6 +747,75 @@ async function verifySqlResultPins(page, editor, sqlTabs, add, exportJson) {
   await grid.getByRole('button', { name: '고정 해제', exact: true }).click();
   assert.equal(await pins.getByRole('button', { name: /^고정 \d+$/ }).count(), 1);
   await cell('고정 이후 이름').waitFor();
+}
+
+async function verifySqlTemplates(page, editor, sqlTabs) {
+  const open = page.getByRole('button', { name: 'SQL 템플릿', exact: true });
+  const library = page.getByRole('dialog', { name: 'SQL 템플릿', exact: true });
+  const list = library.getByRole('list', { name: '템플릿 목록', exact: true });
+  const preview = library.getByLabel('저장된 템플릿 SQL', { exact: true });
+  const save = library.getByRole('button', { name: '템플릿 저장', exact: true });
+  const name = library.getByLabel('템플릿 이름', { exact: true });
+  const previous = await sqlTabs.getByRole('tab', { selected: true }).getAttribute('id');
+  const prefix = "SELECT '보존할 초안😀';\n";
+  const snippet = 'SELECT :threshold AS saved_value;';
+  await editor.fill(prefix + snippet);
+  await editor.evaluate((node, start) => node.setSelectionRange(start, node.value.length), prefix.length);
+  await open.click();
+  await library.getByRole('button', { name: '선택 영역으로 만들기', exact: true }).click();
+  assert.equal(await library.getByLabel('템플릿 SQL', { exact: true }).inputValue(), snippet);
+  await name.fill('매개변수 조회');
+  await library.getByLabel('폴더', { exact: true }).fill('보고서');
+  await save.click();
+  await preview.waitFor();
+  assert.equal(await preview.textContent(), snippet);
+
+  await library.getByRole('button', { name: '새 템플릿', exact: true }).click();
+  await name.fill('상태 확인');
+  await library.getByLabel('템플릿 SQL', { exact: true }).fill('SELECT 1 AS status;');
+  await save.click();
+  await list.getByRole('button', { name: /상태 확인/ }).waitFor();
+  await library.getByLabel('템플릿 폴더', { exact: true }).selectOption({ label: '보고서' });
+  assert.equal(await list.getByRole('button', { name: /상태 확인/ }).count(), 0);
+  await library.getByRole('button', { name: '즐겨찾기', exact: true }).click();
+  await library.getByLabel('즐겨찾기만', { exact: true }).check();
+  await list.getByRole('button', { name: /매개변수 조회/ }).waitFor();
+  await library.getByRole('button', { name: '템플릿 편집', exact: true }).click();
+  await name.fill('보관한 조회');
+  await save.click();
+  await list.getByRole('button', { name: /보관한 조회/ }).waitFor();
+  await library.getByRole('button', { name: '닫기', exact: true }).click();
+
+  await page.getByRole('button', { name: '명령 팔레트', exact: true }).click();
+  const command = page.getByRole('combobox', { name: '명령 검색', exact: true });
+  await command.fill('SQL 템플릿');
+  await command.press('Enter');
+  await library.getByLabel('템플릿 검색', { exact: true }).fill('보관한');
+  await list.getByRole('button', { name: /보관한 조회/ }).waitFor();
+  await library.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  const opened = sqlTabs.getByRole('tab', { name: '보관한 조회', exact: true });
+  assert.equal(await opened.getAttribute('aria-selected'), 'true');
+  assert.equal(await editor.inputValue(), snippet);
+  await sqlTabs.locator(`[id="${previous}"]`).click();
+  assert.equal(await editor.inputValue(), prefix + snippet);
+  await opened.click();
+  await editor.press('Control+Enter');
+  await page.getByLabel(':threshold 형식', { exact: true }).selectOption('integer');
+  await page.getByLabel(':threshold 값', { exact: true }).fill('42');
+  await page.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await page.getByRole('cell', { name: '42', exact: true }).waitFor();
+
+  await open.click();
+  await library.getByLabel('템플릿 검색', { exact: true }).fill('보관한');
+  await library.getByRole('button', { name: '템플릿 삭제', exact: true }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'SQL 템플릿', exact: true });
+  await confirm.getByRole('button', { name: '취소', exact: true }).click();
+  await preview.waitFor();
+  await library.getByRole('button', { name: '템플릿 삭제', exact: true }).click();
+  await confirm.getByRole('button', { name: '템플릿 삭제 확인', exact: true }).click();
+  await library.getByText('조건에 맞는 템플릿이 없습니다.', { exact: true }).waitFor();
+  await library.getByRole('button', { name: '닫기', exact: true }).click();
+  assert.equal(await editor.inputValue(), snippet);
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

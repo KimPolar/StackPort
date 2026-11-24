@@ -81,7 +81,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -135,7 +135,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        6
+        7
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);
@@ -300,7 +300,7 @@ fn version_five_migration_preserves_workspace_resume_and_creates_sftp_profiles()
         layout: ResumeLayout::Tool { tool: ResumeTool::Files },
     }).unwrap();
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
+    db.execute_batch("DROP TABLE sql_templates; DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
     drop(db);
 
     let migrated = Store::open(&path).unwrap();
@@ -314,6 +314,27 @@ fn version_five_migration_preserves_workspace_resume_and_creates_sftp_profiles()
         .find(|path| path.file_name().unwrap().to_string_lossy().contains(".v5-")).unwrap();
     let backup = Connection::open(backup_path).unwrap();
     assert_eq!(backup.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 5);
+}
+
+#[test]
+fn version_six_migration_preserves_existing_tables_before_adding_templates() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    let store = Store::open(&path).unwrap();
+    let project = store.create_project("기존 프로젝트").unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("DROP TABLE sql_templates; PRAGMA user_version=6;").unwrap();
+    drop(db);
+    let migrated = Store::open(&path).unwrap();
+    assert_eq!(migrated.list_projects().unwrap(), vec![project.clone()]);
+    assert!(migrated.list_sql_templates(&project.id).unwrap().is_empty());
+    let backup_path = std::fs::read_dir(directory.path()).unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.file_name().unwrap().to_string_lossy().contains(".v6-")).unwrap();
+    let backup = Connection::open(backup_path).unwrap();
+    assert_eq!(backup.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0)).unwrap(), 6);
+    assert_eq!(backup.query_row("SELECT count(*) FROM sqlite_schema WHERE name = 'sftp_sync_profiles'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(backup.query_row("SELECT count(*) FROM sqlite_schema WHERE name = 'sql_templates'", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
 }
 
 #[test]
