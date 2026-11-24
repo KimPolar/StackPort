@@ -1,3 +1,4 @@
+use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use super::{
     catalog::{self, PostgresStructure, PostgresStructureSection},
     edit::{
@@ -5,10 +6,10 @@ use super::{
         PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
     },
     export::EXPORT_TIMEOUT,
+    monitor::{self, PostgresActivityInput, PostgresActivitySnapshot},
     parameters::Value,
     sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
-use super::search::{self, PostgresSearchInput, PostgresSearchPage};
 use crate::{
     quote_identifier, ssh_tunnel::DatabaseTunnel, table_query::bounded_filter_text,
     LocalTunnelEndpoint, Result, SshTunnelManager, Store, TableQueryClauses,
@@ -19,6 +20,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::HashMap,
     fs::File,
+    future::pending,
     io::Read,
     net::Ipv4Addr,
     sync::{atomic::AtomicU64, Arc, Mutex},
@@ -156,11 +158,17 @@ struct Session {
     connection: JoinHandle<()>,
     connection_ended: watch::Receiver<bool>,
     tunnel: Option<DatabaseTunnel>,
+    monitor_of: Option<String>,
     tls: TlsConnector,
     running_sql: Mutex<Option<sql::RunningSql>>,
     grid_edit: bool,
     edit: AsyncMutex<Option<edit::Plan>>,
     _permit: OwnedSemaphorePermit,
+}
+
+struct MonitorOwner {
+    id: String,
+    connection_ended: watch::Receiver<bool>,
 }
 
 impl Session {
@@ -202,33 +210,82 @@ impl PostgresManager {
         tunnel_id: Option<&str>,
         grid_edit: bool,
     ) -> Result<PostgresSessionInfo> {
+        let tls = self.authorize(&profile, &password, confirmation).await?;
+        let settings = &profile.settings;
+        let tunnel = tunnel_id
+            .map(|id| {
+                tunnels.database_tunnel(id, &profile.project_id, &settings.host, settings.port)
+            })
+            .transpose()?;
+        self.connect(profile, password, tls, tunnel, grid_edit, None)
+            .await
+    }
+
+    pub async fn open_monitor(
+        &self,
+        id: &str,
+        password: PostgresPassword,
+        confirmation: &str,
+    ) -> Result<PostgresSessionInfo> {
+        let workspace = self.session(id)?;
+        if workspace.monitor_of.is_some() {
+            return Err("데이터베이스 작업 공간에서 서버 모니터를 여세요.".into());
+        }
+        let profile = workspace.profile.clone();
+        let tunnel = workspace.tunnel.clone();
+        let owner = MonitorOwner {
+            id: id.to_owned(),
+            connection_ended: workspace.connection_ended.clone(),
+        };
+        drop(workspace);
+        let tls = self.authorize(&profile, &password, confirmation).await?;
+        self.connect(profile, password, tls, tunnel, false, Some(owner))
+            .await
+    }
+
+    async fn authorize(
+        &self,
+        profile: &PostgresProfile,
+        password: &PostgresPassword,
+        confirmation: &str,
+    ) -> Result<TlsConnector> {
         if password.0.len() > 4096 || password.0.contains('\0') {
             return Err("PostgreSQL 암호를 확인하세요.".into());
         }
-        let settings = &profile.settings;
-        if settings.environment == "PROD" && confirmation != "PROD" {
+        if profile.settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
         let store = self.store.clone();
         let expected = profile.clone();
-        let tls = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             if store.postgres_profile(&expected.id)? != expected {
                 return Err("PostgreSQL 연결이 변경되었습니다. 새로고침하세요.".into());
             }
             tls_connector(expected.settings.ca_path.as_deref())
         })
         .await
-        .map_err(|_| "PostgreSQL 연결 설정을 확인할 수 없습니다.")??;
+        .map_err(|_| "PostgreSQL 연결 설정을 확인할 수 없습니다.")?
+    }
 
+    async fn connect(
+        &self,
+        profile: PostgresProfile,
+        password: PostgresPassword,
+        tls: TlsConnector,
+        tunnel: Option<DatabaseTunnel>,
+        grid_edit: bool,
+        owner: Option<MonitorOwner>,
+    ) -> Result<PostgresSessionInfo> {
+        let settings = &profile.settings;
+        let application = if owner.is_some() {
+            "StackPort Monitor"
+        } else {
+            "StackPort"
+        };
         let mut config = Config::new();
         config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
-            .application_name("StackPort").ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
+            .application_name(application).ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
             .options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog -c standard_conforming_strings=on");
-        let tunnel = tunnel_id
-            .map(|id| {
-                tunnels.database_tunnel(id, &profile.project_id, &settings.host, settings.port)
-            })
-            .transpose()?;
         let endpoint = tunnel.as_ref().map(DatabaseTunnel::endpoint);
         if let Some(endpoint) = &endpoint {
             // Keep the original host for SNI and certificate validation.
@@ -268,22 +325,26 @@ impl PostgresManager {
         drop(password);
         let (ended, connection_ended) = watch::channel(false);
         let link = tunnel.clone();
+        let owner_ended = owner.as_ref().map(|owner| owner.connection_ended.clone());
         let session = Arc::new(Session {
             profile,
             client: AsyncMutex::new(client),
             connection: tokio::spawn(async move {
-                if let Some(route) = link {
-                    tokio::select! {
-                        _ = route.ended() => {}
-                        _ = connection => {}
-                    }
-                } else {
-                    let _ = connection.await;
+                tokio::select! {
+                    _ = connection => {}
+                    _ = async { match link { Some(route) => route.ended().await, None => pending().await } } => {}
+                    _ = async {
+                        match owner_ended {
+                            Some(mut owner) => { let _ = owner.wait_for(|closed| *closed).await; }
+                            None => pending().await,
+                        }
+                    } => {}
                 }
                 ended.send_replace(true);
             }),
             connection_ended,
             tunnel,
+            monitor_of: owner.map(|owner| owner.id),
             tls,
             running_sql: Mutex::default(),
             grid_edit,
@@ -298,10 +359,24 @@ impl PostgresManager {
             return Err(reason.message().into());
         }
         let info = info?;
-        self.sessions
+        let mut sessions = self
+            .sessions
             .lock()
-            .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?
-            .insert(id, session);
+            .map_err(|_| "PostgreSQL 연결 목록을 읽을 수 없습니다.")?;
+        if let Some(owner) = &session.monitor_of {
+            if !sessions
+                .get(owner)
+                .is_some_and(|workspace| workspace.closed_reason().is_none())
+            {
+                return Err(PostgresDisconnect::Closed.message().into());
+            }
+            if sessions.values().any(|other| {
+                other.monitor_of.as_ref() == Some(owner) && other.closed_reason().is_none()
+            }) {
+                return Err("이 데이터베이스 연결의 서버 모니터가 이미 열려 있습니다.".into());
+            }
+        }
+        sessions.insert(id, session);
         Ok(info)
     }
 
@@ -412,6 +487,26 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "PostgreSQL 객체 검색 시간이 초과되었습니다.")?
+    }
+
+    pub async fn server_activity(
+        &self,
+        id: &str,
+        input: PostgresActivityInput,
+    ) -> Result<PostgresActivitySnapshot> {
+        input.validate()?;
+        let session = self.session(id)?;
+        let owner = session
+            .monitor_of
+            .as_deref()
+            .ok_or("서버 모니터 연결을 먼저 여세요.")?;
+        self.session(owner)?;
+        timeout(QUERY_TIMEOUT, async {
+            let mut client = session.client.lock().await;
+            monitor::activity(&mut client, input).await
+        })
+        .await
+        .map_err(|_| "PostgreSQL 서버 활동을 읽는 시간이 초과되었습니다.")?
     }
 
     pub async fn page(

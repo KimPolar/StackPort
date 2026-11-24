@@ -12,6 +12,7 @@ const root = process.env.STACKPORT_TEST_ROOT;
 const bin = process.env.STACKPORT_POSTGRES_BIN;
 const openssl = process.env.STACKPORT_TEST_OPENSSL || 'openssl';
 const password = 'fixture-reader-password';
+const otherPassword = 'fixture-unrelated-role-password';
 if (!root || !bin) throw new Error('Set STACKPORT_TEST_ROOT and STACKPORT_POSTGRES_BIN.');
 
 async function startPostgres() {
@@ -37,6 +38,7 @@ async function startPostgres() {
   const extra = Array.from({ length: 23 }, (_, index) => `extra_${index + 1} text`).join(', ');
   const seed = [
     `CREATE ROLE fixture_reader LOGIN PASSWORD '${password}';`,
+    `CREATE ROLE fixture_unrelated LOGIN PASSWORD '${otherPassword}';`,
     'CREATE SCHEMA report;',
     'CREATE SCHEMA archive;',
     'CREATE SCHEMA restricted;',
@@ -594,6 +596,8 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(afterCancel.rows[0][0].value, '7');
   const deadline = await query('SELECT pg_sleep(12)');
   assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
+  const unrelated = await alternate('Unrelated monitor role', { username: 'fixture_unrelated' });
+  await verifyServerMonitor({ command, open, close, unrelated });
   await verifyGridWrites({ command, open, close, profile, session, findObject });
   await close(session.id);
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
@@ -610,8 +614,36 @@ async function verify(browser, fixture, gateway, jump) {
   }
   const data = page.getByRole('table', { name: 'PostgreSQL 데이터', exact: true });
   const disconnect = () => page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+  const monitorPane = page.getByRole('region', { name: 'PostgreSQL 서버 모니터', exact: true });
+  const monitorButton = page.getByRole('button', { name: '서버 모니터', exact: true });
+  const monitorLogin = page.getByRole('dialog', { name: 'PostgreSQL 모니터 연결', exact: true });
+  async function connectMonitor(tunnelName) {
+    await monitorButton.click();
+    await monitorPane.getByRole('button', { name: '모니터 연결', exact: true }).click();
+    await monitorLogin.getByText(tunnelName ? `읽기 전용 · SSH 터널 ${tunnelName}` : '읽기 전용 · 직접 연결', { exact: true }).waitFor();
+    await monitorLogin.getByLabel('PostgreSQL 암호').fill(password);
+    await monitorLogin.getByLabel('운영 환경 확인').fill('PROD');
+    await monitorLogin.getByRole('button', { name: '연결', exact: true }).click();
+    await monitorLogin.waitFor({ state: 'detached' });
+    await monitorPane.getByRole('table', { name: 'PostgreSQL 세션 활동', exact: true }).getByText(/fixture_reader/).first().waitFor();
+  }
   await connect();
   await page.getByText(/TLS 연결됨 · PostgreSQL/).waitFor();
+  await connectMonitor();
+  await monitorPane.getByText('서버 가동 시간', { exact: true }).waitFor();
+  await monitorPane.getByLabel('세션 범위').selectOption('blocked');
+  await monitorPane.getByText('조건에 맞는 세션이 없습니다.', { exact: true }).waitFor();
+  const sampleLabel = await monitorPane.locator('.postgres-monitor-sample').textContent();
+  const automatic = monitorPane.getByLabel('5초마다 새로 고침');
+  await automatic.check();
+  await page.waitForFunction(previous => {
+    const sample = document.querySelector('.postgres-monitor-sample');
+    return sample?.textContent && sample.textContent !== previous;
+  }, sampleLabel, { timeout: 10000 });
+  await automatic.uncheck();
+  await monitorPane.getByRole('button', { name: '모니터 연결 끊기', exact: true }).click();
+  await monitorPane.getByRole('button', { name: '모니터 연결', exact: true }).waitFor();
+  await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: /restricted/ }).isEnabled(), false);
   await page.getByRole('button', { name: 'report', exact: true }).click();
   const catalogSearch = page.getByRole('dialog', { name: 'PostgreSQL 객체 검색', exact: true });
@@ -1038,6 +1070,10 @@ async function verify(browser, fixture, gateway, jump) {
     assert.deepEqual(JSON.parse(fs.readFileSync(tunnelExport, 'utf8')).rows, [['123']]);
     assert.equal(gateway.forwarded(), 2);
 
+    await connectMonitor('보고서 터널');
+    assert.equal(gateway.forwarded(), 3);
+    await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+
     const draft = 'SELECT $1::int + 90';
     await sql.fill(draft);
     await sql.press('Control+Enter');
@@ -1047,6 +1083,7 @@ async function verify(browser, fixture, gateway, jump) {
     const loss = page.locator('.postgres-recovery').getByRole('alert').filter({ hasText: lossMessage });
     const reconnect = page.getByRole('button', { name: 'PostgreSQL 다시 연결', exact: true });
     await loss.waitFor();
+    assert.equal(await monitorButton.isEnabled(), false);
     await parameters.waitFor({ state: 'detached' });
     assert.equal(await sql.inputValue(), draft);
     assert.equal(await page.getByRole('button', { name: '쿼리 실행', exact: true }).isEnabled(), false);
@@ -1093,6 +1130,77 @@ async function verify(browser, fixture, gateway, jump) {
   } finally { await command('stop_ssh_tunnel', { id: tunnel.id }); }
   await assert.rejects(open(profile, password, 'PROD', tunnel.id), /실행 중인 로컬 SSH 터널/);
   assert.deepEqual(errors, []);
+}
+
+async function verifyServerMonitor({ command, open, close, unrelated }) {
+  const workspace = await open();
+  const waiter = await open();
+  const other = await open(unrelated, otherPassword);
+  let monitor;
+  const run = (id, source, request = randomUUID()) => command('execute_postgres_sql', { id, request, source, scope: { kind: 'document' } });
+  const read = (id, filter = 'all', seconds = 1) => command('postgres_server_activity', { id, input: { filter, slow_seconds: seconds, page: 0 } });
+  async function sample(filter, predicate, timeout = 3500) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const snapshot = await read(monitor.id, filter);
+      const matched = snapshot.sessions.find(predicate);
+      if (matched) return matched;
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
+    throw new Error(`Expected PostgreSQL activity did not appear in ${filter}.`);
+  }
+  try {
+    await assert.rejects(read(workspace.id), /서버 모니터 연결/);
+    await assert.rejects(command('open_postgres_monitor', { id: workspace.id, password, confirmation: '' }), /PROD/);
+    monitor = await command('open_postgres_monitor', { id: workspace.id, password, confirmation: 'PROD' });
+    assert.equal(monitor.grid_edit, false);
+    await assert.rejects(command('open_postgres_monitor', { id: workspace.id, password, confirmation: 'PROD' }), /이미 열려/);
+    await assert.rejects(read(monitor.id, 'slow', 0), /1초에서 3600초/);
+    const snapshot = await read(monitor.id);
+    assert.ok(snapshot.server_uptime_seconds >= 0);
+    assert.ok(snapshot.database_backends >= 4);
+    assert.ok(snapshot.max_connections >= snapshot.database_backends);
+    assert.match(snapshot.commits, /^\d+$/);
+    assert.ok(snapshot.cache_hit_percent === null || (snapshot.cache_hit_percent >= 0 && snapshot.cache_hit_percent <= 100));
+    assert.ok(!snapshot.sessions.some(item => item.application === 'StackPort Monitor'));
+    const pid = async id => Number((await run(id, 'SELECT pg_backend_pid()')).rows[0][0].value);
+    const [workspacePid, waiterPid, otherPid] = await Promise.all([pid(workspace.id), pid(waiter.id), pid(other.id)]);
+    const holderRequest = randomUUID();
+    const holder = run(workspace.id, 'SELECT pg_sleep(7) FROM pg_catalog.pg_advisory_xact_lock(8840291)', holderRequest);
+    const unrelatedWork = run(other.id, "SELECT pg_sleep(7), 'hidden-monitor-query'");
+    let blocked;
+    try {
+      const active = await sample('running', item => item.pid === workspacePid && item.wait_event === 'PgSleep');
+      assert.match(active.query, /pg_advisory_xact_lock/);
+      blocked = run(waiter.id, 'SELECT 1 FROM pg_catalog.pg_advisory_xact_lock(8840291)');
+      const waiting = await sample('blocked', item => item.pid === waiterPid, 1800);
+      assert.equal(waiting.wait_type, 'Lock');
+      assert.deepEqual(waiting.blocker_pids, [workspacePid]);
+      assert.match(waiting.query, /pg_advisory_xact_lock/);
+      const slow = await sample('slow', item => item.pid === workspacePid);
+      assert.ok(slow.query_elapsed_ms >= 1000);
+      const limited = await sample('all', item => item.pid === otherPid);
+      assert.equal(limited.username, 'fixture_unrelated');
+      assert.equal(limited.state, null);
+      assert.equal(limited.query, null);
+      assert.equal(limited.wait_type, null);
+      assert.ok(!(await read(monitor.id, 'running')).sessions.some(item => item.pid === otherPid));
+      assert.ok(!JSON.stringify(await read(monitor.id)).includes('hidden-monitor-query'));
+    } finally {
+      await command('cancel_postgres_sql', { id: workspace.id, request: holderRequest });
+      await close(other.id);
+      await Promise.allSettled([holder, unrelatedWork, blocked]);
+    }
+    const ended = command('wait_postgres_disconnect', { id: monitor.id });
+    await close(workspace.id);
+    assert.equal(await ended, 'closed');
+    await assert.rejects(read(monitor.id), /연결이 닫혔습니다/);
+  } finally {
+    if (monitor) await close(monitor.id);
+    await close(workspace.id);
+    await close(waiter.id);
+    await close(other.id);
+  }
 }
 
 async function verifyGridWrites({ command, open, close, profile, session, findObject }) {
@@ -1219,7 +1327,7 @@ async function main() {
     jump = await startGateway(gateway.port, '127.0.0.1');
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway, jump);
-    console.log('Windows PostgreSQL E2E passed (object search, grid editing, SQL, TLS and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (server activity, object search, grid editing, SQL, TLS and SSH jump recovery).');
   } finally {
     await browser?.close();
     jump?.close();

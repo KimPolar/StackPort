@@ -1208,6 +1208,7 @@ function App() {
     </div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setPostgresEditExitGuard}
+        visible={!historyOpen && toolVisible("workspace")}
         onOpenTunnels={() => { setTunnelViewRequest(value => value + 1); showTool("network"); }}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
         tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),

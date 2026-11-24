@@ -16,7 +16,7 @@ use stackport_core::{
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
-    PostgresSearchInput, PostgresSearchPage,
+    PostgresActivityInput, PostgresActivitySnapshot, PostgresSearchInput, PostgresSearchPage,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -815,6 +815,16 @@ async fn wait_postgres_disconnect(postgres: State<'_, PostgresManager>, id: Stri
 }
 
 #[tauri::command]
+async fn open_postgres_monitor(postgres: State<'_, PostgresManager>, id: String, password: PostgresPassword, confirmation: String) -> Result<PostgresSessionInfo, String> {
+    postgres.open_monitor(&id, password, &confirmation).await
+}
+
+#[tauri::command]
+async fn postgres_server_activity(postgres: State<'_, PostgresManager>, id: String, input: PostgresActivityInput) -> Result<PostgresActivitySnapshot, String> {
+    postgres.server_activity(&id, input).await
+}
+
+#[tauri::command]
 async fn postgres_schemas(postgres: State<'_, PostgresManager>, id: String, page: u32) -> Result<PostgresSchemaPage, String> {
     postgres.schemas(&id, page).await
 }
@@ -1562,6 +1572,8 @@ fn main() {
             open_postgres,
             close_postgres,
             wait_postgres_disconnect,
+            open_postgres_monitor,
+            postgres_server_activity,
             postgres_schemas,
             postgres_objects,
             search_postgres_objects,

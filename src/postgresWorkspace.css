@@ -69,6 +69,25 @@
 .postgres-edit-opt-in { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; margin: 12px 0; }
 .postgres-recovery { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .postgres-recovery p { margin: 0; }
+.postgres-monitor { min-width: 0; }
+.postgres-monitor .panel-heading { height: auto; min-height: 44px; gap: 8px; flex-wrap: wrap; padding: 8px 12px; overflow-wrap: anywhere; }
+.postgres-monitor .table-wrap { max-height: min(55vh, 600px); }
+.postgres-monitor table :is(td, th) { vertical-align: top; }
+.postgres-monitor tbody th { background: transparent; color: var(--text); text-align: start; }
+.postgres-monitor thead th { position: sticky; top: 0; white-space: nowrap; }
+.postgres-monitor small { display: block; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.postgres-monitor pre { min-width: 150px; max-width: min(420px, 60vw); max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.postgres-monitor summary { cursor: pointer; white-space: nowrap; }
+.postgres-monitor-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin: 0; padding: 12px 12px 0; }
+.postgres-monitor-totals > div { padding: 8px 10px; border-radius: 6px; background: var(--surface-inset); overflow-wrap: anywhere; }
+.postgres-monitor-totals dt { font-size: 11px; color: var(--text-muted); }
+.postgres-monitor-totals dd { margin: 4px 0 2px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.postgres-monitor-sample { margin: 8px 12px; }
+.postgres-monitor-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; padding: 10px 12px; }
+.postgres-monitor-controls .field { min-width: 0; margin: 0; }
+.postgres-monitor-threshold { width: 120px; }
+.postgres-monitor-controls > button { min-height: 38px; }
+.postgres-monitor-auto { display: flex; align-items: center; gap: 5px; min-height: 38px; color: var(--text-muted); font-size: 12px; }
 .postgres-editable-cell { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
 .postgres-editable-cell .icon-button { flex: 0 0 auto; opacity: .65; }
 .postgres-editable-cell .icon-button:hover, .postgres-editable-cell .icon-button:focus-visible { opacity: 1; }

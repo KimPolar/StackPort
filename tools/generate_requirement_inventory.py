@@ -90,7 +90,9 @@ PARTIAL = {
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
     "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
-    "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
+    "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계 표시",
+    "SP-DB-024": "PostgreSQL의 독립 읽기 전용 모니터에서 현재 DB 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·누적 지표 조회",
+    "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 객체의 SELECT·UPDATE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
@@ -205,6 +207,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-017", "SP-DB-020"}:
                 evidence = "tests/postgres-smoke.cjs"
+            elif requirement_id in {"SP-DB-023", "SP-DB-024", "SP-DB-025"}:
+                evidence = "crates/stackport-core/src/postgres/monitor.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresServerMonitor.tsx; tests/postgres-smoke.cjs"
             elif requirement_id == "SP-AT-006":
                 evidence = "crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:
@@ -344,7 +348,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {
                 "SP-UI-002", "SP-UI-006", "SP-UI-011", "SP-CN-001", "SP-CN-003", "SP-CN-011", "SP-CN-012",
                 "SP-CN-023", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009",
-                "SP-DB-010", "SP-DB-021", "SP-DB-022", "SP-DB-023", "SP-DB-028", "SP-DB-029", "SP-DT-001",
+                "SP-DB-010", "SP-DB-021", "SP-DB-022", "SP-DB-028", "SP-DB-029", "SP-DT-001",
                 "SP-DT-006",
             }:
                 evidence += "; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs"

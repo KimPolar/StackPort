@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, FileCode2, Pencil, Plug, Search, ShieldCheck, X } from "lucide-react";
+import { Activity, Database, FileCode2, Pencil, Plug, Search, ShieldCheck, X } from "lucide-react";
 import { PostgresEditDialog, type PostgresEditExitGuard, type PostgresRowStamp } from "./PostgresEditDialog";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
+import { PostgresServerMonitor } from "./PostgresServerMonitor";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
@@ -44,13 +45,14 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
   return { types, values: values.map(value => ({ kind: "text", value })) };
 }
 
-export function PostgresWorkspace({ profile, editor, onFileBusy, onEditExitGuard, onOpenTunnels }: {
+export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels }: {
   profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
+  visible: boolean;
   onEditExitGuard: (guard: PostgresEditExitGuard | null) => void;
   onOpenTunnels: () => void;
 }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [view, setView] = useState<"catalog" | "sql">("catalog");
+  const [view, setView] = useState<"catalog" | "sql" | "monitor">("catalog");
   const [dialog, setDialog] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState("");
@@ -129,6 +131,8 @@ export function PostgresWorkspace({ profile, editor, onFileBusy, onEditExitGuard
     <nav className="postgres-views" aria-label="PostgreSQL 보기">
       <button type="button" className="secondary small" aria-pressed={view === "catalog"} onClick={() => setView("catalog")}>객체 탐색</button>
       <button type="button" className="secondary small" aria-pressed={view === "sql"} onClick={() => setView("sql")}><FileCode2 size={14} aria-hidden /> SQL 편집기</button>
+      <button type="button" className="secondary small" aria-pressed={view === "monitor"} disabled={!online}
+        onClick={() => setView("monitor")}><Activity size={14} aria-hidden /> 서버 모니터</button>
     </nav>
     {session && <>
       {online && <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>}
@@ -149,6 +153,7 @@ export function PostgresWorkspace({ profile, editor, onFileBusy, onEditExitGuard
       </div>
     </>}
     <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} editor={editor} onExport={requestExport} /></div>
+    {online && <PostgresServerMonitor key={session.id} workspace={session} environment={environment} database={database} visible={visible && view === "monitor"} />}
     {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
