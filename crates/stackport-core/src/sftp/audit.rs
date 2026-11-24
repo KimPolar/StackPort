@@ -10,43 +10,45 @@ pub struct SftpTransferReport {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum Direction {
+pub(super) enum FileOperation {
     Download,
     Upload,
+    CreateFolder,
 }
 
-impl Direction {
-    fn operation(self, cancelled: bool) -> &'static str {
+impl FileOperation {
+    fn name(self, cancelled: bool) -> &'static str {
         match (self, cancelled) {
             (Self::Download, false) => "sftp.download",
             (Self::Download, true) => "sftp.download.cancel",
             (Self::Upload, false) => "sftp.upload",
             (Self::Upload, true) => "sftp.upload.cancel",
+            (Self::CreateFolder, _) => "sftp.mkdir",
         }
     }
 }
 
-pub(super) struct TransferAudit {
+pub(super) struct FileAudit {
     store: Store,
     profile: SshProfile,
     correlation_id: String,
-    direction: Direction,
+    operation: FileOperation,
 }
 
-impl TransferAudit {
+impl FileAudit {
     pub(super) async fn start(
         store: &Store,
         profile: &SshProfile,
         correlation_id: &str,
-        direction: Direction,
+        operation: FileOperation,
     ) -> Result<Self> {
         let audit = Self {
             store: store.clone(),
             profile: profile.clone(),
             correlation_id: correlation_id.to_owned(),
-            direction,
+            operation,
         };
-        const ERROR: &str = "전송 시작 기록을 저장할 수 없습니다. 작업 공간을 확인하세요.";
+        const ERROR: &str = "작업 시작 기록을 저장할 수 없습니다. 작업 공간을 확인하세요.";
         tokio::task::spawn_blocking(move || {
             audit.record("started", false, None).map_err(|_| ERROR)?;
             Ok::<_, &str>(audit)
@@ -56,25 +58,36 @@ impl TransferAudit {
         .map_err(String::from)
     }
 
-    pub(super) async fn finish(
+    pub(super) async fn finish_transfer(
         self,
         result: Result<SftpTransferOutcome>,
     ) -> Result<SftpTransferReport> {
-        let (status, cancelled, count) = match &result {
-            Ok(SftpTransferOutcome::Saved { .. }) => ("succeeded", false, Some(1)),
-            Ok(SftpTransferOutcome::Cancelled { .. }) => ("succeeded", true, None),
-            Err(_) => ("failed", false, None),
+        let cancelled = matches!(&result, Ok(SftpTransferOutcome::Cancelled { .. }));
+        let (outcome, audit_warning) = self.finish(result, cancelled).await?;
+        Ok(SftpTransferReport {
+            outcome,
+            audit_warning,
+        })
+    }
+
+    pub(super) async fn finish<T>(
+        self,
+        result: Result<T>,
+        cancelled: bool,
+    ) -> Result<(T, Option<&'static str>)> {
+        let status = if result.is_ok() {
+            "succeeded"
+        } else {
+            "failed"
         };
+        let count = (result.is_ok() && !cancelled).then_some(1);
         let written = matches!(
             tokio::task::spawn_blocking(move || self.record(status, cancelled, count)).await,
             Ok(Ok(()))
         );
-        let warning = "전송 결과의 작업 기록을 저장하지 못했습니다.";
+        let warning = "작업 결과의 기록을 저장하지 못했습니다.";
         match result {
-            Ok(outcome) => Ok(SftpTransferReport {
-                outcome,
-                audit_warning: (!written).then_some(warning),
-            }),
+            Ok(outcome) => Ok((outcome, (!written).then_some(warning))),
             Err(error) if !written => Err(format!("{error} {warning}")),
             Err(error) => Err(error),
         }
@@ -85,7 +98,7 @@ impl TransferAudit {
             &self.store.connect()?,
             AuditRecord {
                 correlation_id: &self.correlation_id,
-                operation: self.direction.operation(cancelled),
+                operation: self.operation.name(cancelled),
                 project_id: Some(&self.profile.project_id),
                 profile_id: Some(&self.profile.id),
                 environment: Some(&self.profile.environment),
@@ -119,7 +132,7 @@ mod tests {
                 environment: "DEV".into(),
                 revision: 1,
             };
-            let audit = TransferAudit::start(&store, &profile, "first", Direction::Upload)
+            let audit = FileAudit::start(&store, &profile, "first", FileOperation::Upload)
                 .await
                 .unwrap();
             let db = store.connect().unwrap();
@@ -129,7 +142,7 @@ mod tests {
             )
             .unwrap();
             let written = audit
-                .finish(Ok(SftpTransferOutcome::Saved {
+                .finish_transfer(Ok(SftpTransferOutcome::Saved {
                     bytes: "3".into(),
                     sha256: "fixture".into(),
                 }))
@@ -138,7 +151,7 @@ mod tests {
             assert!(matches!(written.outcome, SftpTransferOutcome::Saved { .. }));
             assert!(written.audit_warning.is_some());
             assert!(
-                TransferAudit::start(&store, &profile, "second", Direction::Download)
+                FileAudit::start(&store, &profile, "second", FileOperation::Download)
                     .await
                     .is_err()
             );

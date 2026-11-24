@@ -78,6 +78,21 @@ function sftpChannel(channel, uploads) {
     else if (existing) channel.attrs(id, existing.attrs);
     else channel.status(id, code.NO_SUCH_FILE);
   });
+  channel.on('MKDIR', (id, remotePath, attributes) => {
+    const name = path.posix.basename(remotePath);
+    const entries = directories.get(path.posix.dirname(remotePath));
+    if (!entries) return channel.status(id, code.NO_SUCH_FILE);
+    if (name === '권한 제한') return channel.status(id, code.PERMISSION_DENIED);
+    if (name === '동시 생성') {
+      uploads.files.set(remotePath, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
+    }
+    if (lookup(remotePath) || directories.has(remotePath)) return channel.status(id, code.FAILURE);
+    const entry = directory(name);
+    entry.attrs.mode = 0o40000 | attributes.mode;
+    entries.push(entry);
+    directories.set(remotePath, []);
+    channel.status(id, code.OK);
+  });
   channel.on('OPEN', (id, remotePath, flags, attributes) => {
     const { READ, WRITE, CREAT, EXCL } = utils.sftp.OPEN_MODE;
     if (flags === READ) {
@@ -273,6 +288,7 @@ async function main() {
     await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
+    await verifyNewFolder(page, remote, server.uploads);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
@@ -292,19 +308,62 @@ async function main() {
     await assert.rejects(command('open_sftp', { profile, confirmation: 'PROD', authentication }), /호스트 키/);
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
-    await verifyTransferAudit(page, command, project, profile, local);
+    await verifyFileAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, file navigation and previews, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, browsing and previews, remote folders, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
   }
 }
 
-async function verifyTransferAudit(page, command, project, profile, localPath) {
+async function verifyNewFolder(page, remote, uploads) {
+  const parent = '/home/stackport/문서';
+  const folder = '새 테스트 폴더';
+  const dialog = page.getByRole('dialog', { name: '원격 새 폴더' });
+  const open = () => remote.getByRole('button', { name: '새 폴더', exact: true }).click();
+  const input = dialog.getByLabel('폴더 이름');
+  const submit = async name => {
+    await input.fill(name);
+    await dialog.getByRole('button', { name: '만들기', exact: true }).click();
+  };
+  await open();
+  await dialog.getByText(parent).waitFor();
+  await submit('../밖');
+  await dialog.getByRole('alert').getByText(/경로 구분자/).waitFor();
+  await submit(folder);
+  await dialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('원격 폴더 생성 완료').waitFor();
+  const entry = remote.getByRole('button', { name: folder, exact: true });
+  await entry.waitFor();
+  await remote.getByRole('row')
+    .filter({ has: page.getByRole('button', { name: folder, exact: true }) })
+    .getByText(/0700/).waitFor();
+  await entry.click();
+  await remote.getByText('표시할 파일이 없습니다.').waitFor();
+  assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), `${parent}/${folder}`);
+  await remote.getByRole('button', { name: '원격 파일 상위 폴더' }).click();
+  await entry.waitFor();
+
+  await open();
+  await submit(folder);
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  await submit('새 원격 파일.bin');
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  await submit('권한 제한');
+  await dialog.getByRole('alert').getByText(/접근을 거부/).waitFor();
+  await submit('동시 생성');
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  assert.equal(uploads.files.get(`${parent}/동시 생성`).data.toString(), 'keep');
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await entry.waitFor();
+}
+
+async function verifyFileAudit(page, command, project, profile, localPath) {
   const { events } = await command('list_audit_events', { before: null });
-  const transfers = events.filter(event => event.operation.startsWith('sftp.'));
-  const groups = Map.groupBy(transfers, event => event.correlation_id);
+  const fileEvents = events.filter(event => event.operation.startsWith('sftp.'));
+  const groups = Map.groupBy(fileEvents, event => event.correlation_id);
   for (const records of groups.values()) {
     assert.equal(records.length, 2);
     const [end, start] = records;
@@ -314,11 +373,14 @@ async function verifyTransferAudit(page, command, project, profile, localPath) {
   }
   for (const operation of ['sftp.download', 'sftp.upload']) {
     for (const outcome of ['started', 'succeeded', 'failed']) {
-      assert.ok(transfers.some(event => event.operation === operation && event.outcome === outcome));
+      assert.ok(fileEvents.some(event => event.operation === operation && event.outcome === outcome));
     }
-    assert.ok(transfers.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
+    assert.ok(fileEvents.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
   }
-  for (const event of transfers) {
+  for (const outcome of ['started', 'succeeded', 'failed']) {
+    assert.ok(fileEvents.some(event => event.operation === 'sftp.mkdir' && event.outcome === outcome));
+  }
+  for (const event of fileEvents) {
     assert.equal(event.project_id, project.id);
     assert.equal(event.profile_id, profile.id);
     assert.equal(event.environment, 'PROD');
@@ -327,8 +389,8 @@ async function verifyTransferAudit(page, command, project, profile, localPath) {
     assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
-  const serialized = JSON.stringify(transfers);
-  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '전송.bin', password, passphrase]) {
+  const serialized = JSON.stringify(fileEvents);
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '전송.bin', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
   }
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
@@ -339,6 +401,9 @@ async function verifyTransferAudit(page, command, project, profile, localPath) {
       await rows.getByText(state, { exact: true }).first().waitFor();
     }
   }
+  const folderRows = page.getByRole('listitem').filter({ hasText: 'SFTP 폴더 생성' });
+  await folderRows.getByText('완료', { exact: true }).first().waitFor();
+  await folderRows.getByText('실패', { exact: true }).first().waitFor();
 }
 
 async function verifyPreviews(page, remote, local) {

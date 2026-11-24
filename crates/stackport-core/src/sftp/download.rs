@@ -1,7 +1,7 @@
 //! Stream verified SFTP reads into a local file, then publish without replacing a destination.
 
 use super::{
-    audit::{Direction, TransferAudit},
+    audit::{FileAudit, FileOperation},
     file_error,
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
@@ -37,7 +37,7 @@ impl SftpManager {
         let active = session.register_transfer()?;
         let transfer = &active.transfer;
         let audit =
-            TransferAudit::start(&self.store, &session.profile, &transfer.id, Direction::Download)
+            FileAudit::start(&self.store, &session.profile, &transfer.id, FileOperation::Download)
                 .await?;
         let update = |received, total| progress(transfer.report(received, total, false));
         update(0, None);
@@ -49,7 +49,7 @@ impl SftpManager {
         } else {
             result
         };
-        audit.finish(result).await
+        audit.finish_transfer(result).await
     }
 }
 

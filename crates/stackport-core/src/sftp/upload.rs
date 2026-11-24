@@ -1,8 +1,9 @@
 //! Verify a remote staging file before asking the server to publish it.
 
 use super::{
-    audit::{Direction, TransferAudit},
+    audit::{FileAudit, FileOperation},
     file_error, open_local_file,
+    mutation::{ensure_directory, ensure_vacant, new_child_path},
     transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
     MAX_REMOTE_PATH,
@@ -28,8 +29,8 @@ impl SftpManager {
         filename: String,
         progress: impl Fn(SftpTransferProgress),
     ) -> Result<SftpTransferReport> {
-        validate_name(&filename)?;
         let directory = directory.into_path()?;
+        let destination = new_child_path(&directory, &filename)?;
         let session = self.session(id)?;
         let _operation = session
             .operation
@@ -38,7 +39,7 @@ impl SftpManager {
         let active = session.register_transfer()?;
         let transfer = &active.transfer;
         let audit =
-            TransferAudit::start(&self.store, &session.profile, &transfer.id, Direction::Upload)
+            FileAudit::start(&self.store, &session.profile, &transfer.id, FileOperation::Upload)
                 .await?;
         let update = |bytes, total, verifying| progress(transfer.report(bytes, total, verifying));
         update(0, None, false);
@@ -47,7 +48,7 @@ impl SftpManager {
             session.fsync_supported,
             source,
             directory,
-            filename,
+            destination,
             transfer,
             update,
         )
@@ -58,7 +59,7 @@ impl SftpManager {
             }),
             outcome => outcome,
         };
-        audit.finish(outcome).await
+        audit.finish_transfer(outcome).await
     }
 }
 
@@ -67,7 +68,7 @@ async fn upload_file(
     fsync_supported: bool,
     source: String,
     directory: SftpString,
-    filename: String,
+    destination: SftpString,
     transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>, bool),
 ) -> Result<SftpTransferOutcome> {
@@ -82,20 +83,12 @@ async fn upload_file(
         .map_err(|_| "업로드할 파일의 속성을 읽을 수 없습니다.")?;
     let expected = original.len();
     transfer.check()?;
-    let destination = directory.join(filename.as_bytes());
     let temporary =
         directory.join(format!(".stackport-upload-{}.part", uuid::Uuid::new_v4()).as_bytes());
-    if destination.len() > MAX_REMOTE_PATH || temporary.len() > MAX_REMOTE_PATH {
+    if temporary.len() > MAX_REMOTE_PATH {
         return Err("원격 업로드 경로가 너무 깁니다.".into());
     }
-    if !request(files.lstat(directory))
-        .await
-        .map_err(file_error)?
-        .attrs
-        .is_dir()
-    {
-        return Err("선택한 원격 경로가 현재 일반 디렉터리인지 확인할 수 없습니다.".into());
-    }
+    ensure_directory(files, directory).await?;
     ensure_vacant(files, &destination).await?;
     transfer.check()?;
     let handle = request(files.open(
@@ -155,16 +148,6 @@ async fn upload_file(
         });
     }
     published
-}
-
-async fn ensure_vacant(files: &RawSftpSession, path: &SftpString) -> Result<()> {
-    match request(files.lstat(path.clone())).await {
-        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(()),
-        Ok(_) => {
-            Err("원격 폴더에 같은 이름의 파일 또는 폴더가 있습니다. 새 이름을 입력하세요.".into())
-        }
-        Err(error) => Err(file_error(error)),
-    }
 }
 
 async fn stage_file(
@@ -240,18 +223,4 @@ async fn stage_file(
         return Err("원격 임시 파일이 변경되었거나 SHA-256이 원본과 일치하지 않습니다.".into());
     }
     Ok(format!("{sha256:x}"))
-}
-
-fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > 255
-        || matches!(name, "." | "..")
-        || name.ends_with([' ', '.'])
-        || name
-            .chars()
-            .any(|ch| ch.is_control() || matches!(ch, '/' | '\\' | ':'))
-    {
-        return Err("경로 구분자 없이 새 원격 파일 이름을 입력하세요.".into());
-    }
-    Ok(())
 }

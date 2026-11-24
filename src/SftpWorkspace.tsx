@@ -1,8 +1,9 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Download, Eye, File, FolderOpen, Link, RefreshCw, Upload } from "lucide-react";
+import { ArrowUp, Download, Eye, File, FolderOpen, FolderPlus, Link, RefreshCw, Upload } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
+import { SftpFolderDialog } from "./SftpFolderDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
 type Entry = { name: string; kind: "directory" | "file" | "symlink" | "other"; location: string | null; size: string | null; modified: number | null; mode: number | null; uid: number | null; gid: number | null; hidden: boolean };
@@ -21,6 +22,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [localFolder, setLocalFolder] = useState("");
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
+  const [newFolder, setNewFolder] = useState<Directory | null>(null);
+  const [createdFolder, setCreatedFolder] = useState<{ name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
   const [remoteRefresh, setRemoteRefresh] = useState(0);
@@ -36,6 +39,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       setRemote(null);
       setTransfer(null);
       setFinished(null);
+      setNewFolder(null);
+      setCreatedFolder(null);
       setRemoteRefresh(0);
     } catch (error) {
       setError(String(error));
@@ -46,6 +51,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
 
   function chooseTransfer(selection: TransferSelection) {
     setFinished(null);
+    setCreatedFolder(null);
     setTransfer(selection);
   }
 
@@ -62,6 +68,17 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       source,
       result: result.then(preview => ({ preview }), error => ({ error: String(error) })),
     });
+  }
+
+  function createFolder(directory: Directory) {
+    setFinished(null);
+    setCreatedFolder(null);
+    setNewFolder(directory);
+  }
+
+  function folderCreated(name: string, auditWarning: string | null) {
+    setCreatedFolder({ name, auditWarning });
+    setRemoteRefresh(value => value + 1);
   }
 
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
@@ -85,6 +102,10 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       <details><summary>SHA-256</summary><code>{finished.sha256}</code></details>
       {finished.auditWarning && <strong className="audit-warning">{finished.auditWarning}</strong>}
     </div>}
+    {createdFolder && <div className="success-banner" role="status">
+      <strong>원격 폴더 생성 완료</strong><span>{createdFolder.name}</span>
+      {createdFolder.auditWarning && <strong className="audit-warning">{createdFolder.auditWarning}</strong>}
+    </div>}
     <div className="files-panes">
       <DirectoryPane title="로컬 파일" load={path => invoke("browse_local_directory", { path: path.value })} chooseFolder
         onFolder={directory => setLocalFolder(displayPath(directory.path))} refresh={localRefresh}
@@ -93,12 +114,15 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       {remote ? <DirectoryPane key={remote.id} title="원격 파일" initial={remote.directory}
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
+        onCreateFolder={createFolder}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
     </div>
     {remote && transfer && <SftpTransferDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       file={transfer} onClose={() => setTransfer(null)} onSaved={transferSaved} />}
+    {remote && newFolder && <SftpFolderDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      parent={newFolder} onClose={() => setNewFolder(null)} onCreated={folderCreated} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
@@ -190,9 +214,10 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, action, refresh }: {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onCreateFolder, action, refresh }: {
   title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
+  onCreateFolder?: (directory: Directory) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -240,6 +265,8 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
   return <section className="results-card files-pane" aria-label={title}>
     <div className="panel-heading"><div><strong>{title}</strong>{directory && <span>{numbers.format(shown.length)}개 항목</span>}</div>
       {chooseFolder && <button type="button" className="secondary small" disabled={busy} onClick={() => void navigate(null)}>폴더 선택</button>}
+      {directory && onCreateFolder && <button type="button" className="secondary small" disabled={busy}
+        onClick={() => onCreateFolder(directory)}><FolderPlus size={14} /> 새 폴더</button>}
     </div>
     <form className="files-path" onSubmit={go}>
       <button type="button" className="icon-button" aria-label={`${title} 상위 폴더`} disabled={busy || !directory?.parent}

@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpFolderCreated, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -616,6 +616,16 @@ async fn preview_sftp_file(
 }
 
 #[tauri::command]
+async fn create_sftp_folder(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    name: String,
+) -> Result<SftpFolderCreated, String> {
+    sftp.create_folder(&id, parent, name).await
+}
+
+#[tauri::command]
 async fn preview_local_browse_file(path: String) -> Result<FilePreview, String> {
     worker(move || preview_local_file(&path)).await
 }
@@ -870,6 +880,7 @@ fn main() {
             open_sftp,
             list_sftp_directory,
             preview_sftp_file,
+            create_sftp_folder,
             preview_local_browse_file,
             download_sftp_file,
             upload_sftp_file,

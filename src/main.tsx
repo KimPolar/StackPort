@@ -599,6 +599,7 @@ const auditOperationNames: Record<string, string> = {
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",
+  "sftp.mkdir": "SFTP 폴더 생성",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
 
@@ -691,7 +692,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
   }, [cursor, refresh]);
 
   return <section className="audit-panel" aria-labelledby="audit-title">
-    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite 작업, SFTP 전송과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
+    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite·SFTP 작업과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
     <p className="audit-note">SQL, 행 데이터, 암호와 파일 경로는 기록하지 않습니다. 실행자는 로컬 사용자로만 표시되며 개인 계정 식별과 변조 방지는 아직 제공되지 않습니다.</p>
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
