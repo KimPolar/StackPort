@@ -1,8 +1,9 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowUp, Download, Eye, File, FolderOpen, FolderPlus, Link, Pencil, RefreshCw, Upload } from "lucide-react";
+import { ArrowUp, Download, Eye, File, FolderInput, FolderOpen, FolderPlus, Link, Pencil, RefreshCw, Upload } from "lucide-react";
 import { FilePreviewDialog, type FilePreview, type PreviewSelection } from "./FilePreviewDialog";
 import type { SshProfile } from "./ssh-profile-types";
+import { SftpMoveDialog, type SftpMoveSelection } from "./SftpMoveDialog";
 import { SftpNameDialog, type SftpNameAction } from "./SftpNameDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
@@ -13,6 +14,7 @@ type Host = { status: string; token: string | null; keys: { algorithm: string; f
 type BrowsePath = { kind: "text" | "token"; value: string };
 const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
+const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료" };
 
 export function SftpWorkspace({ projectName, profiles }: { projectName: string; profiles: SshProfile[] }) {
   const [selectedId, setSelectedId] = useState("");
@@ -23,7 +25,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   const [transfer, setTransfer] = useState<TransferSelection | null>(null);
   const [finished, setFinished] = useState<TransferResult | null>(null);
   const [nameAction, setNameAction] = useState<SftpNameAction | null>(null);
-  const [nameResult, setNameResult] = useState<{ kind: SftpNameAction["kind"]; name: string; auditWarning: string | null } | null>(null);
+  const [moveSelection, setMoveSelection] = useState<SftpMoveSelection | null>(null);
+  const [nameResult, setNameResult] = useState<{ kind: keyof typeof mutationTitles; name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
   const [localRefresh, setLocalRefresh] = useState(0);
   const [remoteRefresh, setRemoteRefresh] = useState(0);
@@ -40,6 +43,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       setTransfer(null);
       setFinished(null);
       setNameAction(null);
+      setMoveSelection(null);
       setNameResult(null);
       setRemoteRefresh(0);
     } catch (error) {
@@ -76,7 +80,13 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
     setNameAction(action);
   }
 
-  function mutationSaved(kind: SftpNameAction["kind"], name: string, auditWarning: string | null) {
+  function chooseMove(selection: SftpMoveSelection) {
+    setFinished(null);
+    setNameResult(null);
+    setMoveSelection(selection);
+  }
+
+  function mutationSaved(kind: keyof typeof mutationTitles, name: string, auditWarning: string | null) {
     setNameResult({ kind, name, auditWarning });
     setRemoteRefresh(value => value + 1);
   }
@@ -103,7 +113,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       {finished.auditWarning && <strong className="audit-warning">{finished.auditWarning}</strong>}
     </div>}
     {nameResult && <div className="success-banner" role="status">
-      <strong>{nameResult.kind === "create" ? "원격 폴더 생성 완료" : "원격 이름 변경 완료"}</strong><span>{nameResult.name}</span>
+      <strong>{mutationTitles[nameResult.kind]}</strong><span>{nameResult.name}</span>
       {nameResult.auditWarning && <strong className="audit-warning">{nameResult.auditWarning}</strong>}
     </div>}
     <div className="files-panes">
@@ -115,6 +125,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
         onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
         onNameAction={chooseNameAction}
+        onMove={chooseMove}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder }) }} /> : <section className="results-card files-empty" aria-label="원격 파일"><strong>원격 파일</strong><p>저장된 SSH 연결로 SFTP를 열면 원격 폴더가 표시됩니다.</p></section>}
@@ -123,6 +134,8 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
       file={transfer} onClose={() => setTransfer(null)} onSaved={transferSaved} />}
     {remote && nameAction && <SftpNameDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       action={nameAction} onClose={() => setNameAction(null)} onSaved={(name, warning) => mutationSaved(nameAction.kind, name, warning)} />}
+    {remote && moveSelection && <SftpMoveDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      selection={moveSelection} onClose={() => setMoveSelection(null)} onSaved={(path, warning) => mutationSaved("move", path, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
   </section>;
 }
@@ -214,10 +227,11 @@ function displayPath(path: string) {
   return path.startsWith("\\\\?\\") ? path.slice(4) : path;
 }
 
-function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, action, refresh }: {
+function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onMove, action, refresh }: {
   title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
   onNameAction?: (action: SftpNameAction) => void;
+  onMove?: (selection: SftpMoveSelection) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -304,6 +318,9 @@ function DirectoryPane({ title, load, initial, chooseFolder, onFolder, onPreview
             {onNameAction && <button type="button" className="icon-button" disabled={busy}
               aria-label={`${entry.name} 이름 변경`} title="이름 변경"
               onClick={() => onNameAction({ kind: "rename", parent: directory, item: { ...entry, kind, location } })}><Pencil size={14} /></button>}
+            {onMove && <button type="button" className="icon-button" disabled={busy}
+              aria-label={`${entry.name} 다른 폴더로 이동`} title="다른 폴더로 이동"
+              onClick={() => onMove({ parent: directory, item: { ...entry, kind, location } })}><FolderInput size={14} /></button>}
           </div>}</td>
         </tr>;
       })}</tbody>

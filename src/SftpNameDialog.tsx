@@ -2,9 +2,9 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 
-type ListedItem = { name: string; location: string; kind: "file" | "directory"; size: string | null; modified: number | null };
+export type SftpListedItem = { name: string; location: string; kind: "file" | "directory"; size: string | null; modified: number | null };
 type Parent = { path: string; location: string };
-export type SftpNameAction = { kind: "create"; parent: Parent } | { kind: "rename"; parent: Parent; item: ListedItem };
+export type SftpNameAction = { kind: "create"; parent: Parent } | { kind: "rename"; parent: Parent; item: SftpListedItem };
 
 export function SftpNameDialog({ id, target, action, onClose, onSaved }: {
   id: string;
@@ -33,7 +33,7 @@ export function SftpNameDialog({ id, target, action, onClose, onSaved }: {
       const command = renaming ? "rename_sftp_entry" : "create_sftp_folder";
       const renameArgs = renaming ? {
         ...args,
-        source: { location: action.item.location, kind: action.item.kind, size: action.item.size, modified: action.item.modified },
+        source: listedItemSnapshot(action.item),
       } : args;
       const report = await invoke<{ audit_warning: string | null }>(command, renameArgs);
       onSaved(name, report.audit_warning);
@@ -66,4 +66,8 @@ export function SftpNameDialog({ id, target, action, onClose, onSaved }: {
       </div>
     </form>
   </dialog>;
+}
+
+export function listedItemSnapshot({ location, kind, size, modified }: SftpListedItem) {
+  return { location, kind, size, modified };
 }

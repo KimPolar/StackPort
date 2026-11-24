@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpMutationReport, SftpRenameSource, SftpTransferReport, SftpTransferProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -630,10 +630,21 @@ async fn rename_sftp_entry(
     sftp: State<'_, SftpManager>,
     id: String,
     parent: String,
-    source: SftpRenameSource,
+    source: SftpEntrySource,
     name: String,
 ) -> Result<SftpMutationReport, String> {
     sftp.rename(&id, parent, source, name).await
+}
+
+#[tauri::command]
+async fn move_sftp_entry(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    source: SftpEntrySource,
+    destination: String,
+) -> Result<SftpMutationReport, String> {
+    sftp.move_entry(&id, parent, source, destination).await
 }
 
 #[tauri::command]
@@ -893,6 +904,7 @@ fn main() {
             preview_sftp_file,
             create_sftp_folder,
             rename_sftp_entry,
+            move_sftp_entry,
             preview_local_browse_file,
             download_sftp_file,
             upload_sftp_file,

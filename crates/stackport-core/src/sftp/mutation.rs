@@ -1,6 +1,6 @@
 use super::{
     audit::{FileAudit, FileOperation},
-    file_error,
+    canonical_remote_path, file_error,
     transfer::request,
     FilesSession, RemotePath, SftpError, SftpManager, MAX_REMOTE_PATH,
 };
@@ -20,16 +20,16 @@ pub struct SftpMutationReport {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SftpRenameSource {
+pub struct SftpEntrySource {
     location: String,
-    kind: RenameKind,
+    kind: EntryKind,
     size: Option<String>,
     modified: Option<u32>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum RenameKind {
+enum EntryKind {
     File,
     Directory,
 }
@@ -53,12 +53,12 @@ impl SftpManager {
         &self,
         id: &str,
         parent: String,
-        source: SftpRenameSource,
+        source: SftpEntrySource,
         name: String,
     ) -> Result<SftpMutationReport> {
         let parent = RemotePath::Token(parent).into_path()?;
         let old_path = RemotePath::Token(source.location.clone()).into_path()?;
-        check_direct_child(&parent, &old_path)?;
+        direct_child_name(&parent, &old_path)?;
         let new_path = new_child_path(&parent, &name)?;
         if old_path == new_path {
             return Err("현재 이름과 다른 새 이름을 입력하세요.".into());
@@ -66,17 +66,59 @@ impl SftpManager {
         self.run_mutation(id, FileOperation::Rename, |session| async move {
             let files = &session.files;
             ensure_directory(files, parent).await?;
-            ensure_vacant(files, &new_path).await?;
-            let current = request(files.lstat(old_path.clone()))
-                .await
-                .map_err(file_error)?
-                .attrs;
-            source.check_snapshot(&current)?;
-            rename_to_vacant(
+            relocate_entry(
                 files,
+                &source,
                 &old_path,
                 &new_path,
                 "이름 변경 응답을 받지 못했습니다. 재시도하기 전에 원격 목록을 새로고침하세요.",
+            )
+            .await
+        })
+        .await
+    }
+
+    pub async fn move_entry(
+        &self,
+        id: &str,
+        parent: String,
+        source: SftpEntrySource,
+        destination: String,
+    ) -> Result<SftpMutationReport> {
+        let parent = RemotePath::Token(parent).into_path()?;
+        let old_path = RemotePath::Token(source.location.clone()).into_path()?;
+        let leaf = direct_child_name(&parent, &old_path)?;
+        let destination = RemotePath::Token(destination).into_path()?;
+        let new_path = destination.join(leaf);
+        if new_path.len() > MAX_REMOTE_PATH {
+            return Err("새 원격 경로가 너무 깁니다.".into());
+        }
+        if old_path == new_path {
+            return Err("현재 원격 폴더와 다른 대상 폴더를 선택하세요.".into());
+        }
+        if matches!(source.kind, EntryKind::Directory)
+            && (destination == old_path
+                || destination
+                    .strip_prefix(old_path.as_bytes())
+                    .is_some_and(|tail| tail.starts_with(b"/")))
+        {
+            return Err("폴더를 자기 자신이나 하위 폴더로 이동할 수 없습니다.".into());
+        }
+        self.run_mutation(id, FileOperation::Move, |session| async move {
+            let files = &session.files;
+            for directory in [parent, destination] {
+                let current = canonical_remote_path(files, directory.clone()).await?;
+                if current != directory {
+                    return Err("원격 폴더 경로가 바뀌었습니다. 목록을 새로고침하고 다시 선택하세요.".into());
+                }
+                ensure_directory(files, directory).await?;
+            }
+            relocate_entry(
+                files,
+                &source,
+                &old_path,
+                &new_path,
+                "이동 응답을 받지 못했습니다. 재시도하기 전에 원본과 대상 폴더의 목록을 확인하세요.",
             )
             .await
         })
@@ -106,7 +148,7 @@ impl SftpManager {
     }
 }
 
-fn check_direct_child(parent: &SftpString, path: &SftpString) -> Result<()> {
+fn direct_child_name<'a>(parent: &SftpString, path: &'a SftpString) -> Result<&'a [u8]> {
     let leaf = path
         .as_bytes()
         .rsplit(|byte| *byte == b'/')
@@ -117,16 +159,16 @@ fn check_direct_child(parent: &SftpString, path: &SftpString) -> Result<()> {
         || leaf.contains(&b'\\')
         || parent.join(leaf) != *path
     {
-        return Err("현재 원격 폴더에서 이름을 바꿀 항목을 다시 선택하세요.".into());
+        return Err("현재 원격 폴더에서 작업할 항목을 다시 선택하세요.".into());
     }
-    Ok(())
+    Ok(leaf)
 }
 
-impl SftpRenameSource {
+impl SftpEntrySource {
     fn check_snapshot(&self, attrs: &FileAttributes) -> Result<()> {
         let kind_matches = match self.kind {
-            RenameKind::File => attrs.is_regular(),
-            RenameKind::Directory => attrs.is_dir(),
+            EntryKind::File => attrs.is_regular(),
+            EntryKind::Directory => attrs.is_dir(),
         };
         let size_changed = self.size.as_deref().is_some_and(|size| {
             size.parse::<u64>()
@@ -140,6 +182,22 @@ impl SftpRenameSource {
         }
         Ok(())
     }
+}
+
+async fn relocate_entry(
+    files: &RawSftpSession,
+    selected: &SftpEntrySource,
+    source: &SftpString,
+    destination: &SftpString,
+    unknown_outcome: &'static str,
+) -> Result<()> {
+    ensure_vacant(files, destination).await?;
+    let current = request(files.lstat(source.clone()))
+        .await
+        .map_err(file_error)?
+        .attrs;
+    selected.check_snapshot(&current)?;
+    rename_to_vacant(files, source, destination, unknown_outcome).await
 }
 
 pub(super) async fn rename_to_vacant(
@@ -215,9 +273,7 @@ pub(super) async fn ensure_directory(files: &RawSftpSession, path: SftpString) -
 pub(super) async fn ensure_vacant(files: &RawSftpSession, path: &SftpString) -> Result<()> {
     match request(files.lstat(path.clone())).await {
         Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(()),
-        Ok(_) => {
-            Err("원격 폴더에 같은 이름의 파일 또는 폴더가 있습니다. 새 이름을 입력하세요.".into())
-        }
+        Ok(_) => Err("원격 폴더에 같은 이름의 파일 또는 폴더가 있습니다.".into()),
         Err(error) => Err(file_error(error)),
     }
 }

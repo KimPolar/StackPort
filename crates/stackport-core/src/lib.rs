@@ -36,7 +36,7 @@ pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
 pub use sftp::{
     list_local_directory, preview_local_file, BrowseDirectory, FilePreview, RemotePath,
-    SftpAuthentication, SftpManager, SftpMutationReport, SftpOpened, SftpRenameSource,
+    SftpAuthentication, SftpEntrySource, SftpManager, SftpMutationReport, SftpOpened,
     SftpTransferProgress, SftpTransferReport,
 };
 mod terminal;
@@ -785,6 +785,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sftp.upload" | "sftp.upload.cancel" => "sftp-pinned-host-verified-remote-no-overwrite",
         "sftp.mkdir" => "sftp-pinned-host-new-directory",
         "sftp.rename" => "sftp-pinned-host-rename-no-overwrite",
+        "sftp.move" => "sftp-pinned-host-move-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

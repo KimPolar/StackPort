@@ -7,7 +7,7 @@ mod preview;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
-pub use mutation::{SftpMutationReport, SftpRenameSource};
+pub use mutation::{SftpEntrySource, SftpMutationReport};
 pub use preview::{preview_local_file, FilePreview};
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
@@ -365,8 +365,8 @@ fn load_key(path: &str, phrase: &str) -> Result<russh::keys::PrivateKey> {
         .map_err(|_| "SSH 개인 키 형식 또는 키 암호를 확인하세요.".into())
 }
 
-async fn read_directory(files: &RawSftpSession, requested: SftpString) -> Result<BrowseDirectory> {
-    let mut canonical = files.realpath(requested).await.map_err(file_error)?.files;
+async fn canonical_remote_path(files: &RawSftpSession, requested: SftpString) -> Result<SftpString> {
+    let mut canonical = transfer::request(files.realpath(requested)).await.map_err(file_error)?.files;
     if canonical.len() != 1 {
         return Err("서버가 올바른 원격 경로를 반환하지 않았습니다.".into());
     }
@@ -374,6 +374,11 @@ async fn read_directory(files: &RawSftpSession, requested: SftpString) -> Result
     if path.is_empty() || path.len() > MAX_REMOTE_PATH || path.contains(&0) {
         return Err("서버가 올바른 원격 경로를 반환하지 않았습니다.".into());
     }
+    Ok(path)
+}
+
+async fn read_directory(files: &RawSftpSession, requested: SftpString) -> Result<BrowseDirectory> {
+    let path = canonical_remote_path(files, requested).await?;
     let handle = files
         .opendir(path.clone())
         .await
