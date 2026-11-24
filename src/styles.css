@@ -433,7 +433,7 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
   .database-target { flex: 1 1 100%; }
   .editor-card .panel-heading { height: auto; min-height: 44px; flex-wrap: wrap; gap: 5px; padding-block: 5px; }
   .sql-editor-toggle { white-space: nowrap; }
-  .editor-card .panel-heading .sql-editor-actions { margin-left: auto; flex-wrap: nowrap; }
+  .editor-card .panel-heading .sql-editor-actions { margin-left: auto; }
   .session-heading { align-items: start; gap: 6px; }
   .terminal-actions .small { padding-inline: 7px; gap: 4px; }
 }

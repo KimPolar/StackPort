@@ -123,6 +123,8 @@ function App() {
   const [exitError, setExitError] = useState("");
   const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
   const [sqlSelection, setSqlSelection] = useState<{ start: number; end: number } | null>(null);
+  const sqlEditor = useRef<HTMLTextAreaElement>(null);
+  const statementRequest = useRef(0);
   const [sqlQueryViews, setSqlQueryViews] = useState<Record<string, SqlQueryView>>({});
   const [tableQueryResult, setTableQueryResult] = useState<QueryResult | null>(null);
   const [resultMode, setResultMode] = useState<QueryTarget["kind"]>("sql");
@@ -384,6 +386,7 @@ function App() {
 
   function changeSql(value: string) {
     if (!sqlDraft || !sqlTarget) return;
+    statementRequest.current++;
     editSqlTabs(sqlTarget, group => ({
       ...group, tabs: group.tabs.map(draft => draft.id === sqlDraft.id
         ? { ...draft, document: { ...draft.document, text: value } } : draft),
@@ -422,6 +425,7 @@ function App() {
   }
 
   function resetSqlView() {
+    statementRequest.current++;
     activateSqlView();
     setSqlSelection(null);
     setParameterRequest(null);
@@ -533,6 +537,7 @@ function App() {
   }
 
   function resetActiveQuery() {
+    statementRequest.current++;
     abandonQuery();
     queryGeneration.current++;
     setQuerying(false);
@@ -553,8 +558,24 @@ function App() {
     void executeQuery({ kind: "sql", tabId: sqlDraft.id, sql: query, planSource: explain ? sql : undefined });
   }
 
+  async function runCurrentStatement() {
+    const editor = sqlEditor.current;
+    if (!editor || !sqlDraft || querying) return;
+    const request = ++statementRequest.current;
+    const caret = editor.selectionDirection === "backward" ? editor.selectionStart : editor.selectionEnd;
+    try {
+      const statement = await call<string | null>("current_sql_statement", { sql, caret });
+      if (request !== statementRequest.current) return;
+      if (statement) runQuery(statement);
+      else setError("커서를 실행할 SQL 문장 안에 두세요.");
+    } catch (error) {
+      if (request === statementRequest.current) setError(errorText(error));
+    }
+  }
+
   async function executeQuery(target: QueryTarget, page = 0) {
     if (!profileId || (target.kind === "sql" && target.tabId !== sqlDraft?.id)) return;
+    statementRequest.current++;
     abandonQuery();
     const generation = ++queryGeneration.current;
     const task: ActiveQuery = { kind: target.kind, token: null, cancelRequested: false, cancellation: null };
@@ -826,6 +847,8 @@ function App() {
           {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
           : sqlEditorOpen && <div className="sql-editor-actions">
           <button className="secondary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun, true)}>실행 계획</button>
+          <button type="button" className="secondary small" disabled={!sql.trim()} title="Ctrl+Shift+Enter"
+            onClick={() => void runCurrentStatement()} aria-label="현재 문장 실행">현재 문장</button>
           <button className="primary small" disabled={!sqlToRun.trim()} onClick={() => runQuery(sqlToRun)}>
             <Play size={14} fill="currentColor" /> {sqlSelection ? "선택 영역 실행" : "쿼리 실행"}
           </button>
@@ -837,7 +860,7 @@ function App() {
             aria-labelledby={sqlTabButtonId(draft.id)} hidden={draft.id !== sqlTabs.activeId}>
             {draft.id === sqlTabs.activeId && <>
               <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label>
-              <textarea id="sql-editor" spellCheck={false} value={sql} onChange={event => changeSql(event.target.value)}
+              <textarea id="sql-editor" ref={sqlEditor} spellCheck={false} value={sql} onChange={event => changeSql(event.target.value)}
                 onSelect={event => {
                   const { selectionStart: start, selectionEnd: end } = event.currentTarget;
                   setSqlSelection(start === end ? null : { start, end });
@@ -846,7 +869,8 @@ function App() {
                   if (event.key === "Enter") {
                     event.preventDefault();
                     const { selectionStart, selectionEnd } = event.currentTarget;
-                    if (!querying) runQuery(selectionStart === selectionEnd ? sql : sql.slice(selectionStart, selectionEnd));
+                    if (event.shiftKey) void runCurrentStatement();
+                    else if (!querying) runQuery(selectionStart === selectionEnd ? sql : sql.slice(selectionStart, selectionEnd));
                   } else if (event.key.toLowerCase() === "s") {
                     event.preventDefault();
                     openSqlFileDialog("save");

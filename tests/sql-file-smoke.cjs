@@ -109,6 +109,29 @@ async function main() {
     await editor.press('End');
     await page.getByRole('button', { name: '쿼리 실행', exact: true }).waitFor();
 
+    const script = "SELECT * FROM missing_table;\n-- skip ;\nSELECT '한글😀; ''문자열''';\nSELECT name FROM people WHERE id = 2;";
+    const current = page.getByRole('button', { name: '현재 문장 실행', exact: true });
+    const caret = (source, word) => editor.evaluate((element, offset) => element.setSelectionRange(offset, offset), source.indexOf(word));
+    await editor.fill(script);
+    await caret(script, '문자열');
+    await current.click();
+    const copiedResult = results('새 쿼리.sql');
+    await copiedResult.getByRole('cell', { name: "한글😀; '문자열'", exact: true }).waitFor();
+    await caret(script, 'skip');
+    await current.click();
+    await page.getByRole('alert').getByText(/커서를 실행할 SQL 문장 안에/).waitFor();
+    await copiedResult.getByRole('cell', { name: "한글😀; '문자열'", exact: true }).waitFor();
+    const trigger = 'CREATE TEMP TRIGGER t AFTER INSERT ON people BEGIN SELECT 1; SELECT 2; END;';
+    await editor.fill(trigger);
+    await caret(trigger, 'SELECT 2');
+    await current.click();
+    await page.getByRole('alert').getByText(/읽기 전용/).waitFor();
+    assert.equal(await copiedResult.getByRole('cell', { name: '2', exact: true }).count(), 0);
+    await editor.fill(script);
+    await editor.press('Control+End');
+    await editor.press('Control+Shift+Enter');
+    await copiedResult.getByRole('cell', { name: '사용자 2', exact: true }).waitFor();
+
     await initialTab.click();
     const mainResult = results('SQL 1');
     await mainResult.getByText('아직 조회 결과가 없습니다', { exact: true }).waitFor();

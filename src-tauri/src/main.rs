@@ -11,7 +11,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
-    open_sql_file, save_sql_file, SqlDocument,
+    open_sql_file, save_sql_file, sqlite_statement_at, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
@@ -310,6 +310,11 @@ async fn describe_object(
 #[tauri::command]
 fn prepare_query(store: State<'_, Store>) -> Result<String, String> {
     store.prepare_query()
+}
+
+#[tauri::command]
+async fn current_sql_statement(sql: String, caret: usize) -> Result<Option<String>, String> {
+    worker(move || sqlite_statement_at(&sql, caret).map(|statement| statement.map(str::to_owned))).await
 }
 
 #[tauri::command]
@@ -1011,6 +1016,7 @@ fn main() {
             list_objects,
             describe_object,
             prepare_query,
+            current_sql_statement,
             cancel_query,
             run_query,
             run_object_query,

@@ -47,6 +47,8 @@ pub use terminal_output::{save_terminal_output, TerminalOutputFormat};
 mod local_file;
 mod sql_file;
 pub use sql_file::{open_sql_file, save_sql_file, SqlDocument};
+mod sql_statement;
+pub use sql_statement::sqlite_statement_at;
 mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};
 mod workspace_copy;
