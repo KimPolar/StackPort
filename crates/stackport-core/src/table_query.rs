@@ -3,7 +3,7 @@
 
 use super::{quote_identifier, Result, Store};
 use rusqlite::{types::Value, Connection};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Deserialize)]
@@ -13,20 +13,20 @@ pub struct TableQuery {
     clauses: TableQueryClauses,
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 pub struct TableQueryClauses {
     filters: Vec<Filter>,
     conjunction: Conjunction,
     sort: Vec<Sort>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Filter {
     column: String,
     condition: Condition,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Condition {
     Eq { value: FilterValue },
@@ -41,15 +41,16 @@ enum Condition {
     IsNotNull,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub(crate) enum FilterValue {
     Text(String),
+    Date(String),
     Integer(String),
     Real(String),
 }
 
-#[derive(Default, Deserialize)]
+#[derive(Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Conjunction {
     #[default]
@@ -57,21 +58,21 @@ enum Conjunction {
     Any,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Sort {
     column: String,
     direction: SortDirection,
     nulls: NullOrder,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum SortDirection {
     Asc,
     Desc,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum NullOrder {
     Default,
@@ -114,6 +115,55 @@ impl TableQuery {
 }
 
 impl TableQueryClauses {
+    pub(crate) fn validate_preset(&self, sqlite: bool) -> Result<()> {
+        let mut seen = HashSet::new();
+        self.validate_count()?;
+        if self.filters.is_empty() && self.sort.is_empty() {
+            return Err("저장할 필터 또는 정렬을 추가하세요.".into());
+        }
+        let validate = |value: &FilterValue| -> Result<()> {
+            bounded_filter_text(value.text())?;
+            if sqlite {
+                value.sqlite_value()?;
+            }
+            Ok(())
+        };
+        for filter in &self.filters {
+            if filter.column.contains('\0') {
+                return Err("필터 열 이름을 확인하세요.".into());
+            }
+            use Condition::*;
+            match &filter.condition {
+                Eq { value }
+                | Ne { value }
+                | Lt { value }
+                | Le { value }
+                | Gt { value }
+                | Ge { value } => validate(value)?,
+                Between { from, to } => {
+                    matching_range(from, to)?;
+                    validate(from)?;
+                    validate(to)?;
+                }
+                Contains { value } => bounded_filter_text(value)?,
+                IsNull | IsNotNull => {}
+            }
+        }
+        for sort in &self.sort {
+            if sort.column.contains('\0') || !seen.insert(sort.column.as_str()) {
+                return Err("중복되거나 잘못된 정렬 열을 확인하세요.".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_count(&self) -> Result<()> {
+        if self.filters.len() > 16 || self.sort.len() > 8 {
+            return Err("필터는 최대 16개, 정렬 열은 최대 8개까지 선택할 수 있습니다.".into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn suffix<'a>(
         &self,
         qualifier: &str,
@@ -122,9 +172,7 @@ impl TableQueryClauses {
         mut bind: impl FnMut(&FilterValue) -> Result<String>,
         contains: impl Fn(&str, &str) -> String,
     ) -> Result<String> {
-        if self.filters.len() > 16 || self.sort.len() > 8 {
-            return Err("필터는 최대 16개, 정렬 열은 최대 8개까지 선택할 수 있습니다.".into());
-        }
+        self.validate_count()?;
         let columns: HashSet<_> = columns.into_iter().collect();
         let source_column = |name: &str| {
             if !columns.contains(name) {
@@ -197,9 +245,7 @@ impl Condition {
             Self::Gt { value } => (">", value),
             Self::Ge { value } => (">=", value),
             Self::Between { from, to } => {
-                if std::mem::discriminant(from) != std::mem::discriminant(to) {
-                    return Err("범위의 시작 값과 끝 값은 형식이 같아야 합니다.".into());
-                }
+                matching_range(from, to)?;
                 return Ok(format!(
                     "{column} BETWEEN {} AND {}",
                     bind(from)?,
@@ -219,13 +265,15 @@ impl Condition {
 impl FilterValue {
     pub(crate) fn text(&self) -> &str {
         match self {
-            Self::Text(value) | Self::Integer(value) | Self::Real(value) => value,
+            Self::Text(value) | Self::Date(value) | Self::Integer(value) | Self::Real(value) => {
+                value
+            }
         }
     }
 
     fn sqlite_value(&self) -> Result<Value> {
         match self {
-            Self::Text(value) => text_value(value),
+            Self::Text(value) | Self::Date(value) => text_value(value),
             Self::Integer(value) => value
                 .trim()
                 .parse::<i64>()
@@ -240,6 +288,20 @@ impl FilterValue {
                 .ok_or_else(|| "필터 값에 유한한 실수를 입력하세요.".into()),
         }
     }
+}
+
+fn matching_range(from: &FilterValue, to: &FilterValue) -> Result<()> {
+    if std::mem::discriminant(from) != std::mem::discriminant(to) {
+        return Err("범위의 시작 값과 끝 값은 형식이 같아야 합니다.".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn bounded_filter_text(value: &str) -> Result<()> {
+    if value.contains('\0') || value.chars().take(4097).count() > 4096 {
+        return Err("필터 값은 NUL 문자 없이 4096자 이하여야 합니다.".into());
+    }
+    Ok(())
 }
 
 fn text_value(value: &str) -> Result<Value> {

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, SlidersHorizontal, X } from "lucide-react";
+import { TableQueryPresetsDialog, type TableQueryTarget } from "./TableQueryPresetsDialog";
 
 const operators = [
   ["eq", "같음"], ["ne", "다름"], ["lt", "미만"], ["le", "이하"],
@@ -8,7 +9,7 @@ const operators = [
 ] as const;
 type Operator = (typeof operators)[number][0];
 type Comparison = Exclude<Operator, "between" | "contains" | "is_null" | "is_not_null">;
-type FilterValue = { kind: "text" | "integer" | "real"; value: string };
+type FilterValue = { kind: "text" | "date" | "integer" | "real"; value: string };
 type Condition =
   | { kind: Comparison; value: FilterValue }
   | { kind: "between"; from: FilterValue; to: FilterValue }
@@ -23,7 +24,7 @@ export type TableQueryClauses = {
   sort: Sort[];
 };
 export type TableQuery = TableQueryClauses & { object: string };
-type FilterDraft = { id: number; column: string; operator: Operator; kind: FilterValue["kind"] | "date"; value: string; to: string };
+type FilterDraft = { id: number; column: string; operator: Operator; kind: FilterValue["kind"]; value: string; to: string };
 type SortDraft = Sort & { id: number };
 
 export function defaultTableQuery(object: string): TableQuery {
@@ -33,24 +34,35 @@ export function defaultTableQuery(object: string): TableQuery {
 export const emptyTableQueryClauses: TableQueryClauses = { conjunction: "all", filters: [], sort: [] };
 
 function filterCondition(draft: FilterDraft): Condition {
-  const { operator, value, to } = draft;
-  const kind = draft.kind === "date" ? "text" : draft.kind;
+  const { operator, kind, value, to } = draft;
   if (operator === "is_null" || operator === "is_not_null") return { kind: operator };
   if (operator === "contains") return { kind: operator, value };
   if (operator === "between") return { kind: operator, from: { kind, value }, to: { kind, value: to } };
   return { kind: operator, value: { kind, value } };
 }
 
-export function TableQueryControls({ columns, busy, apply, engine = "sqlite", errorId }: {
+function filterDraft(id: number, column: string, condition: Condition): FilterDraft {
+  const base = { id, column, operator: condition.kind, kind: "text" as const, value: "", to: "" };
+  if (condition.kind === "between") return { ...base, kind: condition.from.kind, value: condition.from.value, to: condition.to.value };
+  if (condition.kind === "contains") return { ...base, value: condition.value };
+  if ("value" in condition) return { ...base, kind: condition.value.kind, value: condition.value.value };
+  return base;
+}
+
+export function TableQueryControls({ columns, busy, apply, target, errorId }: {
   columns: string[];
   busy: boolean;
   apply: (query: TableQueryClauses) => void;
-  engine?: "sqlite" | "postgres";
+  target: TableQueryTarget;
   errorId?: string;
 }) {
   const [conjunction, setConjunction] = useState<Conjunction>("all");
   const [filters, setFilters] = useState<FilterDraft[]>([]);
   const [sort, setSort] = useState<SortDraft[]>([]);
+  const [presets, setPresets] = useState<{ target: TableQueryTarget; clauses: TableQueryClauses; valid: boolean } | null>(null);
+  const form = useRef<HTMLFormElement>(null);
+  const presetsButton = useRef<HTMLButtonElement>(null);
+  const summary = useRef<HTMLElement>(null);
   const id = useRef(0);
   const unusedSortColumn = columns.find(column => !sort.some(row => row.column === column));
 
@@ -90,15 +102,35 @@ export function TableQueryControls({ columns, busy, apply, engine = "sqlite", er
     apply(emptyTableQueryClauses);
   }
 
-  return <details className="table-query-controls">
-    <summary><SlidersHorizontal size={14} aria-hidden /> 필터 및 정렬</summary>
-    <form aria-describedby={errorId} onSubmit={event => {
+  function draft(): TableQueryClauses {
+    return {
+      conjunction,
+      filters: filters.map(row => ({ column: row.column, condition: filterCondition(row) })),
+      sort: sort.map(({ column, direction, nulls }) => ({ column, direction, nulls })),
+    };
+  }
+
+  function closePresets() {
+    setPresets(null);
+    requestAnimationFrame(() => {
+      if (presetsButton.current && !presetsButton.current.disabled) presetsButton.current.focus();
+      else summary.current?.focus();
+    });
+  }
+
+  function applyPreset(clauses: TableQueryClauses) {
+    setConjunction(clauses.conjunction);
+    setFilters(clauses.filters.map(({ column, condition }) => filterDraft(++id.current, column, condition)));
+    setSort(clauses.sort.map(item => ({ ...item, id: ++id.current })));
+    closePresets();
+    apply(clauses);
+  }
+
+  return <><details className="table-query-controls">
+    <summary ref={summary}><SlidersHorizontal size={14} aria-hidden /> 필터 및 정렬</summary>
+    <form ref={form} aria-describedby={errorId} onSubmit={event => {
       event.preventDefault();
-      apply({
-        conjunction,
-        filters: filters.map(row => ({ column: row.column, condition: filterCondition(row) })),
-        sort: sort.map(({ column, direction, nulls }) => ({ column, direction, nulls })),
-      });
+      apply(draft());
     }}>
       <fieldset disabled={busy}>
         <legend>필터</legend>
@@ -119,8 +151,8 @@ export function TableQueryControls({ columns, busy, apply, engine = "sqlite", er
               {operators.map(([operator, name]) => <option key={operator} value={operator}>{name}</option>)}
             </select>
             {hasValue && row.operator !== "contains" && <select aria-label={`${label} 값 형식`} value={row.kind} onChange={event => updateFilter(row.id, { kind: event.target.value as FilterDraft["kind"] })}>
-              <option value="text">{engine === "postgres" ? "열의 형식" : "텍스트"}</option>
-              {engine === "sqlite" && <>
+              <option value="text">{target.engine === "postgres" ? "열의 형식" : "텍스트"}</option>
+              {target.engine === "sqlite" && <>
                 <option value="integer">정수</option>
                 <option value="real">실수</option>
               </>}
@@ -158,9 +190,14 @@ export function TableQueryControls({ columns, busy, apply, engine = "sqlite", er
         <button type="button" className="secondary small" disabled={unusedSortColumn === undefined || sort.length >= 8} onClick={addSort}><Plus size={14} /> 정렬 열 추가</button>
       </fieldset>
       <div className="table-query-actions">
+        <button type="button" className="secondary small" ref={presetsButton} disabled={busy}
+          onClick={() => setPresets({ target, clauses: draft(), valid: form.current?.checkValidity() ?? false })}>저장된 조건</button>
         <button type="button" className="secondary small" disabled={busy} onClick={reset}>초기화</button>
         <button type="submit" className="primary small" disabled={busy}>적용</button>
       </div>
     </form>
-  </details>;
+  </details>
+    {presets && <TableQueryPresetsDialog target={presets.target} draft={presets.clauses} valid={presets.valid}
+      columns={columns} onApply={applyPreset} onClose={closePresets} />}
+  </>;
 }

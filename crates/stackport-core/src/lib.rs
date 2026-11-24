@@ -29,6 +29,8 @@ mod restore;
 pub use restore::{RestorePreview, RestoreReport};
 mod table_query;
 pub use table_query::{TableQuery, TableQueryClauses};
+mod table_query_presets;
+pub use table_query_presets::{TableQueryPreset, TableQueryPresetWrite, TableQueryTarget};
 mod schema_diagram;
 pub use schema_diagram::{DiagramColumn, DiagramTable};
 mod schema_compare;
@@ -101,7 +103,7 @@ use std::{
 use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -376,6 +378,7 @@ impl Store {
                 tx.execute_batch(sql_templates::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -415,7 +418,10 @@ impl Store {
                 } else if current < 9 {
                     ssh_tunnel::migrate_v8(&tx)?;
                 }
-                tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
+                if current < 10 {
+                    tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

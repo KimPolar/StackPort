@@ -120,7 +120,9 @@ fn migration_from_nine_preserves_saved_tunnels_and_the_pre_migration_backup() {
         .unwrap();
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE postgres_profiles; PRAGMA user_version=9;")
+        .execute_batch(
+            "DROP TABLE table_query_presets; DROP TABLE postgres_profiles; PRAGMA user_version=9;",
+        )
         .unwrap();
 
     let upgraded = Store::open(&path).unwrap();
@@ -150,4 +152,70 @@ fn migration_from_nine_preserves_saved_tunnels_and_the_pre_migration_backup() {
             .unwrap(),
         tunnel.id
     );
+}
+
+#[test]
+fn version_ten_backup_preserves_existing_profiles_after_success_or_failure() {
+    for conflict in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workspace.sqlite");
+        let store = Store::open(&path).unwrap();
+        let project = store.create_project("old").unwrap();
+        let profile = store
+            .create_postgres_profile(&project.id, settings())
+            .unwrap();
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("DROP TABLE table_query_presets; PRAGMA user_version=10;")
+            .unwrap();
+        if conflict {
+            db.execute_batch("CREATE VIEW table_query_presets AS SELECT 1;")
+                .unwrap();
+        }
+        drop(db);
+        match Store::open(&path) {
+            Err(_) if conflict => {}
+            Ok(reopened) if !conflict => {
+                assert_eq!(reopened.postgres_profile(&profile.id).unwrap(), profile);
+                assert!(reopened
+                    .list_table_query_presets(&stackport_core::TableQueryTarget::Postgres {
+                        profile_id: profile.id.clone(),
+                        revision: profile.revision,
+                        schema: "reports".into(),
+                        object: "items".into(),
+                    })
+                    .unwrap()
+                    .is_empty());
+            }
+            _ => panic!("unexpected migration outcome"),
+        }
+        let backup = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|file| {
+                file.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .contains(".v10-")
+            })
+            .unwrap();
+        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 11 })] {
+            let db = Connection::open(file).unwrap();
+            assert_eq!(
+                db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                version
+            );
+            assert_eq!(
+                db.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                    .unwrap(),
+                "ok"
+            );
+            assert_eq!(
+                db.query_row("SELECT id FROM postgres_profiles", [], |row| row
+                    .get::<_, String>(0))
+                    .unwrap(),
+                profile.id
+            );
+        }
+    }
 }

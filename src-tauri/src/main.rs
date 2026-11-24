@@ -12,7 +12,7 @@ use stackport_core::{
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
-    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TerminalInfo, MAX_SSH_HOPS,
+    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
@@ -1268,6 +1268,24 @@ async fn delete_sql_template(store: State<'_, Store>, project_id: String, id: St
 }
 
 #[tauri::command]
+async fn list_table_query_presets(store: State<'_, Store>, target: TableQueryTarget) -> Result<Vec<TableQueryPreset>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_table_query_presets(&target)).await
+}
+
+#[tauri::command]
+async fn read_table_query_preset(store: State<'_, Store>, target: TableQueryTarget, id: String, revision: i64) -> Result<TableQueryClauses, String> {
+    let store = store.inner().clone();
+    worker(move || store.read_table_query_preset(&target, &id, revision)).await
+}
+
+#[tauri::command]
+async fn write_table_query_preset(store: State<'_, Store>, target: TableQueryTarget, write: TableQueryPresetWrite) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.write_table_query_preset(&target, write)).await
+}
+
+#[tauri::command]
 async fn choose_sqlite_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1547,6 +1565,9 @@ fn main() {
             read_sql_document,
             write_sql_document,
             list_sql_templates,
+            list_table_query_presets,
+            read_table_query_preset,
+            write_table_query_preset,
             read_sql_template,
             save_sql_template,
             delete_sql_template,

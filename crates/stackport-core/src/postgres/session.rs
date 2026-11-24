@@ -4,7 +4,10 @@ use super::{
     parameters::Value,
     sql, sql_range, PostgresProfile, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
-use crate::{quote_identifier, Result, SshTunnelManager, Store, TableQueryClauses};
+use crate::{
+    quote_identifier, table_query::bounded_filter_text, Result, SshTunnelManager, Store,
+    TableQueryClauses,
+};
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -491,9 +494,7 @@ async fn browse(
         primary_key_columns.iter().map(String::as_str),
         |value| {
             let value = value.text();
-            if value.contains('\0') || value.chars().take(4097).count() > 4096 {
-                return Err("필터 값은 NUL 문자 없이 4096자 이하여야 합니다.".into());
-            }
+            bounded_filter_text(value)?;
             values.push(Value::Text {
                 value: Zeroizing::new(value.to_owned()),
             });

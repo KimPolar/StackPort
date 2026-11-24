@@ -265,6 +265,8 @@ textarea:focus { outline-offset: -2px; }
 .table-query-actions { justify-content: flex-end; }
 .table-query-sql pre { margin: 0 14px 10px; padding: 8px; overflow: auto; background: var(--surface-hover); color: var(--text-subtle); }
 .table-query-sql p { margin: 0 14px 10px; }
+.query-preset-section { display: grid; gap: 10px; margin-top: 12px; }
+.query-preset-confirm { border: 1px solid var(--border); border-radius: 6px; padding: 10px; }
 .restore-dialog { width: min(560px, calc(100vw - 32px)); }
 .restore-summary { display: grid; grid-template-columns: minmax(105px, auto) minmax(0, 1fr); gap: 8px 14px; font-size: 12px; line-height: 1.5; }
 .restore-summary dt { color: var(--text-muted); }

@@ -81,7 +81,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -135,7 +135,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        10
+        11
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);
@@ -300,7 +300,7 @@ fn version_five_migration_preserves_workspace_resume_and_creates_sftp_profiles()
         layout: ResumeLayout::Tool { tool: ResumeTool::Files },
     }).unwrap();
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
+    db.execute_batch("DROP TABLE table_query_presets; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
     drop(db);
 
     let migrated = Store::open(&path).unwrap();
@@ -323,7 +323,7 @@ fn version_six_migration_preserves_existing_tables_before_adding_templates() {
     let store = Store::open(&path).unwrap();
     let project = store.create_project("기존 프로젝트").unwrap();
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; PRAGMA user_version=6;").unwrap();
+    db.execute_batch("DROP TABLE table_query_presets; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; PRAGMA user_version=6;").unwrap();
     drop(db);
     let migrated = Store::open(&path).unwrap();
     assert_eq!(migrated.list_projects().unwrap(), vec![project.clone()]);

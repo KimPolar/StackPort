@@ -100,8 +100,8 @@ PARTIAL = {
     "SP-DT-005": "SQLite 기본 키 검증과 키 없는 테이블 편집 차단",
     "SP-DT-006": "SQLite의 NULL·빈 문자열·숫자 구분과 단일 셀 입력, PostgreSQL의 NULL·빈 문자열 구분과 숫자 정밀도 유지",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집",
-    "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시와 PostgreSQL 서버 타입 바인딩",
-    "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화",
+    "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
+    "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
     "SP-DT-020": "단일 셀 변경의 시작·성공·실패 감사 기록",
     "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
@@ -163,7 +163,7 @@ PARTIAL = {
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
-    "SP-AT-025": "v1~v9 백업 후 v10 이관·이관 실패 시 원본 보존",
+    "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
@@ -351,6 +351,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
+                evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
             if requirement_id in {

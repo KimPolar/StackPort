@@ -119,6 +119,16 @@ async function main() {
   await page.getByRole('button', { name: '적용', exact: true }).click();
   const resultRows = page.locator('.results-card tbody tr');
   await resultRows.first().getByText('사용자 205', { exact: true }).waitFor();
+  const savedConditions = page.getByRole('dialog', { name: '저장된 조회 조건', exact: true });
+  const savedButton = page.getByRole('button', { name: '저장된 조건', exact: true });
+  const savedSelect = savedConditions.getByLabel('조회 조건');
+  await savedButton.click();
+  await savedConditions.getByText('저장된 조건이 없습니다.').waitFor();
+  await savedConditions.getByLabel('새 조건 이름').fill('검토할 행');
+  await savedConditions.getByRole('button', { name: '조건 저장', exact: true }).click();
+  await savedConditions.getByText('조회 조건을 저장했습니다.').waitFor();
+  await savedConditions.getByRole('button', { name: '닫기', exact: true }).click();
+  await savedConditions.waitFor({ state: 'detached' });
   await page.getByText('people · 조회 SQL · 필터 2개 · 정렬 2개', { exact: true }).click();
   const generatedSql = page.locator('.table-query-sql pre');
   await generatedSql.getByText(/WHERE sp_source\."note" IS NULL OR sp_source\."id" >= \?/).waitFor();
@@ -145,6 +155,40 @@ async function main() {
   await page.getByRole('button', { name: '변경 적용' }).click();
   await resultRows.first().getByText('필터에서 수정', { exact: true }).waitFor();
   if (scalar('SELECT name FROM people WHERE id=5') !== '필터에서 수정') throw new Error('Filtered grid edited a different row.');
+  await page.getByRole('button', { name: '초기화', exact: true }).click();
+  await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
+  await savedButton.click();
+  await savedSelect.selectOption({ label: '검토할 행' });
+  await savedConditions.getByRole('button', { name: '적용', exact: true }).click();
+  await savedConditions.waitFor({ state: 'detached' });
+  await resultRows.first().getByText('사용자 205', { exact: true }).waitFor();
+  if (await page.getByLabel('필터 2 값', { exact: true }).inputValue() !== '90' ||
+      await page.getByLabel('일치 조건').inputValue() !== 'any' ||
+      await page.getByLabel('정렬 1 NULL 순서').inputValue() !== 'first') {
+    throw new Error('SQLite did not restore the saved filter and sort controls.');
+  }
+  await page.getByLabel('필터 2 값', { exact: true }).fill('205');
+  await savedButton.click();
+  await savedSelect.selectOption({ label: '검토할 행' });
+  await savedConditions.getByRole('button', { name: '현재 조건으로 바꾸기', exact: true }).click();
+  await savedConditions.getByRole('button', { name: '조건 바꾸기', exact: true }).click();
+  await savedConditions.getByText('조회 조건을 저장했습니다.').waitFor();
+  await savedConditions.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.getByRole('button', { name: '초기화', exact: true }).click();
+  await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
+  await savedButton.click();
+  await savedSelect.selectOption({ label: '검토할 행' });
+  await savedConditions.getByRole('button', { name: '적용', exact: true }).click();
+  await resultRows.first().getByText('사용자 205', { exact: true }).waitFor();
+  if (await page.getByLabel('필터 2 값', { exact: true }).inputValue() !== '205') {
+    throw new Error('SQLite did not reload the replacement filter.');
+  }
+  await savedButton.click();
+  await savedSelect.selectOption({ label: '검토할 행' });
+  await savedConditions.getByRole('button', { name: '삭제', exact: true }).click();
+  await savedConditions.getByRole('button', { name: '조건 삭제', exact: true }).click();
+  await savedConditions.getByText('저장된 조건이 없습니다.').waitFor();
+  await savedConditions.getByRole('button', { name: '닫기', exact: true }).click();
   await page.getByRole('button', { name: '초기화', exact: true }).click();
   await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
   await page.getByText('필터 및 정렬', { exact: true }).click();

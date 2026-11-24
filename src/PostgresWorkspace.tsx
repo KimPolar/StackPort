@@ -102,7 +102,7 @@ export function PostgresWorkspace({ profile, editor, onFileBusy }: {
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
       <div hidden={view !== "catalog"}>
-        <PostgresBrowse key={session.id} id={session.id} onFileBusy={onFileBusy} onOpenSql={source => {
+        <PostgresBrowse key={session.id} id={session.id} profile={profile} onFileBusy={onFileBusy} onOpenSql={source => {
           editor.add(source + ";");
           setView("sql");
         }} onExport={requestExport} />
@@ -163,8 +163,9 @@ function ConnectDialog({ profile, onClose, onOpened }: { profile: PostgresProfil
   </dialog>;
 }
 
-function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
-  id: string; onOpenSql: (source: string) => void; onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
+function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy }: {
+  id: string; profile: PostgresProfile; onOpenSql: (source: string) => void;
+  onExport: (target: PostgresExportTarget) => void; onFileBusy: (busy: boolean) => void;
 }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
@@ -262,7 +263,8 @@ function PostgresBrowse({ id, onOpenSql, onExport, onFileBusy }: {
           visible={structureOpen} revision={structureRevision} onFollow={follow} onFileBusy={onFileBusy} />
       </>}
       <div hidden={structureOpen}>
-        {object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns} engine="postgres"
+        {schema && object && filterColumns && filterColumns.length > 0 && <TableQueryControls key={object.id} columns={filterColumns}
+          target={{ engine: "postgres", profile_id: profile.id, revision: profile.revision, schema: schema.name, object: object.name }}
           busy={page.loading} errorId={page.error ? errorId : undefined} apply={next => {
             if (next === tableQuery) setRefresh(value => value + 1);
             setTableQuery(next); setRowPage(0);

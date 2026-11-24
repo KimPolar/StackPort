@@ -105,7 +105,7 @@ fn version_eight_tunnel_becomes_local_and_retains_its_revision_and_addresses() {
     let project = store.create_project("existing").unwrap();
     let profile = gateway(&store, &project.id);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; CREATE TABLE ssh_tunnels (
+    db.execute_batch("DROP TABLE table_query_presets; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; CREATE TABLE ssh_tunnels (
         id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         ssh_profile_id TEXT NOT NULL REFERENCES ssh_profiles(id) ON DELETE CASCADE,
         name TEXT NOT NULL COLLATE NOCASE, local_port INTEGER NOT NULL CHECK(local_port BETWEEN 0 AND 65535),
@@ -187,7 +187,7 @@ fn version_seven_migration_preserves_the_ssh_profile_and_previous_schema() {
     let profile = gateway(&store, &project.id);
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; PRAGMA user_version=7;")
+        .execute_batch("DROP TABLE table_query_presets; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; PRAGMA user_version=7;")
         .unwrap();
 
     let reopened = Store::open(&path).unwrap();

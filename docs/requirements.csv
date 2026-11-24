@@ -163,8 +163,8 @@ SP-DT-006,NULL·기본값,"NULL/빈 문자열/DEFAULT/0의 구분, 타입 맞춤
 SP-DT-007,데이터 타입,숫자·날짜·시간대·UUID·JSON/JSONB·XML·ARRAY·BLOB/CLOB·지리정보 등 각 타입의 안전한 표시/수정.,partial,SQLite 문자열·정수·실수·NULL 셀 편집,crates/stackport-core/tests/edit.rs; tests/desktop-smoke.cjs; src/; src-tauri/
 SP-DT-008,대용량 값,"BLOB/CLOB/BFile·이미지·파일·문자열을 필요할 때 별도 로드, 저장/열기/내보내기.",not_started,,
 SP-DT-009,FK 선택,외래키 셀을 참조 대상 테이블의 검색 가능한 레코드 선택기로 수정.,not_started,,
-SP-DT-010,필터,"컬럼별 연산자·날짜 범위·NULL·다중 조건 AND/OR, 조건 저장/재사용, 필터 SQL 표시.",partial,"SQLite·PostgreSQL 테이블·뷰의 비교·범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시와 PostgreSQL 서버 타입 바인딩",crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs
-SP-DT-011,정렬,"단일·다중 컬럼, NULL 정렬, 서버 측 정렬, 순서 초기화.",partial,SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화,crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs
+SP-DT-010,필터,"컬럼별 연산자·날짜 범위·NULL·다중 조건 AND/OR, 조건 저장/재사용, 필터 SQL 표시.",partial,"SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx
+SP-DT-011,정렬,"단일·다중 컬럼, NULL 정렬, 서버 측 정렬, 순서 초기화.",partial,"SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",crates/stackport-core/tests/table_query.rs; tests/desktop-smoke.cjs; src/TableQueryControls.tsx; src-tauri/; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx
 SP-DT-012,탐색·검색,"셀·행/열 검색, 정규식(가능 범위), 찾기/바꾸기, 데이터베이스 전체 검색.",not_started,,
 SP-DT-013,컬럼 설정,숨김/고정/순서·폭·형식·타입별 색상·표시 자릿수·날짜 포맷·프로필 저장.,not_started,,
 SP-DT-014,집계·통계,"행 수, 합계, 평균, 최소/최대, NULL 비율, 고유값 수, 분포/히스토그램, 누락 데이터 분석.",not_started,,
@@ -429,5 +429,5 @@ SP-AT-021,AI 안전,승인 전 원본 레코드 송신 안 됨; 생성 SQL이 �
 SP-AT-022,협업,연결 정의만 공유되고 개인 시크릿/원본 레코드는 팀 동기화에 포함되지 않음,not_started,,
 SP-AT-023,브라우저 보안,인증 없는 연결 및 임의 대상 TCP 프록시 요청을 게이트웨이가 차단하고 감사 이벤트 기록,not_started,,
 SP-AT-024,오프라인,중앙 서비스 없이 로컬 저장 연결/작업과 기존 오프라인 자산을 이용 가능,partial,SQLite 로컬 메타데이터 및 로컬 조회,crates/stackport-core/tests/workspace.rs; src/; src-tauri/
-SP-AT-025,이전 버전 호환,"저장 포맷 업데이트 전 백업 후 마이그레이션, 실패 시 원본 파일 보존",partial,v1~v9 백업 후 v10 이관·이관 실패 시 원본 보존,crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/postgres_profiles.rs
+SP-AT-025,이전 버전 호환,"저장 포맷 업데이트 전 백업 후 마이그레이션, 실패 시 원본 파일 보존",partial,v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존,crates/stackport-core/tests/migration.rs; crates/stackport-core/tests/postgres_profiles.rs
 SP-AT-026,플러그인 격리,허용되지 않은 파일·네트워크·시크릿 접근 시도가 차단되고 권한 요청이 기록됨,not_started,,

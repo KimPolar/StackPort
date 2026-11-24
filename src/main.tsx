@@ -1386,7 +1386,10 @@ function App() {
             }}>중단 위치로 이동</button>}
           </div>}
         </div>}
-        {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={clauses => void executeQuery({ kind: "table", request: { object: selectedObject.name, ...clauses } })} />}
+        {profile && selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current}
+          target={{ engine: "sqlite", profile_id: profile.id, object: selectedObject.name }}
+          columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying}
+          apply={clauses => void executeQuery({ kind: "table", request: { object: selectedObject.name, ...clauses } })} />}
         {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
           <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
           <pre>{result.generated_sql}</pre>
@@ -1675,6 +1678,7 @@ const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
   "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
+  "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
