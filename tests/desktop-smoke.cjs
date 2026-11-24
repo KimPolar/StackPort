@@ -151,6 +151,26 @@ async function main() {
 
   await editorToggle.press('Enter');
   await page.getByLabel('SQL 쿼리').fill('SELECT name FROM people WHERE id >= :first AND :key = :key ORDER BY id');
+  const split = page.getByRole('button', { name: '화면 분할', exact: true });
+  await split.click();
+  await page.getByRole('heading', { name: '터미널', exact: true }).waitFor();
+  const separator = page.getByRole('separator', { name: '데이터베이스 창 크기', exact: true });
+  await separator.press('ArrowRight');
+  if (await separator.getAttribute('aria-valuenow') !== '55') throw new Error('Keyboard resizing did not move the split.');
+  await page.getByLabel('분할 방향', { exact: true }).selectOption('stack');
+  if (await separator.getAttribute('aria-orientation') !== 'horizontal') throw new Error('Stacked panes kept a vertical separator.');
+  const handle = await separator.boundingBox();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2 - 40, { steps: 4 });
+  await page.mouse.up();
+  if (Number(await separator.getAttribute('aria-valuenow')) >= 55) throw new Error('Dragging did not resize the stacked panes.');
+  await page.getByLabel('두 번째 도구', { exact: true }).selectOption('network');
+  await page.getByRole('heading', { name: '로컬 포트', exact: true }).waitFor();
+  await page.getByRole('heading', { name: '터미널', exact: true }).waitFor({ state: 'hidden' });
+  if (!(await editor.inputValue()).startsWith('SELECT name FROM people')) throw new Error('Splitting the workspace changed the SQL draft.');
+  await split.click();
+  await separator.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('heading', { name: 'SQL 매개변수' }).waitFor();
   await page.getByLabel(':first 형식').selectOption('integer');

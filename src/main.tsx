@@ -4,7 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
-  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen,
+  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
   Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
@@ -21,6 +21,7 @@ import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
+import { WorkspaceSeparator, WorkspaceSplitControls, type SplitDirection } from "./WorkspaceSplit";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -69,6 +70,9 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 
 function App() {
   const [page, setPage] = useState<WorkspacePage>("workspace");
+  const [splitPage, setSplitPage] = useState<WorkspacePage | null>(null);
+  const [splitDirection, setSplitDirection] = useState<SplitDirection>("side");
+  const [splitSize, setSplitSize] = useState(50);
   const [explorerOpen, setExplorerOpen] = useState(true);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [recentCommands, setRecentCommands] = useState<string[]>([]);
@@ -76,10 +80,7 @@ function App() {
   const [rdpClientCount, setRdpClientCount] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
-  const [terminalLoaded, setTerminalLoaded] = useState(false);
-  const [rdpLoaded, setRdpLoaded] = useState(false);
-  const [filesLoaded, setFilesLoaded] = useState(false);
-  const [networkLoaded, setNetworkLoaded] = useState(false);
+  const [loadedPages, setLoadedPages] = useState<ReadonlySet<WorkspacePage>>(() => new Set(["workspace"]));
   const [projects, setProjects] = useState<Project[]>([]);
   const [archivedProjectsOpen, setArchivedProjectsOpen] = useState(false);
   const [projectId, setProjectId] = useState("");
@@ -259,7 +260,7 @@ function App() {
   }
 
   function openObject(object: DatabaseObject) {
-    openPage("workspace");
+    showTool("workspace");
     setSqlEditorOpen(false);
     const generation = ++detailsGeneration.current;
     setSelectedObject(object); setObjectDetails(null); setDetailsError(""); setDetailsLoading(true);
@@ -361,27 +362,50 @@ function App() {
     setPath(""); setEnvironment("DEV"); setModal(next);
   }
 
+  function loadPage(next: WorkspacePage) {
+    setLoadedPages(current => current.has(next) ? current : new Set([...current, next]));
+  }
+
   function openPage(next: WorkspacePage) {
-    setHistoryOpen(false);
-    if (next === "terminal") setTerminalLoaded(true);
-    if (next === "rdp") setRdpLoaded(true);
-    if (next === "files") setFilesLoaded(true);
-    if (next === "network") setNetworkLoaded(true);
+    if (next === "workspace") setHistoryOpen(false);
+    loadPage(next);
+    if (next === splitPage) setSplitPage(page);
     setPage(next);
+  }
+
+  function showTool(next: WorkspacePage) {
+    if (next !== splitPage) openPage(next);
+    else if (next === "workspace") setHistoryOpen(false);
+  }
+
+  function selectSplitPage(next: WorkspacePage) {
+    if (next === page) return;
+    if (next === "workspace") setHistoryOpen(false);
+    loadPage(next);
+    setSplitPage(next);
+  }
+
+  function toggleSplit() {
+    if (splitPage) setSplitPage(null);
+    else selectSplitPage(page === "workspace" ? "terminal" : "workspace");
+  }
+
+  function toolVisible(tool: WorkspacePage) {
+    return page === tool || splitPage === tool;
   }
 
   function selectSqliteProfile(id: string) {
     setProfileId(id);
-    openPage("workspace");
+    showTool("workspace");
   }
 
   function openSavedSsh(item: SshProfile) {
     setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current });
-    openPage("terminal");
+    showTool("terminal");
   }
 
   function showHistory() {
-    setPage("workspace");
+    showTool("workspace");
     setHistoryOpen(true);
   }
 
@@ -396,6 +420,7 @@ function App() {
     if (desktop) {
       commands.push(
         { id: "open:history", title: "작업 기록", group: "작업", keywords: "audit history", Icon: History, run: showHistory },
+        { id: "toggle:split", title: splitPage ? "화면 분할 해제" : "화면 분할", group: "작업", keywords: "split pane", Icon: PanelsTopLeft, run: toggleSplit },
         { id: "create:project", title: "새 프로젝트", group: "작업", Icon: Plus, run: () => openModal("project") },
         { id: "open:archived", title: "보관된 프로젝트", group: "작업", Icon: Archive, run: () => setArchivedProjectsOpen(true) },
       );
@@ -496,6 +521,89 @@ function App() {
     return keys;
   }
 
+  const databasePane = <div id="workspace-pane-workspace" key="workspace" className="main-content" hidden={!toolVisible("workspace")}>
+    {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
+      <strong>SQLite 복원 완료 · 검증 통과</strong>
+      <span>{displayPath(restoreReport.path)}</span>
+      <span>{restoreCounts(restoreReport)} · 무결성 및 SHA-256 일치</span>
+      <code>{restoreReport.sha256}</code>
+      {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
+    </div>}
+    {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
+    !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
+    !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
+      <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
+        <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
+      </div>
+      {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
+      {exportReport && <div className="success-banner" role="status">
+        <strong>{exportReport.format} 내보내기 완료</strong>
+        <span>{displayPath(exportReport.path)} · {exportReport.rows.toLocaleString("ko-KR")}행 · {exportReport.size_bytes.toLocaleString("ko-KR")} bytes</span>
+        {exportReport.protected_fields > 0 && <span>수식처럼 보이는 텍스트 {exportReport.protected_fields.toLocaleString("ko-KR")}개를 보호했습니다.</span>}
+        {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
+      </div>}
+      {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
+      <div className="editor-card">
+        <div className="panel-heading">
+          <button type="button" className="sql-editor-toggle" aria-expanded={sqlEditorOpen} aria-controls="sql-editor-panel"
+            onClick={() => setSqlEditorOpen(open => !open)}>
+            <FileCode2 size={16} aria-hidden /> SQL 편집기
+            {sqlEditorOpen ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+          </button>
+          {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
+          : sqlEditorOpen && <div className="sql-editor-actions">
+          <button className="secondary small" disabled={!sql.trim()} onClick={() => runQuery(sql, true)}>실행 계획</button>
+          <button className="primary small" disabled={!sql.trim()} onClick={() => runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>
+          </div>}
+        </div>
+        <div id="sql-editor-panel" hidden={!sqlEditorOpen}>
+          <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (!querying) void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
+          <div className="editor-footer"><span>초안은 앱을 닫을 때까지 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
+        </div>
+      </div>
+      {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
+      {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
+      {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
+      {sqlEditorOpen && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
+      <div className="results-card database-results" aria-busy={querying}><div className="panel-heading">
+        <div className="result-identity"><Table2 size={16} aria-hidden /><strong title={executedQuery?.kind === "table" ? executedQuery.request.object : undefined}>{executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
+        <div className="results-actions">
+          {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
+            setExportReport(null);
+            setExportRequest({ profile, query: executedQuery });
+          }}><FileDown size={14} /> 결과 내보내기</button>}
+        </div>
+      </div>
+        {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
+        {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
+          <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
+          <pre>{result.generated_sql}</pre>
+          {executedQuery.request.filters.length > 0 && <p>물음표에는 필터 값을 매개변수로 전달합니다.</p>}
+        </details>}
+        {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
+        {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
+          <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
+      </div>
+    </>}
+    {!profile && error && <div className="error-banner" role="alert">{error}</div>}
+  </div>;
+
+  const toolPanes: Record<WorkspacePage, React.ReactNode> = {
+    workspace: databasePane,
+    terminal: <div id="workspace-pane-terminal" key="terminal" className="tool-body terminal-body" hidden={!toolVisible("terminal")}>
+      <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
+        <TerminalWorkspace visible={toolVisible("terminal")} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} />
+      </React.Suspense>
+    </div>,
+    network: <div id="workspace-pane-network" key="network" className="tool-body network-body" hidden={!toolVisible("network")}><NetworkWorkspace /></div>,
+    rdp: <div id="workspace-pane-rdp" key="rdp" className="tool-body network-body" hidden={!toolVisible("rdp")}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>,
+    files: <div id="workspace-pane-files" key="files" className="tool-body network-body" hidden={!toolVisible("files")}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>,
+  };
+  const paneOrder = [page, ...(splitPage ? [splitPage] : []), ...workspaceTools.map(tool => tool.id).filter(tool => !toolVisible(tool))];
+  const panes = paneOrder.filter(tool => loadedPages.has(tool)).flatMap(tool => tool === page && splitPage
+    ? [toolPanes[tool], <WorkspaceSeparator key="split" primary={page} direction={splitDirection} size={splitSize} onResize={setSplitSize} />]
+    : [toolPanes[tool]]);
+
   return <div className="app-shell">
     <div className="workspace">
       <header className="topbar">
@@ -507,7 +615,7 @@ function App() {
         <div className="top-right">
           <button className="history-button palette-trigger" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+Shift+P Meta+Shift+P"
             title="명령 팔레트 (Ctrl+Shift+P)" onClick={() => setPaletteOpen(true)}><Search size={15} aria-hidden /> 명령 팔레트 <kbd aria-hidden>Ctrl+Shift+P</kbd></button>
-          <button className="history-button" disabled={!desktop} onClick={() => { if (page === "workspace" && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
+          <button className="history-button" disabled={!desktop} onClick={() => { if (toolVisible("workspace") && historyOpen) setHistoryOpen(false); else showHistory(); }} aria-pressed={toolVisible("workspace") && historyOpen}><History size={15} /> 작업 기록</button>
         </div>
       </header>
       <div className="workspace-toolbar">
@@ -516,6 +624,8 @@ function App() {
           onClick={() => setExplorerOpen(open => !open)}>{explorerOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
         <WorkspaceNavigation page={page} desktop={desktop} historyOpen={page === "workspace" && historyOpen}
           terminalCount={terminalTabCount} rdpCount={rdpClientCount} onSelect={openPage} />
+        {desktop && <WorkspaceSplitControls primary={page} secondary={splitPage} direction={splitDirection}
+          onToggle={toggleSplit} onSelect={selectSplitPage} onDirectionChange={setSplitDirection} />}
       </div>
       <div className="body-layout">
         <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={!explorerOpen}>
@@ -531,7 +641,7 @@ function App() {
             <button disabled={!desktop} onClick={() => setWorkspaceCopyOpen(true)}><FileDown size={13} /> 데이터 복사</button>
           </div>
           <div className="section-heading"><span>데이터베이스</span><div>
-            <button className="icon-button" onClick={() => { setRestoreOpen(true); openPage("workspace"); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
+            <button className="icon-button" onClick={() => { setRestoreOpen(true); showTool("workspace"); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
           </div></div>
           {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
@@ -554,76 +664,10 @@ function App() {
             <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
           </div>)}</div>
         </aside>
-        <main className="main-content" hidden={page !== "workspace"}>
-          {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
-            <strong>SQLite 복원 완료 · 검증 통과</strong>
-            <span>{displayPath(restoreReport.path)}</span>
-            <span>{restoreCounts(restoreReport)} · 무결성 및 SHA-256 일치</span>
-            <code>{restoreReport.sha256}</code>
-            {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
-          </div>}
-          {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
-          !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
-          !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
-            <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
-              <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
-            </div>
-            {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
-            {exportReport && <div className="success-banner" role="status">
-              <strong>{exportReport.format} 내보내기 완료</strong>
-              <span>{displayPath(exportReport.path)} · {exportReport.rows.toLocaleString("ko-KR")}행 · {exportReport.size_bytes.toLocaleString("ko-KR")} bytes</span>
-              {exportReport.protected_fields > 0 && <span>수식처럼 보이는 텍스트 {exportReport.protected_fields.toLocaleString("ko-KR")}개를 보호했습니다.</span>}
-              {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
-            </div>}
-            {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
-            <div className="editor-card">
-              <div className="panel-heading">
-                <button type="button" className="sql-editor-toggle" aria-expanded={sqlEditorOpen} aria-controls="sql-editor-panel"
-                  onClick={() => setSqlEditorOpen(open => !open)}>
-                  <FileCode2 size={16} aria-hidden /> SQL 편집기
-                  {sqlEditorOpen ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-                </button>
-                {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
-                : sqlEditorOpen && <div className="sql-editor-actions">
-                <button className="secondary small" disabled={!sql.trim()} onClick={() => runQuery(sql, true)}>실행 계획</button>
-                <button className="primary small" disabled={!sql.trim()} onClick={() => runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>
-                </div>}
-              </div>
-              <div id="sql-editor-panel" hidden={!sqlEditorOpen}>
-                <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (!querying) void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
-                <div className="editor-footer"><span>초안은 앱을 닫을 때까지 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
-              </div>
-            </div>
-            {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
-            {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
-            {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
-            {sqlEditorOpen && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
-            <div className="results-card database-results" aria-busy={querying}><div className="panel-heading">
-              <div className="result-identity"><Table2 size={16} aria-hidden /><strong title={executedQuery?.kind === "table" ? executedQuery.request.object : undefined}>{executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
-              <div className="results-actions">
-                {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
-                  setExportReport(null);
-                  setExportRequest({ profile, query: executedQuery });
-                }}><FileDown size={14} /> 결과 내보내기</button>}
-              </div>
-            </div>
-              {selectedObject && objectDetails && <TableQueryControls key={detailsGeneration.current} object={selectedObject.name} columns={objectDetails.columns.filter(column => column.hidden !== 1).map(column => column.name)} busy={querying} apply={request => void executeQuery({ kind: "table", request })} />}
-              {result?.generated_sql && executedQuery?.kind === "table" && <details className="table-query-sql">
-                <summary>{executedQuery.request.object} · 조회 SQL{executedQuery.request.filters.length > 0 && ` · 필터 ${executedQuery.request.filters.length}개`}{executedQuery.request.sort.length > 0 && ` · 정렬 ${executedQuery.request.sort.length}개`}</summary>
-                <pre>{result.generated_sql}</pre>
-                {executedQuery.request.filters.length > 0 && <p>물음표에는 필터 값을 매개변수로 전달합니다.</p>}
-              </details>}
-              {editUnavailableReason && <p className="edit-unavailable">{editUnavailableReason}</p>}
-              {result ? <><div className="table-wrap"><table><thead><tr><th scope="col" className="row-number">#</th>{result.columns.map((column, i) => <th scope="col" key={i}>{column}</th>)}{canEditRows && <th scope="col">작업</th>}</tr></thead><tbody>{result.rows.map((row, rowIndex) => { const keys = keysForRow(row); return <tr key={rowIndex}><td className="row-number">{result.page * 100 + rowIndex + 1}</td>{row.map((cell, index) => <td key={index} className={cell.kind === "null" ? "null-cell" : ""} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>)}{canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying} aria-label={`${result.page * 100 + rowIndex + 1}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button> : <span className="subtle" title="NULL·BLOB 또는 긴 기본 키는 편집할 수 없습니다.">지원 안 됨</span>}</td>}</tr>; })}</tbody></table>{result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}</div>
-                <div className="pagination"><span>페이지 {result.page + 1}{result.has_more ? " · 다음 페이지 있음" : " · 마지막 페이지"}</span><div><button className="icon-button" disabled={!result.page || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page - 1); }} aria-label="이전 페이지"><ArrowLeft size={16} /></button><button className="icon-button" disabled={!result.has_more || querying} onClick={() => { if (executedQuery) void executeQuery(executedQuery, result.page + 1); }} aria-label="다음 페이지"><ArrowRight size={16} /></button></div></div></> : <div className="result-placeholder"><Table2 size={24} /><strong>아직 조회 결과가 없습니다</strong><span>테이블을 선택하거나 SQL을 실행해 보세요.</span></div>}
-            </div>
-          </>}
-          {!profile && error && <div className="error-banner" role="alert">{error}</div>}
+        <main id="workspace-panes" className="workspace-panes" aria-label="작업 공간" data-split={splitPage ? splitDirection : undefined}
+          style={splitPage ? { "--workspace-primary": `${splitSize}fr`, "--workspace-secondary": `${100 - splitSize}fr` } as React.CSSProperties : undefined}>
+          {panes}
         </main>
-        {terminalLoaded && <main className="tool-body terminal-body" hidden={page !== "terminal"}><React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense></main>}
-        {networkLoaded && <main className="tool-body network-body" hidden={page !== "network"}><NetworkWorkspace /></main>}
-        {rdpLoaded && <main className="tool-body network-body" hidden={page !== "rdp"}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></main>}
-        {filesLoaded && <main className="tool-body network-body" hidden={page !== "files"}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></main>}
       </div>
       <footer className="statusbar">
         <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span />

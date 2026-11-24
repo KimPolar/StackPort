@@ -12,13 +12,14 @@ PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제",
     "SP-UI-002": "도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH 연결 탐색",
     "SP-UI-003": "여러 Windows 터미널 탭 열기·전환·닫기, 도구 전환 후 열린 터미널·RDP 세션 표시",
+    "SP-UI-004": "두 작업 도구의 좌우·상하 분할과 마우스·키보드 크기 조절, 위치 전환 시 터미널·SQL 상태 유지",
     "SP-UI-006": "명령 팔레트에서 도구·프로젝트·현재 프로젝트 연결·선택한 SQLite 연결의 테이블과 뷰 검색",
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
-    "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, Ctrl+Shift+F 터미널 출력 검색",
+    "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",
@@ -163,7 +164,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-UI-006", "SP-UI-007", "SP-UI-016"}:
-                evidence = "src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
+                evidence = "src/CommandPalette.tsx; src/WorkspaceNavigation.tsx; src/WorkspaceSplit.tsx; src/TerminalWorkspace.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
+            elif requirement_id == "SP-UI-004":
+                evidence = "src/WorkspaceSplit.tsx; src/main.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs"
             elif requirement_id == "SP-UI-003":
                 evidence = "src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
