@@ -1,9 +1,11 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
 mod audit;
+mod copy;
 mod download;
 mod mutation;
 mod preview;
+mod remote_stage;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;

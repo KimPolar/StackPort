@@ -648,6 +648,21 @@ async fn move_sftp_entry(
 }
 
 #[tauri::command]
+async fn copy_sftp_file(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    parent: String,
+    source: SftpEntrySource,
+    directory: String,
+    name: Option<String>,
+    progress: Channel<SftpTransferProgress>,
+) -> Result<SftpTransferReport, String> {
+    sftp.copy_file(&id, parent, source, directory, name, |update| {
+        let _ = progress.send(update);
+    }).await
+}
+
+#[tauri::command]
 async fn preview_local_browse_file(path: String) -> Result<FilePreview, String> {
     worker(move || preview_local_file(&path)).await
 }
@@ -905,6 +920,7 @@ fn main() {
             create_sftp_folder,
             rename_sftp_entry,
             move_sftp_entry,
+            copy_sftp_file,
             preview_local_browse_file,
             download_sftp_file,
             upload_sftp_file,

@@ -313,6 +313,7 @@ async function main() {
     await verifyNewFolder(page, remote, server.uploads);
     await verifyRenames(page, remote, server.uploads);
     await verifyMoves(page, remote, server.uploads);
+    await verifyCopies(page, remote, server.uploads, local);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
@@ -334,7 +335,7 @@ async function main() {
     assert.equal(server.stats.subsystem, 0);
     await verifyFileAudit(page, command, project, profile, local);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, browsing and previews, remote folder operations, verified transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, browsing and previews, remote file operations, verified copies/transfers and audit, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
@@ -550,6 +551,104 @@ async function verifyMoves(page, remote, uploads) {
   assert.equal(uploads.files.get(`${destination}/${folderName}/하위.txt`).data.toString(), 'nested file');
 }
 
+async function verifyCopies(page, remote, uploads, local) {
+  const parent = '/home/stackport/정리';
+  const sourceName = '변경한 파일.bin';
+  const sourcePath = `${parent}/${sourceName}`;
+  const targetFolder = '변경한 폴더';
+  const dialog = page.getByRole('dialog', { name: '원격 파일 복사' });
+  const submit = dialog.getByRole('button', { name: '복사', exact: true });
+  const name = dialog.getByLabel('복사본 이름');
+  const done = async () => {
+    await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('status').getByText('원격 복사 완료', { exact: true }).waitFor();
+  };
+  const open = fileName => remote.getByRole('button', { name: `${fileName} 복사`, exact: true }).click();
+  const noPartials = () => assert.ok(Array.from(uploads.files.keys()).every(key => !path.posix.basename(key).startsWith('.stackport-upload-')));
+  const error = pattern => dialog.getByRole('alert').getByText(pattern).waitFor();
+  const original = uploads.files.get(sourcePath);
+  const contents = Buffer.from(original.data);
+  const localFiles = fs.readdirSync(local);
+  const assertCopy = target => {
+    const copied = uploads.files.get(target);
+    assert.deepEqual(copied.data, contents);
+    assert.equal(copied.attrs.mode & 0o777, 0o600);
+    assert.deepEqual(uploads.files.get(sourcePath).data, contents);
+    noPartials();
+  };
+
+  await remote.getByRole('button', { name: '원격 파일 상위 폴더' }).click();
+  await open(sourceName);
+  assert.equal(await submit.isDisabled(), true);
+  await name.fill('../밖.bin');
+  await submit.click();
+  await error(/경로 구분자/);
+  await name.fill('동일 폴더 복사.bin');
+  await submit.click();
+  await done();
+  await remote.getByText('동일 폴더 복사.bin', { exact: true }).waitFor();
+  assertCopy(`${parent}/동일 폴더 복사.bin`);
+  await page.getByText('SHA-256', { exact: true }).click();
+  await page.getByText(createHash('sha256').update(contents).digest('hex'), { exact: true }).waitFor();
+
+  await open(sourceName);
+  await dialog.getByLabel('하위 대상 폴더').selectOption({ label: targetFolder });
+  await dialog.getByLabel('확인한 복사 경로').filter({ hasText: `${parent}/${targetFolder}/${sourceName}` }).waitFor();
+  await submit.click();
+  await done();
+  assertCopy(`${parent}/${targetFolder}/${sourceName}`);
+
+  await open(sourceName);
+  await name.fill('동일 폴더 복사.bin');
+  await submit.click();
+  await error(/같은 이름/);
+  assertCopy(`${parent}/동일 폴더 복사.bin`);
+
+  await name.fill('복사 게시 경쟁.bin');
+  uploads.behavior = 'collision';
+  await submit.click();
+  await error(/같은 이름/);
+  assert.equal(uploads.files.get(`${parent}/복사 게시 경쟁.bin`).data.toString(), 'keep');
+  noPartials();
+
+  await name.fill('복사 검증 실패.bin');
+  uploads.behavior = 'corrupt';
+  await submit.click();
+  await error(/SHA-256/);
+  assert.equal(uploads.files.has(`${parent}/복사 검증 실패.bin`), false);
+  noPartials();
+
+  await name.fill('복사 중 원본 변경.bin');
+  original.changed = true;
+  await submit.click();
+  await error(/전송 중 변경/);
+  original.changed = false;
+  assert.equal(uploads.files.has(`${parent}/복사 중 원본 변경.bin`), false);
+  noPartials();
+
+  await name.fill('중단할 복사.bin');
+  uploads.behavior = 'slow';
+  await submit.click();
+  await dialog.getByText(/KiB\/s/).waitFor();
+  await dialog.getByRole('button', { name: '복사 중단', exact: true }).click();
+  await dialog.getByText('복사가 중단되었습니다.', { exact: true }).waitFor();
+  assert.equal(uploads.files.has(`${parent}/중단할 복사.bin`), false);
+  assert.deepEqual(uploads.files.get(sourcePath).data, contents);
+  assert.deepEqual(fs.readdirSync(local), localFiles);
+  noPartials();
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+
+  uploads.files.set(`${parent}/빈 원격 파일.txt`, { data: Buffer.alloc(0), attrs: { ...file('').attrs, size: 0 } });
+  await remote.getByRole('button', { name: '원격 파일 새로고침', exact: true }).click();
+  await open('빈 원격 파일.txt');
+  await name.fill('빈 복사본.txt');
+  await submit.click();
+  await done();
+  assert.equal(uploads.files.get(`${parent}/빈 복사본.txt`).data.length, 0);
+  noPartials();
+}
+
 async function verifyFileAudit(page, command, project, profile, localPath) {
   const { events } = await command('list_audit_events', { before: null });
   const fileEvents = events.filter(event => event.operation.startsWith('sftp.'));
@@ -561,7 +660,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.equal(start.outcome, 'started');
     assert.ok(end.operation === start.operation || end.operation === `${start.operation}.cancel`);
   }
-  for (const operation of ['sftp.download', 'sftp.upload']) {
+  for (const operation of ['sftp.download', 'sftp.upload', 'sftp.copy']) {
     for (const outcome of ['started', 'succeeded', 'failed']) {
       assert.ok(fileEvents.some(event => event.operation === operation && event.outcome === outcome));
     }
@@ -582,12 +681,12 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.ok(Number.isFinite(Date.parse(event.occurred_at)));
   }
   const serialized = JSON.stringify(fileEvents);
-  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', password, passphrase]) {
+  for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
   }
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
   await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
-  for (const action of ['SFTP 다운로드', 'SFTP 업로드']) {
+  for (const action of ['SFTP 다운로드', 'SFTP 업로드', 'SFTP 복사']) {
     const rows = page.getByRole('listitem').filter({ hasText: action });
     for (const state of ['시작', '완료', '실패', '중단']) {
       await rows.getByText(state, { exact: true }).first().waitFor();

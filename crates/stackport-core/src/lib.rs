@@ -786,6 +786,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sftp.mkdir" => "sftp-pinned-host-new-directory",
         "sftp.rename" => "sftp-pinned-host-rename-no-overwrite",
         "sftp.move" => "sftp-pinned-host-move-no-overwrite",
+        "sftp.copy" | "sftp.copy.cancel" => "sftp-pinned-host-verified-copy-no-overwrite",
         "sqlite.cell.update" if record.environment == Some("PROD") => {
             "sqlite-cell-update-prod-confirmed"
         }

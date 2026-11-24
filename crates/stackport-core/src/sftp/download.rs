@@ -1,9 +1,11 @@
 //! Stream verified SFTP reads into a local file, then publish without replacing a destination.
 
 use super::{
-    audit::{FileAudit, FileOperation},
+    audit::FileOperation,
     file_error,
-    transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
+    transfer::{
+        check_remote_snapshot, read_chunk, remote_file_size, request, Transfer, CHUNK_SIZE,
+    },
     RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress, SftpTransferReport,
 };
 use crate::Result;
@@ -29,27 +31,16 @@ impl SftpManager {
         progress: impl Fn(SftpTransferProgress),
     ) -> Result<SftpTransferReport> {
         let source = source.into_path()?;
-        let session = self.session(id)?;
-        let _operation = session
-            .operation
-            .try_lock()
-            .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
-        let active = session.register_transfer()?;
-        let transfer = &active.transfer;
-        let audit =
-            FileAudit::start(&self.store, &session.profile, &transfer.id, FileOperation::Download)
-                .await?;
-        let update = |received, total| progress(transfer.report(received, total, false));
-        update(0, None);
-        let result = download_file(&session.files, source, destination, transfer, update).await;
-        let result = if transfer.cancelled() {
-            Ok(SftpTransferOutcome::Cancelled {
-                cleanup_warning: None,
-            })
-        } else {
-            result
-        };
-        audit.finish_transfer(result).await
+        self.run_transfer(
+            id,
+            FileOperation::Download,
+            |session, transfer| async move {
+                let update = |received, total| progress(transfer.report(received, total, false));
+                update(0, None);
+                download_file(&session.files, source, destination, &transfer, update).await
+            },
+        )
+        .await
     }
 }
 
@@ -72,7 +63,7 @@ async fn download_file(
         .await
         .map_err(file_error)?
         .attrs;
-    let expected = file_size(&listed)?;
+    let expected = remote_file_size(&listed)?;
     transfer.check()?;
     let handle = request(files.open(source, OpenFlags::READ, FileAttributes::empty()))
         .await
@@ -114,7 +105,7 @@ async fn copy_contents(
         .await
         .map_err(file_error)?
         .attrs;
-    check_snapshot(listed, &opened, expected)?;
+    check_remote_snapshot(listed, &opened, expected)?;
     progress(0, Some(expected));
     let mut copied = 0;
     let mut checksum = Sha256::new();
@@ -140,26 +131,8 @@ async fn copy_contents(
         .await
         .map_err(file_error)?
         .attrs;
-    check_snapshot(&opened, &finished, expected)?;
+    check_remote_snapshot(&opened, &finished, expected)?;
     Ok(format!("{:x}", checksum.finalize()))
-}
-
-fn file_size(attrs: &FileAttributes) -> Result<u64> {
-    if !attrs.is_regular() {
-        return Err("다운로드할 원격 경로가 일반 파일인지 확인할 수 없습니다.".into());
-    }
-    attrs
-        .size
-        .ok_or_else(|| "서버가 원격 파일 크기를 반환하지 않았습니다.".into())
-}
-
-fn check_snapshot(before: &FileAttributes, current: &FileAttributes, size: u64) -> Result<()> {
-    if file_size(current)? != size || current.mtime != before.mtime {
-        return Err(
-            "원격 파일의 크기 또는 수정 시간이 전송 중 변경되었습니다. 다시 시도하세요.".into(),
-        );
-    }
-    Ok(())
 }
 
 fn prepare_destination(destination: &str) -> Result<(PathBuf, NamedTempFile)> {

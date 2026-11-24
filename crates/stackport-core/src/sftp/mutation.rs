@@ -21,7 +21,7 @@ pub struct SftpMutationReport {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SftpEntrySource {
-    location: String,
+    pub(super) location: String,
     kind: EntryKind,
     size: Option<String>,
     modified: Option<u32>,
@@ -107,11 +107,7 @@ impl SftpManager {
         self.run_mutation(id, FileOperation::Move, |session| async move {
             let files = &session.files;
             for directory in [parent, destination] {
-                let current = canonical_remote_path(files, directory.clone()).await?;
-                if current != directory {
-                    return Err("원격 폴더 경로가 바뀌었습니다. 목록을 새로고침하고 다시 선택하세요.".into());
-                }
-                ensure_directory(files, directory).await?;
+                ensure_current_directory(files, &directory).await?;
             }
             relocate_entry(
                 files,
@@ -148,7 +144,7 @@ impl SftpManager {
     }
 }
 
-fn direct_child_name<'a>(parent: &SftpString, path: &'a SftpString) -> Result<&'a [u8]> {
+pub(super) fn direct_child_name<'a>(parent: &SftpString, path: &'a SftpString) -> Result<&'a [u8]> {
     let leaf = path
         .as_bytes()
         .rsplit(|byte| *byte == b'/')
@@ -165,7 +161,7 @@ fn direct_child_name<'a>(parent: &SftpString, path: &'a SftpString) -> Result<&'
 }
 
 impl SftpEntrySource {
-    fn check_snapshot(&self, attrs: &FileAttributes) -> Result<()> {
+    pub(super) fn check_snapshot(&self, attrs: &FileAttributes) -> Result<()> {
         let kind_matches = match self.kind {
             EntryKind::File => attrs.is_regular(),
             EntryKind::Directory => attrs.is_dir(),
@@ -268,6 +264,16 @@ pub(super) async fn ensure_directory(files: &RawSftpSession, path: SftpString) -
         return Err("선택한 원격 경로가 현재 일반 디렉터리인지 확인할 수 없습니다.".into());
     }
     Ok(())
+}
+
+pub(super) async fn ensure_current_directory(
+    files: &RawSftpSession,
+    path: &SftpString,
+) -> Result<()> {
+    if canonical_remote_path(files, path.clone()).await? != *path {
+        return Err("원격 폴더 경로가 바뀌었습니다. 목록을 새로고침하고 다시 선택하세요.".into());
+    }
+    ensure_directory(files, path.clone()).await
 }
 
 pub(super) async fn ensure_vacant(files: &RawSftpSession, path: &SftpString) -> Result<()> {

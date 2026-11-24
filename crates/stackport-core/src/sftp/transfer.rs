@@ -1,8 +1,11 @@
-use super::{file_error, FilesSession, SftpManager};
+use super::{
+    audit::{FileAudit, FileOperation},
+    file_error, FilesSession, SftpManager, SftpTransferReport,
+};
 use crate::Result;
 use russh_sftp::{
     client::{error::Error as SftpError, RawSftpSession},
-    protocol::{SftpHandle, StatusCode},
+    protocol::{FileAttributes, SftpHandle, StatusCode},
 };
 use serde::Serialize;
 use std::{
@@ -143,6 +146,38 @@ impl FilesSession {
 }
 
 impl SftpManager {
+    pub(super) async fn run_transfer<F>(
+        &self,
+        id: &str,
+        operation: FileOperation,
+        run: impl FnOnce(Arc<FilesSession>, Arc<Transfer>) -> F,
+    ) -> Result<SftpTransferReport>
+    where
+        F: Future<Output = Result<SftpTransferOutcome>>,
+    {
+        let session = self.session(id)?;
+        let _operation = session
+            .operation
+            .try_lock()
+            .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
+        let active = session.register_transfer()?;
+        let audit = FileAudit::start(
+            &self.store,
+            &session.profile,
+            &active.transfer.id,
+            operation,
+        )
+        .await?;
+        let result = run(Arc::clone(&session), Arc::clone(&active.transfer)).await;
+        let result = match result {
+            Err(_) if active.transfer.cancelled() => Ok(SftpTransferOutcome::Cancelled {
+                cleanup_warning: None,
+            }),
+            result => result,
+        };
+        audit.finish_transfer(result).await
+    }
+
     pub fn cancel_transfer(&self, id: &str, transfer_id: &str) -> bool {
         let Ok(session) = self.session(id) else {
             return false;
@@ -154,6 +189,28 @@ impl SftpManager {
                 .is_some_and(|transfer| transfer.id == transfer_id && transfer.cancel())
         })
     }
+}
+
+pub(super) fn remote_file_size(attrs: &FileAttributes) -> Result<u64> {
+    if !attrs.is_regular() {
+        return Err("원격 경로가 일반 파일인지 확인할 수 없습니다.".into());
+    }
+    attrs
+        .size
+        .ok_or_else(|| "서버가 원격 파일 크기를 반환하지 않았습니다.".into())
+}
+
+pub(super) fn check_remote_snapshot(
+    before: &FileAttributes,
+    current: &FileAttributes,
+    size: u64,
+) -> Result<()> {
+    if remote_file_size(current)? != size || current.mtime != before.mtime {
+        return Err(
+            "원격 파일의 크기 또는 수정 시간이 전송 중 변경되었습니다. 다시 시도하세요.".into(),
+        );
+    }
+    Ok(())
 }
 
 pub(super) async fn request<T>(

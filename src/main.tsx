@@ -602,6 +602,7 @@ const auditOperationNames: Record<string, string> = {
   "sftp.mkdir": "SFTP 폴더 생성",
   "sftp.rename": "SFTP 이름 변경",
   "sftp.move": "SFTP 이동",
+  "sftp.copy": "SFTP 복사", "sftp.copy.cancel": "SFTP 복사",
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
 
