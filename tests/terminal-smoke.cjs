@@ -110,7 +110,7 @@ async function main() {
   await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
   await page.keyboard.type("Start-Sleep -Seconds 2; [Console]::WriteLine('STACKPORT_HIDDEN')");
   await page.keyboard.press('Enter');
-  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   const terminalTool = page.getByRole('navigation', { name: '작업 도구' }).getByRole('button', { name: '터미널', exact: true });
   if (await terminalTool.getAttribute('aria-description') !== '열린 세션 2개') throw new Error('Open terminal tabs were not shown across workspace tools.');
   const hiddenActivity = page.locator('[role=tab]').filter({ hasText: 'PowerShell 2' }).getByText('새 출력', { exact: true });
@@ -134,7 +134,7 @@ async function main() {
   if (!pasteMessage.includes('여러 줄')) throw new Error(`Paste confirmation missing: ${pasteMessage}`);
   await page.waitForTimeout(300);
   if ((await page.locator('[role=tabpanel]:visible .xterm-rows').innerText()).includes('901')) throw new Error('Rejected multiline paste was executed.');
-  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('button', { name: '터미널', exact: true }).click();
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
 

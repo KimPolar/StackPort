@@ -233,7 +233,7 @@ async function main() {
 
   // Saved connections retain their environment and cannot be opened with a
   // stale snapshot or without the server-side PROD confirmation.
-  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('button', { name: '새 프로젝트' }).click();
   await page.getByLabel('이름', { exact: true }).fill('SSH 프로필 검증');
   await page.getByRole('button', { name: '저장', exact: true }).click();
@@ -279,7 +279,7 @@ async function main() {
   await page.keyboard.type(password);
   await page.keyboard.press('Enter');
   await waitForRows(page, 'STACKPORT_REMOTE_READY');
-  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('button', { name: '운영 SSH SSH 연결 삭제' }).click();
   await page.getByRole('dialog').getByRole('button', { name: '삭제', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 운영 SSH 연결' }).waitFor({ state: 'detached' });

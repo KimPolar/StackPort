@@ -119,7 +119,7 @@ async function main() {
   await page.getByRole('button', { name: /SSH 2 .*터미널 닫기/ }).click();
   await page.getByRole('tab', { name: /SSH 2/ }).waitFor({ state: 'detached' });
 
-  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
   await page.getByRole('button', { name: '새 프로젝트' }).click();
   await page.getByLabel('이름', { exact: true }).fill('키 인증 검증');
   await page.getByRole('button', { name: '저장', exact: true }).click();

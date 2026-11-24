@@ -38,7 +38,7 @@ async function main() {
   await page.getByRole('button', { name: '저장' }).click();
   await page.getByRole('dialog').waitFor({ state: 'hidden' });
   const tools = page.getByRole('navigation', { name: '작업 도구' });
-  const databaseTool = tools.getByRole('button', { name: '워크스페이스', exact: true });
+  const databaseTool = tools.getByRole('button', { name: '데이터베이스', exact: true });
   const networkTool = tools.getByRole('button', { name: '네트워크', exact: true });
   await databaseTool.press('End');
   if (!(await networkTool.evaluate(button => button === document.activeElement))) {
@@ -58,6 +58,9 @@ async function main() {
     throw new Error('Selecting an object in another tool did not activate its database workspace.');
   }
   await page.getByText('100개 행', { exact: true }).waitFor();
+  const editorToggle = page.getByRole('button', { name: 'SQL 편집기', exact: true });
+  const editor = page.getByLabel('SQL 쿼리');
+  await editor.waitFor({ state: 'hidden' });
   await page.getByText('사용자 1', { exact: true }).waitFor();
   await page.locator('details.schema-card summary').click();
   const columns = page.getByRole('table', { name: 'people 열 구조' });
@@ -118,6 +121,7 @@ async function main() {
   await resultRows.first().getByText('사용자 1', { exact: true }).waitFor();
   await page.getByText('필터 및 정렬', { exact: true }).click();
 
+  await editorToggle.press('Enter');
   await page.getByLabel('SQL 쿼리').fill('SELECT name FROM people WHERE id >= :first AND :key = :key ORDER BY id');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('heading', { name: 'SQL 매개변수' }).waitFor();
@@ -193,16 +197,22 @@ async function main() {
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('button', { name: '쿼리 중단' }).waitFor();
   await page.waitForTimeout(250);
+  await editorToggle.press('Enter');
+  await editor.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '쿼리 중단' }).click();
   await page.getByRole('status').getByText('쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.').waitFor();
+  await editorToggle.press('Enter');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('status').getByText('쿼리 실행 시간 10초를 초과해 중단되었습니다. 조건을 줄여 다시 실행하세요.').waitFor({ timeout: 20000 });
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();
 
-  page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'people' }).click();
+  await editor.waitFor({ state: 'hidden' });
+  await editorToggle.press('Enter');
+  if (await editor.inputValue() !== 'SELECT COUNT(*) AS total FROM people') throw new Error('Browsing an object replaced the SQL draft.');
+  await editorToggle.press('Enter');
   await page.getByRole('button', { name: '1행 편집', exact: true }).click();
   await page.getByLabel('변경할 열').selectOption('name');
   await page.getByLabel('변경할 값').fill('수정된 사용자');
@@ -276,6 +286,7 @@ async function main() {
   await page.getByRole('button', { name: '저장' }).click();
   await page.getByRole('button', { name: 'people' }).click();
   await page.getByText('100개 행', { exact: true }).waitFor();
+  await editorToggle.press('Enter');
   await page.getByLabel('SQL 쿼리').fill('SELECT COUNT(*) AS total FROM people');
   await page.getByRole('button', { name: '쿼리 실행' }).click();
   await page.getByRole('cell', { name: '205', exact: true }).waitFor();

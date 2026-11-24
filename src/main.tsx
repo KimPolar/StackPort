@@ -91,6 +91,7 @@ function App() {
   const [detailsError, setDetailsError] = useState("");
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sql, setSql] = useState("");
+  const [sqlEditorOpen, setSqlEditorOpen] = useState(true);
   const [executedQuery, setExecutedQuery] = useState<QueryTarget | null>(null);
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
@@ -189,6 +190,7 @@ function App() {
     abandonQuery();
     const generation = ++objectGeneration.current;
     setObjects([]); setResult(null); setSql(drafts.current[profileId] ?? ""); setExecutedQuery(null); setError("");
+    setSqlEditorOpen(true);
     setParameterRequest(null);
     setQueryPlan(null);
     setExportReport(null);
@@ -241,16 +243,14 @@ function App() {
   }
 
   function openObject(object: DatabaseObject) {
-    const query = objectSelectSql(object.name);
-    if (sql.trim() && sql !== query && !window.confirm("현재 편집 중인 SQL을 선택한 객체의 조회문으로 바꾸시겠습니까?")) return;
     openPage("workspace");
+    setSqlEditorOpen(false);
     const generation = ++detailsGeneration.current;
     setSelectedObject(object); setObjectDetails(null); setDetailsError(""); setDetailsLoading(true);
     call<ObjectDetails>("describe_object", { profileId, name: object.name })
       .then(details => { if (detailsGeneration.current === generation) setObjectDetails(details); })
       .catch(e => { if (detailsGeneration.current === generation) setDetailsError(errorText(e)); })
       .finally(() => { if (detailsGeneration.current === generation) setDetailsLoading(false); });
-    changeSql(query);
     void executeQuery({ kind: "table", request: defaultTableQuery(object.name) });
   }
 
@@ -482,7 +482,7 @@ function App() {
           {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
           !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
           !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
-            <div className="content-header"><div><div className="breadcrumbs">{project.name} <ChevronRight size={14} /> 데이터베이스</div><h1><Database size={21} /> {profile.name} <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} /> {displayPath(profile.path)}</p></div>
+            <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
               <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
             </div>
             {backupReport && <div className="success-banner" role="status"><strong>백업 생성 완료 · 무결성 검사 통과</strong><span>{displayPath(backupReport.path)} · {new Intl.NumberFormat("ko-KR").format(backupReport.size_bytes)} bytes</span><span>별도 파일에 복원해 검증할 수 있습니다.</span>{backupReport.audit_warning && <strong className="audit-warning">{backupReport.audit_warning}</strong>}</div>}
@@ -493,23 +493,31 @@ function App() {
               {exportReport.audit_warning && <strong className="audit-warning">{exportReport.audit_warning}</strong>}
             </div>}
             {editReport && <div className="success-banner" role="status"><strong>셀 변경 완료 · 저장 값 검증됨</strong><span>저장된 값: {editReport.actual.kind === "null" ? "NULL" : editReport.actual.display || "(빈 문자열)"}</span>{editReport.audit_warning && <strong className="audit-warning">{editReport.audit_warning}</strong>}</div>}
-            <div className="editor-card" aria-busy={querying}><div className="panel-heading"><div><FileCode2 size={16} /><strong>SQL 편집기</strong><span className="subtle">SQLite</span></div>{querying
-              ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
-              : <div className="sql-editor-actions">
+            <div className="editor-card">
+              <div className="panel-heading">
+                <button type="button" className="sql-editor-toggle" aria-expanded={sqlEditorOpen} aria-controls="sql-editor-panel"
+                  onClick={() => setSqlEditorOpen(open => !open)}>
+                  <FileCode2 size={16} aria-hidden /> SQL 편집기
+                  {sqlEditorOpen ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+                </button>
+                {querying ? <button className="secondary small" disabled={cancelling} onClick={cancelCurrentQuery}>{cancelling ? "중단 요청 중…" : "쿼리 중단"}</button>
+                : sqlEditorOpen && <div className="sql-editor-actions">
                 <button className="secondary small" disabled={!sql.trim()} onClick={() => runQuery(sql, true)}>실행 계획</button>
                 <button className="primary small" disabled={!sql.trim()} onClick={() => runQuery(sql)}><Play size={14} fill="currentColor" /> 쿼리 실행</button>
-              </div>}</div>
-              <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
-              <div className="editor-footer"><span>읽기 전용 SQL · 초안은 현재 실행 중에만 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
+                </div>}
+              </div>
+              <div id="sql-editor-panel" hidden={!sqlEditorOpen}>
+                <label className="sr-only" htmlFor="sql-editor">SQL 쿼리</label><textarea id="sql-editor" spellCheck={false} value={sql} onChange={e => changeSql(e.target.value)} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); if (!querying) void runQuery(sql); } }} placeholder={'SELECT *\nFROM 테이블_이름;'} />
+                <div className="editor-footer"><span>초안은 앱을 닫을 때까지 보관됩니다</span><span>Ctrl + Enter 실행</span></div>
+              </div>
             </div>
             {queryNotice && <div className="query-notice" role="status">{queryNotice}</div>}
             {error && <div className="error-banner" role="alert"><strong>작업을 완료하지 못했습니다.</strong> {error}</div>}
-            {selectedObject && <SchemaDetails object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
-            {queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
-            <div className="results-card"><div className="panel-heading">
-              <div><Table2 size={16} /><strong>쿼리 결과</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
+            {selectedObject && <SchemaDetails key={selectedObject.name} object={selectedObject} details={objectDetails} loading={detailsLoading} error={detailsError} />}
+            {sqlEditorOpen && queryPlan?.sql === sql && <SqliteQueryPlan plan={queryPlan.plan} dismiss={() => setQueryPlan(null)} />}
+            <div className="results-card database-results" aria-busy={querying}><div className="panel-heading">
+              <div className="result-identity"><Table2 size={16} aria-hidden /><strong title={executedQuery?.kind === "table" ? executedQuery.request.object : undefined}>{executedQuery?.kind === "table" ? executedQuery.request.object : "쿼리 결과"}</strong>{result && <span className="result-count">{result.rows.length}개 행</span>}</div>
               <div className="results-actions">
-                <span className="subtle">페이지당 최대 100개 행</span>
                 {result && executedQuery && <button className="secondary small" disabled={querying} onClick={() => {
                   setExportReport(null);
                   setExportRequest({ profile, query: executedQuery });

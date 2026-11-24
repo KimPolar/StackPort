@@ -119,7 +119,7 @@ async function main() {
     assert.ok(fs.existsSync(multiple.profile.filePath));
     assert.ok(processCommand(multiple.pid));
 
-    await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+    await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
     const confirmation = page.waitForEvent('dialog');
     const closed = page.waitForEvent('close', { timeout: 15000 });
     powershell(`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class TestRdpWindow { [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l); }'; $p = Get-Process -Id ${windowPid} -ErrorAction Stop; if ($p.ProcessName -ne 'stackport' -or $p.MainWindowHandle -eq 0) { throw 'Invalid isolated StackPort window' }; [TestRdpWindow]::PostMessage($p.MainWindowHandle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null`);
