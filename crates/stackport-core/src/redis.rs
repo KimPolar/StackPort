@@ -1,3 +1,4 @@
+mod edit;
 mod keys;
 mod profiles;
 mod resp;
@@ -6,7 +7,7 @@ pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{RedisProfile, RedisSettings};
 
-use crate::{tls, Result, Store};
+use crate::{insert_audit, tls, AuditRecord, Result, Store};
 use resp::{Failure, Socket, Wire, Work};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -25,6 +26,8 @@ use zeroize::Zeroizing;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(8);
 const SESSION_LIMIT: usize = 8;
+const UPDATE_UNKNOWN: &str =
+    "Redis 변경 결과를 확인할 수 없습니다. 연결이 닫혔습니다. 다시 연결해 현재 값을 확인하세요.";
 
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -41,10 +44,13 @@ pub struct RedisSessionInfo {
     id: String,
     engine: &'static str,
     version: String,
+    allow_edits: bool,
 }
 
 struct Session {
-    wire: AsyncMutex<Option<Wire>>,
+    state: AsyncMutex<Option<edit::State>>,
+    profile: RedisProfile,
+    allow_edits: bool,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -69,6 +75,7 @@ impl RedisManager {
         revision: i64,
         password: RedisPassword,
         confirmation: &str,
+        allow_edits: bool,
     ) -> Result<RedisSessionInfo> {
         if password.0.len() > 4096 {
             return Err("Redis 암호가 너무 깁니다.".into());
@@ -107,7 +114,9 @@ impl RedisManager {
             .insert(
                 id.clone(),
                 Arc::new(Session {
-                    wire: AsyncMutex::new(Some(wire)),
+                    state: AsyncMutex::new(Some(edit::State::new(wire))),
+                    profile,
+                    allow_edits,
                     _permit: permit,
                 }),
             );
@@ -115,6 +124,7 @@ impl RedisManager {
             id,
             engine,
             version,
+            allow_edits,
         })
     }
 
@@ -127,50 +137,153 @@ impl RedisManager {
     }
 
     pub async fn keys(&self, id: &str, input: RedisScanInput) -> Result<RedisKeyPage> {
-        self.read(id, |wire| Box::pin(keys::scan(wire, input)))
-            .await
+        let session = self.session(id)?;
+        self.run(id, &session, |state| {
+            Box::pin(keys::scan(&mut state.wire, input))
+        })
+        .await
     }
 
     pub async fn value(&self, id: &str, input: RedisValueInput) -> Result<RedisValuePage> {
-        self.read(id, |wire| Box::pin(keys::value(wire, input)))
+        let session = self.session(id)?;
+        self.run(id, &session, |state| {
+            Box::pin(keys::value(&mut state.wire, input))
+        })
+        .await
+    }
+
+    pub async fn preview_edit(
+        &self,
+        id: &str,
+        key: String,
+        input: RedisEditInput,
+    ) -> Result<RedisEditPreview> {
+        let session = self.edit_session(id)?;
+        self.run(id, &session, |state| Box::pin(state.preview(key, input)))
             .await
     }
 
-    async fn read<T>(
+    pub async fn discard_edit(&self, id: &str, token: &str) -> Result<()> {
+        let session = self.edit_session(id)?;
+        let token = Uuid::parse_str(token).map_err(|_| "Redis 변경을 다시 미리 보세요.")?;
+        self.run(id, &session, |state| Box::pin(state.discard(token)))
+            .await
+    }
+
+    pub async fn apply_edit(
         &self,
         id: &str,
-        query: impl for<'a> FnOnce(&'a mut Wire) -> Work<'a, T>,
-    ) -> Result<T> {
-        let session = self
-            .sessions
+        token: &str,
+        confirmation: &str,
+    ) -> Result<RedisEditReport> {
+        let session = self.edit_session(id)?;
+        let token = Uuid::parse_str(token).map_err(|_| "Redis 변경을 다시 미리 보세요.")?;
+        if session.profile.settings.environment == "PROD" && confirmation != "PROD" {
+            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+        }
+        let store = self.store.clone();
+        let profile = session.profile.clone();
+        tokio::task::spawn_blocking(move || store.redis_profile(&profile.id, profile.revision))
+            .await
+            .map_err(|_| "Redis 연결 설정을 확인할 수 없습니다.")??;
+        let result = self
+            .run(id, &session, |state| Box::pin(state.apply(token)))
+            .await;
+        let outcome = match &result {
+            Ok(report) if matches!(report.status, RedisEditStatus::Applied) => "succeeded",
+            Err(message) if message == UPDATE_UNKNOWN => "unknown",
+            _ => "failed",
+        };
+        let store = self.store.clone();
+        let profile = session.profile.clone();
+        let audit_warning = !matches!(
+            tokio::task::spawn_blocking(move || {
+                store.connect().and_then(|db| {
+                    insert_audit(
+                        &db,
+                        AuditRecord {
+                            correlation_id: &token.to_string(),
+                            operation: "redis.key.edit",
+                            project_id: Some(&profile.project_id),
+                            profile_id: Some(&profile.id),
+                            environment: Some(&profile.settings.environment),
+                            object_name: None,
+                            outcome,
+                            affected_count: (outcome == "succeeded").then_some(1),
+                        },
+                    )
+                })
+            })
+            .await,
+            Ok(Ok(()))
+        );
+        result.map(|mut report| {
+            report.audit_warning = audit_warning;
+            report
+        })
+    }
+
+    fn edit_session(&self, id: &str) -> Result<Arc<Session>> {
+        let session = self.session(id)?;
+        if !session.allow_edits {
+            return Err("Redis 키 편집을 허용한 연결을 여세요.".into());
+        }
+        Ok(session)
+    }
+
+    fn session(&self, id: &str) -> Result<Arc<Session>> {
+        self.sessions
             .lock()
             .map_err(|_| "Redis 연결 목록을 읽을 수 없습니다.")?
             .get(id)
             .cloned()
-            .ok_or("Redis 연결이 닫혔습니다. 다시 연결하세요.")?;
-        let mut slot = timeout(READ_TIMEOUT, session.wire.lock())
+            .ok_or_else(|| "Redis 연결이 닫혔습니다. 다시 연결하세요.".into())
+    }
+
+    async fn run<T>(
+        &self,
+        id: &str,
+        session: &Session,
+        query: impl for<'a> FnOnce(&'a mut edit::State) -> Work<'a, T>,
+    ) -> Result<T> {
+        let mut slot = timeout(READ_TIMEOUT, session.state.lock())
             .await
             .map_err(|_| "Redis의 앞선 작업이 끝날 때까지 기다려 주세요.")?;
-        let Some(mut wire) = slot.take() else {
+        let Some(mut state) = slot.take() else {
             self.close(id)?;
             return Err("Redis 연결이 닫혔습니다. 다시 연결하세요.".into());
         };
-        match timeout(READ_TIMEOUT, query(&mut wire)).await {
+        let result = timeout(READ_TIMEOUT, async {
+            state.expire().await?;
+            query(&mut state).await
+        })
+        .await;
+        match result {
             Ok(Ok(value)) => {
-                *slot = Some(wire);
+                *slot = Some(state);
                 Ok(value)
             }
             Ok(Err(Failure::Server(message))) => {
-                *slot = Some(wire);
+                *slot = Some(state);
                 Err(message.into())
             }
             Ok(Err(error)) => {
                 self.close(id)?;
-                Err(error.message().into())
+                Err(if state.committing {
+                    UPDATE_UNKNOWN
+                } else {
+                    error.message()
+                }
+                .into())
             }
             Err(_) => {
                 self.close(id)?;
-                Err("Redis 응답 시간이 초과되어 연결이 닫혔습니다.".into())
+                Err(if state.committing {
+                    UPDATE_UNKNOWN
+                } else {
+                    "Redis 응답 시간이 초과되어 연결이 닫혔습니다."
+                }
+                .into())
             }
         }
     }
@@ -259,3 +372,4 @@ fn info_field<'a>(info: &'a str, field: &str) -> Option<&'a str> {
         .filter_map(|line| line.split_once(':'))
         .find_map(|(key, value)| (key == field).then_some(value))
 }
+pub use edit::{EditStatus as RedisEditStatus, RedisEditInput, RedisEditPreview, RedisEditReport};

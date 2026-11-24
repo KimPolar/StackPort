@@ -927,8 +927,9 @@ async fn delete_redis_profile(store: State<'_, Store>, id: String, revision: i64
 
 #[tauri::command]
 async fn open_redis(redis: State<'_, stackport_core::RedisManager>, profile_id: String, revision: i64,
-    password: stackport_core::RedisPassword, confirmation: String) -> Result<stackport_core::RedisSessionInfo, String> {
-    redis.open(profile_id, revision, password, &confirmation).await
+    password: stackport_core::RedisPassword, confirmation: String, allow_edits: Option<bool>,
+) -> Result<stackport_core::RedisSessionInfo, String> {
+    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -941,6 +942,19 @@ async fn redis_keys(redis: State<'_, stackport_core::RedisManager>, id: String, 
 #[tauri::command]
 async fn redis_value(redis: State<'_, stackport_core::RedisManager>, id: String, input: stackport_core::RedisValueInput)
     -> Result<stackport_core::RedisValuePage, String> { redis.value(&id, input).await }
+
+#[tauri::command]
+async fn preview_redis_edit(redis: State<'_, stackport_core::RedisManager>, id: String, key: String, input: stackport_core::RedisEditInput)
+    -> Result<stackport_core::RedisEditPreview, String> { redis.preview_edit(&id, key, input).await }
+
+#[tauri::command]
+async fn discard_redis_edit(redis: State<'_, stackport_core::RedisManager>, id: String, token: String) -> Result<(), String> {
+    redis.discard_edit(&id, &token).await
+}
+
+#[tauri::command]
+async fn apply_redis_edit(redis: State<'_, stackport_core::RedisManager>, id: String, token: String, confirmation: String)
+    -> Result<stackport_core::RedisEditReport, String> { redis.apply_edit(&id, &token, &confirmation).await }
 
 #[tauri::command]
 async fn create_postgres_profile(store: State<'_, Store>, project_id: String, input: PostgresProfileInput) -> Result<PostgresProfile, String> {
@@ -1917,6 +1931,9 @@ fn main() {
             close_redis,
             redis_keys,
             redis_value,
+            preview_redis_edit,
+            discard_redis_edit,
+            apply_redis_edit,
             create_postgres_profile,
             update_postgres_profile,
             delete_postgres_profile,

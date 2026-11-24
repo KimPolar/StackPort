@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 const VALUE_BATCH: u64 = 32;
-const DISPLAY_BYTES: usize = 512;
+pub(super) const DISPLAY_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,11 +52,11 @@ struct RedisKey {
 }
 
 #[derive(Serialize)]
-struct RedisBytes {
+pub(super) struct RedisBytes {
     text: String,
     encoding: &'static str,
-    bytes: usize,
-    truncated: bool,
+    pub bytes: usize,
+    pub truncated: bool,
 }
 
 #[derive(Deserialize)]
@@ -133,13 +133,7 @@ pub(super) async fn value(
     wire: &mut Wire,
     input: RedisValueInput,
 ) -> Result<RedisValuePage, Failure> {
-    let key = if input.key.len() <= 6 * 1024 * 1024 {
-        STANDARD
-            .decode(input.key)
-            .map_err(|_| Failure::Server("Redis 키 식별자가 올바르지 않습니다."))?
-    } else {
-        return Err(Failure::Server("Redis 키가 표시 한도를 넘었습니다."));
-    };
+    let key = key_bytes(&input.key)?;
     let kind = wire.command(&[b"TYPE", &key]).await?.bytes()?;
     let kind = std::str::from_utf8(&kind)
         .map_err(|_| Failure::Protocol)?
@@ -303,7 +297,16 @@ fn display_rows(entries: Vec<Reply>, width: usize) -> Result<Vec<Vec<RedisBytes>
     .collect())
 }
 
-fn display(bytes: &[u8], multiline: bool) -> RedisBytes {
+pub(super) fn key_bytes(id: &str) -> Result<Vec<u8>, Failure> {
+    if id.len() > 6 * 1024 * 1024 {
+        return Err(Failure::Server("Redis 키가 표시 한도를 넘었습니다."));
+    }
+    STANDARD
+        .decode(id)
+        .map_err(|_| Failure::Server("Redis 키 식별자가 올바르지 않습니다."))
+}
+
+pub(super) fn display(bytes: &[u8], multiline: bool) -> RedisBytes {
     let limit = bytes.len().min(DISPLAY_BYTES);
     let mut end = limit;
     let data = match std::str::from_utf8(&bytes[..limit]) {
@@ -337,7 +340,7 @@ fn display(bytes: &[u8], multiline: bool) -> RedisBytes {
     }
 }
 
-fn valid_stream_id(id: &str) -> bool {
+pub(super) fn valid_stream_id(id: &str) -> bool {
     id.split_once('-').is_some_and(|(time, sequence)| {
         time.parse::<u64>().is_ok() && sequence.parse::<u64>().is_ok()
     })
