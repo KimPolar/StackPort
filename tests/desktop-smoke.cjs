@@ -36,7 +36,27 @@ async function main() {
   await page.getByLabel('이름', { exact: true }).fill('테스트 DB');
   await page.getByLabel('SQLite 파일 경로').fill(database);
   await page.getByRole('button', { name: '저장' }).click();
-  await page.getByRole('button', { name: 'people' }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  const tools = page.getByRole('navigation', { name: '작업 도구' });
+  const databaseTool = tools.getByRole('button', { name: '워크스페이스', exact: true });
+  const networkTool = tools.getByRole('button', { name: '네트워크', exact: true });
+  await databaseTool.press('End');
+  if (!(await networkTool.evaluate(button => button === document.activeElement))) {
+    throw new Error('The last workspace tool did not receive keyboard focus.');
+  }
+  await page.keyboard.press('Enter');
+  await page.getByRole('heading', { name: '로컬 포트', exact: true }).waitFor();
+  if (await networkTool.getAttribute('aria-current') !== 'page') throw new Error('The active workspace tool was not announced.');
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기' });
+  await explorer.getByRole('button', { name: 'people', exact: true }).waitFor();
+  await page.getByRole('button', { name: '탐색기 접기', exact: true }).click();
+  await explorer.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '탐색기 펼치기', exact: true }).click();
+  const people = explorer.getByRole('button', { name: 'people', exact: true });
+  await people.click();
+  if (await databaseTool.getAttribute('aria-current') !== 'page' || await people.getAttribute('aria-current') !== 'true') {
+    throw new Error('Selecting an object in another tool did not activate its database workspace.');
+  }
   await page.getByText('100개 행', { exact: true }).waitFor();
   await page.getByText('사용자 1', { exact: true }).waitFor();
   await page.locator('details.schema-card summary').click();

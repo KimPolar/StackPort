@@ -10,13 +10,13 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 생성·이름 변경·복제·보관·재활성화·삭제와 연결 정의 복제",
-    "SP-UI-002": "프로젝트별 SQLite 테이블·뷰와 SSH 연결 탐색",
-    "SP-UI-003": "여러 Windows 로컬 터미널 탭 열기·전환·닫기",
+    "SP-UI-002": "도구를 전환해도 유지되는 프로젝트 탐색기에서 SQLite 테이블·뷰와 SSH 연결 탐색",
+    "SP-UI-003": "여러 Windows 터미널 탭 열기·전환·닫기, 도구 전환 후 열린 터미널·RDP 세션 표시",
     "SP-UI-008": "Windows SSH 호스트·포트·사용자 빠른 연결",
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH 연결 정의와 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
     "SP-UI-019": "연결별 SQL 초안을 실행 중 메모리에 유지",
-    "SP-UI-016": "로컬 터미널 탭의 키보드 이동과 Ctrl+Shift+F 출력 검색",
+    "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일과 SSH 호스트·포트·사용자·이름·환경 저장",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH 연결 정의 생성·수정·삭제와 세션 열기·닫기",
@@ -160,6 +160,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src-tauri/src/data_location.rs; tests/portable-smoke.cjs; crates/stackport-core/tests/workspace_copy.rs; tests/desktop-smoke.cjs"
             elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023", "SP-ST-006"}:
                 evidence = "crates/stackport-core/tests/ssh_profiles.rs; crates/stackport-core/tests/workspace.rs; tests/ssh-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-UI-003", "SP-UI-016"}:
+                evidence = "src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; tests/desktop-smoke.cjs; tests/terminal-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
                 evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
             elif requirement_id == "SP-NW-001":

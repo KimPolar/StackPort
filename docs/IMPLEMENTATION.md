@@ -6,6 +6,8 @@
 
 React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다. 네트워크·파일 처리와 장시간 SQL은 웹 UI에서 직접 수행하지 않고 별도 작업 스레드로 넘깁니다. 브라우저에는 네이티브 명령이나 임의 TCP 프록시를 제공하지 않습니다. 게이트웨이 인증 및 접근 제어는 아직 구현하지 않았습니다.
 
+공통 작업 공간의 상단에는 현재 프로젝트와 작업 기록, 도구 전환을 배치합니다. 어느 도구에서든 프로젝트 탐색기를 펼치거나 접을 수 있습니다. 탐색기에서 SQLite 연결·객체를 선택하면 데이터베이스 화면이 열리고, 저장된 SSH 연결을 선택하면 해당 연결 설정과 터미널로 이동합니다. 도구 버튼에 초점이 있을 때 좌우 화살표와 Home·End로 이동하고 Enter로 엽니다. 열려 있는 터미널과 RDP 작업 수는 다른 도구에서도 표시합니다. 원격 파일 화면의 연결 표시는 연결할 때의 프로젝트와 서버를 계속 보여줍니다. [PuTTY의 저장된 세션](https://the.earth.li/~sgtatham/putty/latest/htmldoc/Chapter4.html#config-saving) · [Navicat의 객체 탐색](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html) · [MobaXterm의 세션 관리](https://mobaxterm.mobatek.net/documentation.html)
+
 Windows 로컬 터미널은 ConPTY와 xterm.js를 사용하며 PowerShell(`-NoProfile`) 또는 CMD(`/D`) 세션을 별도 탭으로 엽니다. 출력은 메모리에 유지하며 파일 저장은 사용자 요청으로 시작합니다. 셸과 실행 프로그램은 자체 기록 설정을 사용합니다. 화면을 숨겨도 세션을 유지하며 출력 대기열은 유한한 크기로 제한하고 밀리면 프로세스에 역압을 적용합니다. 창 크기는 PTY에 전달하고, 여러 줄 붙여넣기 및 탭·앱 종료 시 확인합니다. Windows 작업 개체에 연결된 프로세스는 탭이나 앱을 닫을 때 정리합니다. Windows 10 1809 이상의 ConPTY가 필요하며 WSL·사용자 지정 셸, 재연결, 명령 기록 관리와 다른 OS 검증은 아직 없습니다.
 
 각 터미널 탭의 현재 화면과 최대 10,000줄 메모리 스크롤백을 일반 문자열로 검색할 수 있습니다. 이전·다음 이동, 대소문자 구분과 `Ctrl+Shift+F`를 지원합니다. 검색어는 해당 탭에만 보관하고 검색을 닫거나 탭이 종료되면 지웁니다.
@@ -128,6 +130,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `crates/stackport-core/tests/query_parameters.rs`: SQLite 슬롯 감지, 정밀한 값 바인딩, 실제 쿼리를 실행하지 않는 인덱스·정렬 계획, 쓰기 차단을 검사합니다.
 - `crates/stackport-core/tests/restore.rs`: 백업 복원 후 객체·행 수·체크섬 검증, 미리보기 이후 백업 변경, 기존 대상·저널 충돌과 작업 기록의 민감 정보 제외를 검사합니다.
 - `tests/desktop-smoke.cjs`: 독립된 테스트 앱과 실제 SQLite 파일에서 그리드 필터·정렬·페이지 이동, 조회 중단·재조회, 단일 셀 편집, 운영 환경 확인, 별도 파일 복원 후 원본 보존·재조회 및 작업 기록을 검사합니다.
+- `tests/desktop-smoke.cjs`와 `tests/terminal-smoke.cjs`에서 도구의 키보드 전환, 다른 도구에서 탐색기 접기·펼치기와 SQLite 객체 열기, 전환 뒤 열린 터미널 유지 및 개수 표시를 확인합니다.
 - `tests/terminal-smoke.cjs`: 격리된 Windows 앱에서 PowerShell·CMD와 한글 입력·24비트 색상 출력, 탭별 스크롤백 검색, 비활성 탭의 새 출력 표시와 확인, 탭 전환·키보드 이동, 여러 줄 붙여넣기 거부와 창 종료 확인을 검사합니다. 실제 IME 조합 입력과 스크린 리더 사용성은 별도 검증이 필요합니다.
 - `crates/stackport-core/tests/terminal_output.rs`와 `tests/terminal-smoke.cjs`에서 터미널 TXT/ANSI 내보내기의 UTF-8, 화면 줄바꿈 복원, 한글·색상·스크롤백, 탭 범위, 파일 크기 제한과 기존 파일 보존을 검사합니다.
 - `tests/ssh-smoke.cjs`: 루프백 SSH 서버에서 DNS·TCP 진단, 지문 대조, 암호 로그인, 대화형 인증의 서버 안내·다중 프롬프트·표시 정책, 인증 실패 제한, 키 변경 차단과 교체, 운영 연결 확인 및 신뢰 기록을 검사합니다.

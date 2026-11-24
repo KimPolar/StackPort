@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
-  ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight, CircleHelp,
-  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, Monitor, Network,
+  ArrowLeft, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
+  Database, FileCode2, FileDown, FileUp, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen,
   Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Table2, TerminalSquare, Trash2, X, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
@@ -19,6 +19,7 @@ import { NetworkWorkspace } from "./NetworkWorkspace";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
+import { WorkspaceNavigation, type WorkspacePage } from "./WorkspaceNavigation";
 import "./styles.css";
 
 type Project = { id: string; name: string };
@@ -66,7 +67,10 @@ function Dialog({ title, children, onClose, busy }: { title: string; children: R
 }
 
 function App() {
-  const [page, setPage] = useState<"workspace" | "terminal" | "network" | "rdp" | "files">("workspace");
+  const [page, setPage] = useState<WorkspacePage>("workspace");
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [terminalTabCount, setTerminalTabCount] = useState(0);
+  const [rdpClientCount, setRdpClientCount] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [workspaceCopyOpen, setWorkspaceCopyOpen] = useState(false);
   const [terminalLoaded, setTerminalLoaded] = useState(false);
@@ -121,8 +125,14 @@ function App() {
   const selectedProject = useRef(projectId);
   selectedProject.current = projectId;
   const closeApproved = useRef(false);
-  const updateTerminalCount = useCallback((count: number) => { terminalCount.current = count; }, []);
-  const updateRdpCount = useCallback((count: number) => { rdpCount.current = count; }, []);
+  const updateTerminalCount = useCallback((count: number) => {
+    terminalCount.current = count;
+    setTerminalTabCount(count);
+  }, []);
+  const updateRdpCount = useCallback((count: number) => {
+    rdpCount.current = count;
+    setRdpClientCount(count);
+  }, []);
   const consumeSshRequest = useCallback(() => { setSshOpenRequest(null); }, []);
   // Drafts stay in memory: SQL can contain sensitive literals, so the editor
   // must not silently write them to browser storage or workspace metadata.
@@ -233,6 +243,7 @@ function App() {
   function openObject(object: DatabaseObject) {
     const query = objectSelectSql(object.name);
     if (sql.trim() && sql !== query && !window.confirm("현재 편집 중인 SQL을 선택한 객체의 조회문으로 바꾸시겠습니까?")) return;
+    openPage("workspace");
     const generation = ++detailsGeneration.current;
     setSelectedObject(object); setObjectDetails(null); setDetailsError(""); setDetailsLoading(true);
     call<ObjectDetails>("describe_object", { profileId, name: object.name })
@@ -334,6 +345,14 @@ function App() {
     setPath(""); setEnvironment("DEV"); setModal(next);
   }
 
+  function openPage(next: WorkspacePage) {
+    setHistoryOpen(false);
+    if (next === "terminal") setTerminalLoaded(true);
+    if (next === "rdp") setRdpLoaded(true);
+    if (next === "files") setFilesLoaded(true);
+    setPage(next);
+  }
+
   async function submitForm(event: React.FormEvent) {
     event.preventDefault();
     if (saving) return;
@@ -398,25 +417,25 @@ function App() {
   }
 
   return <div className="app-shell">
-    <aside className="rail" aria-label="기본 탐색">
-      <div className="brand-mark" aria-label="StackPort"><Layers3 size={22} strokeWidth={2.2} /></div>
-      <button className={`rail-item ${page === "workspace" ? "rail-active" : ""}`} aria-label="워크스페이스" aria-current={page === "workspace" ? "page" : undefined} onClick={() => setPage("workspace")}><Boxes size={20} /><span>워크스페이스</span></button>
-      <button className={`rail-item ${page === "terminal" ? "rail-active" : ""}`} aria-label="터미널" aria-current={page === "terminal" ? "page" : undefined} disabled={!desktop} onClick={() => { setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={20} /><span>터미널</span></button>
-      <button className={`rail-item ${page === "network" ? "rail-active" : ""}`} aria-label="네트워크" aria-current={page === "network" ? "page" : undefined} disabled={!desktop} onClick={() => setPage("network")}><Network size={20} /><span>네트워크</span></button>
-      <button className={`rail-item ${page === "rdp" ? "rail-active" : ""}`} aria-label="원격 화면" aria-current={page === "rdp" ? "page" : undefined} onClick={() => { setRdpLoaded(true); setPage("rdp"); }}><Monitor size={20} /><span>원격 화면</span></button>
-      <button className={`rail-item ${page === "files" ? "rail-active" : ""}`} aria-label="파일 탐색" aria-current={page === "files" ? "page" : undefined} disabled={!desktop} onClick={() => { setFilesLoaded(true); setPage("files"); }}><FolderOpen size={20} /><span>파일 탐색</span></button>
-      <div className="rail-bottom"><CircleHelp size={19} /><span>로컬 우선</span></div>
-    </aside>
     <div className="workspace">
       <header className="topbar">
-        <div className="brand-name">StackPort <span className="brand-divider">/</span> <span className="brand-section">{{ workspace: "워크스페이스", terminal: "터미널", network: "네트워크", rdp: "원격 화면", files: "파일 탐색" }[page]}</span></div>
+        <div className="workspace-heading">
+          <span className="brand-mark" aria-hidden><Layers3 size={17} strokeWidth={2.2} /></span>
+          <span className="brand-name">StackPort</span>
+          <span className="workspace-context" title={project?.name}><FolderOpen size={14} aria-hidden /><span>{project?.name ?? "프로젝트 없음"}</span></span>
+        </div>
         <div className="top-right"><button className="history-button" disabled={!desktop} onClick={() => { setPage("workspace"); setHistoryOpen(current => page !== "workspace" ? true : !current); }} aria-pressed={page === "workspace" && historyOpen}><History size={15} /> 작업 기록</button>
-          <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span /> {runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간"}</span>
-          {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
         </div>
       </header>
-      <div className="body-layout" hidden={page !== "workspace"}>
-        <aside className="explorer" aria-label="작업 공간 탐색기">
+      <div className="workspace-toolbar">
+        <button className="icon-button explorer-toggle" type="button" aria-controls="workspace-explorer" aria-expanded={explorerOpen}
+          aria-label={explorerOpen ? "탐색기 접기" : "탐색기 펼치기"} title={explorerOpen ? "탐색기 접기" : "탐색기 펼치기"}
+          onClick={() => setExplorerOpen(open => !open)}>{explorerOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}</button>
+        <WorkspaceNavigation page={page} desktop={desktop} historyOpen={page === "workspace" && historyOpen}
+          terminalCount={terminalTabCount} rdpCount={rdpClientCount} onSelect={openPage} />
+      </div>
+      <div className="body-layout">
+        <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={!explorerOpen}>
           <div className="explorer-top"><span>탐색기</span><button className="icon-button" onClick={() => openModal("project")} disabled={!desktop} aria-label="새 프로젝트"><Plus size={17} /></button></div>
           <label className="select-label" htmlFor="project-select">프로젝트</label>
           <div className="project-selector"><FolderOpen size={16} /><select id="project-select" value={projectId} onChange={event => setProjectId(event.target.value)} disabled={!projects.length}>
@@ -429,31 +448,30 @@ function App() {
             <button disabled={!desktop} onClick={() => setWorkspaceCopyOpen(true)}><FileDown size={13} /> 데이터 복사</button>
           </div>
           <div className="section-heading"><span>데이터베이스</span><div>
-            <button className="icon-button" onClick={() => { setRestoreOpen(true); setHistoryOpen(false); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
+            <button className="icon-button" onClick={() => { setRestoreOpen(true); openPage("workspace"); }} disabled={!project} aria-label="SQLite 백업 복원" title="SQLite 백업 복원"><RotateCcw size={15} /></button>
             <button className="icon-button" onClick={() => openModal("profile")} disabled={!project} aria-label="SQLite 연결 추가"><Plus size={16} /></button>
           </div></div>
           {!profiles.length && <p className="sidebar-empty">{project ? "저장된 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
-          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => setProfileId(item.id)}>
+          <div className="profile-list">{profiles.map(item => <button key={item.id} className={`profile-row ${item.id === profileId ? "selected" : ""}`} onClick={() => { setProfileId(item.id); openPage("workspace"); }}>
             {item.id === profileId ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<Database size={15} /><span>{item.name}</span><small>{item.environment}</small>
           </button>)}</div>
           {profile && <div className="object-list">
             <div className="object-toolbar"><span>객체</span><button className="icon-button" onClick={refreshObjects} disabled={loading} aria-label="객체 새로고침"><RefreshCw size={14} /></button></div>
             <div className="object-search"><Search size={14} /><input aria-label="객체 검색" value={filter} onChange={e => setFilter(e.target.value)} placeholder="이름으로 찾기" /></div>
             {loading ? <p className="sidebar-empty">불러오는 중…</p> : <>
-              <ObjectGroup name="테이블" items={tables} onSelect={openObject} />
-              <ObjectGroup name="뷰" items={views} onSelect={openObject} />
+              <ObjectGroup name="테이블" items={tables} selected={selectedObject?.name} onSelect={openObject} />
+              <ObjectGroup name="뷰" items={views} selected={selectedObject?.name} onSelect={openObject} />
             </>}
           </div>}
           <div className="section-heading"><span>SSH 연결</span><div><button className="icon-button" onClick={() => setSshExchange("import")} disabled={!project} aria-label="SSH 연결 가져오기" title="SSH 연결 가져오기"><FileUp size={14} /></button><button className="icon-button" onClick={() => setSshExchange("export")} disabled={!project || !sshProfiles.length} aria-label="SSH 연결 내보내기" title="SSH 연결 내보내기"><FileDown size={14} /></button><button className="icon-button" onClick={() => { if (projectId) void reloadSshProfiles(projectId).catch(e => setError(errorText(e))); }} disabled={!project} aria-label="SSH 연결 새로고침"><RefreshCw size={14} /></button><button className="icon-button" onClick={() => setSshProfileDialog({ mode: "create" })} disabled={!project} aria-label="SSH 연결 추가"><Plus size={16} /></button></div></div>
           {!sshProfiles.length && <p className="sidebar-empty">{project ? "저장된 SSH 연결이 없습니다." : "프로젝트를 먼저 만드세요."}</p>}
           <div className="profile-list">{sshProfiles.map(item => <div className="ssh-profile-row" key={item.id}>
-            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); setTerminalLoaded(true); setPage("terminal"); }}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
+            <button className="profile-row" aria-label={`SSH ${item.name} 연결`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} title={`${item.username}@${item.host}:${item.port}`} onClick={() => { setSshOpenRequest({ profile: item, sequence: ++sshRequestSequence.current }); openPage("terminal"); }}><TerminalSquare size={15} /><span className="ssh-profile-detail"><span>{item.name}</span><small>{item.host.includes(":") ? `[${item.host}]` : item.host}:{item.port}</small></span><small className={item.environment.toLowerCase()}>{item.environment}</small></button>
             <button className="icon-button" aria-label={`${item.name} SSH 연결 수정`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "edit", profile: item })}><Pencil size={14} /></button>
             <button className="icon-button" aria-label={`${item.name} SSH 연결 삭제`} aria-description={`${item.username}@${item.host}:${item.port} · ${item.environment}`} onClick={() => setSshProfileDialog({ mode: "delete", profile: item })}><Trash2 size={14} /></button>
           </div>)}</div>
-          <div className="explorer-foot"><ShieldCheck size={15} /><span>연결 정보는 이 장치에 저장됩니다.</span></div>
         </aside>
-        <main className="main-content">
+        <main className="main-content" hidden={page !== "workspace"}>
           {restoreReport && !historyOpen && <div className="success-banner restore-result" role="status">
             <strong>SQLite 복원 완료 · 검증 통과</strong>
             <span>{displayPath(restoreReport.path)}</span>
@@ -462,7 +480,7 @@ function App() {
             {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
           </div>}
           {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
-          !project ? <EmptyState title="작업을 시작해 보세요" text="프로젝트를 만들고 SQLite 데이터베이스를 연결하세요." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
+          !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
           !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
             <div className="content-header"><div><div className="breadcrumbs">{project.name} <ChevronRight size={14} /> 데이터베이스</div><h1><Database size={21} /> {profile.name} <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} /> {displayPath(profile.path)}</p></div>
               <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span><button className="secondary" onClick={() => openModal("backup")}><Archive size={14} /> 백업</button><button className="icon-button" aria-label="연결 삭제" onClick={() => openModal("deleteProfile")}><Trash2 size={16} /></button></div>
@@ -511,12 +529,16 @@ function App() {
           </>}
           {!profile && error && <div className="error-banner" role="alert">{error}</div>}
         </main>
+        {terminalLoaded && <main className="tool-body terminal-body" hidden={page !== "terminal"}><React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense></main>}
+        {page === "network" && <main className="tool-body network-body"><NetworkWorkspace /></main>}
+        {rdpLoaded && <main className="tool-body network-body" hidden={page !== "rdp"}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></main>}
+        {filesLoaded && <main className="tool-body network-body" hidden={page !== "files"}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></main>}
       </div>
-      <div className="body-layout terminal-body" hidden={page !== "terminal"}>{terminalLoaded && <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}><TerminalWorkspace visible={page === "terminal"} onCountChange={updateTerminalCount} request={sshOpenRequest} onRequestHandled={consumeSshRequest} /></React.Suspense>}</div>
-      {page === "network" && <div className="body-layout network-body"><NetworkWorkspace /></div>}
-      {rdpLoaded && <div className="body-layout network-body" hidden={page !== "rdp"}><RdpWorkspace desktop={desktop} onCountChange={updateRdpCount} /></div>}
-      {filesLoaded && <div className="body-layout network-body" hidden={page !== "files"}><SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} /></div>}
-      <footer className="statusbar"><span><span className="status-dot" /> {desktop ? "데스크톱 · 로컬 모드" : "브라우저 · 게이트웨이 미연결"}</span><span>SSH · 로컬 터미널 · SQLite 조회 및 셀 편집 <span className="status-separator">|</span> 기타 DB 준비 중</span></footer>
+      <footer className="statusbar">
+        <span className="offline-indicator" title={runtime ? displayPath(runtime.data_directory) : undefined}><span />
+          {desktop ? runtime?.data_mode === "portable" ? "휴대형 작업 공간" : runtime?.data_mode === "custom" ? "지정 작업 공간" : "로컬 작업 공간" : "브라우저 · 게이트웨이 미연결"}</span>
+        {runtime && <span className="version" aria-label="StackPort 버전">v{runtime.version}</span>}
+      </footer>
     </div>
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
@@ -752,12 +774,13 @@ function SchemaDetails({ object, details, loading, error }: { object: DatabaseOb
   </details>;
 }
 
-function ObjectGroup({ name, items, onSelect }: { name: string; items: DatabaseObject[]; onSelect: (object: DatabaseObject) => void }) {
-  return <section className="object-group"><div className="group-title"><ChevronDown size={13} /> {name} <span>{items.length}</span></div>{items.map(object => <button key={object.name} className="object-row" onClick={() => onSelect(object)}><Table2 size={14} /><span>{object.name}</span></button>)}</section>;
+function ObjectGroup({ name, items, selected, onSelect }: { name: string; items: DatabaseObject[]; selected?: string; onSelect: (object: DatabaseObject) => void }) {
+  return <section className="object-group"><div className="group-title"><ChevronDown size={13} /> {name} <span>{items.length}</span></div>{items.map(object => <button key={object.name} className="object-row"
+    aria-current={object.name === selected ? "true" : undefined} onClick={() => onSelect(object)}><Table2 size={14} /><span>{object.name}</span></button>)}</section>;
 }
 
 function EmptyState({ title, text, action, onAction }: { title: string; text: string; action?: string; onAction?: () => void }) {
-  return <div className="empty-state"><div className="empty-icon"><Layers3 size={27} /></div><h1>{title}</h1><p>{text}</p>{action && <button className="primary" onClick={onAction}><Plus size={16} /> {action}</button>}<div className="capability-note"><ShieldCheck size={16} /><span>현재 SQLite 조회와 승인된 단일 셀 편집을 지원합니다.<br />다른 프로토콜과 데이터베이스는 준비 중입니다.</span></div></div>;
+  return <div className="empty-state"><div className="empty-icon" aria-hidden><Layers3 size={27} /></div><h1>{title}</h1><p>{text}</p>{action && <button className="primary" onClick={onAction}><Plus size={16} /> {action}</button>}</div>;
 }
 
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

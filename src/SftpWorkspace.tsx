@@ -21,7 +21,7 @@ const transferTitles = { download: "다운로드 완료", upload: "업로드 완
 
 export function SftpWorkspace({ projectName, profiles }: { projectName: string; profiles: SshProfile[] }) {
   const [selectedId, setSelectedId] = useState("");
-  const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory } | null>(null);
+  const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string } | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [closing, setClosing] = useState(false);
   const [localFolder, setLocalFolder] = useState("");
@@ -139,7 +139,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
   return <section className="network-workspace files-workspace" aria-label="파일 탐색">
     <div className="terminal-heading"><div><h1><FolderOpen size={20} /> 파일 탐색</h1></div></div>
     {remote ? <div className="results-card files-connection" aria-label="SFTP 연결 대상">
-      <div><strong>{remote.profile.name}</strong><span>{remote.profile.username}@{remote.profile.host}:{remote.profile.port} · {remote.profile.environment}</span></div>
+      <div><strong>{remote.profile.name}</strong><span>{[remote.projectName, `${remote.profile.username}@${remote.profile.host}:${remote.profile.port}`, remote.profile.environment].filter(Boolean).join(" · ")}</span></div>
       <button className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
     </div> : <div className="results-card files-setup">
       <label className="field">{projectName ? `${projectName}의 SSH 연결` : "SSH 연결"}
@@ -149,7 +149,7 @@ export function SftpWorkspace({ projectName, profiles }: { projectName: string; 
         </select>
       </label>
       {selected && <SftpConnect key={`${selected.id}:${selected.revision}`} profile={selected} onConnecting={setConnecting}
-        onOpened={session => setRemote({ ...session, profile: selected })} />}
+        onOpened={session => setRemote({ ...session, profile: selected, projectName })} />}
     </div>}
     {error && <p className="error-banner" role="alert">{error}</p>}
     {finished && <div className="success-banner files-download-result" role="status">
