@@ -8,6 +8,7 @@ mod download;
 mod editor;
 mod folder_tree;
 mod mutation;
+mod permissions;
 mod preview;
 mod remote_stage;
 mod sync;
@@ -21,6 +22,7 @@ pub use delete::SftpDeletePreview;
 pub use editor::{SftpEditDocument, SftpEditSave};
 pub use folder_tree::{list_local_tree, FolderTree};
 pub use mutation::{SftpEntrySource, SftpMutationReport};
+pub use permissions::SftpPermissionChange;
 pub use preview::{preview_local_file, FilePreview};
 pub use sync::{SyncPlan, SyncProgress, SyncReport};
 pub use sync_delete::{SyncDeleteInput, SyncDeletePreview};
@@ -154,6 +156,7 @@ struct FilesSession {
     transfers: Mutex<transfer::TransferState>,
     fsync_supported: bool,
     posix_rename_supported: bool,
+    lsetstat_supported: bool,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -368,6 +371,7 @@ async fn start_session(
             transfers: Mutex::new(transfer::TransferState::default()),
             fsync_supported: version.extensions.get("fsync@openssh.com").is_some_and(|value| value == "1"),
             posix_rename_supported: version.extensions.get(russh_sftp::extensions::POSIX_RENAME).is_some_and(|value| value == "1"),
+            lsetstat_supported: version.extensions.get(permissions::LSETSTAT).is_some_and(|value| value == "1"),
             _permit: permit,
         },
         directory,

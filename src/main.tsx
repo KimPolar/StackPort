@@ -1124,6 +1124,8 @@ const auditOperationNames: Record<string, string> = {
   "sftp.sync.delete": "SFTP 폴더 동기화 · 삭제 포함",
   "sftp.sync.delete.cancel": "SFTP 폴더 동기화 · 삭제 포함",
   "sftp.rename": "SFTP 이름 변경",
+  "sftp.chmod": "SFTP 권한 변경",
+  "sftp.chown": "SFTP 소유자·그룹 변경",
   "sftp.move": "SFTP 이동",
   "sftp.copy": "SFTP 복사", "sftp.copy.cancel": "SFTP 복사",
   "sftp.delete": "SFTP 삭제",

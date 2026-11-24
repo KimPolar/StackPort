@@ -11,6 +11,7 @@ import { SftpDeleteDialog, type SftpDeletePreview, type SftpDeleteSelection } fr
 import { SftpDestinationDialog, type SftpDestinationSelection } from "./SftpDestinationDialog";
 import { SftpEditorDialog, type SftpEditDocument, type SftpEditorSelection } from "./SftpEditorDialog";
 import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameAction } from "./SftpNameDialog";
+import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 
 type Session = { id: string; directory: Directory };
@@ -21,7 +22,7 @@ const numbers = new Intl.NumberFormat("ko-KR");
 const dates = new Intl.DateTimeFormat("ko-KR", { dateStyle: "short", timeStyle: "short" });
 const names = new Intl.Collator("ko-KR", { numeric: true, sensitivity: "base" });
 const fileColumns = [["name", "이름"], ["size", "크기"], ["modified", "수정"]] as const;
-const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료" };
+const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료", permissions: "원격 권한·소유자 변경 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료", edit: "원격 파일 저장 완료" };
 
 export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit }: {
@@ -43,6 +44,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [destinationSelection, setDestinationSelection] = useState<SftpDestinationSelection | null>(null);
   const [deleteSelection, setDeleteSelection] = useState<SftpDeleteSelection | null>(null);
   const [editorSelection, setEditorSelection] = useState<SftpEditorSelection | null>(null);
+  const [permissionSelection, setPermissionSelection] = useState<PermissionSelection | null>(null);
   const [savedDraftPath, setSavedDraftPath] = useState("");
   const [nameResult, setNameResult] = useState<{ kind: keyof typeof mutationTitles; name: string; auditWarning: string | null } | null>(null);
   const [preview, setPreview] = useState<PreviewSelection | null>(null);
@@ -65,6 +67,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       setDestinationSelection(null);
       setDeleteSelection(null);
       setEditorSelection(null);
+      setPermissionSelection(null);
       setSavedDraftPath("");
       setNameResult(null);
       setRemoteRefresh(0);
@@ -224,6 +227,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         onDestination={chooseDestination}
         onDelete={chooseDelete}
         onEdit={chooseEditor}
+        onPermissions={selection => { setFinished(null); setNameResult(null); setPermissionSelection(selection); }}
         onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder ? displayFilePath(localFolder.path) : "" }) }} />
@@ -244,6 +248,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     {remote && editorSelection && <SftpEditorDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
       selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
       onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
+    {remote && permissionSelection && <SftpPermissionsDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+      production={remote.profile.environment === "PROD"} selection={permissionSelection} onClose={() => setPermissionSelection(null)}
+      onRefresh={() => setRemoteRefresh(value => value + 1)} onSaved={(name, warning) => mutationSaved("permissions", name, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
     {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result}
       production={remote?.profile.environment === "PROD"} onExitGuard={onExitGuard} onClose={() => setComparison(null)}
@@ -351,13 +358,14 @@ function compareEntries(left: Entry, right: Entry, { key, direction }: FileSort)
   return (sizeOrTimeA < sizeOrTimeB ? -order : sizeOrTimeA > sizeOrTimeB ? order : byName);
 }
 
-function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, onEdit, action, refresh }: {
+function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolder, onPreview, onNameAction, onDestination, onDelete, onEdit, onPermissions, action, refresh }: {
   id: string; active: boolean; title: string; load: (path: BrowsePath) => Promise<Directory>; initial?: Directory; chooseFolder?: boolean;
   onPreview: (file: FileSelection) => void;
   onNameAction?: (action: SftpNameAction) => void;
   onDestination?: (selection: SftpDestinationSelection) => void;
   onDelete?: (directory: Directory, item: SftpListedItem) => void;
   onEdit?: (directory: Directory, item: SftpListedItem) => void;
+  onPermissions?: (selection: PermissionSelection) => void;
   onFolder?: (directory: Directory) => void; action?: { kind: "download" | "upload"; run: (file: FileSelection) => void }; refresh: number;
 }) {
   const [directory, setDirectory] = useState<Directory | null>(initial ?? null);
@@ -500,6 +508,7 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
       <tbody>{shown.map((entry, index) => {
         const location = entry.location;
         const kind = entry.kind;
+        const rights = `${entry.mode === null ? "—" : entry.mode.toString(8).padStart(4, "0")} · ${entry.uid ?? "—"}/${entry.gid ?? "—"}`;
         const icon = entry.kind === "directory" ? <FolderOpen size={14} /> : entry.kind === "symlink" ? <Link size={14} /> : <File size={14} />;
         return <tr key={entry.location ?? index}>
           <td>{entry.kind === "directory" && location ? <button type="button" className="files-entry" disabled={busy}
@@ -507,7 +516,11 @@ function DirectoryPane({ id, active, title, load, initial, chooseFolder, onFolde
             : <span className="files-entry">{icon}{entry.name}</span>}</td>
           <td>{entry.kind !== "directory" && entry.size !== null ? `${numbers.format(BigInt(entry.size))} B` : "—"}</td>
           <td>{entry.modified === null ? "—" : dates.format(entry.modified * 1000)}</td>
-          {!chooseFolder && <td>{entry.mode === null ? "—" : entry.mode.toString(8).padStart(4, "0")} · {entry.uid ?? "—"}/{entry.gid ?? "—"}</td>}
+          {!chooseFolder && <td>{onPermissions && location && !entry.name_is_lossy && (kind === "file" || kind === "directory") &&
+            (entry.mode !== null || (entry.uid !== null && entry.gid !== null))
+            ? <button type="button" className="files-sort files-permission-value" disabled={busy} aria-label={`${entry.name} 권한 변경`}
+              title="권한·소유자 변경" onClick={() => onPermissions({ parent: directory, item: { ...entry, kind, location } })}>{rights}</button>
+            : rights}</td>}
           <td>{location && (kind === "file" || kind === "directory") && <div className="files-row-actions">
             {kind === "file" && <>
               <button type="button" className="icon-button" disabled={busy} aria-label={`${entry.name} 미리보기`} title="미리보기"

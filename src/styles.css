@@ -309,6 +309,11 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-sort { display: inline-flex; align-items: center; gap: 5px; padding: 2px 3px; margin: -2px -3px; border: 0; border-radius: 4px; color: inherit; background: transparent; font-size: inherit; font-weight: inherit; }
 .files-sort:hover { background: #e0eee8; }
 .files-sort svg { color: #60786b; }
+.files-permission-value { text-decoration: underline; text-underline-offset: 2px; font-variant-numeric: tabular-nums; }
+.files-permission-current { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin: 0 0 14px; }
+.files-permission-current dt { color: #526a5f; font-size: 12px; }
+.files-permission-current dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.files-permission-current .field { margin: 0; }
 .files-table th[aria-sort] .files-sort { color: #155e4e; }
 .dialog.files-compare { width: min(920px, calc(100vw - 32px)); }
 .files-compare-body { padding: 0 21px 21px; }

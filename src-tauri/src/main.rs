@@ -11,7 +11,7 @@ use stackport_core::{
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
-    open_sql_file, save_sql_file, sqlite_statement_at, SqlDocument,
+    open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     SyncPlan, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
@@ -699,6 +699,15 @@ async fn rename_sftp_entry(
 }
 
 #[tauri::command]
+async fn change_sftp_permissions(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    input: SftpPermissionChange,
+) -> Result<SftpMutationReport, String> {
+    sftp.change_permissions(&id, input).await
+}
+
+#[tauri::command]
 async fn move_sftp_entry(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1118,6 +1127,7 @@ fn main() {
             save_local_text_draft,
             create_sftp_folder,
             rename_sftp_entry,
+            change_sftp_permissions,
             move_sftp_entry,
             preview_sftp_delete,
             discard_sftp_delete,

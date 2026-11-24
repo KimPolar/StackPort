@@ -38,11 +38,16 @@ const file = (filename) => {
 };
 
 function sftpChannel(channel, uploads) {
-  if (uploads.advertiseEdit) {
+  const lsetstat = 'lsetstat@openssh.com';
+  const extensions = [
+    ...(uploads.advertiseEdit ? [posixRename, '1'] : []),
+    ...(uploads.advertisePermissions ? [lsetstat, '1'] : []),
+  ];
+  if (extensions.length) {
     // ssh2's test server sends an extension-free v3 VERSION packet by default.
     const protocol = channel._protocol;
     const sendData = protocol.channelData;
-    const fields = [posixRename, '1'].map(value => {
+    const fields = extensions.map(value => {
       const data = Buffer.from(value);
       const field = Buffer.alloc(4 + data.length);
       field.writeUInt32BE(data.length);
@@ -77,6 +82,7 @@ function sftpChannel(channel, uploads) {
     const fixture = downloadFixtures.get(name);
     return fixture && { ...fixture, attrs: file(name).attrs };
   };
+  const directoryAttrs = name => uploads.permissionDirectories.get(name) ?? directory(name).attrs;
   function newHandle(id, value) {
     const handle = Buffer.alloc(4);
     handle.writeUInt32BE(++next);
@@ -85,7 +91,7 @@ function sftpChannel(channel, uploads) {
   }
   channel.on('REALPATH', (id, requested) => {
     const resolved = requested === '.' ? '/home/stackport' : uploads.aliases.get(requested) ?? requested;
-    if ((directories.has(resolved) || uploads.comparisonDirectories.has(resolved)) && !uploads.unavailableDirectories.has(resolved)) channel.name(id, [directory(resolved)]);
+    if ((directories.has(resolved) || uploads.comparisonDirectories.has(resolved) || lookup(resolved)) && !uploads.unavailableDirectories.has(resolved)) channel.name(id, [directory(resolved)]);
     else channel.status(id, code.NO_SUCH_FILE);
   });
   channel.on('OPENDIR', (id, requested) => {
@@ -94,7 +100,7 @@ function sftpChannel(channel, uploads) {
     const added = Array.from(uploads.files).filter(([name]) => path.posix.dirname(name) === requested)
       .map(([name, fixture]) => ({ filename: path.posix.basename(name), longname: name, attrs: fixture.attrs }));
     const nested = Array.from(uploads.comparisonDirectories.keys()).filter(name => path.posix.dirname(name) === requested)
-      .map(name => directory(path.posix.basename(name)));
+      .map(name => ({ ...directory(path.posix.basename(name)), attrs: directoryAttrs(name) }));
     newHandle(id, { entries: [...entries, ...added, ...nested] });
   });
   channel.on('READDIR', (id, handle) => {
@@ -114,7 +120,7 @@ function sftpChannel(channel, uploads) {
   });
   channel.on('LSTAT', (id, remotePath) => {
     const existing = lookup(remotePath);
-    if (directories.has(remotePath) || uploads.comparisonDirectories.has(remotePath)) channel.attrs(id, directory(remotePath).attrs);
+    if (directories.has(remotePath) || uploads.comparisonDirectories.has(remotePath)) channel.attrs(id, directoryAttrs(remotePath));
     else if (existing) channel.attrs(id, existing.attrs);
     else channel.status(id, code.NO_SUCH_FILE);
   });
@@ -168,7 +174,33 @@ function sftpChannel(channel, uploads) {
     opened.fixture.attrs.gid = attrs.gid;
     channel.status(id, code.OK);
   });
+  function applyPermissions(id, remotePath, attrs, method) {
+    uploads.permissionRequests.push({ path: remotePath, method, mode: attrs.mode, uid: attrs.uid, gid: attrs.gid });
+    const name = path.posix.basename(remotePath);
+    if (name === '권한 거부.txt' || name === '소유자 거부.txt') return channel.status(id, code.PERMISSION_DENIED);
+    if (name === '권한 미지원.txt') return channel.status(id, code.OP_UNSUPPORTED);
+    if (name === '권한 미반영.txt') return channel.status(id, code.OK);
+    const fixture = uploads.files.get(remotePath);
+    const current = fixture?.attrs ?? (uploads.comparisonDirectories.has(remotePath) ? directoryAttrs(remotePath) : null);
+    if (!current) return channel.status(id, code.NO_SUCH_FILE);
+    if (attrs.mode !== undefined) current.mode = (current.mode & ~0o7777) | attrs.mode;
+    if (attrs.uid !== undefined) current.uid = attrs.uid;
+    if (attrs.gid !== undefined) current.gid = attrs.gid;
+    if (!fixture) uploads.permissionDirectories.set(remotePath, current);
+    channel.status(id, code.OK);
+  }
+  channel.on('SETSTAT', (id, remotePath, attrs) => applyPermissions(id, remotePath, attrs, 'setstat'));
   channel.on('EXTENDED', (id, extension, data) => {
+    if (uploads.advertisePermissions && extension === lsetstat) {
+      const end = 4 + data.readUInt32BE();
+      const remotePath = data.toString('utf8', 4, end);
+      const flags = data.readUInt32BE(end);
+      if (flags === 4 && data.length === end + 8) return applyPermissions(id, remotePath, { mode: data.readUInt32BE(end + 4) }, 'lsetstat');
+      if (flags === 2 && data.length === end + 12) {
+        return applyPermissions(id, remotePath, { uid: data.readUInt32BE(end + 4), gid: data.readUInt32BE(end + 8) }, 'lsetstat');
+      }
+      return channel.status(id, code.BAD_MESSAGE);
+    }
     if (!uploads.advertiseEdit || extension !== posixRename) return channel.status(id, code.OP_UNSUPPORTED);
     const firstLength = data.readUInt32BE();
     const secondOffset = 4 + firstLength;
@@ -281,7 +313,8 @@ async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
   const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), comparisonDirectories: new Map(), moves: 0, moveCollision: false,
-    deletions: 0, edits: 0, editRace: null, advertiseEdit: true };
+    deletions: 0, edits: 0, editRace: null, advertiseEdit: true, advertisePermissions: true,
+    permissionDirectories: new Map(), permissionRequests: [] };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
     client.on('error', () => {});
@@ -507,6 +540,7 @@ async function main() {
 
     await verifyFolderComparison(page, local, server.uploads);
     await verifySyncAdditions(page, remote, localPane, local, server.uploads);
+    await verifyPermissions(page, remote, server.uploads, 'lsetstat');
     await verifyPreviews(page, remote, localPane);
     await verifyDownloads(page, remote, local);
     await verifyUploads(page, remote, localPane, local, server.uploads);
@@ -523,6 +557,7 @@ async function main() {
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     server.uploads.advertiseEdit = false;
+    server.uploads.advertisePermissions = false;
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
     await page.getByLabel('인증 방식').selectOption('private_key');
     await page.getByLabel('개인 키 파일 경로').fill(keyFile);
@@ -532,6 +567,7 @@ async function main() {
     await remote.getByText('대시보드.txt', { exact: true }).waitFor();
     assert.equal(server.stats.signatures, 1);
     assert.equal(server.stats.subsystem, 2);
+    await verifyPermissions(page, remote, server.uploads, 'setstat');
     await verifyEditorCopyOnly(page, remote, server.uploads);
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await connect.waitFor({ state: 'detached' });
@@ -549,6 +585,93 @@ async function main() {
     await browser.close();
     await server.close();
   }
+}
+
+async function verifyPermissions(page, remote, uploads, method) {
+  const rootPath = '/home/stackport';
+  const names = ['권한 시험.txt', '권한 거부.txt', '권한 미지원.txt', '권한 미반영.txt', '권한 경합.txt', '소유자 거부.txt', '권한 링크'];
+  const folder = '소유자 시험 폴더';
+  const toPath = name => `${rootPath}/${name}`;
+  const start = uploads.permissionRequests.length;
+  const original = Buffer.from('permission fixture contents');
+  for (const name of names) {
+    uploads.files.set(toPath(name), { data: Buffer.from(original), attrs: { ...file('').attrs, size: original.length } });
+  }
+  uploads.files.get(toPath('권한 링크')).attrs.mode = 0o120777;
+  uploads.comparisonDirectories.set(toPath(folder), []);
+  const refresh = remote.getByRole('button', { name: '원격 파일 새로고침', exact: true });
+  const action = name => remote.getByRole('button', { name: `${name} 권한 변경`, exact: true });
+  const row = name => remote.getByRole('row').filter({ has: page.getByRole('button', { name: `${name} 권한 변경`, exact: true }) });
+  const dialog = page.getByRole('dialog', { name: '원격 권한·소유자 변경', exact: true });
+  const confirm = dialog.getByRole('textbox', { name: '운영 환경 변경 확인', exact: true });
+  const permission = dialog.getByRole('textbox', { name: '새 Unix 권한', exact: true });
+  const uid = dialog.getByRole('textbox', { name: '새 UID', exact: true });
+  const apply = dialog.getByRole('button', { name: '변경 적용', exact: true });
+  const open = name => action(name).click();
+  await refresh.click();
+  await remote.getByText('권한 링크', { exact: true }).waitFor();
+  assert.equal(await action('권한 링크').count(), 0);
+  await open('권한 시험.txt');
+  assert.equal(await permission.inputValue(), '0640');
+  await permission.fill('2750');
+  assert.equal(await apply.isEnabled(), false);
+  await confirm.fill('PROD');
+  await permission.fill('8800');
+  assert.equal(await apply.isEnabled(), false);
+  await permission.fill('2750');
+  await apply.click();
+  await dialog.waitFor({ state: 'hidden' });
+  assert.equal(uploads.files.get(toPath('권한 시험.txt')).attrs.mode, 0o102750);
+  assert.deepEqual(uploads.files.get(toPath('권한 시험.txt')).data, original);
+  await row('권한 시험.txt').getByText('2750 · 42/9', { exact: true }).waitFor();
+
+  await open(folder);
+  await dialog.getByRole('combobox', { name: '변경할 속성', exact: true }).selectOption('owner');
+  await confirm.fill('PROD');
+  await uid.fill('4294967295');
+  assert.equal(await apply.isEnabled(), false);
+  await uid.fill('99');
+  await apply.click();
+  await dialog.waitFor({ state: 'hidden' });
+  await row(folder).getByText('0750 · 99/9', { exact: true }).waitFor();
+  assert.deepEqual(uploads.permissionRequests.slice(start, start + 2), [
+    { path: toPath('권한 시험.txt'), method, mode: 0o2750, uid: undefined, gid: undefined },
+    { path: toPath(folder), method, mode: undefined, uid: 99, gid: 9 },
+  ]);
+
+  for (const [name, reason] of [['권한 거부.txt', /변경을 거부했습니다/], ['권한 미지원.txt', /지원하지 않습니다/],
+    ['권한 미반영.txt', /요청한 변경을 확인할 수 없습니다/]]) {
+    await open(name);
+    await permission.fill('0600');
+    await confirm.fill('PROD');
+    await apply.click();
+    await dialog.getByRole('alert').getByText(reason).waitFor();
+    await dialog.getByRole('button', { name: '취소', exact: true }).click();
+    assert.equal(uploads.files.get(toPath(name)).attrs.mode, 0o100640);
+  }
+  await open('소유자 거부.txt');
+  await dialog.getByRole('combobox', { name: '변경할 속성', exact: true }).selectOption('owner');
+  await uid.fill('99');
+  await confirm.fill('PROD');
+  await apply.click();
+  await dialog.getByRole('alert').getByText(/변경을 거부했습니다/).waitFor();
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  assert.equal(uploads.files.get(toPath('소유자 거부.txt')).attrs.uid, 42);
+  const beforeStale = uploads.permissionRequests.length;
+  await open('권한 경합.txt');
+  uploads.files.get(toPath('권한 경합.txt')).attrs.gid = 125;
+  await permission.fill('0600');
+  await confirm.fill('PROD');
+  await apply.click();
+  await dialog.getByRole('alert').getByText(/목록을 읽은 뒤 변경되었습니다/).waitFor();
+  assert.equal(uploads.permissionRequests.length, beforeStale);
+  await dialog.getByRole('button', { name: '목록 새로고침', exact: true }).click();
+  await row('권한 경합.txt').getByText('0640 · 42/125', { exact: true }).waitFor();
+  for (const name of names) uploads.files.delete(toPath(name));
+  uploads.comparisonDirectories.delete(toPath(folder));
+  uploads.permissionDirectories.delete(toPath(folder));
+  await refresh.click();
+  await action('권한 시험.txt').waitFor({ state: 'hidden' });
 }
 
 async function verifyNewFolder(page, remote, uploads) {
@@ -1190,7 +1313,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     }
     assert.ok(fileEvents.some(event => event.operation === `${operation}.cancel` && event.outcome === 'succeeded'));
   }
-  for (const operation of ['sftp.mkdir', 'sftp.rename', 'sftp.move', 'sftp.delete']) {
+  for (const operation of ['sftp.mkdir', 'sftp.rename', 'sftp.move', 'sftp.delete', 'sftp.chmod', 'sftp.chown']) {
     for (const outcome of ['started', 'succeeded', 'failed']) {
       assert.ok(fileEvents.some(event => event.operation === operation && event.outcome === outcome));
     }
@@ -1200,6 +1323,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     assert.equal(event.profile_id, profile.id);
     assert.equal(event.environment, 'PROD');
     if (event.operation === 'sftp.delete') assert.equal(event.policy, 'sftp-delete-preview-prod-required');
+    if (event.operation === 'sftp.chmod' || event.operation === 'sftp.chown') assert.equal(event.policy, 'sftp-pinned-host-attributes-verified');
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
     if (event.operation.startsWith('sftp.sync')) {
@@ -1228,7 +1352,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
       expected.push({ action, state });
     }
   }
-  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제', 'SFTP 편집 저장']) {
+  for (const action of ['SFTP 폴더 생성', 'SFTP 이름 변경', 'SFTP 이동', 'SFTP 삭제', 'SFTP 편집 저장', 'SFTP 권한 변경', 'SFTP 소유자·그룹 변경']) {
     expected.push({ action, state: '완료' }, { action, state: '실패' });
   }
   expected.push({ action: 'SFTP 폴더 동기화', state: '시작' }, { action: 'SFTP 폴더 동기화', state: '실패' });

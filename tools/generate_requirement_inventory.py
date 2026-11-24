@@ -51,6 +51,7 @@ PARTIAL = {
     "SP-FL-007": "SFTP 전송 실패·중단 시 임시 파일 정리, 완료 파일 게시와 수동 재시도",
     "SP-FL-008": "전송·복사·원격 이름 변경·이동에서 기존 대상 보존, 파일 크기·수정 시간 변경 감지",
     "SP-FL-009": "로컬·SFTP 항목의 유형·크기·수정 시각, 숨김 표시와 크기·시각 정렬, SFTP 권한·소유자/그룹 ID",
+    "SP-FL-010": "SFTP 일반 파일·폴더의 Unix 권한·소유자 변경, 변경 전후 확인과 서버 거부·미지원 사유 표시",
     "SP-FL-011": "로컬·SFTP 파일의 UTF-8 원문(HTML·XML·JSON·CSV 포함), HEX 및 제한된 정적 PNG 미리보기",
     "SP-FL-012": "최대 512 KiB SFTP UTF-8 편집기, 줄 번호·커서 위치와 일반 텍스트 찾기·바꾸기, BOM·LF/CRLF 유지, 로컬 초안 보관",
     "SP-FL-013": "SFTP 텍스트 열기·편집, 검증한 원격 임시 파일에서 저장, 원본 해시 충돌 확인과 새 이름 저장",
@@ -59,7 +60,7 @@ PARTIAL = {
     "SP-FL-017": "단방향·양방향 dry-run·실행, 검증 후 갱신과 단방향 삭제 반영, 제외·충돌 표시, 남은 작업 중단과 작업 기록",
     "SP-FL-019": "SFTP 빈 폴더를 확인해 한 폴더씩 삭제하며 숨김 파일을 포함한 하위 항목을 보존",
     "SP-FL-021": "SFTP 업로드·원격 복사·편집본의 원격 SHA-256 검증, 다운로드의 수신 SHA-256과 원격 크기·수정 시간 검증",
-    "SP-FL-023": "SFTP 전송·복사·편집·원격 폴더 생성·이름 변경·이동·삭제의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
+    "SP-FL-023": "SFTP 전송·편집·파일 관리·권한 및 소유자 변경·동기화의 시작과 결과를 시각 및 연결 ID와 함께 로컬에 기록",
     "SP-FL-024": "SFTP 경로의 누락과 접근 거부, 새 폴더·파일 이름 충돌 및 전송 오류 표시",
     "SP-RG-001": "Windows 네이티브 RDP 실행, 열린 클라이언트 목록, 창·전체 화면·다중 모니터, 펼칠 수 있는 해상도·색 깊이 설정",
     "SP-RG-002": "사용자·도메인 및 관리 콘솔, Windows CredSSP 사용과 서버 인증 실패 시 연결 거부 설정",
@@ -193,6 +194,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/web_check.rs; tests/ports-smoke.cjs; src/WebDiagnosticResult.tsx; src-tauri/"
             elif requirement_id in {"SP-FL-006", "SP-FL-007", "SP-FL-021"}:
                 evidence = "crates/stackport-core/src/sftp/download.rs; crates/stackport-core/src/sftp/upload.rs; crates/stackport-core/src/sftp/remote_stage.rs; crates/stackport-core/src/sftp/copy.rs; tests/sftp-smoke.cjs; src/SftpTransferStatus.tsx; src-tauri/"
+            elif requirement_id == "SP-FL-010":
+                evidence = "src/SftpPermissionsDialog.tsx; crates/stackport-core/src/sftp/permissions.rs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-FL-011":
                 evidence = "crates/stackport-core/src/sftp/preview.rs; tests/sftp-smoke.cjs; src/FilePreviewDialog.tsx; src-tauri/"
             elif requirement_id == "SP-FL-012":
