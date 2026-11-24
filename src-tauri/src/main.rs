@@ -10,7 +10,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
-    save_terminal_output, SftpAuthentication, SftpDownloadOutcome, SftpDownloadProgress, SftpManager,
+    save_terminal_output, SftpAuthentication, SftpTransferOutcome, SftpTransferProgress, SftpManager,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     TerminalManager, TerminalOutputFormat, TerminalRead,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport,
@@ -612,16 +612,32 @@ async fn download_sftp_file(
     id: String,
     source: RemotePath,
     destination: String,
-    progress: Channel<SftpDownloadProgress>,
-) -> Result<SftpDownloadOutcome, String> {
+    progress: Channel<SftpTransferProgress>,
+) -> Result<SftpTransferOutcome, String> {
     sftp.download(&id, source, destination, |update| {
-        let _ = progress.send(update);
-    }).await
+            let _ = progress.send(update);
+        })
+        .await
 }
 
 #[tauri::command]
-fn cancel_sftp_download(sftp: State<'_, SftpManager>, id: String, transfer_id: String) -> bool {
-    sftp.cancel_download(&id, &transfer_id)
+async fn upload_sftp_file(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    source: String,
+    directory: RemotePath,
+    filename: String,
+    progress: Channel<SftpTransferProgress>,
+) -> Result<SftpTransferOutcome, String> {
+    sftp.upload(&id, source, directory, filename, |update| {
+            let _ = progress.send(update);
+        })
+        .await
+}
+
+#[tauri::command]
+fn cancel_sftp_transfer(sftp: State<'_, SftpManager>, id: String, transfer_id: String) -> bool {
+    sftp.cancel_transfer(&id, &transfer_id)
 }
 
 #[tauri::command]
@@ -840,7 +856,8 @@ fn main() {
             open_sftp,
             list_sftp_directory,
             download_sftp_file,
-            cancel_sftp_download,
+            upload_sftp_file,
+            cancel_sftp_transfer,
             close_sftp,
             browse_local_directory,
             choose_local_browse_directory,

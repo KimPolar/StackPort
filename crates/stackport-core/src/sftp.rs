@@ -1,7 +1,9 @@
 //! SFTP navigation over a connection authenticated to a previously pinned host key.
 
 mod download;
-pub use download::{SftpDownloadOutcome, SftpDownloadProgress};
+mod transfer;
+mod upload;
+pub use transfer::{SftpTransferOutcome, SftpTransferProgress};
 
 use crate::{ssh, Result, SshManager, SshProfile};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -129,7 +131,8 @@ struct FilesSession {
     ssh: Handle<PinnedHost>,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
-    downloads: Mutex<download::DownloadState>,
+    transfers: Mutex<transfer::TransferState>,
+    fsync_supported: bool,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -223,7 +226,7 @@ impl SftpManager {
             .map_err(|_| "SFTP 연결 목록을 열 수 없습니다.")?
             .remove(id);
         if let Some(session) = session {
-            session.cancel_download_on_close();
+            session.cancel_transfer_on_close();
             let _ = timeout(
                 Duration::from_secs(2),
                 session.ssh.disconnect(Disconnect::ByApplication, "", ""),
@@ -327,7 +330,8 @@ async fn start_session(
             ssh,
             files,
             operation: AsyncMutex::new(()),
-            downloads: Mutex::new(download::DownloadState::default()),
+            transfers: Mutex::new(transfer::TransferState::default()),
+            fsync_supported: version.extensions.get("fsync@openssh.com").is_some_and(|value| value == "1"),
             _permit: permit,
         },
         directory,

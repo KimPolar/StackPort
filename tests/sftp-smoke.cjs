@@ -27,7 +27,7 @@ const file = (filename) => {
   return { filename, longname: filename, attrs: { mode: 0o100640, size: (fixture?.data.length ?? 17) + (fixture?.short ? 8 : 0), uid: 42, gid: 9, mtime: 1700000000, atime: 1700000000 } };
 };
 
-function sftpChannel(channel) {
+function sftpChannel(channel, uploads) {
   const directories = new Map([
     ['/home', [directory('stackport')]],
     ['/home/stackport', [directory('.'), directory('..'), file('.숨김'), directory('문서'), ...Array.from(downloadFixtures.keys(), file)]],
@@ -35,6 +35,19 @@ function sftpChannel(channel) {
   ]);
   const handles = new Map();
   let next = 0;
+  const lookup = remotePath => {
+    const uploaded = uploads.files.get(remotePath);
+    if (uploaded) return uploaded;
+    const name = remotePath.startsWith('/home/stackport/') ? remotePath.slice('/home/stackport/'.length) : '';
+    const fixture = downloadFixtures.get(name);
+    return fixture && { ...fixture, attrs: file(name).attrs };
+  };
+  function newHandle(id, value) {
+    const handle = Buffer.alloc(4);
+    handle.writeUInt32BE(++next);
+    handles.set(handle.toString('hex'), value);
+    channel.handle(id, handle);
+  }
   channel.on('REALPATH', (id, requested) => {
     const resolved = requested === '.' ? '/home/stackport' : requested;
     if (directories.has(resolved)) channel.name(id, [directory(resolved)]);
@@ -43,10 +56,9 @@ function sftpChannel(channel) {
   channel.on('OPENDIR', (id, requested) => {
     const entries = directories.get(requested);
     if (!entries) return channel.status(id, code.NO_SUCH_FILE);
-    const handle = Buffer.alloc(4);
-    handle.writeUInt32BE(++next);
-    handles.set(handle.toString('hex'), { entries: [...entries] });
-    channel.handle(id, handle);
+    const added = Array.from(uploads.files).filter(([name]) => path.posix.dirname(name) === requested)
+      .map(([name, fixture]) => ({ filename: path.posix.basename(name), longname: name, attrs: fixture.attrs }));
+    newHandle(id, { entries: [...entries, ...added] });
   });
   channel.on('READDIR', (id, handle) => {
     const entries = handles.get(handle.toString('hex'))?.entries;
@@ -57,26 +69,32 @@ function sftpChannel(channel) {
   channel.on('CLOSE', (id, handle) => {
     channel.status(id, handles.delete(handle.toString('hex')) ? code.OK : code.FAILURE);
   });
-  const sourceName = remotePath => remotePath.startsWith('/home/stackport/') ? remotePath.slice('/home/stackport/'.length) : '';
   channel.on('LSTAT', (id, remotePath) => {
-    const name = sourceName(remotePath);
-    if (downloadFixtures.has(name)) channel.attrs(id, file(name).attrs);
+    const existing = lookup(remotePath);
+    if (directories.has(remotePath)) channel.attrs(id, directory(remotePath).attrs);
+    else if (existing) channel.attrs(id, existing.attrs);
     else channel.status(id, code.NO_SUCH_FILE);
   });
-  channel.on('OPEN', (id, remotePath, flags) => {
-    const name = sourceName(remotePath);
-    const fixture = downloadFixtures.get(name);
-    if (!fixture) return channel.status(id, code.NO_SUCH_FILE);
-    if (flags !== utils.sftp.OPEN_MODE.READ) return channel.status(id, code.PERMISSION_DENIED);
-    const handle = Buffer.alloc(4);
-    handle.writeUInt32BE(++next);
-    handles.set(handle.toString('hex'), { name, fixture, stats: 0 });
-    channel.handle(id, handle);
+  channel.on('OPEN', (id, remotePath, flags, attributes) => {
+    const { READ, WRITE, CREAT, EXCL } = utils.sftp.OPEN_MODE;
+    if (flags === READ) {
+      const fixture = lookup(remotePath);
+      if (!fixture) return channel.status(id, code.NO_SUCH_FILE);
+      return newHandle(id, { fixture, stats: 0 });
+    }
+    if (flags !== (READ | WRITE | CREAT | EXCL) || !directories.has(path.posix.dirname(remotePath))
+      || !path.posix.basename(remotePath).startsWith('.stackport-upload-') || lookup(remotePath)) {
+      return channel.status(id, code.PERMISSION_DENIED);
+    }
+    const fixture = { data: Buffer.alloc(0), attrs: { ...file('').attrs, size: 0, mode: 0o100000 | attributes.mode }, behavior: uploads.behavior };
+    uploads.behavior = '';
+    uploads.files.set(remotePath, fixture);
+    newHandle(id, { fixture, stats: 0, writable: true });
   });
   channel.on('FSTAT', (id, handle) => {
     const open = handles.get(handle.toString('hex'));
     if (!open?.fixture) return channel.status(id, code.FAILURE);
-    const attrs = file(open.name).attrs;
+    const attrs = { ...open.fixture.attrs };
     if (open.fixture.changed && open.stats++ > 0) attrs.mtime++;
     channel.attrs(id, attrs);
   });
@@ -91,6 +109,30 @@ function sftpChannel(channel) {
     if (delay) setTimeout(respond, delay);
     else respond();
   });
+  channel.on('WRITE', (id, handle, offset, data) => {
+    const open = handles.get(handle.toString('hex'));
+    if (!open?.writable || open.fixture.data.length !== offset) return channel.status(id, code.FAILURE);
+    const fixture = open.fixture;
+    fixture.data = Buffer.concat([fixture.data, data]);
+    fixture.attrs.size = fixture.data.length;
+    if (offset === 0 && fixture.behavior === 'corrupt') fixture.data[0] ^= 0xff;
+    const respond = () => { if (!channel.destroyed) channel.status(id, code.OK); };
+    if (fixture.behavior === 'slow') setTimeout(respond, 90);
+    else respond();
+  });
+  channel.on('RENAME', (id, from, to) => {
+    const fixture = uploads.files.get(from);
+    if (!fixture || !path.posix.basename(from).startsWith('.stackport-upload-')) return channel.status(id, code.FAILURE);
+    if (fixture.behavior === 'collision') uploads.files.set(to, { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
+    if (lookup(to) || !directories.has(path.posix.dirname(to))) return channel.status(id, code.FAILURE);
+    uploads.files.set(to, fixture);
+    uploads.files.delete(from);
+    channel.status(id, code.OK);
+  });
+  channel.on('REMOVE', (id, remotePath) => {
+    if (!path.posix.basename(remotePath).startsWith('.stackport-upload-')) return channel.status(id, code.PERMISSION_DENIED);
+    channel.status(id, uploads.files.delete(remotePath) ? code.OK : code.NO_SUCH_FILE);
+  });
 }
 
 function makeHost() {
@@ -102,6 +144,7 @@ function makeHost() {
 async function startHost(host, identity, port = 0) {
   const clients = new Set();
   const stats = { passwords: 0, signatures: 0, subsystem: 0 };
+  const uploads = { files: new Map(), behavior: '' };
   const server = new Server({ hostKeys: [host.privateKey] }, client => {
     clients.add(client);
     client.on('error', () => {});
@@ -124,7 +167,7 @@ async function startHost(host, identity, port = 0) {
     client.on('ready', () => client.on('session', accept => {
       accept().on('sftp', acceptSftp => {
         stats.subsystem++;
-        sftpChannel(acceptSftp());
+        sftpChannel(acceptSftp(), uploads);
       });
     }));
   });
@@ -134,6 +177,7 @@ async function startHost(host, identity, port = 0) {
   return {
     port: server.address().port,
     stats,
+    uploads,
     close() {
       if (closing) return closing;
       closing = once(server, 'close');
@@ -223,6 +267,7 @@ async function main() {
     await localPane.getByText('로컬 파일.txt', { exact: true }).waitFor();
 
     await verifyDownloads(page, remote, local);
+    await verifyUploads(page, remote, localPane, local, server.uploads);
 
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
@@ -243,7 +288,7 @@ async function main() {
     assert.equal(server.stats.passwords, 0);
     assert.equal(server.stats.subsystem, 0);
     assert.deepEqual(errors, []);
-    console.log('Pinned SFTP host, password and encrypted key, PROD validation, file navigation, download integrity, cancellation, and changed-key blocking passed.');
+    console.log('Pinned SFTP host, file navigation, verified uploads/downloads, cancellation, collision protection, and changed-key blocking passed.');
   } finally {
     await browser.close();
     await server.close();
@@ -307,6 +352,78 @@ async function verifyDownloads(page, remote, local) {
     noPartials();
     await close();
   }
+}
+
+async function verifyUploads(page, remote, localPane, local, uploads) {
+  const dialog = page.getByRole('dialog', { name: '로컬 파일 업로드' });
+  const filename = dialog.getByLabel('원격 파일 이름');
+  const start = dialog.getByRole('button', { name: '업로드', exact: true });
+  const done = page.getByRole('status').getByText('업로드 완료', { exact: true });
+  const close = () => dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  const noPartials = () => assert.ok(Array.from(uploads.files.keys()).every(name => !path.posix.basename(name).startsWith('.stackport-upload-')));
+  const payload = Buffer.from(Array.from({ length: 310_000 }, (_, index) => index % 197));
+  fs.writeFileSync(path.join(local, '업로드.bin'), payload);
+  fs.writeFileSync(path.join(local, '로컬 빈 파일.txt'), '');
+  await localPane.getByRole('button', { name: '로컬 파일 새로고침' }).click();
+  await remote.getByRole('button', { name: '문서' }).click();
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+  const directoryPath = '/home/stackport/문서';
+  const open = () => localPane.getByRole('button', { name: '업로드.bin 업로드', exact: true }).click();
+
+  await open();
+  await dialog.getByText(directoryPath, { exact: false }).waitFor();
+  await filename.fill('../escape.bin');
+  await start.click();
+  await dialog.getByRole('alert').getByText(/경로 구분자/).waitFor();
+  assert.equal(uploads.files.size, 0);
+  await filename.fill('새 원격 파일.bin');
+  await start.click();
+  await done.waitFor();
+  await remote.getByText('새 원격 파일.bin', { exact: true }).waitFor();
+  const saved = uploads.files.get(`${directoryPath}/새 원격 파일.bin`);
+  assert.deepEqual(saved.data, payload);
+  assert.equal(saved.attrs.mode & 0o777, 0o600);
+  await page.getByText('SHA-256', { exact: true }).click();
+  await page.getByText(createHash('sha256').update(payload).digest('hex'), { exact: true }).waitFor();
+  noPartials();
+
+  await localPane.getByRole('button', { name: '로컬 빈 파일.txt 업로드', exact: true }).click();
+  await start.click();
+  await done.waitFor();
+  assert.equal(uploads.files.get(`${directoryPath}/로컬 빈 파일.txt`).data.length, 0);
+
+  await open();
+  await filename.fill('새 원격 파일.bin');
+  await start.click();
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  assert.deepEqual(saved.data, payload);
+  noPartials();
+  await close();
+
+  await open();
+  await filename.fill('중단.bin');
+  uploads.behavior = 'slow';
+  await start.click();
+  await dialog.getByText(/KiB\/s/).waitFor();
+  await dialog.getByRole('button', { name: '업로드 중단' }).click();
+  await dialog.getByText('업로드가 중단되었습니다.', { exact: true }).waitFor();
+  assert.equal(uploads.files.has(`${directoryPath}/중단.bin`), false);
+  noPartials();
+
+  await filename.fill('검증 실패.bin');
+  uploads.behavior = 'corrupt';
+  await start.click();
+  await dialog.getByRole('alert').getByText(/SHA-256/).waitFor();
+  assert.equal(uploads.files.has(`${directoryPath}/검증 실패.bin`), false);
+  noPartials();
+
+  await filename.fill('게시 충돌.bin');
+  uploads.behavior = 'collision';
+  await start.click();
+  await dialog.getByRole('alert').getByText(/같은 이름/).waitFor();
+  assert.equal(uploads.files.get(`${directoryPath}/게시 충돌.bin`).data.toString('utf8'), 'keep');
+  noPartials();
+  await close();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

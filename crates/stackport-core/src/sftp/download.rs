@@ -1,152 +1,47 @@
 //! Stream verified SFTP reads into a local file, then publish without replacing a destination.
 
-use super::{file_error, FilesSession, RemotePath, SftpManager};
+use super::{
+    file_error,
+    transfer::{read_chunk, request, Transfer, CHUNK_SIZE},
+    RemotePath, SftpManager, SftpTransferOutcome, SftpTransferProgress,
+};
 use crate::Result;
 use russh_sftp::{
-    client::{error::Error as SftpError, RawSftpSession},
-    protocol::{FileAttributes, OpenFlags, SftpHandle, SftpString, StatusCode},
+    client::RawSftpSession,
+    protocol::{FileAttributes, OpenFlags, SftpHandle, SftpString},
 };
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
-    future::Future,
-    io,
+    fs, io,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU8, Ordering},
-        Arc, Mutex,
-    },
     time::{Duration, Instant},
 };
 use tempfile::{NamedTempFile, TempPath};
-use tokio::{io::AsyncWriteExt, time::timeout};
-use uuid::Uuid;
-
-const READ_SIZE: u32 = 32 * 1024;
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
-const RUNNING: u8 = 0;
-const CANCELLED: u8 = 1;
-const PUBLISHING: u8 = 2;
-
-#[derive(Serialize)]
-pub struct SftpDownloadProgress {
-    transfer_id: String,
-    received: String,
-    total: Option<String>,
-    elapsed_ms: u64,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum SftpDownloadOutcome {
-    Saved { bytes: String, sha256: String },
-    Cancelled,
-}
-
-struct Download {
-    id: String,
-    phase: Arc<AtomicU8>,
-}
-
-impl Download {
-    fn cancel(&self) -> bool {
-        self.phase
-            .compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-    }
-}
-
-#[derive(Default)]
-pub(super) struct DownloadState {
-    closing: bool,
-    active: Option<Download>,
-}
-
-struct ActiveDownload<'a>(&'a Mutex<DownloadState>);
-
-impl Drop for ActiveDownload<'_> {
-    fn drop(&mut self) {
-        self.0
-            .lock()
-            .unwrap_or_else(|lock| lock.into_inner())
-            .active
-            .take();
-    }
-}
-
-impl FilesSession {
-    pub(super) fn cancel_download_on_close(&self) {
-        if let Ok(mut state) = self.downloads.lock() {
-            state.closing = true;
-            if let Some(active) = state.active.as_ref() {
-                active.cancel();
-            }
-        }
-    }
-}
+use tokio::io::AsyncWriteExt;
 
 impl SftpManager {
-    pub fn cancel_download(&self, id: &str, transfer_id: &str) -> bool {
-        let Ok(session) = self.session(id) else {
-            return false;
-        };
-        session
-            .downloads
-            .lock()
-            .ok()
-            .and_then(|state| {
-                state
-                    .active
-                    .as_ref()
-                    .filter(|download| download.id == transfer_id)
-                    .map(Download::cancel)
-            })
-            .unwrap_or(false)
-    }
-
     pub async fn download(
         &self,
         id: &str,
         source: RemotePath,
         destination: String,
-        progress: impl Fn(SftpDownloadProgress),
-    ) -> Result<SftpDownloadOutcome> {
+        progress: impl Fn(SftpTransferProgress),
+    ) -> Result<SftpTransferOutcome> {
         let source = source.into_path()?;
         let session = self.session(id)?;
         let _operation = session
             .operation
             .try_lock()
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
-        let transfer_id = Uuid::new_v4().to_string();
-        let phase = Arc::new(AtomicU8::new(RUNNING));
-        {
-            let mut state = session
-                .downloads
-                .lock()
-                .map_err(|_| "SFTP 전송 상태를 열 수 없습니다.")?;
-            if state.closing {
-                return Err("SFTP 연결이 닫혔습니다. 다시 연결하세요.".into());
-            }
-            state.active = Some(Download {
-                id: transfer_id.clone(),
-                phase: Arc::clone(&phase),
-            });
-        }
-        let _active = ActiveDownload(&session.downloads);
-        let started = Instant::now();
-        let update = |received: u64, total: Option<u64>| {
-            progress(SftpDownloadProgress {
-                transfer_id: transfer_id.clone(),
-                received: received.to_string(),
-                total: total.map(|value| value.to_string()),
-                elapsed_ms: started.elapsed().as_millis() as u64,
-            })
-        };
+        let active = session.register_transfer()?;
+        let transfer = &active.transfer;
+        let update = |received, total| progress(transfer.report(received, total, false));
         update(0, None);
-        let result = download_file(&session.files, source, destination, &phase, update).await;
-        if phase.load(Ordering::Acquire) == CANCELLED {
-            return Ok(SftpDownloadOutcome::Cancelled);
+        let result = download_file(&session.files, source, destination, transfer, update).await;
+        if transfer.cancelled() {
+            return Ok(SftpTransferOutcome::Cancelled {
+                cleanup_warning: None,
+            });
         }
         result
     }
@@ -156,42 +51,44 @@ async fn download_file(
     files: &RawSftpSession,
     source: SftpString,
     destination: String,
-    phase: &AtomicU8,
+    transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>),
-) -> Result<SftpDownloadOutcome> {
+) -> Result<SftpTransferOutcome> {
     let (destination, temporary) =
         tokio::task::spawn_blocking(move || prepare_destination(&destination))
             .await
             .map_err(|_| "다운로드 경로를 준비할 수 없습니다.")??;
     let (local, temporary) = temporary.into_parts();
     let mut local = tokio::fs::File::from_std(local);
-    check_cancelled(phase)?;
-    let listed = request(files.lstat(source.clone())).await?.attrs;
+    transfer.check()?;
+    let listed = request(files.lstat(source.clone()))
+        .await
+        .map_err(file_error)?
+        .attrs;
     let expected = file_size(&listed)?;
-    check_cancelled(phase)?;
+    transfer.check()?;
     let handle = request(files.open(source, OpenFlags::READ, FileAttributes::empty()))
-        .await?
+        .await
+        .map_err(file_error)?
         .handle;
     let copied = copy_contents(
-        files, &handle, &mut local, &listed, expected, phase, progress,
+        files, &handle, &mut local, &listed, expected, transfer, progress,
     )
     .await;
-    let closed = request(files.close(handle)).await;
+    let closed = request(files.close(handle)).await.map_err(file_error);
     let digest = copied?;
     closed?;
-    check_cancelled(phase)?;
+    transfer.check()?;
     local
         .sync_all()
         .await
         .map_err(|_| "다운로드 파일을 디스크에 기록할 수 없습니다.")?;
     drop(local);
-    phase
-        .compare_exchange(RUNNING, PUBLISHING, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| "다운로드를 중단했습니다.")?;
+    transfer.begin_publication()?;
     tokio::task::spawn_blocking(move || publish(temporary, destination))
         .await
         .map_err(|_| "다운로드 파일을 저장할 수 없습니다.")??;
-    Ok(SftpDownloadOutcome::Saved {
+    Ok(SftpTransferOutcome::Saved {
         bytes: expected.to_string(),
         sha256: digest,
     })
@@ -203,31 +100,23 @@ async fn copy_contents(
     local: &mut tokio::fs::File,
     listed: &FileAttributes,
     expected: u64,
-    phase: &AtomicU8,
+    transfer: &Transfer,
     progress: impl Fn(u64, Option<u64>),
 ) -> Result<String> {
-    let opened = request(files.fstat(handle.clone())).await?.attrs;
+    let opened = request(files.fstat(handle.clone()))
+        .await
+        .map_err(file_error)?
+        .attrs;
     check_snapshot(listed, &opened, expected)?;
     progress(0, Some(expected));
     let mut copied = 0;
     let mut checksum = Sha256::new();
     let mut last_update = Instant::now();
     while copied < expected {
-        check_cancelled(phase)?;
-        let wanted = (expected - copied).min(u64::from(READ_SIZE)) as u32;
-        let data = match timeout(REQUEST_TIMEOUT, files.read(handle.clone(), copied, wanted)).await
-        {
-            Ok(Ok(packet)) if !packet.data.is_empty() && packet.data.len() <= wanted as usize => {
-                packet.data
-            }
-            Ok(Err(SftpError::Status(status))) if status.status_code == StatusCode::Eof => {
-                return Err("원격 파일이 예상 크기보다 먼저 끝났습니다.".into())
-            }
-            Ok(Err(error)) => return Err(file_error(error)),
-            Ok(Ok(_)) => return Err("서버가 잘못된 파일 데이터 길이를 반환했습니다.".into()),
-            Err(_) => return Err("SFTP 서버 응답 시간이 초과되었습니다.".into()),
-        };
-        check_cancelled(phase)?;
+        transfer.check()?;
+        let wanted = (expected - copied).min(u64::from(CHUNK_SIZE)) as u32;
+        let data = read_chunk(files, handle, copied, wanted).await?;
+        transfer.check()?;
         local
             .write_all(&data)
             .await
@@ -239,25 +128,13 @@ async fn copy_contents(
             last_update = Instant::now();
         }
     }
-    check_cancelled(phase)?;
-    let finished = request(files.fstat(handle.clone())).await?.attrs;
+    transfer.check()?;
+    let finished = request(files.fstat(handle.clone()))
+        .await
+        .map_err(file_error)?
+        .attrs;
     check_snapshot(&opened, &finished, expected)?;
     Ok(format!("{:x}", checksum.finalize()))
-}
-
-async fn request<T>(future: impl Future<Output = std::result::Result<T, SftpError>>) -> Result<T> {
-    timeout(REQUEST_TIMEOUT, future)
-        .await
-        .map_err(|_| "SFTP 서버 응답 시간이 초과되었습니다.")?
-        .map_err(file_error)
-}
-
-fn check_cancelled(phase: &AtomicU8) -> Result<()> {
-    if phase.load(Ordering::Acquire) == CANCELLED {
-        Err("다운로드를 중단했습니다.".into())
-    } else {
-        Ok(())
-    }
 }
 
 fn file_size(attrs: &FileAttributes) -> Result<u64> {
@@ -367,22 +244,6 @@ mod tests {
         assert!(prepare_destination(target.to_str().unwrap()).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"keep");
         assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
-    }
-
-    #[test]
-    fn cancellation_cannot_override_publication_or_be_sent_twice() {
-        let active = Download {
-            id: String::new(),
-            phase: Arc::new(AtomicU8::new(RUNNING)),
-        };
-        assert!(active.cancel());
-        assert!(!active.cancel());
-        assert!(check_cancelled(&active.phase).is_err());
-        let publishing = Download {
-            id: String::new(),
-            phase: Arc::new(AtomicU8::new(PUBLISHING)),
-        };
-        assert!(!publishing.cancel());
     }
 
     #[test]
