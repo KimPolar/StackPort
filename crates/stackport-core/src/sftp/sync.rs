@@ -26,19 +26,22 @@ pub struct SyncPlan {
     local_root: String,
     remote_root: String,
     confirmation: String,
+    #[serde(default)]
+    deletion_confirmation: String,
+    delete_token: Option<String>,
     items: Vec<PlanItem>,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-enum Side {
+pub(super) enum Side {
     Local,
     Remote,
 }
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum Kind {
+pub(super) enum Kind {
     File,
     Directory,
 }
@@ -86,9 +89,9 @@ struct ResolvedItem {
 
 #[derive(Serialize)]
 pub struct SyncProgress {
-    completed: usize,
-    total: usize,
-    path: String,
+    pub(super) completed: usize,
+    pub(super) total: usize,
+    pub(super) path: String,
 }
 
 #[derive(Serialize)]
@@ -111,6 +114,7 @@ enum ItemOutcome {
 struct ItemReport {
     path: String,
     target: Side,
+    deletion: bool,
     #[serde(flatten)]
     outcome: ItemOutcome,
 }
@@ -128,7 +132,7 @@ pub(super) fn ensure_local_parent(path: &Path) -> Result<()> {
     )
 }
 
-fn ensure_local_directory(path: &Path) -> Result<()> {
+pub(super) fn ensure_local_directory(path: &Path) -> Result<()> {
     if !path.is_absolute() || (cfg!(windows) && path.to_string_lossy().starts_with(r"\\.\")) {
         return Err("로컬 폴더의 절대 경로를 확인하세요.".into());
     }
@@ -142,8 +146,39 @@ fn ensure_local_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn resolve_item_paths(
+    local_root: &Path,
+    remote_root: &SftpString,
+    relative: &str,
+    creating_remote: bool,
+) -> Result<(PathBuf, SftpString, SftpString)> {
+    let mut local = local_root.to_path_buf();
+    let mut remote = remote_root.clone();
+    let mut remote_parent = remote_root.clone();
+    for segment in relative.split('/') {
+        if segment.is_empty()
+            || matches!(segment, "." | "..")
+            || segment.contains(['\\', ':', '\0'])
+            || !valid_filename(segment)
+        {
+            return Err("동기화 계획의 상대 경로를 확인하세요.".into());
+        }
+        local.push(segment);
+        remote_parent = remote;
+        remote = if creating_remote {
+            new_child_path(&remote_parent, segment)?
+        } else {
+            remote_parent.join(segment.as_bytes())
+        };
+        if remote.len() > MAX_REMOTE_PATH {
+            return Err("동기화 계획의 원격 경로가 너무 깁니다.".into());
+        }
+    }
+    Ok((local, remote_parent, remote))
+}
+
 fn resolve_items(input: SyncPlan, remote_root: &SftpString) -> Result<Vec<ResolvedItem>> {
-    if input.items.is_empty() || input.items.len() > MAX_ITEMS_PER_SYNC {
+    if input.items.len() > MAX_ITEMS_PER_SYNC {
         return Err("실행할 동기화 항목 수를 확인하세요.".into());
     }
     let local_root = Path::new(&input.local_root);
@@ -158,28 +193,12 @@ fn resolve_items(input: SyncPlan, remote_root: &SftpString) -> Result<Vec<Resolv
         if !unique.insert(name) {
             return Err("동기화 계획에 중복된 경로가 있습니다. 다시 비교하세요.".into());
         }
-        let mut local = local_root.to_path_buf();
-        let mut remote = remote_root.clone();
-        let mut remote_parent = remote_root.clone();
-        for segment in addition.path.split('/') {
-            if segment.is_empty()
-                || matches!(segment, "." | "..")
-                || segment.contains(['\\', ':', '\0'])
-                || !valid_filename(segment)
-            {
-                return Err("동기화 계획의 상대 경로를 확인하세요.".into());
-            }
-            local.push(segment);
-            remote_parent = remote;
-            remote = if addition.target == Side::Remote {
-                new_child_path(&remote_parent, segment)?
-            } else {
-                remote_parent.join(segment.as_bytes())
-            };
-            if remote.len() > MAX_REMOTE_PATH {
-                return Err("동기화 계획의 원격 경로가 너무 깁니다.".into());
-            }
-        }
+        let (local, remote_parent, remote) = resolve_item_paths(
+            local_root,
+            remote_root,
+            &addition.path,
+            addition.target == Side::Remote,
+        )?;
         let copy = match addition.kind {
             Kind::Directory if addition.replacement.is_some() => {
                 return Err("폴더는 파일 갱신 대상으로 지정할 수 없습니다.".into())
@@ -222,29 +241,104 @@ impl SftpManager {
             .operation
             .try_lock()
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
+        let remote_root = RemotePath::Token(input.remote_root.clone()).into_path()?;
+        let local_root = PathBuf::from(&input.local_root);
+        let delete_token = input.delete_token.clone();
+        let delete_target = if let Some(token) = &delete_token {
+            if input.deletion_confirmation != "삭제" {
+                return Err("동기화에서 항목을 영구 삭제하려면 삭제를 입력하세요.".into());
+            }
+            let slot = session
+                .pending_sync_delete
+                .lock()
+                .map_err(|_| "삭제 확인을 열 수 없습니다.")?;
+            let plan = slot.as_ref().ok_or("동기화 삭제 후보를 다시 검증하세요.")?;
+            let target = plan.validate(token, &local_root, &remote_root)?;
+            if input.items.iter().any(|item| item.target != target) {
+                return Err("삭제는 같은 방향의 단방향 동기화에서만 반영할 수 있습니다.".into());
+            }
+            Some(target)
+        } else {
+            None
+        };
         if session.profile.environment == "PROD"
-            && input.items.iter().any(|item| item.target == Side::Remote)
+            && (delete_target == Some(Side::Remote)
+                || input.items.iter().any(|item| item.target == Side::Remote))
             && input.confirmation != "PROD"
         {
             return Err("운영 연결에 저장하려면 PROD를 입력하세요.".into());
         }
-        let remote_root = RemotePath::Token(input.remote_root.clone()).into_path()?;
-        let local_root = input.local_root.clone();
+        if delete_target.is_some() {
+            let store = self.store.clone();
+            let profile_id = session.profile.id.clone();
+            let current = tokio::task::spawn_blocking(move || store.ssh_profile(&profile_id))
+                .await
+                .map_err(|_| "현재 SSH 연결 설정을 확인할 수 없습니다.")??;
+            if current != session.profile {
+                return Err(
+                    "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 삭제 대상을 확인하세요.".into(),
+                );
+            }
+        }
         let additions = resolve_items(input, &remote_root)?;
-        tokio::task::spawn_blocking(move || ensure_local_directory(Path::new(&local_root)))
+        let local = local_root.clone();
+        tokio::task::spawn_blocking(move || ensure_local_directory(&local))
             .await
             .map_err(|_| "로컬 폴더를 확인할 수 없습니다.")??;
         ensure_current_directory(&session.files, &remote_root).await?;
+        let deletions = if let Some(token) = delete_token {
+            let mut slot = session
+                .pending_sync_delete
+                .lock()
+                .map_err(|_| "삭제 확인을 열 수 없습니다.")?;
+            slot.as_ref()
+                .ok_or("동기화 삭제 후보를 다시 검증하세요.")?
+                .validate(&token, &local_root, &remote_root)?;
+            slot.take()
+                .ok_or("동기화 삭제 후보를 다시 검증하세요.")?
+                .into_items()
+        } else {
+            Vec::new()
+        };
+        let total = additions.len() + deletions.len();
+        if total == 0 || total > MAX_ITEMS_PER_SYNC {
+            return Err("실행할 동기화 항목 수를 확인하세요.".into());
+        }
+        if !deletions.is_empty() {
+            let mut paths = HashSet::new();
+            for path in additions
+                .iter()
+                .map(|item| item.relative.as_str())
+                .chain(deletions.iter().map(|item| item.relative.as_str()))
+            {
+                let key = if cfg!(windows) {
+                    path.to_uppercase()
+                } else {
+                    path.to_owned()
+                };
+                if !paths.insert(key) {
+                    return Err("동기화 계획에 중복된 경로가 있습니다. 다시 비교하세요.".into());
+                }
+            }
+        }
         let correlation = Uuid::new_v4().to_string();
         let audit = FileAudit::start(
             &self.store,
             &session.profile,
             &correlation,
-            FileOperation::Synchronize,
+            if delete_target.is_some() {
+                FileOperation::SynchronizeDelete
+            } else {
+                FileOperation::Synchronize
+            },
         )
         .await?;
 
-        let total = additions.len();
+        let mut prepared_deletions = Vec::with_capacity(deletions.len());
+        for item in deletions {
+            let checked = item.verify_directory(&session.files).await;
+            prepared_deletions.push((item, checked));
+        }
         let mut items = Vec::with_capacity(total);
         let mut failed_folders = HashSet::new();
         let mut applied = 0;
@@ -277,6 +371,49 @@ impl SftpManager {
             items.push(ItemReport {
                 path: item.relative,
                 target: item.target,
+                deletion: false,
+                outcome,
+            });
+        }
+        let mut changed_parents = HashSet::new();
+        for (item, checked) in prepared_deletions {
+            progress(SyncProgress {
+                completed: items.len(),
+                total,
+                path: item.relative.clone(),
+            });
+            let outcome = match checked {
+                Ok(()) if session.ssh.is_closed() => ItemOutcome::Skipped {
+                    reason: "SFTP 연결이 종료되었습니다.",
+                },
+                Ok(()) => match item
+                    .apply(
+                        &session.files,
+                        &local_root,
+                        &remote_root,
+                        changed_parents.contains(&item.relative),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        applied += 1;
+                        if let Some((parent, _)) = item.relative.rsplit_once('/') {
+                            changed_parents.insert(parent.to_owned());
+                        }
+                        ItemOutcome::Applied {
+                            bytes: None,
+                            sha256: None,
+                            warning: None,
+                        }
+                    }
+                    Err(reason) => ItemOutcome::Failed { reason },
+                },
+                Err(reason) => ItemOutcome::Failed { reason },
+            };
+            items.push(ItemReport {
+                target: item.target(),
+                path: item.relative,
+                deletion: true,
                 outcome,
             });
         }
@@ -387,6 +524,8 @@ mod tests {
             local_root: std::env::current_dir().unwrap().to_str().unwrap().into(),
             remote_root: String::new(),
             confirmation: String::new(),
+            deletion_confirmation: String::new(),
+            delete_token: None,
             items: paths
                 .iter()
                 .map(|path| PlanItem {

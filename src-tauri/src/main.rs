@@ -14,6 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SqlDocument,
     SftpOpened, SshProfileInput, SshTrustPage, Store, TableQuery, TerminalInfo,
     SyncPlan, SyncProgress, SyncReport,
+    SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
     WebDiagnostic, WebMethod, WorkspaceCopyPreview, WorkspaceCopyReport, WorkspaceResume,
     WorkspaceResumeRecord, WorkspaceResumeWrite,
@@ -822,6 +823,16 @@ async fn apply_sftp_sync_plan(
 }
 
 #[tauri::command]
+async fn prepare_sftp_sync_deletions(
+    sftp: State<'_, SftpManager>,
+    id: String,
+    input: SyncDeleteInput,
+    progress: Channel<SyncProgress>,
+) -> Result<SyncDeletePreview, String> {
+    sftp.prepare_sync_deletions(&id, input, |update| { let _ = progress.send(update); }).await
+}
+
+#[tauri::command]
 async fn compare_sftp_file_contents(
     sftp: State<'_, SftpManager>,
     id: String,
@@ -1114,6 +1125,7 @@ fn main() {
             browse_local_folder_tree,
             browse_sftp_folder_tree,
             apply_sftp_sync_plan,
+            prepare_sftp_sync_deletions,
             compare_sftp_file_contents,
             save_merged_file,
             choose_merged_file_path,

@@ -1120,6 +1120,7 @@ const auditOperationNames: Record<string, string> = {
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",
   "sftp.mkdir": "SFTP 폴더 생성",
   "sftp.sync": "SFTP 폴더 동기화",
+  "sftp.sync.delete": "SFTP 폴더 동기화 · 삭제 포함",
   "sftp.rename": "SFTP 이름 변경",
   "sftp.move": "SFTP 이동",
   "sftp.copy": "SFTP 복사", "sftp.copy.cancel": "SFTP 복사",

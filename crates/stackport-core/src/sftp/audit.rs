@@ -21,6 +21,7 @@ pub(super) enum FileOperation {
     Edit,
     EditedCopy,
     Synchronize,
+    SynchronizeDelete,
 }
 
 impl FileOperation {
@@ -41,6 +42,7 @@ impl FileOperation {
             (Self::EditedCopy, false) => "sftp.edit.copy",
             (Self::EditedCopy, true) => "sftp.edit.copy.cancel",
             (Self::Synchronize, _) => "sftp.sync",
+            (Self::SynchronizeDelete, _) => "sftp.sync.delete",
         }
     }
 }

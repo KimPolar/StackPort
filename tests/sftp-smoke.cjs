@@ -250,18 +250,23 @@ function sftpChannel(channel, uploads) {
   });
   channel.on('RMDIR', (id, remotePath) => {
     uploads.deletions++;
-    const entries = directories.get(remotePath);
+    const comparison = uploads.comparisonDirectories.has(remotePath);
+    const entries = directories.get(remotePath) ?? uploads.comparisonDirectories.get(remotePath);
     if (!entries) return channel.status(id, code.NO_SUCH_FILE);
     if (path.posix.basename(remotePath) === '삭제 중 변경 폴더') {
       uploads.files.set(remotePath + '/.새 파일', { data: Buffer.from('keep'), attrs: { ...file('').attrs, size: 4 } });
     }
     if (entries.some(entry => entry.filename !== '.' && entry.filename !== '..')
-      || Array.from(uploads.files.keys()).some(name => path.posix.dirname(name) === remotePath)) {
+      || Array.from(uploads.files.keys()).some(name => path.posix.dirname(name) === remotePath)
+      || Array.from(uploads.comparisonDirectories.keys()).some(name => path.posix.dirname(name) === remotePath)) {
       return channel.status(id, code.FAILURE);
     }
-    directories.delete(remotePath);
-    const parent = directories.get(path.posix.dirname(remotePath));
-    parent.splice(parent.findIndex(entry => entry.filename === path.posix.basename(remotePath)), 1);
+    if (comparison) uploads.comparisonDirectories.delete(remotePath);
+    else {
+      directories.delete(remotePath);
+      const parent = directories.get(path.posix.dirname(remotePath));
+      parent.splice(parent.findIndex(entry => entry.filename === path.posix.basename(remotePath)), 1);
+    }
     channel.status(id, code.OK);
   });
 }
@@ -1197,8 +1202,8 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     if (event.operation === 'sftp.delete') assert.equal(event.policy, 'sftp-delete-preview-prod-required');
     assert.equal(event.actor, 'local');
     assert.equal(event.object_name, null);
-    if (event.operation === 'sftp.sync') {
-      assert.equal(event.policy, 'sftp-pinned-host-sync-verified-plan');
+    if (event.operation === 'sftp.sync' || event.operation === 'sftp.sync.delete') {
+      assert.equal(event.policy, event.operation === 'sftp.sync' ? 'sftp-pinned-host-sync-verified-plan' : 'sftp-pinned-host-sync-mirror-delete-confirmed');
       if (event.outcome === 'started') assert.equal(event.affected_count, null);
     } else {
       assert.equal(event.affected_count, event.outcome === 'succeeded' && !event.operation.endsWith('.cancel') ? 1 : null);
@@ -1207,6 +1212,8 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
   }
   assert.deepEqual(fileEvents.filter(event => event.operation === 'sftp.sync' && event.outcome === 'failed')
     .map(event => event.affected_count).sort(), [1, 1, 4]);
+  assert.deepEqual(fileEvents.filter(event => event.operation === 'sftp.sync.delete' && event.outcome === 'failed')
+    .map(event => event.affected_count).sort(), [3, 3]);
   const serialized = JSON.stringify(fileEvents);
   for (const privateValue of [localPath, '/home/stackport', '새 원격 파일.bin', '새 테스트 폴더', '변경한 파일.bin', '변경한 폴더', '전송.bin', '동일 폴더 복사.bin', '비어 있는 폴더', '빈 복사본.txt', '편집 원본.txt', '편집 내용 유지', password, passphrase]) {
     assert.equal(serialized.includes(privateValue), false);
@@ -1223,6 +1230,7 @@ async function verifyFileAudit(page, command, project, profile, localPath) {
     expected.push({ action, state: '완료' }, { action, state: '실패' });
   }
   expected.push({ action: 'SFTP 폴더 동기화', state: '시작' }, { action: 'SFTP 폴더 동기화', state: '실패' });
+  expected.push({ action: 'SFTP 폴더 동기화 · 삭제 포함', state: '시작' }, { action: 'SFTP 폴더 동기화 · 삭제 포함', state: '실패' });
   const history = page.locator('.audit-card .audit-list');
   const older = page.getByRole('button', { name: '이전 기록 더 보기', exact: true });
   await history.waitFor();
@@ -1607,6 +1615,7 @@ async function verifySyncAdditions(page, remote, localPane, local, uploads) {
   await plan.getByRole('button', { name: '닫기', exact: true }).click();
   await comparison.getByRole('columnheader', { name: '상대 경로', exact: true }).waitFor();
   await verifySyncReplacements(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
+  await verifySyncDeletions(page, comparison, plan, localRoot, rootPath, uploads, remoteFile);
   await comparison.getByRole('button', { name: '닫기', exact: true }).click();
   await remote.getByRole('button', { name: '송신', exact: true }).waitFor();
   await localPane.getByRole('button', { name: '수신', exact: true }).waitFor();
@@ -1694,6 +1703,94 @@ async function verifySyncReplacements(page, comparison, plan, localRoot, remoteR
   assert.equal([...uploads.files.keys()].some(name => name.startsWith(remoteRoot) && name.includes('.stackport-upload-')), false);
   await plan.getByRole('button', { name: '닫기', exact: true }).click();
   await relative.waitFor();
+}
+
+async function verifySyncDeletions(page, comparison, plan, localRoot, remoteRoot, uploads, remoteFile) {
+  const previousDeletions = uploads.deletions;
+  const excluded = fs.readdirSync(localRoot);
+  const relative = comparison.getByRole('columnheader', { name: '상대 경로', exact: true });
+  const refresh = comparison.getByRole('button', { name: '다시 비교', exact: true });
+  const result = plan.getByRole('table', { name: '동기화 실행 결과', exact: true });
+  const resultRow = name => result.getByRole('row').filter({ has: page.getByRole('rowheader', { name, exact: true }) });
+  const confirmation = page.getByRole('alertdialog', { name: '동기화 계획 미리보기', exact: true });
+  const start = confirmation.getByRole('button', { name: '확인하고 시작', exact: true });
+  function localFile(name, data) {
+    const destination = path.join(localRoot, name);
+    fs.writeFileSync(destination, data);
+    fs.utimesSync(destination, 1700000200, 1700000200);
+  }
+  async function open(direction, exclude) {
+    await refresh.click();
+    await relative.waitFor();
+    await comparison.getByRole('button', { name: '동기화 계획', exact: true }).click();
+    await plan.getByRole('combobox', { name: '동기화 방향', exact: true }).selectOption(direction);
+    await plan.getByRole('textbox', { name: '제외 패턴', exact: true }).fill([...excluded, '*.tmp', ...exclude].join('\n'));
+    await plan.getByRole('checkbox', { name: '대상에만 있는 항목을 삭제 후보에 포함', exact: true }).check();
+  }
+  async function verify(candidates, ready, held) {
+    await plan.getByRole('button', { name: `삭제 후보 검증 (${candidates})`, exact: true }).click();
+    await plan.getByText(`삭제 검증 ${ready}개 완료 · 보존 ${held}개`, { exact: false }).waitFor();
+    await plan.getByRole('button', { name: `동기화 실행 (${ready})`, exact: true }).click();
+    assert.equal(await start.isEnabled(), false);
+  }
+  async function finish() {
+    await plan.getByRole('button', { name: '닫기', exact: true }).click();
+    await relative.waitFor();
+  }
+
+  const remoteBase = '삭제 시험';
+  fs.mkdirSync(path.join(localRoot, remoteBase));
+  for (const suffix of ['', '/원격 폴더', '/빈폴더 경합', '/보존 폴더']) {
+    uploads.comparisonDirectories.set(`${remoteRoot}/${remoteBase}${suffix}`, []);
+  }
+  for (const name of ['버릴 파일.bin', '원격 폴더/아이.bin', '원격 대상 경합.bin', '원격 기준 생김.bin', '검증 전 변경.bin', '보존 폴더/keep.tmp']) {
+    remoteFile(`${remoteBase}/${name}`, 'before');
+  }
+  await open('upload', []);
+  remoteFile(`${remoteBase}/검증 전 변경.bin`, 'changed before reading');
+  await verify(7, 6, 1);
+  const production = confirmation.getByRole('textbox', { name: '운영 연결 확인', exact: true });
+  const permanent = confirmation.getByRole('textbox', { name: '영구 삭제 확인', exact: true });
+  await permanent.fill('삭제');
+  assert.equal(await start.isEnabled(), false);
+  await production.fill('PROD');
+  localFile(`${remoteBase}/원격 기준 생김.bin`, 'new source');
+  uploads.files.get(`${remoteRoot}/${remoteBase}/원격 대상 경합.bin`).data = Buffer.from('edited');
+  remoteFile(`${remoteBase}/빈폴더 경합/.숨긴 조각`, 'new child');
+  await start.click();
+  await plan.getByText('완료 3개 · 실패 3개 · 건너뜀 0개', { exact: true }).waitFor();
+  await resultRow(`${remoteBase}/원격 폴더`).getByText('영구 삭제', { exact: true }).waitFor();
+  await resultRow(`${remoteBase}/원격 기준 생김.bin`).getByText(/같은 경로가 생겼습니다/).waitFor();
+  await resultRow(`${remoteBase}/원격 대상 경합.bin`).getByText(/삭제 대상이 바뀌었습니다/).waitFor();
+  await resultRow(`${remoteBase}/빈폴더 경합`).getByText(/빈 폴더만 삭제/).waitFor();
+  assert.equal(uploads.files.has(`${remoteRoot}/${remoteBase}/버릴 파일.bin`), false);
+  assert.equal(uploads.files.has(`${remoteRoot}/${remoteBase}/원격 폴더/아이.bin`), false);
+  assert.equal(uploads.comparisonDirectories.has(`${remoteRoot}/${remoteBase}/원격 폴더`), false);
+  for (const name of ['원격 기준 생김.bin', '원격 대상 경합.bin', '빈폴더 경합/.숨긴 조각', '검증 전 변경.bin', '보존 폴더/keep.tmp']) {
+    assert.equal(uploads.files.has(`${remoteRoot}/${remoteBase}/${name}`), true);
+  }
+  assert.equal(uploads.deletions, previousDeletions + 3);
+  uploads.deletions = previousDeletions;
+  await finish();
+
+  const localBase = '로컬 삭제 시험';
+  fs.mkdirSync(path.join(localRoot, localBase, '로컬 폴더'), { recursive: true });
+  uploads.comparisonDirectories.set(`${remoteRoot}/${localBase}`, []);
+  for (const name of ['버릴 파일.txt', '로컬 폴더/아이.txt', '기준 다시 생김.txt', '대상 변경.txt']) localFile(`${localBase}/${name}`, 'before');
+  await open('download', [remoteBase]);
+  await verify(5, 5, 0);
+  assert.equal(await production.count(), 0);
+  await permanent.fill('삭제');
+  remoteFile(`${localBase}/기준 다시 생김.txt`, 'new source');
+  localFile(`${localBase}/대상 변경.txt`, 'edited');
+  await start.click();
+  await plan.getByText('완료 3개 · 실패 2개 · 건너뜀 0개', { exact: true }).waitFor();
+  await resultRow(`${localBase}/로컬 폴더`).getByText('영구 삭제', { exact: true }).waitFor();
+  assert.equal(fs.existsSync(path.join(localRoot, localBase, '버릴 파일.txt')), false);
+  assert.equal(fs.existsSync(path.join(localRoot, localBase, '로컬 폴더')), false);
+  assert.equal(fs.readFileSync(path.join(localRoot, localBase, '기준 다시 생김.txt'), 'utf8'), 'before');
+  assert.equal(fs.readFileSync(path.join(localRoot, localBase, '대상 변경.txt'), 'utf8'), 'edited');
+  await finish();
 }
 
 async function verifyPreviews(page, remote, local) {

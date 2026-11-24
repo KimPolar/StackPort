@@ -70,10 +70,11 @@ struct DigestReader {
 }
 
 impl DigestReader {
-    fn new(size: u64) -> Self {
+    fn new(size: u64, preview: bool) -> Self {
         Self {
             sha: Sha256::new(),
-            bytes: (size <= MAX_DIFFERENCE_BYTES).then(|| Vec::with_capacity(size as usize)),
+            bytes: (preview && size <= MAX_DIFFERENCE_BYTES)
+                .then(|| Vec::with_capacity(size as usize)),
         }
     }
 
@@ -137,20 +138,39 @@ pub(super) async fn digest_remote_contents(
     path: &SftpString,
     listed: &FileAttributes,
 ) -> Result<FileDigest> {
+    digest_remote(files, path, listed, true).await
+}
+
+pub(super) async fn remote_delete_sha256(
+    files: &RawSftpSession,
+    path: &SftpString,
+    listed: &FileAttributes,
+) -> Result<String> {
+    Ok(digest_remote(files, path, listed, false).await?.sha256)
+}
+
+async fn digest_remote(
+    files: &RawSftpSession,
+    path: &SftpString,
+    listed: &FileAttributes,
+    bounded: bool,
+) -> Result<FileDigest> {
     let size = remote_file_size(listed)?;
-    check_size(size)?;
+    if bounded {
+        check_size(size)?;
+    }
     let handle = request(files.open(path.clone(), OpenFlags::READ, FileAttributes::empty()))
         .await
         .map_err(file_error)?
         .handle;
-    let digest = tokio::time::timeout(BROWSE_TIMEOUT, async {
+    let read = async {
         let opened = request(files.fstat(handle.clone()))
             .await
             .map_err(file_error)?
             .attrs;
         check_remote_snapshot(listed, &opened, size)?;
         let mut offset = 0;
-        let mut digest = DigestReader::new(size);
+        let mut digest = DigestReader::new(size, bounded);
         while offset < size {
             let amount = (size - offset).min(u64::from(CHUNK_SIZE)) as u32;
             let data = read_chunk(files, &handle, offset, amount).await?;
@@ -168,15 +188,26 @@ pub(super) async fn digest_remote_contents(
             .attrs;
         check_remote_snapshot(listed, &current, size)?;
         Ok::<_, String>(digest.finish())
-    })
-    .await;
+    };
+    let digest = if bounded {
+        tokio::time::timeout(BROWSE_TIMEOUT, read)
+            .await
+            .unwrap_or_else(|_| Err("파일 내용 비교 시간이 초과되었습니다.".into()))
+    } else {
+        read.await
+    };
     let closed = request(files.close(handle)).await.map_err(file_error);
-    let digest = digest.map_err(|_| "파일 내용 비교 시간이 초과되었습니다.")??;
+    let digest = digest?;
     closed?;
     Ok(digest)
 }
 
 fn check_listing(source: &ComparedFile, size: u64, modified: Option<u64>) -> Result<()> {
+    check_listing_metadata(source, size, modified)?;
+    check_size(size)
+}
+
+fn check_listing_metadata(source: &ComparedFile, size: u64, modified: Option<u64>) -> Result<()> {
     if source
         .size
         .as_ref()
@@ -185,7 +216,7 @@ fn check_listing(source: &ComparedFile, size: u64, modified: Option<u64>) -> Res
     {
         return Err("목록을 읽은 뒤 파일이 변경되었습니다. 폴더를 다시 비교하세요.".into());
     }
-    check_size(size)
+    Ok(())
 }
 
 fn check_size(size: u64) -> Result<()> {
@@ -196,22 +227,29 @@ fn check_size(size: u64) -> Result<()> {
 }
 
 fn digest_local_file(source: &ComparedFile) -> Result<FileDigest> {
+    digest_local(source, true)
+}
+
+fn digest_local(source: &ComparedFile, bounded: bool) -> Result<FileDigest> {
     let mut file = open_local_file(&source.location)?;
     let listed = file
         .metadata()
         .map_err(|_| "파일 속성을 읽을 수 없습니다.")?;
     let size = listed.len();
     let modified = listed.modified().ok();
-    check_listing(
+    check_listing_metadata(
         source,
         size,
         modified
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|time| time.as_secs()),
     )?;
-    let mut reader = (&mut file).take(size + 1);
+    if bounded {
+        check_size(size)?;
+    }
+    let mut reader = (&mut file).take(size.saturating_add(1));
     let mut buffer = [0; CHUNK_SIZE as usize];
-    let mut digest = DigestReader::new(size);
+    let mut digest = DigestReader::new(size, bounded);
     let mut received = 0;
     loop {
         let count = reader
@@ -238,6 +276,18 @@ pub(super) fn local_sha256(path: &str, size: u64, modified: Option<u64>) -> Resu
         size: Some(size.to_string()),
         modified,
     })?
+    .sha256)
+}
+
+pub(super) fn local_delete_sha256(path: &str, size: u64) -> Result<String> {
+    Ok(digest_local(
+        &ComparedFile {
+            location: path.into(),
+            size: Some(size.to_string()),
+            modified: None,
+        },
+        false,
+    )?
     .sha256)
 }
 

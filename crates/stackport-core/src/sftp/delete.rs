@@ -153,17 +153,24 @@ async fn delete_confirmed(files: &RawSftpSession, pending: PendingDelete) -> Res
                 .into(),
         );
     }
-    let directory = before.is_dir();
+    remove_remote_item(files, &pending.path, before.is_dir()).await
+}
+
+pub(super) async fn remove_remote_item(
+    files: &RawSftpSession,
+    path: &SftpString,
+    directory: bool,
+) -> Result<()> {
     let result = if directory {
-        request(files.rmdir(pending.path.clone())).await
+        request(files.rmdir(path.clone())).await
     } else {
-        request(files.remove(pending.path.clone())).await
+        request(files.remove(path.clone())).await
     };
     match result {
         Ok(_) => Ok(()),
         Err(SftpError::Status(status)) => {
             if directory && status.status_code == StatusCode::Failure {
-                ensure_empty_directory(files, &pending.path).await?;
+                ensure_empty_directory(files, path).await?;
             }
             Err(file_error(SftpError::Status(status)))
         }
@@ -173,7 +180,10 @@ async fn delete_confirmed(files: &RawSftpSession, pending: PendingDelete) -> Res
     }
 }
 
-async fn ensure_empty_directory(files: &RawSftpSession, path: &SftpString) -> Result<()> {
+pub(super) async fn ensure_empty_directory(
+    files: &RawSftpSession,
+    path: &SftpString,
+) -> Result<()> {
     let handle = request(files.opendir(path.clone()))
         .await
         .map_err(file_error)?

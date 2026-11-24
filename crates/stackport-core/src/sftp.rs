@@ -11,6 +11,7 @@ mod mutation;
 mod preview;
 mod remote_stage;
 mod sync;
+mod sync_delete;
 mod sync_replace;
 mod transfer;
 mod upload;
@@ -22,6 +23,7 @@ pub use folder_tree::{list_local_tree, FolderTree};
 pub use mutation::{SftpEntrySource, SftpMutationReport};
 pub use preview::{preview_local_file, FilePreview};
 pub use sync::{SyncPlan, SyncProgress, SyncReport};
+pub use sync_delete::{SyncDeleteInput, SyncDeletePreview};
 pub use transfer::SftpTransferProgress;
 use transfer::SftpTransferOutcome;
 
@@ -146,6 +148,7 @@ struct FilesSession {
     files: RawSftpSession,
     operation: AsyncMutex<()>,
     pending_delete: Mutex<Option<delete::PendingDelete>>,
+    pending_sync_delete: Mutex<Option<sync_delete::PendingSyncDelete>>,
     pending_edit: Mutex<Option<editor::PendingEdit>>,
     transfers: Mutex<transfer::TransferState>,
     fsync_supported: bool,
@@ -358,6 +361,7 @@ async fn start_session(
             files,
             operation: AsyncMutex::new(()),
             pending_delete: Mutex::new(None),
+            pending_sync_delete: Mutex::new(None),
             pending_edit: Mutex::new(None),
             transfers: Mutex::new(transfer::TransferState::default()),
             fsync_supported: version.extensions.get("fsync@openssh.com").is_some_and(|value| value == "1"),
