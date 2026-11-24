@@ -29,6 +29,12 @@ async function main() {
     const isolatedPath = path.join(root, 'completion-isolated.sqlite');
     const isolated = new DatabaseSync(isolatedPath);
     isolated.exec('CREATE TABLE source (value TEXT); CREATE VIEW "web view" AS SELECT value FROM source;');
+    isolated.exec(`
+      CREATE TABLE departments (dept_id INTEGER PRIMARY KEY, dept_name TEXT);
+      CREATE TABLE staff (staff_id INTEGER PRIMARY KEY, department_id INTEGER REFERENCES departments(dept_id));
+      INSERT INTO departments VALUES (1, '영업'), (2, '기획'), (3, '운영');
+      INSERT INTO staff VALUES (1, 1), (2, 1), (3, 2);
+    `);
     isolated.close();
     await invoke('create_sqlite_profile', { projectId: project.id, name: '격리 DB', path: isolatedPath, environment: 'DEV' });
     await page.reload();
@@ -336,8 +342,9 @@ async function main() {
     await verifySqlResultPins(page, editor, sqlTabs, add, exportJson);
     await verifySqlTemplates(page, editor, sqlTabs);
     await verifySqlHistory(page, editor, sqlTabs, dev, prod);
+    await verifySqlQueryBuilder(page, editor, sqlTabs);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, history, plans, batches, result pins, comparisons and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, query builder, plans, batches, result pins, comparisons and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -905,6 +912,64 @@ async function verifySqlHistory(page, editor, sqlTabs, dev, prod) {
   await open.click();
   await dialog.getByText('이 연결의 최근 실행 기록이 없습니다.', { exact: true }).waitFor();
   await close();
+}
+
+async function verifySqlQueryBuilder(page, editor, sqlTabs) {
+  await page.getByRole('button', { name: /격리 DB DEV/ }).click();
+  const previous = await sqlTabs.getByRole('tab', { selected: true }).getAttribute('id');
+  const source = "SELECT '보존할 쿼리 빌더 초안';";
+  await editor.fill(source);
+  await page.getByRole('button', { name: '쿼리 빌더', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '쿼리 빌더', exact: true });
+  const relations = dialog.getByRole('region', { name: '조회 테이블 관계', exact: true });
+  const button = name => dialog.getByRole('button', { name, exact: true });
+  const combo = name => dialog.getByRole('combobox', { name, exact: true });
+  const preview = dialog.getByLabel('생성된 조회 SQL', { exact: true });
+  await button('departments 추가').press('Enter');
+  await relations.getByRole('button', { name: 't1 테이블 제거', exact: true }).waitFor();
+  await button('staff 추가').dragTo(relations);
+  await combo('조인 1 유형').selectOption('LEFT');
+  assert.equal(await combo('조인 1 관계 1 기준 열').inputValue(), JSON.stringify('dept_id'));
+  assert.equal(await combo('조인 1 관계 1 연결 열').inputValue(), JSON.stringify('department_id'));
+
+  await button('조회 열 추가').click();
+  await combo('조회 열 1 원본').selectOption({ label: 'dept_name' });
+  await button('조회 열 추가').click();
+  await combo('조회 열 2 함수').selectOption('COUNT');
+  await combo('조회 열 2 원본').selectOption({ label: 'staff_id' });
+  await dialog.getByRole('textbox', { name: '조회 열 2 별칭', exact: true }).fill('staff_count');
+  await dialog.getByText('WHERE', { exact: true }).click();
+  await button('WHERE 조건 추가').click();
+  await combo('WHERE 1 연산자').selectOption('>=');
+  await dialog.getByText('GROUP BY와 HAVING', { exact: true }).click();
+  await button('그룹 열 추가').click();
+  await combo('GROUP BY 1 열').selectOption({ label: 'dept_name' });
+  await button('HAVING 조건 추가').click();
+  await dialog.getByText('ORDER BY와 LIMIT', { exact: true }).click();
+  await button('정렬 열 추가').click();
+  await combo('ORDER BY 1 열').selectOption({ label: 'staff_count' });
+  await combo('ORDER BY 1 방향').selectOption('DESC');
+  await dialog.getByRole('textbox', { name: 'LIMIT', exact: true }).fill('1');
+  const generated = await preview.textContent();
+  assert.match(generated, /LEFT JOIN main\."staff" AS t2\n  ON t1\."dept_id" = t2\."department_id"/);
+  assert.match(generated, /WHERE t1\."dept_id" >= :where_1\nGROUP BY t1\."dept_name"/);
+  assert.match(generated, /HAVING COUNT\(t2\."staff_id"\) >= :having_1\nORDER BY COUNT\(t2\."staff_id"\) DESC\nLIMIT 1;/);
+  await button('SQL을 새 탭에서 열기').click();
+  assert.equal(await editor.inputValue(), generated);
+  const generatedTab = await sqlTabs.getByRole('tab', { selected: true }).getAttribute('id');
+  await sqlTabs.locator(`[id="${previous}"]`).click();
+  assert.equal(await editor.inputValue(), source);
+  await sqlTabs.locator(`[id="${generatedTab}"]`).click();
+  await editor.press('Control+Enter');
+  for (const [name, value] of [[':where_1', '1'], [':having_1', '2']]) {
+    await page.getByLabel(`${name} 형식`, { exact: true }).selectOption('integer');
+    await page.getByLabel(`${name} 값`, { exact: true }).fill(value);
+  }
+  await page.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await page.getByRole('cell', { name: '영업', exact: true }).waitFor();
+  const grid = page.locator('.database-results');
+  assert.equal(await grid.getByRole('cell', { name: '기획', exact: true }).count(), 0);
+  await grid.getByRole('cell', { name: '2', exact: true }).waitFor();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

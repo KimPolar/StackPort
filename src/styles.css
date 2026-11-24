@@ -340,6 +340,34 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .sql-history-detail pre { min-height: 64px; max-height: 35vh; padding: 9px; overflow: auto; border: 1px solid #dce7df; border-radius: 5px; background: #f6f9f7; font: 12px/1.6 Consolas, monospace; }
 @media (max-width: 580px) { .sql-history-layout { grid-template-columns: 1fr; } .sql-history-list { max-height: 24vh; } }
 @media (forced-colors: active) { .sql-history-list button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -1px; } }
+.dialog.sql-query-builder { width: min(1020px, calc(100vw - 32px)); }
+.sql-builder-body { padding: 0 21px 21px; color: #435e50; font-size: 12px; }
+.sql-builder-layout { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(0, 3fr); gap: 12px; }
+.sql-builder-catalog, .sql-builder-sources { min-width: 0; padding: 9px; border: 1px solid #dce7df; border-radius: 6px; background: #f8fbf9; }
+.sql-builder-catalog > input { width: 100%; }
+.sql-builder-catalog ul { display: grid; gap: 4px; max-height: 35vh; overflow: auto; margin: 7px 0 0; padding: 0; list-style: none; }
+.sql-builder-catalog li button { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px; width: 100%; padding: 6px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: #30473b; text-align: start; overflow-wrap: anywhere; }
+.sql-builder-catalog li button:not(:disabled):hover { border-color: #d2e3db; background: white; }
+.sql-builder-catalog li button:disabled { opacity: .55; }
+.sql-builder-sources { display: grid; align-content: start; gap: 7px; min-height: 80px; max-height: 36vh; overflow: auto; }
+.sql-builder-source { display: grid; gap: 6px; min-width: 0; padding: 7px; border: 1px solid #dce7df; border-radius: 5px; background: white; }
+.sql-builder-source-heading, .sql-builder-row, .sql-builder-relation, .sql-builder-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; }
+.sql-builder-source-heading { justify-content: space-between; }
+.sql-builder-source-name { max-width: 100%; overflow-wrap: anywhere; }
+.sql-builder-source-name code { padding: 2px 4px; border-radius: 4px; background: #e3f0e9; color: #155e4e; }
+.sql-builder-relation { padding: 6px; border-radius: 4px; background: #f0f6f2; }
+.sql-builder-join-edge { flex: 0 1 15px; min-width: 9px; border-top: 1px solid #7c9e8c; }
+.sql-builder-row > label { display: grid; min-width: 0; gap: 3px; }
+.sql-builder-body :is(input, select) { max-width: 100%; min-height: 30px; padding: 0 7px; border: 1px solid #dce7df; border-radius: 4px; background: white; color: #30473b; }
+.sql-builder-row > input, .sql-builder-inline input { width: min(150px, 100%); }
+.sql-builder-clauses { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); align-items: start; gap: 7px; margin: 10px 0; }
+.sql-builder-clauses details { min-width: 0; padding: 7px; border: 1px solid #dce7df; border-radius: 5px; }
+.sql-builder-clauses summary { cursor: pointer; font-weight: 600; }
+.sql-builder-rows { display: grid; justify-items: start; gap: 7px; min-width: 0; }
+.sql-builder-clauses .sql-builder-rows { margin-top: 7px; }
+.sql-builder-rows .form-note { margin: 0; }
+.sql-builder-body pre { max-height: 30vh; overflow: auto; margin: 8px 0 0; padding: 9px; border: 1px solid #dce7df; border-radius: 5px; background: #f6f9f7; font: 12px/1.6 Consolas, monospace; }
+@media (max-width: 570px) { .sql-builder-layout { grid-template-columns: minmax(0, 1fr); } .sql-builder-catalog ul { max-height: 18vh; } }
 .csv-options { display: grid; gap: 8px; margin: 12px 0; padding: 0; border: 0; color: #526a5f; font-size: 12px; }
 .csv-options label { display: flex; align-items: center; gap: 6px; }
 .network-body { overflow: auto; }

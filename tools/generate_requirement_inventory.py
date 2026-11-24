@@ -101,6 +101,7 @@ PARTIAL = {
     "SP-SQ-008": "각 SQL 탭의 개별·일괄 조회 결과 보관, 문장별 시간·페이지·내보내기, 오류나 중단 위치로 이동",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
+    "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
     "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
@@ -259,6 +260,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "src/main.tsx; crates/stackport-core/src/query.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-013":
                 evidence = "src/main.tsx; src/SqlResultComparison.tsx; src/sqlResults.ts; tests/sql-results.test.mjs; tests/sql-file-smoke.cjs"
+            elif requirement_id == "SP-SQ-012":
+                evidence = "src/SqlQueryBuilderDialog.tsx; src/SqlBuilderClauses.tsx; src/sqlQueryBuilder.ts; tests/sql-query-builder.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-017":
                 evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; src/SqlHistoryDialog.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-023":

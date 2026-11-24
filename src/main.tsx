@@ -98,6 +98,7 @@ const TerminalWorkspace = React.lazy(() => import("./TerminalWorkspace").then(mo
 const SqlResultComparison = React.lazy(() => import("./SqlResultComparison").then(module => ({ default: module.SqlResultComparison })));
 const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(module => ({ default: module.SqlTemplateLibrary })));
 const SqlHistoryDialog = React.lazy(() => import("./SqlHistoryDialog").then(module => ({ default: module.SqlHistoryDialog })));
+const SqlQueryBuilderDialog = React.lazy(() => import("./SqlQueryBuilderDialog").then(module => ({ default: module.SqlQueryBuilderDialog })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -155,6 +156,7 @@ function App() {
   const [templateLibrary, setTemplateLibrary] = useState<{ projectId: string; source: string; selection: boolean } | null>(null);
   const [sqlHistory, setSqlHistory] = useState<SqlHistoryEntry[]>([]);
   const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
+  const [sqlBuilderProfile, setSqlBuilderProfile] = useState<string | null>(null);
   const nextSqlHistoryId = useRef(0);
   const pendingSqlHistory = useRef(new Map<number, string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
@@ -357,6 +359,7 @@ function App() {
     setSqlSelection(null);
     setParameterRequest(null);
     setSqlHistoryProfile(null);
+    setSqlBuilderProfile(null);
     setExportReport(null);
     detailsGeneration.current++; setSelectedObject(null); setObjectDetails(null); setDetailsError(""); setDetailsLoading(false);
     setBackupReport(null);
@@ -692,6 +695,10 @@ function App() {
     if (desktop && profile) setSqlHistoryProfile(profile.id);
   }
 
+  function openSqlBuilder() {
+    if (desktop && profile) setSqlBuilderProfile(profile.id);
+  }
+
   function finishSqlFile(action: SqlFileAction, contents: SqlDocument, path: string) {
     if (action.mode === "open") {
       if (action.target.profileId === profileId) {
@@ -993,6 +1000,8 @@ function App() {
     });
     if (desktop && profile) commands.push({ id: "open:sql-history", title: "최근 SQL", group: "작업",
       keywords: "query history recent sql", Icon: History, run: openSqlHistory });
+    if (desktop && profile) commands.push({ id: "open:sql-builder", title: "쿼리 빌더", group: "작업",
+      keywords: "query builder join group select sql", Icon: Table2, run: openSqlBuilder });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
         id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
@@ -1080,6 +1089,7 @@ function App() {
       <button type="button" className="secondary small" disabled={!sqlDraft} onClick={() => openSqlFileDialog("save")}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
       <button type="button" className="secondary small" onClick={openSqlTemplates}><FileCode2 size={14} aria-hidden /> SQL 템플릿</button>
       <button type="button" className="secondary small" onClick={openSqlHistory}><History size={14} aria-hidden /> 최근 SQL</button>
+      <button type="button" className="secondary small" onClick={openSqlBuilder}><Table2 size={14} aria-hidden /> 쿼리 빌더</button>
       {sqlDraft && <button type="button" className="secondary small" title="F12" disabled={!sql.trim()} onClick={openSqlDefinition}>정의 보기</button>}
       {sqlDraft && <button type="button" className="secondary small" title="F2" disabled={!sql.trim()} onClick={openSqlAliasRename}>별칭 변경</button>}
       {sqlDraft && <button type="button" className="secondary small" title="Ctrl+Alt+F" disabled={!sql.trim()} onClick={openSqlFormat}>SQL 서식</button>}
@@ -1433,6 +1443,12 @@ function App() {
         onClear={() => clearSqlHistory(new Set([profile.id]))}
         onOpen={text => { setSqlHistoryProfile(null); openSqlDraft(text); }}
         onClose={() => setSqlHistoryProfile(null)} />
+    </React.Suspense>}
+    {profile && sqlBuilderProfile === profile.id && <React.Suspense fallback={null}>
+      <SqlQueryBuilderDialog key={profile.id} profileId={profile.id} objects={objects}
+        connection={`${profile.name} · ${profile.environment}`}
+        onOpen={text => { setSqlBuilderProfile(null); openSqlDraft(text); }}
+        onClose={() => setSqlBuilderProfile(null)} />
     </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
