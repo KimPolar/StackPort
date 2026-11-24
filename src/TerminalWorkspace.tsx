@@ -4,17 +4,18 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { ChevronDown, ChevronUp, FileDown, Plug, Plus, Search, TerminalSquare, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Ellipsis, FileDown, Pin, Plug, Plus, Search, TerminalSquare, X } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
+import { TerminalTabDialog } from "./TerminalTabDialog";
 import "@xterm/xterm/css/xterm.css";
 
 type Shell = "powershell" | "cmd" | "ssh";
 type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
-type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean };
+type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean; pinned: boolean };
 type SshKey = { algorithm: string; fingerprint: string };
 type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
@@ -27,6 +28,8 @@ const tabName = (tab: Tab) => `${shellName(tab.shell)} ${tab.number}${tab.target
 export function TerminalWorkspace({ visible, onCountChange, request, onRequestHandled }: { visible: boolean; onCountChange: (count: number) => void; request: SshOpenRequest | null; onRequestHandled: () => void }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState("");
+  const [tabDialogOpen, setTabDialogOpen] = useState(false);
+  const [dropTarget, setDropTarget] = useState("");
   const [opening, setOpening] = useState(false);
   const [sshDialog, setSshDialog] = useState(false);
   const [dialogProfile, setDialogProfile] = useState<SshProfile | null>(null);
@@ -36,8 +39,11 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
   const tabsRef = useRef(tabs);
   const closingRef = useRef(new Set<string>());
   const openingRef = useRef(false);
+  const draggedTab = useRef("");
   const nextNumber = useRef(1);
   tabsRef.current = tabs;
+  const activeIndex = tabs.findIndex(tab => tab.id === activeId);
+  const activeTab = tabs[activeIndex];
 
   useEffect(() => { onCountChange(tabs.length + (opening ? 1 : 0) + (sshOpening ? 1 : 0)); }, [tabs.length, opening, sshOpening, onCountChange]);
   useEffect(() => {
@@ -55,7 +61,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 
   function addTerminal(terminal: TerminalInfo) {
     const number = nextNumber.current++;
-    setTabs(current => [...current, { ...terminal, number, exit: null, unreadOutput: false }]);
+    setTabs(current => [...current, { ...terminal, number, exit: null, unreadOutput: false, pinned: false }]);
     setActiveId(terminal.id);
   }
 
@@ -95,7 +101,49 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
       : current);
   }
 
+  function reorderTab(id: string, targetId: string) {
+    setTabs(current => {
+      const source = current.findIndex(tab => tab.id === id);
+      const target = current.findIndex(tab => tab.id === targetId);
+      if (source < 0 || target < 0 || source === target || current[source].pinned !== current[target].pinned) return current;
+      const reordered = [...current];
+      const [tab] = reordered.splice(source, 1);
+      reordered.splice(target, 0, tab);
+      return reordered;
+    });
+  }
+
+  function togglePinned(id: string) {
+    setTabs(current => {
+      const tab = current.find(item => item.id === id);
+      if (!tab) return current;
+      const remaining = current.filter(item => item.id !== id);
+      const firstUnpinned = remaining.findIndex(item => !item.pinned);
+      remaining.splice(firstUnpinned < 0 ? remaining.length : firstUnpinned, 0, { ...tab, pinned: !tab.pinned });
+      return remaining;
+    });
+  }
+
+  function openTabDialog(tab: Tab) {
+    setActiveId(tab.id);
+    setTabDialogOpen(true);
+  }
+
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const tab = tabs[index];
+    if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+      event.preventDefault();
+      openTabDialog(tab);
+      return;
+    }
+    if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      const target = tabs[index + (event.key === "ArrowLeft" ? -1 : 1)];
+      if (!target || target.pinned !== tab.pinned) return;
+      reorderTab(tab.id, target.id);
+      requestAnimationFrame(() => document.getElementById(`terminal-tab-${tab.id}`)?.focus());
+      return;
+    }
     const destination = event.key === "ArrowRight" ? (index + 1) % tabs.length
       : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
       : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
@@ -119,12 +167,48 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
     {opening && <p className="terminal-hint" role="status">터미널을 여는 중…</p>}
     {error && <div className="error-banner" role="alert">{error}</div>}
     {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} aria-hidden /><strong>열린 터미널이 없습니다</strong><span>상단에서 새 터미널을 열거나 탐색기에서 저장된 SSH 연결을 선택하세요.</span></div> : <div className="terminal-card">
-      <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} key={tab.id}>
-        <button role="tab" id={`terminal-tab-${tab.id}`} aria-label={tabName(tab)} aria-describedby={[tab.unreadOutput && `terminal-activity-${tab.id}`, tab.exit && `terminal-exit-tab-${tab.id}`].filter(Boolean).join(" ") || undefined} aria-selected={tab.id === activeId} aria-controls={`terminal-panel-${tab.id}`} tabIndex={tab.id === activeId ? 0 : -1} onKeyDown={event => moveTab(event, index)} onClick={() => setActiveId(tab.id)}><TerminalSquare size={14} /><span>{tabName(tab)}</span>{tab.unreadOutput && <small className="terminal-activity" id={`terminal-activity-${tab.id}`}>새 출력</small>}{tab.exit && <small id={`terminal-exit-tab-${tab.id}`}>종료</small>}</button>
-        <button className="terminal-close" aria-label={`${tabName(tab)} 터미널 닫기`} disabled={closing.includes(tab.id)} onClick={() => void closeTerminal(tab)}><X size={14} /></button>
-      </div>)}</div>
+      <div className="terminal-tab-strip">
+        <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div
+          className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} data-drop-target={tab.id === dropTarget || undefined} key={tab.id}>
+          <button type="button" role="tab" id={`terminal-tab-${tab.id}`} aria-label={tabName(tab)}
+            aria-describedby={[tab.pinned && `terminal-pin-${tab.id}`, tab.unreadOutput && `terminal-activity-${tab.id}`, tab.exit && `terminal-exit-tab-${tab.id}`].filter(Boolean).join(" ") || undefined}
+            aria-selected={tab.id === activeId} aria-controls={`terminal-panel-${tab.id}`} tabIndex={tab.id === activeId ? 0 : -1}
+            onKeyDown={event => moveTab(event, index)} onClick={() => setActiveId(tab.id)}
+            onContextMenu={event => { event.preventDefault(); openTabDialog(tab); }}
+            draggable={!closing.includes(tab.id)} onDragStart={event => {
+              draggedTab.current = tab.id;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("application/x-stackport-terminal-tab", "move");
+            }} onDragOver={event => {
+              const source = tabs.find(item => item.id === draggedTab.current);
+              if (!source || source.id === tab.id || source.pinned !== tab.pinned) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              setDropTarget(tab.id);
+            }} onDragLeave={() => setDropTarget(current => current === tab.id ? "" : current)}
+            onDragEnd={() => { draggedTab.current = ""; setDropTarget(""); }} onDrop={event => {
+              if (!draggedTab.current) return;
+              event.preventDefault();
+              reorderTab(draggedTab.current, tab.id);
+              draggedTab.current = "";
+              setDropTarget("");
+            }}>
+            {tab.pinned ? <><Pin size={14} aria-hidden /><span className="sr-only" id={`terminal-pin-${tab.id}`}>고정됨</span></> : <TerminalSquare size={14} aria-hidden />}
+            <span>{tabName(tab)}</span>
+            {tab.unreadOutput && <small className="terminal-activity" id={`terminal-activity-${tab.id}`}>새 출력</small>}
+            {tab.exit && <small id={`terminal-exit-tab-${tab.id}`}>종료</small>}
+          </button>
+          <button type="button" className="terminal-close" aria-label={`${tabName(tab)} 터미널 닫기`}
+            disabled={closing.includes(tab.id)} onClick={() => void closeTerminal(tab)}><X size={14} aria-hidden /></button>
+        </div>)}</div>
+        <button type="button" className="icon-button terminal-tab-menu" aria-label="터미널 탭 관리" aria-haspopup="dialog"
+          title="터미널 탭 관리" disabled={!activeTab} onClick={() => setTabDialogOpen(true)}><Ellipsis size={17} aria-hidden /></button>
+      </div>
       {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} onActivity={reportActivity} />)}
     </div>}
+    {tabDialogOpen && activeTab && <TerminalTabDialog name={tabName(activeTab)} pinned={activeTab.pinned}
+      canMoveLeft={tabs[activeIndex - 1]?.pinned === activeTab.pinned} canMoveRight={tabs[activeIndex + 1]?.pinned === activeTab.pinned}
+      onPin={() => togglePinned(activeTab.id)} onMove={offset => reorderTab(activeTab.id, tabs[activeIndex + offset].id)} onClose={() => setTabDialogOpen(false)} />}
     {sshDialog && <SshDialog profile={dialogProfile} onClose={() => setSshDialog(false)} onOpeningChange={setSshOpening} onOpened={terminal => { addTerminal(terminal); setSshDialog(false); }} />}
   </section>;
 }

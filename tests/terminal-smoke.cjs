@@ -157,6 +157,26 @@ async function main() {
   await page.getByRole('button', { name: '터미널', exact: true }).click();
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
 
+  const cmdTab = page.getByRole('tab', { name: 'CMD 1', exact: true });
+  const powershellTab = page.getByRole('tab', { name: 'PowerShell 2', exact: true });
+  const tabOrder = () => page.locator('.terminal-tabs [role="tab"]')
+    .evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label')).join(','));
+  await powershellTab.press('Alt+ArrowLeft');
+  if (await tabOrder() !== 'PowerShell 2,CMD 1') throw new Error('Keyboard reorder did not move the terminal tab.');
+  await powershellTab.dragTo(cmdTab);
+  if (await tabOrder() !== 'CMD 1,PowerShell 2') throw new Error('Dragging did not reorder the terminal tab.');
+  await powershellTab.press('Shift+F10');
+  const tabManager = page.getByRole('dialog', { name: '터미널 탭 관리', exact: true });
+  await tabManager.getByRole('button', { name: '탭 고정', exact: true }).click();
+  if (await tabOrder() !== 'PowerShell 2,CMD 1') throw new Error('Pinning did not move the tab into the pinned group.');
+  if (!await tabManager.getByRole('button', { name: '오른쪽으로 이동', exact: true }).isDisabled()) throw new Error('A pinned tab could leave its group without unpinning.');
+  await tabManager.getByRole('button', { name: '고정 해제', exact: true }).click();
+  await tabManager.getByRole('button', { name: '오른쪽으로 이동', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await tabManager.waitFor({ state: 'hidden' });
+  await cmdTab.click();
+  await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
+
   page.once('dialog', dialog => dialog.dismiss());
   await page.getByRole('button', { name: 'CMD 1 터미널 닫기' }).click();
   await page.getByRole('tab', { name: 'CMD 1' }).waitFor();
