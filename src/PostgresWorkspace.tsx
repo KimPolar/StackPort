@@ -12,6 +12,7 @@ import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } fro
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
+import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, postgresCopyCell, selectionColumnWidth, useGridRowSelection } from "./GridRowSelection";
 import { gridDisplay, gridTypeLabels, postgresGridValueType } from "./gridValuePresentation";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
@@ -289,8 +290,10 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const objects = useRead<ObjectPage>("postgres_objects", objectArgs);
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
   const result = page.data;
+  const rowSelection = useGridRowSelection(result, result?.rows.length ?? 0);
+  const selectedWidth = rowSelection.active ? selectionColumnWidth : 0;
   const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns,
-    result.row_delete ? rowActionWidth : 0);
+    (result.row_delete ? rowActionWidth : 0) + selectedWidth);
   const displayFormats = useMemo(() => new Map(grid.layout.active.map(column => [column.name, column.format])), [grid.layout.active]);
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
@@ -430,6 +433,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
       tabIndex={-1} ref={dataPanel}>
       {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
         <div className="sql-editor-actions">
+          {!structureOpen && Boolean(result?.rows.length) && <GridSelectionButton selection={rowSelection} disabled={page.loading} />}
           {result?.row_insert && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {result?.row_paste && !structureOpen && <button type="button" className="secondary small" disabled={page.loading || Boolean(unavailable)}
@@ -488,16 +492,23 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
             <pre tabIndex={0} aria-label="PostgreSQL 그리드 조회 SQL">{result.source}</pre>
             {result.parameter_types.length > 0 && <p>필터 값은 $1부터 순서대로 바인딩됩니다.</p>}
           </details>}
+          {rowSelection.active && Boolean(result.rows.length) && <GridCopyControls selection={rowSelection}
+            columns={result.columns.map(column => column.name)} startRow={rowPage * 100 + 1} disabled={page.loading}
+            readCell={(row, column) => postgresCopyCell(result.rows[row][column], result.columns[column].data_type)} />}
           {result.columns.length > 0 && <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL 데이터 스크롤">
             <table aria-label="PostgreSQL 데이터" style={geometry ? { tableLayout: "fixed", width: geometry.total } : undefined}>
-              {geometry && <colgroup>{geometry.widths.map((width, index) => <col key={index} style={{ width }} />)}
+              {geometry && <colgroup>{rowSelection.active && <col style={{ width: selectionColumnWidth }} />}
+                {geometry.widths.map((width, index) => <col key={index} style={{ width }} />)}
                 {result.row_delete && <col style={{ width: rowActionWidth }} />}</colgroup>}
-              <thead><tr>{result.columns.map((column, index) => <th key={column.name} scope="col"
+              <thead><tr>{rowSelection.active && <th scope="col" className="grid-row-select"><GridSelectPage selection={rowSelection} disabled={page.loading} /></th>}
+                {result.columns.map((column, index) => <th key={column.name} scope="col"
                 className={index < result.pinned_columns ? "grid-sticky-column" : undefined}
-                style={{ insetInlineStart: geometry?.pins[index] }}>
+                style={{ insetInlineStart: index < result.pinned_columns && geometry ? geometry.pins[index] + selectedWidth : undefined }}>
               {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
             </th>)}{result.row_delete && <th scope="col" className="postgres-row-actions">작업</th>}</tr></thead>
-              <tbody>{result.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => {
+              <tbody>{result.rows.map((row, index) => <tr key={index} data-grid-selected={rowSelection.rows.has(index) || undefined}>
+                {rowSelection.active && <td className="grid-row-select"><GridSelectRow selection={rowSelection} index={index} rowNumber={rowPage * 100 + index + 1} disabled={page.loading} /></td>}
+                {row.map((cell, column) => {
                 const field = result.columns[column];
                 const stamp = result.row_stamps?.[index];
                 const valueRow = result.value_rows?.[index];
@@ -510,7 +521,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                 const display = cell.value === null ? undefined : gridDisplay(cell.value, cell.truncated, displayFormats.get(field.name));
                 const type = grid.layout.typeColors ? postgresGridValueType(field.data_type, cell.value === null) : undefined;
                 return <td key={column} className={column < result.pinned_columns ? "grid-sticky-column" : undefined}
-                  style={{ insetInlineStart: geometry?.pins[column] }} data-grid-value-type={type}
+                  style={{ insetInlineStart: column < result.pinned_columns && geometry ? geometry.pins[column] + selectedWidth : undefined }} data-grid-value-type={type}
                   title={display !== undefined && display !== cell.value ? `원본 ${cell.value}` : type ? gridTypeLabels[type] : undefined}>
                   {canPreview || canEdit ? <div className="postgres-editable-cell">
                   <PostgresValue cell={cell} display={display} />

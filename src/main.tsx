@@ -17,6 +17,7 @@ import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQ
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
 import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
+import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, sqliteCopyCell, useGridRowSelection } from "./GridRowSelection";
 import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChangeResult } from "./RowChangeDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
@@ -1188,7 +1189,8 @@ function App() {
     : result?.columns.map((name, index) => ({ name, index, pinned: false, format: rawCellFormat })) ?? [];
   const declaredTypes = new Map(tableLayoutTarget && sqliteGrid.layout.typeColors
     ? objectDetails?.columns.map(column => [column.name, column.declared_type]) : undefined);
-  const rowNumberWidth = 50;
+  const rowSelection = useGridRowSelection(result, result?.rows.length ?? 0);
+  const rowNumberWidth = rowSelection.active ? 76 : 50;
   const actionWidth = 96;
   const sqliteGeometry = tableLayoutTarget && gridGeometry(displayColumns.map(column => column.name), sqliteGrid.layout.active,
     displayColumns.filter(column => column.pinned).length, rowNumberWidth + (canEditRows ? actionWidth : 0));
@@ -1407,6 +1409,7 @@ function App() {
           {result && <span className="result-count">{result.rows.length}개 행</span>}
         </div>
         <div className="results-actions">
+          {Boolean(result?.rows.length) && <GridSelectionButton selection={rowSelection} disabled={querying} />}
           {rowChangeTable && <button type="button" ref={rowAddButton} className="secondary small" disabled={querying}
             onClick={event => openRowChange({ kind: "insert" }, event.currentTarget)}><Plus size={14} aria-hidden /> 행 추가</button>}
           {rowChangeTable && <button type="button" className="secondary small" disabled={querying}
@@ -1495,18 +1498,23 @@ function App() {
           {!!currentRowReport.fields.length && <details><summary>저장된 행 보기</summary><RowChangeFields fields={currentRowReport.fields} /></details>}
         </div>}
         {sqliteGrid.error && <p className="form-note" role="status">{sqliteGrid.error}</p>}
-        {result ? <><div className="table-wrap"><table style={sqliteGeometry ? { tableLayout: "fixed", width: sqliteGeometry.total } : undefined}>
+        {result && rowSelection.active && Boolean(result.rows.length) && <GridCopyControls selection={rowSelection} disabled={querying}
+          columns={displayColumns.map(column => column.name)} startRow={result.page * 100 + 1}
+          readCell={(row, column) => sqliteCopyCell(result.rows[row][displayColumns[column].index])} />}
+        {result ? <><div className="table-wrap"><table className={rowSelection.active ? "with-row-selection" : undefined}
+          style={sqliteGeometry ? { tableLayout: "fixed", width: sqliteGeometry.total } : undefined}>
           {sqliteGeometry && <colgroup><col style={{ width: rowNumberWidth }} />
             {sqliteGeometry.widths.map((width, index) => <col key={index} style={{ width }} />)}
             {canEditRows && <col style={{ width: actionWidth }} />}</colgroup>}
-          <thead><tr><th scope="col" className="row-number">#</th>
+          <thead><tr><th scope="col" className="row-number">{rowSelection.active && <GridSelectPage selection={rowSelection} disabled={querying} />}#</th>
             {displayColumns.map((column, position) => <th scope="col" key={column.index} title={column.name}
               className={column.pinned ? "grid-sticky-column" : undefined} style={{ insetInlineStart: sqliteGeometry?.pins[position] }}>{column.name}</th>)}
             {canEditRows && <th scope="col">작업</th>}</tr></thead>
           <tbody>{result.rows.map((row, rowIndex) => {
             const keys = keysForRow(row);
             const rowNumber = result.page * 100 + rowIndex + 1;
-            return <tr key={rowIndex}><td className="row-number">{rowNumber}</td>
+            return <tr key={rowIndex} data-grid-selected={rowSelection.rows.has(rowIndex) || undefined}><td className="row-number">
+              {rowSelection.active && <GridSelectRow selection={rowSelection} index={rowIndex} rowNumber={rowNumber} disabled={querying} />}{rowNumber}</td>
               {displayColumns.map((column, position) => {
                 const cell = row[column.index];
                 const display = gridDisplay(cell.display, cell.truncated, column.format);

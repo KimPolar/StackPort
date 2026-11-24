@@ -170,6 +170,28 @@ async function main() {
   await displayExport.getByRole('button', { name: 'CSV 저장', exact: true }).click();
   await displayExport.waitFor({ state: 'detached' });
   assert.match(fs.readFileSync(originalCsv, 'utf8'), /9007199254740993,999\.995,"2026-01-02T23:24:25\.123\+09:00"/);
+  const selectGridRows = page.getByRole('button', { name: '행 선택', exact: true });
+  const copyGridRows = page.getByRole('button', { name: '선택한 행 복사', exact: true });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => {
+      window.stackPortGridCopied = text;
+    } });
+  });
+  await selectGridRows.click();
+  await gridTable.getByLabel('이 페이지의 행 모두 선택', { exact: true }).check();
+  await copyGridRows.click();
+  await page.getByRole('alert').getByText(/1행.*payload/).waitFor();
+  assert.equal(await page.evaluate(() => window.stackPortGridCopied), undefined);
+  await layoutButton.click();
+  await layoutDialog.getByLabel('payload 표시', { exact: true }).uncheck();
+  await applyLayout();
+  await gridTable.getByLabel('1행 선택', { exact: true }).check();
+  await copyGridRows.click();
+  await page.getByRole('status').getByText('행 1개 복사 완료', { exact: true }).waitFor();
+  const [copyHeader, copyRow] = (await page.evaluate(() => window.stackPortGridCopied)).split('\n');
+  assert.deepEqual(copyHeader.split('\t'), ['id', 'exact_integer', 'amount', 'observed', 'flag', 'document']);
+  assert.deepEqual(copyRow.split('\t').slice(0, 4), ['1', '9007199254740993', '999.995', '2026-01-02T23:24:25.123+09:00']);
+  await selectGridRows.click();
   await people.click();
   await page.getByText('사용자 1', { exact: true }).waitFor();
   assert.equal(await gridTable.locator('td[data-grid-value-type]').count(), 0);
@@ -260,6 +282,28 @@ async function main() {
   await gridTable.getByText('다음 행', { exact: true }).waitFor();
   assert.equal(scalar("SELECT label || '|' || length(empty_text) || '|' || (optional IS NULL) || '|' || amount || '|' || created FROM row_actions ORDER BY id LIMIT 1"),
     '탭\t포함|0|1|9007199254740993|2026-01-02');
+  await selectGridRows.click();
+  await gridTable.getByLabel('2행 선택', { exact: true }).check();
+  await gridTable.getByLabel('1행 선택', { exact: true }).check();
+  await copyGridRows.click();
+  await page.getByRole('status').getByText('행 2개 복사 완료', { exact: true }).waitFor();
+  const copiedRows = await page.evaluate(() => window.stackPortGridCopied);
+  assert.match(copiedRows, /^id\tlabel\tempty_text\toptional\tamount\tcreated\n\d+\t"탭\t포함"\t""\t\\N\t9007199254740993\t2026-01-02\n\d+\t다음 행\t""\t\\N\t0/);
+  await selectGridRows.click();
+  await page.evaluate(() => { delete navigator.clipboard.writeText; delete window.stackPortGridCopied; });
+  await pasteRows.click();
+  await pasteText.fill(copiedRows);
+  await pasteDialog.getByLabel('첫 행에 열 이름이 있음', { exact: true }).check();
+  await pasteDialog.getByLabel('StackPort의 NULL과 빈 문자열 복원', { exact: true }).check();
+  await mapPaste.click();
+  await pasteDialog.getByLabel('원본 열 1 대상', { exact: true }).selectOption('');
+  await pasteDialog.getByLabel('원본 열 3 빈 셀', { exact: true }).selectOption('default');
+  await previewPaste.click();
+  await pasteTable.getByText('(빈 문자열)', { exact: true }).first().waitFor();
+  await pasteTable.getByText('NULL', { exact: true }).first().waitFor();
+  await pasteDialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await pasteDialog.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await pasteDialog.waitFor({ state: 'detached' });
   await pasteRows.click();
   await pasteText.fill('롤백할 행\n다음 행');
   await mapPaste.click();

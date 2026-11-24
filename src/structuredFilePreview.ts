@@ -109,18 +109,38 @@ const CSV_COLUMNS = 32;
 
 function parseCsv(source: string): StructuredPreview {
   const parsed = parseDelimitedText(source, ",", CSV_ROWS, CSV_COLUMNS);
-  return parsed ? { kind: "csv", ...parsed } : { error: "CSV 따옴표 또는 구분자 형식이 올바르지 않아 원문을 표시합니다." };
+  return parsed ? { kind: "csv", rows: parsed.rows, rowCount: parsed.rowCount, columnCount: parsed.columnCount }
+    : { error: "CSV 따옴표 또는 구분자 형식이 올바르지 않아 원문을 표시합니다." };
 }
 
 export const clipboardPasteLimits = { rows: 100, columns: 64, bytes: 256 * 1024 };
+export const clipboardNull = "\\N";
 
-export function parseClipboardRows(source: string, header: boolean) {
+export type ClipboardCell = { value: string | null; textual: boolean };
+
+export function encodeClipboardRows(rows: ClipboardCell[][], headers: string[] | null, spreadsheetSafe: boolean) {
+  let protectedFields = 0;
+  function encode({ value, textual }: ClipboardCell) {
+    if (value === null) return clipboardNull;
+    if (spreadsheetSafe && textual && (/^[\t\r\n]/.test(value) || /^[=+\-@＝＋－＠]/.test(value.trimStart()))) {
+      value = "'" + value;
+      protectedFields++;
+    }
+    const quote = value === "" || value === clipboardNull || value.startsWith("\uFEFF") || /[\t\r\n"]/.test(value);
+    return quote ? `"${value.replaceAll('"', '""')}"` : value;
+  }
+  const records = rows.map(row => row.map(encode).join("\t"));
+  if (headers) records.unshift(headers.map(value => encode({ value, textual: true })).join("\t"));
+  return { text: records.join("\n"), protectedFields };
+}
+
+export function parseClipboardRows(source: string, header: boolean, preserveBlanks = false) {
   if (source.length > clipboardPasteLimits.bytes || new TextEncoder().encode(source).length > clipboardPasteLimits.bytes) {
     return { error: "붙여넣을 값의 전체 크기를 256 KiB 이하로 줄이세요." };
   }
   if (source.includes("\0")) return { error: "NUL 문자가 들어 있는 셀을 제거하세요." };
   const { rows: maximum, columns: width } = clipboardPasteLimits;
-  const parsed = parseDelimitedText(source.replace(/^\uFEFF/, ""), "\t", maximum + Number(header), width);
+  const parsed = parseDelimitedText(source.replace(/^\uFEFF/, ""), "\t", maximum + Number(header), width, preserveBlanks);
   if (!parsed) return { error: "따옴표로 묶인 셀의 시작과 끝을 확인하세요." };
   if (parsed.rowCount <= Number(header)) return { error: "붙여넣을 데이터 행을 입력하세요." };
   if (parsed.rowCount > maximum + Number(header) || parsed.columnCount > width) {
@@ -131,12 +151,20 @@ export function parseClipboardRows(source: string, header: boolean) {
   const columnCount = (headers ?? rows[0]).length;
   const mismatch = rows.findIndex(row => row.length !== columnCount);
   if (mismatch !== -1) return { error: `붙여넣기 ${mismatch + 1}행의 열 수가 다릅니다. 사각형 범위를 복사하세요.` };
+  if (preserveBlanks) {
+    const flags = parsed.blanks.slice(Number(header));
+    return { headers, columnCount, rows: rows.map((row, index) => row.map((value, column) =>
+      flags[index]?.get(column) === "null" ? null : value)), quotedEmpty: flags.map(row => new Set([...row].flatMap(([column, kind]) =>
+      kind === "empty" ? [column] : []))) };
+  }
   return { headers, rows, columnCount };
 }
 
-function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: number, maxColumns: number) {
+function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: number, maxColumns: number, preserveBlanks = false) {
   const rows: string[][] = [];
+  const blanks: Map<number, "null" | "empty">[] = [];
   let row: string[] = [];
+  let rowBlanks = new Map<number, "null" | "empty">();
   let value = "";
   let state: "start" | "plain" | "quoted" | "closed" = "start";
   let columns = 0;
@@ -144,7 +172,11 @@ function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: numb
   let rowCount = 0;
 
   function field() {
-    if (rowCount < maxRows && columns < maxColumns) row.push(value);
+    if (rowCount < maxRows && columns < maxColumns) {
+      row.push(value);
+      if (preserveBlanks && state === "plain" && value === clipboardNull) rowBlanks.set(columns, "null");
+      if (preserveBlanks && state === "closed" && value === "") rowBlanks.set(columns, "empty");
+    }
     columns++;
     value = "";
     state = "start";
@@ -153,6 +185,7 @@ function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: numb
   function record() {
     field();
     if (rowCount < maxRows) rows.push(row);
+    if (preserveBlanks && rowCount < maxRows) { blanks.push(rowBlanks); rowBlanks = new Map(); }
     row = [];
     rowCount++;
     columnCount = Math.max(columns, columnCount);
@@ -182,5 +215,5 @@ function parseDelimitedText(source: string, delimiter: "," | "\t", maxRows: numb
   }
   if (state === "quoted") return null;
   if (state !== "start" || columns) record();
-  return { rows, rowCount, columnCount };
+  return { rows, rowCount, columnCount, blanks };
 }

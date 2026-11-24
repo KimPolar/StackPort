@@ -855,8 +855,33 @@ async function verify(browser, fixture, gateway, jump) {
   await gridScroller.evaluate(element => { element.scrollLeft = 400; });
   assert.ok(await gridScroller.evaluate(element => element.scrollLeft > 200));
   assert.ok(Math.abs((await lockedHeader.boundingBox()).x - (await gridScroller.boundingBox()).x) < 4);
+  const selectGridRows = page.getByRole('button', { name: '행 선택', exact: true });
+  const copyGridRows = page.getByRole('button', { name: '선택한 행 복사', exact: true });
+  const captureGridClipboard = () => page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true, value: async text => {
+      window.stackPortGridCopied = text;
+    } });
+  });
+  const releaseGridClipboard = () => page.evaluate(() => {
+    delete navigator.clipboard.writeText;
+    delete window.stackPortGridCopied;
+  });
+  await captureGridClipboard();
+  await selectGridRows.click();
+  await data.getByLabel('2행 선택', { exact: true }).check();
+  await data.getByLabel('1행 선택', { exact: true }).check();
+  await copyGridRows.click();
+  await page.getByRole('status').getByText('행 2개 복사 완료', { exact: true }).waitFor();
+  const [copyHeader, firstCopyRow, secondCopyRow] = (await page.evaluate(() => window.stackPortGridCopied)).split('\n');
+  assert.deepEqual(copyHeader.split('\t').slice(0, 3), ['extra_23', 'precise', 'id']);
+  assert.ok(!copyHeader.split('\t').includes('note'));
+  assert.deepEqual(firstCopyRow.split('\t').slice(0, 3), ['마지막 열', '9007199254740993.123', '1']);
+  assert.deepEqual(secondCopyRow.split('\t').slice(0, 3), ['마지막 열', '9007199254740993.123', '2']);
   await page.getByRole('button', { name: '다음 열 페이지', exact: true }).click();
   await data.getByRole('columnheader', { name: /extra_22/ }).waitFor();
+  assert.equal(await copyGridRows.isDisabled(), true);
+  await selectGridRows.click();
+  await releaseGridClipboard();
   assert.equal(await data.getByRole('columnheader').count(), 2);
   assert.match(await data.getByRole('columnheader').first().textContent(), /^extra_23/);
   await data.getByText('마지막 열', { exact: true }).first().waitFor();
@@ -1079,8 +1104,17 @@ async function verify(browser, fixture, gateway, jump) {
   await sql.evaluate((input, selection) => input.setSelectionRange(selection, input.value.length), multiline.indexOf('SELECT id'));
   await sql.press('Control+Enter');
   await results.getByText('25', { exact: true }).waitFor();
+  await captureGridClipboard();
+  await selectGridRows.click();
+  await results.getByLabel('25행 선택', { exact: true }).check();
+  await copyGridRows.click();
+  await page.getByRole('status').getByText('행 1개 복사 완료', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => window.stackPortGridCopied), 'id\n25');
+  await releaseGridClipboard();
   await page.getByRole('button', { name: '다음 SQL 결과 페이지' }).click();
   await results.getByText('26', { exact: true }).waitFor();
+  assert.equal(await copyGridRows.isDisabled(), true);
+  await selectGridRows.click();
   await page.getByRole('tab', { name: 'SQL 2', exact: true }).click();
   await results.getByText('4', { exact: true }).waitFor();
   await page.getByRole('tab', { name: 'SQL 3', exact: true }).click();

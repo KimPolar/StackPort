@@ -782,5 +782,14 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .paste-sample { flex-basis: 100%; color: var(--text-muted); margin: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grid-paste-preview { max-height: 42vh; margin-block: 12px; }
 .grid-paste-preview td { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+.grid-copy-controls { padding: 10px 12px; border-block: 1px solid var(--divider); }
+.grid-copy-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.grid-copy-actions label { display: inline-flex; align-items: center; gap: 5px; }
+.grid-copy-controls p { margin-bottom: 0; }
+.table-wrap .with-row-selection .row-number { width: 76px; min-width: 76px; }
+.with-row-selection .row-number input { margin-inline-end: 6px; vertical-align: middle; }
+.table-wrap .grid-row-select { position: sticky; inset-inline-start: 0; width: 64px; min-width: 64px; max-width: 64px; text-align: center; padding-inline: 4px; background: var(--surface); z-index: 2; }
+.table-wrap th.grid-row-select { background: var(--surface-inset); z-index: 4; }
+.table-wrap tr[data-grid-selected="true"] > :is(th, td) { background: var(--surface-selected); }
 .app-shell[data-density="compact"] .terminal-tab [role="tab"] { min-height: 28px; padding-block: 4px; }
 .app-shell[data-density="compact"] .terminal-screen { padding: 8px; }

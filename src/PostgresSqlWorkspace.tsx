@@ -1,8 +1,9 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
+import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, postgresCopyCell, useGridRowSelection } from "./GridRowSelection";
 import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter } from "./PostgresParameterDialog";
 import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
 import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport";
@@ -209,6 +210,10 @@ export function PostgresValue({ cell, display }: { cell: PostgresCell; display?:
 
 function PostgresSqlResult({ outcome, jump, onExport }: { outcome: QueryStatus; jump?: (position: number) => void; onExport?: () => void }) {
   const [page, setPage] = useState(0);
+  const start = page * resultPageSize;
+  const snapshot = useMemo(() => ({ outcome, page }), [outcome, page]);
+  const length = outcome.status === "completed" ? Math.max(0, Math.min(outcome.rows.length - start, resultPageSize)) : 0;
+  const rowSelection = useGridRowSelection(snapshot, length);
   if (outcome.status === "plan") return <PostgresQueryPlan plan={outcome.plan} />;
   if (outcome.status === "failed") return <div className="error-banner" role="alert">
     {outcome.error}
@@ -219,21 +224,26 @@ function PostgresSqlResult({ outcome, jump, onExport }: { outcome: QueryStatus; 
     {outcome.timed_out ? outcome.server_confirmed ? "서버가 쿼리를 중단했습니다. 실행 제한은 8초입니다." : "응답 시간이 초과됐습니다."
       : outcome.server_confirmed ? "PostgreSQL 서버에서 쿼리 중단을 확인했습니다." : "쿼리를 보내기 전에 취소했습니다."}
   </div>;
-  const start = page * resultPageSize;
   const rows = outcome.rows.slice(start, start + resultPageSize);
   return <section className="postgres-data results-card" aria-label="PostgreSQL SQL 조회 결과">
     <div className="panel-heading"><strong>마지막 실행 결과</strong>
       <div className="sql-editor-actions"><span className="result-count">{outcome.rows.length}행 · {outcome.elapsed_ms}ms</span>
+        {rows.length > 0 && <GridSelectionButton selection={rowSelection} />}
         {onExport && <button type="button" className="secondary small" onClick={onExport}>결과 내보내기</button>}
       </div></div>
     {(outcome.more_rows || outcome.total_columns > outcome.columns.length) && <p className="form-note postgres-page-note">
       미리보기 {outcome.more_rows && "100행"}{outcome.more_rows && outcome.total_columns > outcome.columns.length && " · "}
       {outcome.total_columns > outcome.columns.length && `전체 ${outcome.total_columns}열 중 ${outcome.columns.length}열`}
     </p>}
+    {rowSelection.active && rows.length > 0 && <GridCopyControls selection={rowSelection} startRow={start + 1}
+      columns={outcome.columns.map(column => column.name)} readCell={(row, column) => postgresCopyCell(rows[row][column], outcome.columns[column].data_type)} />}
     {rows.length ? <div className="table-wrap" tabIndex={0} role="region" aria-label="PostgreSQL SQL 데이터 스크롤">
-      <table aria-label="PostgreSQL SQL 데이터"><thead><tr>{outcome.columns.map((column, index) => <th key={index} scope="col">
+      <table aria-label="PostgreSQL SQL 데이터"><thead><tr>{rowSelection.active && <th scope="col" className="grid-row-select"><GridSelectPage selection={rowSelection} /></th>}
+        {outcome.columns.map((column, index) => <th key={index} scope="col">
         {column.name}<small>{column.data_type}</small></th>)}</tr></thead>
-        <tbody>{rows.map((row, rowIndex) => <tr key={start + rowIndex}>{row.map((cell, column) =>
+        <tbody>{rows.map((row, rowIndex) => <tr key={start + rowIndex} data-grid-selected={rowSelection.rows.has(rowIndex) || undefined}>
+          {rowSelection.active && <td className="grid-row-select"><GridSelectRow selection={rowSelection} index={rowIndex} rowNumber={start + rowIndex + 1} /></td>}
+          {row.map((cell, column) =>
           <td key={column}><PostgresValue cell={cell} /></td>)}</tr>)}</tbody>
       </table>
     </div> : <p className="result-empty">조회된 행이 없습니다.</p>}

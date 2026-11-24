@@ -37,6 +37,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
   const [session, setSession] = useState<Session | null>(null);
   const [text, setText] = useState("");
   const [header, setHeader] = useState(false);
+  const [preserveBlanks, setPreserveBlanks] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
   const [mapping, setMapping] = useState<Mapping[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -88,7 +89,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
   }
 
   function analyze() {
-    const parsed = parseClipboardRows(text, header);
+    const parsed = parseClipboardRows(text, header, preserveBlanks);
     if ("error" in parsed) { setError(parsed.error ?? "붙여넣을 범위를 확인하세요."); return; }
     const byPosition = editableColumns.filter(column => !column.auto_key);
     setMapping(Array.from({ length: parsed.columnCount }, (_, index) => mappingFor(postgres,
@@ -131,9 +132,12 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
           if (live.current) onApplied(report);
         }
       } else {
-        const rows = source.rows.map(row => mapping.flatMap(({ column, kind, blank }, index) => {
+        const rows = source.rows.map((row, rowIndex) => mapping.flatMap(({ column, kind, blank }, index) => {
           const value = row[index];
-          if (column === null || (value === "" && blank === "default")) return [];
+          if (column === null) return [];
+          if (value === null) return [{ column, input: { kind: "null", value: "" } }];
+          if (source.quotedEmpty?.[rowIndex]?.has(index)) return [{ column, input: { kind: "text", value: "" } }];
+          if (value === "" && blank === "default") return [];
           const inputKind = value ? kind : blank === "null" ? "null" : "text";
           return [{ column, input: { kind: inputKind, value } }];
         }));
@@ -171,6 +175,8 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
             onChange={event => { setText(event.target.value); setError(""); }} /></label>
           <label className="paste-header"><input type="checkbox" checked={header} disabled={busy}
             onChange={event => { setHeader(event.target.checked); setError(""); }} />첫 행에 열 이름이 있음</label>
+          <label className="paste-header"><input type="checkbox" checked={preserveBlanks} disabled={busy}
+            onChange={event => { setPreserveBlanks(event.target.checked); setError(""); }} />StackPort의 NULL과 빈 문자열 복원</label>
           <p className="form-note">복사한 탭 구분 범위를 붙여넣으세요. 최대 {clipboardPasteLimits.rows}행, {clipboardPasteLimits.columns}열입니다.</p>
         </>}
         {source && !preview && <>
@@ -179,7 +185,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
             const column = findColumn(item.column);
             return <fieldset key={index} disabled={busy}>
               <legend>원본 열 {index + 1}{source.headers?.[index] && ` · ${source.headers[index]}`}</legend>
-              {source.rows[0][index] && <p className="paste-sample">{source.rows[0][index]}</p>}
+              {source.rows[0][index] !== "" && <p className="paste-sample">{source.rows[0][index] ?? "NULL"}</p>}
               <label className="field">대상 열<select aria-label={`원본 열 ${index + 1} 대상`} value={item.column === null ? "" : `column:${item.column}`}
                 onChange={event => updateMapping(index, mappingFor(postgres, findColumn(event.target.value ? event.target.value.slice("column:".length) : null)))}>
                 <option value="">건너뛰기</option>
