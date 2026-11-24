@@ -58,7 +58,7 @@ SP-TM-012,일괄 명령 실행,여러 호스트에서 명령 실행 후 호스�
 SP-TM-013,매크로 기록,"키 입력/명령 시퀀스 기록, 편집, 저장, 재생, 대상 지정, 안전 확인.",not_started,,
 SP-TM-014,매크로 조건,"텍스트 대기, 타임아웃, 변수 치환, 오류 중지, 실행 로그(스크립트형 워크플로와 구분).",not_started,,
 SP-TM-015,시작 명령,"세션 연결 후 특정 명령/스크립트 실행, 실행 종료 후 탭 유지 선택.",not_started,,
-SP-TM-016,작업 표시,출력이 발생한 비활성 탭의 상태·알림 및 터미널 활동 추적.,not_started,,
+SP-TM-016,작업 표시,출력이 발생한 비활성 탭의 상태·알림 및 터미널 활동 추적.,partial,비활성 터미널에 새 출력이 있으면 탭에 표시하고 확인 시 지움,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-017,세션 종료 보호,실행 중 작업이 있을 때 닫기 확인 및 안전한 연결 종료.,partial,로컬 터미널·앱 종료 시 실행 작업 확인,crates/stackport-core/tests/terminal.rs; tests/terminal-smoke.cjs; src/TerminalWorkspace.tsx; src-tauri/
 SP-TM-018,로컬 Unix 도구,"ls, grep, awk, sed, find, rsync, wget, curl, ssh, scp, vim 등 설치/번들된 명령을 사용할 통합 실행 환경.",not_started,,
 SP-TM-019,OS 경로 통합,"Windows 드라이브 경로와 POSIX 스타일 경로 변환, 기본 작업 디렉터리·환경변수·PATH 설정.",not_started,,

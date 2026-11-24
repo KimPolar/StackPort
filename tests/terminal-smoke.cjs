@@ -73,12 +73,22 @@ async function main() {
   await page.getByRole('search').getByRole('status').getByText('일치하는 내용을 선택했습니다.').waitFor();
   if (process.env.STACKPORT_TEST_SCREENSHOT) await page.screenshot({ path: process.env.STACKPORT_TEST_SCREENSHOT });
 
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.type("Start-Sleep -Seconds 2; [Console]::WriteLine('STACKPORT_BACKGROUND')");
+  await page.keyboard.press('Enter');
   await page.getByRole('tab', { name: 'PowerShell 2' }).focus();
   await page.keyboard.press('ArrowLeft');
   if (await page.getByRole('tab', { name: 'CMD 1' }).getAttribute('aria-selected') !== 'true') throw new Error('Keyboard tab navigation failed.');
+  const backgroundTab = page.getByRole('tab', { name: 'PowerShell 2' });
+  const activity = backgroundTab.getByText('새 출력', { exact: true });
+  await activity.waitFor();
+  if (!(await backgroundTab.getAttribute('aria-describedby'))) throw new Error('Background activity is not described to assistive technology.');
+  if (await page.getByRole('tab', { name: 'CMD 1' }).getByText('새 출력').count()) throw new Error('Visible terminal was marked as having unread output.');
   if (await page.locator('[role=tabpanel]:visible').getByLabel('터미널 출력 검색어').count()) throw new Error('Search state leaked into another terminal tab.');
   await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('26441', { exact: false }).waitFor();
-  await page.getByRole('tab', { name: 'PowerShell 2' }).click();
+  await backgroundTab.click();
+  await activity.waitFor({ state: 'detached' });
+  await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('STACKPORT_BACKGROUND', { exact: false }).last().waitFor();
   if (await page.getByLabel('터미널 출력 검색어').inputValue() !== '[') throw new Error('Search state did not follow its terminal tab.');
   await page.getByLabel('터미널 출력 검색어').press('Escape');
   if (await page.getByLabel('터미널 출력 검색어').count()) throw new Error('Escape did not close terminal search.');
@@ -86,6 +96,15 @@ async function main() {
   await page.getByLabel('터미널 출력 검색어').waitFor();
   if (await page.getByLabel('터미널 출력 검색어').inputValue() !== '') throw new Error('Closed search retained its previous term.');
   await page.getByRole('button', { name: '검색 닫기' }).click();
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.type("Start-Sleep -Seconds 2; [Console]::WriteLine('STACKPORT_HIDDEN')");
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: '워크스페이스', exact: true }).click();
+  const hiddenActivity = page.locator('[role=tab]').filter({ hasText: 'PowerShell 2' }).getByText('새 출력', { exact: true });
+  await hiddenActivity.waitFor({ state: 'attached' });
+  await page.getByRole('button', { name: '터미널', exact: true }).click();
+  await hiddenActivity.waitFor({ state: 'detached' });
+  await page.locator('[role=tabpanel]:visible .xterm-rows').getByText('STACKPORT_HIDDEN', { exact: false }).last().waitFor();
   await page.getByLabel('셸', { exact: true }).selectOption('ssh');
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
   await page.keyboard.press('Control+Shift+F');
@@ -139,7 +158,7 @@ async function main() {
     await page.getByRole('button', { name: 'PowerShell 2 터미널 닫기' }).click();
     await browser.close();
   }
-  console.log('Desktop terminals, scrollback search, tabs, process cleanup, and close protection passed.');
+  console.log('Desktop terminals, scrollback search, background activity, tabs, process cleanup, and close protection passed.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

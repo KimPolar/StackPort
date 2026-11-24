@@ -11,7 +11,7 @@ type Shell = "powershell" | "cmd" | "ssh";
 type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
-type Tab = TerminalInfo & { number: number; exit: TerminalExit | null };
+type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; unreadOutput: boolean };
 type SshKey = { algorithm: string; fingerprint: string };
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
 type TcpStatus = "connected" | "refused" | "unreachable" | "timed_out" | "failed" | "not_tested";
@@ -40,6 +40,12 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 
   useEffect(() => { onCountChange(tabs.length + (opening ? 1 : 0) + (sshOpening ? 1 : 0)); }, [tabs.length, opening, sshOpening, onCountChange]);
   useEffect(() => {
+    if (!visible || !activeId) return;
+    setTabs(current => current.some(tab => tab.id === activeId && tab.unreadOutput)
+      ? current.map(tab => tab.id === activeId ? { ...tab, unreadOutput: false } : tab)
+      : current);
+  }, [visible, activeId]);
+  useEffect(() => {
     if (!request) return;
     setDialogProfile(request.profile);
     setSshDialog(true);
@@ -48,7 +54,7 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
 
   function addTerminal(terminal: TerminalInfo) {
     const number = nextNumber.current++;
-    setTabs(current => [...current, { ...terminal, number, exit: null }]);
+    setTabs(current => [...current, { ...terminal, number, exit: null, unreadOutput: false }]);
     setActiveId(terminal.id);
   }
 
@@ -83,6 +89,12 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
     setTabs(current => current.map(tab => tab.id === id ? { ...tab, exit } : tab));
   }
 
+  function reportActivity(id: string) {
+    setTabs(current => current.some(tab => tab.id === id && !tab.unreadOutput)
+      ? current.map(tab => tab.id === id ? { ...tab, unreadOutput: true } : tab)
+      : current);
+  }
+
   function moveTab(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const destination = event.key === "ArrowRight" ? (index + 1) % tabs.length
       : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
@@ -103,16 +115,16 @@ export function TerminalWorkspace({ visible, onCountChange, request, onRequestHa
     {error && <div className="error-banner" role="alert">{error}</div>}
     {tabs.length === 0 ? <div className="terminal-empty"><TerminalSquare size={30} /><strong>열린 터미널이 없습니다</strong><span>셸을 선택하고 새 터미널을 여세요.</span></div> : <div className="terminal-card">
       <div className="terminal-tabs" role="tablist" aria-label="터미널 목록">{tabs.map((tab, index) => <div className={`terminal-tab ${tab.id === activeId ? "selected" : ""}`} key={tab.id}>
-        <button role="tab" id={`terminal-tab-${tab.id}`} aria-selected={tab.id === activeId} aria-controls={`terminal-panel-${tab.id}`} tabIndex={tab.id === activeId ? 0 : -1} onKeyDown={event => moveTab(event, index)} onClick={() => setActiveId(tab.id)}><TerminalSquare size={14} /><span>{tabName(tab)}</span>{tab.exit && <small>종료</small>}</button>
+        <button role="tab" id={`terminal-tab-${tab.id}`} aria-label={tabName(tab)} aria-describedby={[tab.unreadOutput && `terminal-activity-${tab.id}`, tab.exit && `terminal-exit-tab-${tab.id}`].filter(Boolean).join(" ") || undefined} aria-selected={tab.id === activeId} aria-controls={`terminal-panel-${tab.id}`} tabIndex={tab.id === activeId ? 0 : -1} onKeyDown={event => moveTab(event, index)} onClick={() => setActiveId(tab.id)}><TerminalSquare size={14} /><span>{tabName(tab)}</span>{tab.unreadOutput && <small className="terminal-activity" id={`terminal-activity-${tab.id}`}>새 출력</small>}{tab.exit && <small id={`terminal-exit-tab-${tab.id}`}>종료</small>}</button>
         <button className="terminal-close" aria-label={`${tabName(tab)} 터미널 닫기`} disabled={closing.includes(tab.id)} onClick={() => void closeTerminal(tab)}><X size={14} /></button>
       </div>)}</div>
-      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} />)}
+      {tabs.map(tab => <TerminalPane key={tab.id} tab={tab} visible={visible && tab.id === activeId} onExit={reportExit} onActivity={reportActivity} />)}
     </div>}
     {sshDialog && <SshDialog profile={dialogProfile} onClose={() => setSshDialog(false)} onOpeningChange={setSshOpening} onOpened={terminal => { addTerminal(terminal); setSshDialog(false); }} />}
   </section>;
 }
 
-function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; onExit: (id: string, exit: TerminalExit) => void }) {
+function TerminalPane({ tab, visible, onExit, onActivity }: { tab: Tab; visible: boolean; onExit: (id: string, exit: TerminalExit) => void; onActivity: (id: string) => void }) {
   const container = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const searchAddon = useRef<SearchAddon | null>(null);
@@ -120,6 +132,7 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
   const fit = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   const exitCallback = useRef(onExit);
+  const activityCallback = useRef(onActivity);
   const [error, setError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -127,6 +140,7 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
   const [searchStatus, setSearchStatus] = useState("");
   visibleRef.current = visible;
   exitCallback.current = onExit;
+  activityCallback.current = onActivity;
 
   useEffect(() => {
     if (!visible) return;
@@ -209,7 +223,10 @@ function TerminalPane({ tab, visible, onExit }: { tab: Tab; visible: boolean; on
           while (!stopped) {
             const output = await call<TerminalRead>("read_terminal", { id: tab.id });
             if (stopped) break;
-            if (output.data.length) await new Promise<void>(resolve => emulator.write(new Uint8Array(output.data), resolve));
+            if (output.data.length) {
+              if (!visibleRef.current) activityCallback.current(tab.id);
+              await new Promise<void>(resolve => emulator.write(new Uint8Array(output.data), resolve));
+            }
             if (output.exit && !reportedExit) { reportedExit = true; emulator.options.disableStdin = true; exitCallback.current(tab.id, output.exit); }
             if (output.output_error) { setError(output.output_error); break; }
             if (output.output_closed && output.exit) break;
