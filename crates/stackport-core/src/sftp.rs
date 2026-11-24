@@ -12,7 +12,7 @@ mod remote_stage;
 mod transfer;
 mod upload;
 pub use audit::SftpTransferReport;
-pub use compare::{ComparedFile, FileContentComparison};
+pub use compare::{save_merged_text, ComparedFile, FileContentComparison};
 pub use delete::SftpDeletePreview;
 pub use editor::{SftpEditDocument, SftpEditSave};
 pub use mutation::{SftpEntrySource, SftpMutationReport};

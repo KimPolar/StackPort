@@ -40,7 +40,7 @@ pub(crate) fn valid_filename(name: &str) -> bool {
 
 pub(crate) fn write_new_file(
     destination: &str,
-    extension: &str,
+    extension: Option<&str>,
     prefix: &str,
     bytes: &[u8],
 ) -> Result<usize> {
@@ -49,16 +49,18 @@ pub(crate) fn write_new_file(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or("저장할 파일 이름을 입력하세요.")?;
-    if !path.is_absolute()
-        || !valid_filename(name)
-        || !path
-            .extension()
+    let extension_matches = extension.is_none_or(|extension| {
+        path.extension()
             .and_then(|suffix| suffix.to_str())
             .is_some_and(|suffix| suffix.eq_ignore_ascii_case(extension))
-    {
-        return Err(format!(
-            ".{extension} 확장자를 가진 새 파일의 절대 경로를 입력하세요."
-        ));
+    });
+    if !path.is_absolute() || !valid_filename(name) || !extension_matches {
+        return Err(match extension {
+            Some(extension) => {
+                format!(".{extension} 확장자를 가진 새 파일의 절대 경로를 입력하세요.")
+            }
+            None => "새 파일의 절대 경로를 입력하세요.".into(),
+        });
     }
     let parent = path
         .parent()

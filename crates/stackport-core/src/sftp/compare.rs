@@ -6,7 +6,7 @@ use super::{
     transfer::{check_remote_snapshot, read_chunk, remote_file_size, request, CHUNK_SIZE},
     RemotePath, SftpManager, BROWSE_TIMEOUT,
 };
-use crate::Result;
+use crate::{local_file::write_new_file, text_draft::UTF8_BOM, Result};
 use russh_sftp::protocol::{FileAttributes, OpenFlags};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,6 +16,7 @@ const MAX_COMPARE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_DIFFERENCE_BYTES: u64 = 64 * 1024;
 const HEX_ROW_BYTES: usize = 16;
 const MAX_HEX_ROWS: usize = 64;
+const MAX_MERGED_BYTES: usize = (2 * MAX_DIFFERENCE_BYTES) as usize + UTF8_BOM.len();
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -258,6 +259,13 @@ fn describe_difference(local: Option<Vec<u8>>, remote: Option<Vec<u8>>) -> FileD
     }
 }
 
+pub fn save_merged_text(destination: &str, text: &str) -> Result<usize> {
+    if text.len() > MAX_MERGED_BYTES || utf8_prefix(text.as_bytes(), text.len() as u64).is_none() {
+        return Err("병합 결과의 UTF-8 텍스트 또는 크기 한도를 확인하세요.".into());
+    }
+    write_new_file(destination, None, ".stackport-merge-", text.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +329,24 @@ mod tests {
                     && rows.len() == MAX_HEX_ROWS && rows[0].offset == HEX_ROW_BYTES
                     && rows[0].local[0] == 0 && rows[0].remote[0] == 0xff
         ));
+    }
+
+    #[test]
+    fn saves_exact_merged_utf8_bytes_to_a_new_file_only() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("merged.conf");
+        let destination = path.to_str().unwrap();
+        let text = "\u{feff}원격\r\n로컬\n끝";
+        assert_eq!(save_merged_text(destination, text).unwrap(), text.len());
+        assert!(save_merged_text(destination, "replacement").is_err());
+        assert_eq!(fs::read(path).unwrap(), text.as_bytes());
+        assert!(save_merged_text("relative.txt", text).is_err());
+        let invalid = folder.path().join("invalid");
+        assert!(save_merged_text(invalid.to_str().unwrap(), "\0").is_err());
+        assert!(
+            save_merged_text(invalid.to_str().unwrap(), &" ".repeat(MAX_MERGED_BYTES + 1)).is_err()
+        );
+        assert!(!invalid.exists());
+        assert_eq!(fs::read_dir(folder.path()).unwrap().count(), 1);
     }
 }

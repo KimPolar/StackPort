@@ -10,7 +10,7 @@ const MAX_ALIGNMENT_CELLS = 1_000_000;
 const MAX_VISIBLE_LINES = 240;
 const CONTEXT_LINES = 2;
 
-export function compareTextLines(local: string, remote: string) {
+function alignTextLines(local: string, remote: string) {
   const left = local.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
   const right = remote.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
   const lines: Line[] = [];
@@ -68,6 +68,11 @@ export function compareTextLines(local: string, remote: string) {
   while (after < rightEnd) insert(after++);
   while (before < left.length) same(before++, after++);
 
+  return { lines, removed, inserted, alignmentLimited };
+}
+
+export function compareTextLines(local: string, remote: string) {
+  const { lines, removed, inserted, alignmentLimited } = alignTextLines(local, remote);
   const nearby = new Uint8Array(lines.length);
   lines.forEach((line, index) => {
     if (line.local === null || line.remote === null) {
@@ -91,4 +96,52 @@ export function compareTextLines(local: string, remote: string) {
   });
   if (skipped) shown.push({ skipped });
   return { shown, removed, inserted, truncated, alignmentLimited };
+}
+
+export type MergeSide = "local" | "remote";
+export type MergeChange = {
+  kind: "change";
+  index: number;
+  local: string[];
+  remote: string[];
+  firstLocal: number | null;
+  firstRemote: number | null;
+};
+type MergePart = MergeChange | { kind: "common"; lines: string[] };
+
+export function prepareTextMerge(local: string, remote: string) {
+  const initialBom = local.startsWith("\uFEFF");
+  const { lines, alignmentLimited } = alignTextLines(local.replace(/^\uFEFF/, ""), remote.replace(/^\uFEFF/, ""));
+  const parts: MergePart[] = [];
+  const changes: MergeChange[] = [];
+  let part: MergePart | undefined;
+  for (const line of lines) {
+    if (line.local !== null && line.remote !== null) {
+      if (part?.kind !== "common") {
+        part = { kind: "common", lines: [] };
+        parts.push(part);
+      }
+      part.lines.push(line.text);
+    } else {
+      if (part?.kind !== "change") {
+        part = { kind: "change", index: changes.length, local: [], remote: [], firstLocal: null, firstRemote: null };
+        parts.push(part);
+        changes.push(part);
+      }
+      if (line.local !== null) {
+        part.firstLocal ??= line.local;
+        part.local.push(line.text);
+      } else {
+        part.firstRemote ??= line.remote;
+        part.remote.push(line.text);
+      }
+    }
+  }
+  return { parts, changes, initialBom, alignmentLimited };
+}
+
+export function mergedText(parts: MergePart[], choices: ReadonlyMap<number, MergeSide>, bom: boolean) {
+  const content = parts.map(part => part.kind === "common"
+    ? part.lines.join("") : part[choices.get(part.index) ?? "local"].join("")).join("");
+  return bom ? "\uFEFF" + content : content;
 }

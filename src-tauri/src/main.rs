@@ -5,7 +5,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
-    list_local_directory, local_ports, preview_local_file, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, NetworkDiagnostics, NetworkManager,
+    list_local_directory, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, NetworkDiagnostics, NetworkManager,
     ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlParameterValue, SshAuthentication,
@@ -807,6 +807,23 @@ async fn compare_sftp_file_contents(
 }
 
 #[tauri::command]
+async fn save_merged_file(destination: String, text: String) -> Result<usize, String> {
+    worker(move || save_merged_text(&destination, &text)).await
+}
+
+#[tauri::command]
+async fn choose_merged_file_path(name: String) -> Result<Option<String>, String> {
+    worker(move || {
+        Ok(rfd::FileDialog::new()
+            .set_title("병합 결과를 새 파일로 저장")
+            .set_file_name(&name)
+            .save_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    })
+    .await
+}
+
+#[tauri::command]
 async fn choose_local_browse_directory() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -1070,6 +1087,8 @@ fn main() {
             close_sftp,
             browse_local_directory,
             compare_sftp_file_contents,
+            save_merged_file,
+            choose_merged_file_path,
             choose_local_browse_directory,
             choose_local_text_draft_path,
             choose_sql_document_path,

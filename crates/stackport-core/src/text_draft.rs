@@ -19,7 +19,7 @@ pub fn save_text_draft(
 ) -> Result<usize> {
     let bytes = encode_text(text, line_ending, bom, MAX_BYTES)
         .ok_or("로컬 초안은 16 MiB 이하여야 합니다.")?;
-    write_new_file(destination, "txt", ".stackport-draft-", &bytes)
+    write_new_file(destination, Some("txt"), ".stackport-draft-", &bytes)
 }
 
 pub(crate) fn encode_text(

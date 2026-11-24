@@ -89,5 +89,5 @@ pub fn save_sql_file(destination: &str, document: &SqlDocument) -> Result<usize>
         MAX_BYTES,
     )
     .ok_or(TOO_LARGE)?;
-    write_new_file(destination, "sql", ".stackport-sql-", &bytes)
+    write_new_file(destination, Some("sql"), ".stackport-sql-", &bytes)
 }

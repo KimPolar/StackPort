@@ -35,7 +35,7 @@ mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
 mod sftp;
 pub use sftp::{
-    list_local_directory, preview_local_file, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, RemotePath,
+    list_local_directory, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, FileContentComparison, FilePreview, RemotePath,
     SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource,
     SftpManager, SftpMutationReport, SftpOpened,
     SftpTransferProgress, SftpTransferReport,

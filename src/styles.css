@@ -330,6 +330,8 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .files-compare-hash dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 6px; margin: 4px 0 0; }
 .files-compare-hash dd { margin: 0; white-space: normal; overflow-wrap: anywhere; }
 .file-difference-name { margin: 0 0 12px; overflow-wrap: anywhere; }
+.file-difference-file { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 12px; }
+.file-difference-file .file-difference-name { margin: 0; }
 .file-difference-scroll { max-height: 55vh; overflow: auto; border: 1px solid #dce9e1; border-radius: 6px; }
 .file-difference-table { font-variant-numeric: tabular-nums; }
 .file-difference-table td { vertical-align: top; }
@@ -343,6 +345,21 @@ textarea:focus { outline-offset: -2px; } textarea::placeholder { color: #bbcac1;
 .file-difference-ending { margin-inline: 4px; padding: 1px 3px; border: 1px solid currentColor; border-radius: 3px; font-size: 10px; }
 .file-difference-table td .file-difference-hex { display: inline-flex; gap: 4px; white-space: nowrap; }
 .file-difference-hex mark { padding: 0 1px; border-radius: 2px; background: #f9e4d4; color: #773815; font-weight: 700; }
+.dialog.file-merge form { padding: 0; }
+.file-merge-navigation, .file-merge-choices, .file-merge-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.file-merge-navigation { font-size: 12px; font-variant-numeric: tabular-nums; }
+.file-merge-choices { margin: 12px 0; padding: 6px 0 0; border: 0; font-size: 12px; }
+.file-merge-choices legend { padding: 0; color: #526a5f; font-weight: 600; }
+.file-merge-sources { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 8px; }
+.file-merge-source { min-width: 0; padding: 8px; border: 1px solid #dce9e1; border-radius: 6px; }
+.file-merge-source h3 { margin: 0; font-size: 12px; font-weight: 600; }
+.file-merge-source .form-note { margin: 3px 0 5px; }
+.file-merge .files-preview-content { max-height: 23vh; white-space: pre-wrap; overflow-wrap: anywhere; }
+.file-merge-bom { display: flex; align-items: center; gap: 4px; margin: 12px 0; font-size: 12px; }
+.file-merge-preview { margin-bottom: 14px; font-size: 12px; }
+.file-merge-preview summary { margin-bottom: 5px; cursor: pointer; }
+.file-merge-actions { justify-content: flex-end; }
+.file-merge-saved { overflow-wrap: anywhere; }
 .files-table td .icon-button { width: 24px; height: 24px; }
 .files-row-actions { display: flex; gap: 4px; }
 .dialog.sftp-editor { width: min(760px, calc(100vw - 32px)); }

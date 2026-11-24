@@ -26,7 +26,7 @@ pub fn save_terminal_output(
     }
     write_new_file(
         destination,
-        extension,
+        Some(extension),
         ".stackport-terminal-",
         text.as_bytes(),
     )

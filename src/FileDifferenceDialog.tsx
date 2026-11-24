@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { compareTextLines, type FileDifference, type HexRow } from "./fileDifference";
+import { FileMergeDialog } from "./FileMergeDialog";
 
 const numbers = new Intl.NumberFormat("ko-KR");
 
@@ -77,17 +78,23 @@ export type ViewableDifference = Exclude<FileDifference, { kind: "too_large" }>;
 
 export function FileDifferenceDialog({ name, difference, onClose }: { name: string; difference: ViewableDifference; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const [merging, setMerging] = useState(false);
   useEffect(() => { dialog.current?.showModal(); }, []);
 
-  return <dialog ref={dialog} className="dialog files-compare" aria-labelledby="file-difference-title" onClose={onClose}>
+  return <><dialog ref={dialog} className="dialog files-compare" aria-labelledby="file-difference-title" onClose={onClose}>
     <div className="dialog-heading">
       <h2 id="file-difference-title">파일 차이</h2>
       <button type="button" className="icon-button" aria-label="닫기" onClick={() => dialog.current?.close()}><X size={18} aria-hidden /></button>
     </div>
     <div className="files-compare-body">
-      <p className="file-difference-name"><strong>{name}</strong></p>
+      <div className="file-difference-file">
+        <p className="file-difference-name"><strong>{name}</strong></p>
+        {difference.kind === "text" && <button type="button" className="secondary small" onClick={() => setMerging(true)}>텍스트 병합</button>}
+      </div>
       {difference.kind === "text" && <TextDifference local={difference.local} remote={difference.remote} />}
       {difference.kind === "binary" && <BinaryDifference rows={difference.rows} changedRows={difference.changed_rows} differingBytes={difference.differing_bytes} />}
     </div>
-  </dialog>;
+  </dialog>
+    {merging && difference.kind === "text" && <FileMergeDialog name={name} local={difference.local} remote={difference.remote} onClose={() => setMerging(false)} />}
+  </>;
 }
