@@ -126,6 +126,9 @@ async function startPostgres(preloadStats = true) {
     'INSERT INTO report.json_source (amount, payload, flag, note, binary_data) ' +
       "VALUES (0.5, '{\"seed\":true}', false, NULL, decode('00ff5c','hex'));",
     'GRANT SELECT, INSERT ON report.json_source, report.json_replay TO fixture_reader;',
+    'CREATE TABLE report.xml_import (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, code text NOT NULL UNIQUE, ' +
+      "amount numeric(38,9) NOT NULL, note text DEFAULT 'DB 기본값', markup xml);",
+    'GRANT SELECT, INSERT ON report.xml_import TO fixture_reader;',
     "CREATE TABLE report.row_guard (id integer PRIMARY KEY, label text); INSERT INTO report.row_guard VALUES (1, 'before');",
     'GRANT SELECT, UPDATE, DELETE ON report.row_guard TO fixture_reader;',
     "CREATE TABLE report.grid_updates (id int PRIMARY KEY, note text DEFAULT '서버 기본값', " +
@@ -1438,6 +1441,45 @@ async function verify(browser, fixture, gateway, jump) {
     await close(jsonReader.id);
   }
 
+  await page.getByRole('button', { name: 'xml_import 테이블', exact: true }).click();
+  await fileImport.click();
+  await importPicker.setInputFiles({
+    name: 'postgres-import.xml', mimeType: 'application/xml',
+    buffer: Buffer.from('<feed xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:m="urn:meta">' +
+      '<entries><entry code="PG XML 1"><amount>9007199254740993.123456789</amount><note xsi:nil="true"/>' +
+      '<markup><m:value>한글 &amp; XML</m:value></markup></entry>' +
+      '<entry code="PG XML 2"><amount>0</amount><note/></entry>' +
+      '<entry code="PG XML 3"><amount>-0.01</amount></entry></entries><other><entry code="ignored"/></other></feed>'),
+  });
+  await importDialog.getByRole('button', { name: '레코드 경로 읽기', exact: true }).click();
+  const xmlPath = importDialog.getByLabel('XML 레코드 경로');
+  await xmlPath.selectOption({ label: '/feed/entries/entry · 3행' });
+  await mapFile.click();
+  await importDialog.getByText('postgres-import.xml · UTF-8 · XML · /feed/entries/entry', { exact: true }).waitFor();
+  await previewFile.click();
+  await importPreview.getByText('9007199254740993.123456789', { exact: true }).waitFor();
+  await importPreview.getByText('NULL', { exact: true }).first().waitFor();
+  await importPreview.getByText('(빈 문자열)', { exact: true }).waitFor();
+  assert.equal(await applyFile.isEnabled(), true);
+  await confirmFile.fill('PROD');
+  await applyFile.click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 3개 가져오기 완료', { exact: true }).waitFor();
+  const xmlReader = await open();
+  try {
+    const result = await command('execute_postgres_sql', {
+      id: xmlReader.id, request: randomUUID(), scope: { kind: 'document' },
+      source: "SELECT code, amount::text, note, (xpath('string(/markup/m:value) = \"한글 & XML\"', markup, ARRAY[ARRAY['m','urn:meta']]))[1]::text FROM report.xml_import ORDER BY id",
+    });
+    assert.deepEqual(result.rows.map(row => row.map(cell => cell.value)), [
+      ['PG XML 1', '9007199254740993.123456789', null, 'true'],
+      ['PG XML 2', '0.000000000', '', null],
+      ['PG XML 3', '-0.010000000', 'DB 기본값', null],
+    ]);
+  } finally {
+    await close(xmlReader.id);
+  }
+
   await page.getByRole('button', { name: 'edit demo 테이블', exact: true }).click();
   const cellEditor = page.getByRole('dialog', { name: 'PostgreSQL 행 편집', exact: true });
   const editNote = data.getByRole('button', { name: '1행 public note 편집', exact: true });
@@ -2227,7 +2269,7 @@ async function main() {
     await verify(browser, fixture, gateway, jump);
     withoutPreload = await startPostgres(false);
     await verifyStatsWithoutPreload(browser, withoutPreload);
-    console.log('Windows PostgreSQL E2E passed (column layouts, cell representations, statement stats, grid editing and SSH jump recovery).');
+    console.log('Windows PostgreSQL E2E passed (column layouts, cell representations, statement stats, grid editing, file import and SSH jump recovery).');
   } finally {
     await browser?.close();
     withoutPreload?.close();

@@ -29,7 +29,7 @@ StackPort는 로컬 우선 원격 접속·데이터베이스 작업 공간을 �
 - SQLite·PostgreSQL의 필터와 정렬을 연결·객체별로 이름을 붙여 저장하고, 다시 열어 적용하거나 현재 조건으로 갱신
 - SQLite·PostgreSQL 그리드의 **열 설정**에서 표시 여부·고정·순서·폭, 타입별 색상, 숫자 자릿수와 ISO 날짜 형식을 조정하고 연결·객체별 보기 프로필 저장
 - SQLite·PostgreSQL의 테이블·뷰·SQL 결과에서 현재 페이지의 여러 행을 선택하고 화면에 보이는 열을 탭 구분 형식으로 복사
-- SQLite·PostgreSQL의 편집 가능한 테이블에서 **파일 가져오기**로 CSV·TSV·TXT, JSON 객체 배열과 StackPort 결과 JSON을 매핑해 한 트랜잭션으로 추가
+- SQLite·PostgreSQL의 편집 가능한 테이블에서 **파일 가져오기**로 CSV·TSV·TXT·JSON·XML을 매핑해 한 트랜잭션으로 추가하고, XML은 레코드 경로를 선택해 속성과 하위 요소를 열로 가져오기
 - PostgreSQL 그리드의 필터·정렬을 적용한 전체 결과나 마지막 SQL 조회를 새 CSV·JSON 파일로 저장하고 진행 행 수 확인 또는 중단
 - PostgreSQL 일반 힙 테이블에서 긴 텍스트와 `bytea`를 원본 창의 텍스트·HEX 페이지로 보고 전체 값을 새 파일로 저장
 - PostgreSQL JSON·JSONB는 들여쓰기, XML은 구조, `bytea`의 정적 PNG는 이미지로 미리 보고 원문이나 HEX로 전환

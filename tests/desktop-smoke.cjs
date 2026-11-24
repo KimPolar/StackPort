@@ -386,6 +386,51 @@ async function main() {
   assert.equal(scalar('SELECT exact_integer || \'|\' || typeof(amount) || \'|\' || hex(payload) FROM json_destination'), '9007199254740993|real|00FF');
   assert.equal(scalar('SELECT document FROM json_destination'), '{"ready":true}');
 
+  mutateFixture("CREATE TABLE xml_destination (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, amount INTEGER NOT NULL, note TEXT DEFAULT '기본값', markup TEXT)");
+  await refreshObjects.click();
+  await explorer.getByRole('button', { name: 'xml_destination', exact: true }).click();
+  await fileImport.click();
+  const readXmlPaths = importDialog.getByRole('button', { name: '레코드 경로 읽기', exact: true });
+  await importPicker.setInputFiles({
+    name: 'blocked.xml', mimeType: 'application/xml',
+    buffer: Buffer.from('<!DOCTYPE feed SYSTEM "https://example.invalid/test"><feed/>'),
+  });
+  await readXmlPaths.click();
+  await importDialog.getByRole('alert').getByText(/DTD/).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM xml_destination'), '0');
+  await importPicker.setInputFiles({
+    name: 'sqlite-import.xml', mimeType: 'application/xml',
+    buffer: Buffer.from('\uFEFF<?xml version="1.0" encoding="UTF-16"?>' +
+      '<feed xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:a="urn:test" xmlns:b="urn:test">' +
+      '<metadata>사용하지 않음</metadata><records>' +
+      '<a:entry code="XML &amp; 1"><a:amount>9007199254740993</a:amount><note xsi:nil="1"/><markup><a:value><![CDATA[한글 & <그대로>]]></a:value></markup></a:entry>' +
+      '<b:entry code="XML 2"><b:amount>0</b:amount><note/></b:entry>' +
+      '<a:entry code="XML 3"><a:amount>-1</a:amount></a:entry></records></feed>', 'utf16le'),
+  });
+  await readXmlPaths.click();
+  const xmlPath = importDialog.getByLabel('XML 레코드 경로');
+  const selectedPath = await xmlPath.inputValue();
+  await xmlPath.selectOption({ label: '/feed/records · 1행' });
+  await importMapping.click();
+  await importDialog.getByRole('alert').getByText(/b:entry 요소가 반복됩니다/).waitFor();
+  await xmlPath.selectOption(selectedPath);
+  await importMapping.click();
+  await importDialog.getByText('sqlite-import.xml · UTF-16 LE · XML · /feed/records/a:entry {urn:test}', { exact: true }).waitFor();
+  assert.equal(await importDialog.getByLabel('원본 열 1 대상', { exact: true }).inputValue(), 'column:code');
+  assert.equal(await importDialog.getByLabel('원본 열 2 입력 형식', { exact: true }).inputValue(), 'integer');
+  await importDialog.getByRole('button', { name: '가져오기 미리보기', exact: true }).click();
+  await importedPreview.getByText('9007199254740993', { exact: true }).waitFor();
+  await importedPreview.getByText('(빈 문자열)', { exact: true }).waitFor();
+  await importedPreview.getByText('DB 기본값', { exact: true }).waitFor();
+  assert.equal(scalar('SELECT count(*) FROM xml_destination'), '0');
+  await importDialog.getByRole('button', { name: '가져오기 적용', exact: true }).click();
+  await importDialog.waitFor({ state: 'detached' });
+  await page.getByRole('status').getByText('행 3개 가져오기 완료', { exact: true }).waitFor();
+  assert.equal(scalar("SELECT amount || '|' || (note IS NULL) FROM xml_destination WHERE code='XML & 1'"), '9007199254740993|1');
+  assert.match(scalar("SELECT markup FROM xml_destination WHERE code='XML & 1'"), /xmlns:a="urn:test".*<!\[CDATA\[한글 & <그대로>\]\]>/);
+  assert.equal(scalar("SELECT length(note) FROM xml_destination WHERE code='XML 2'"), '0');
+  assert.equal(scalar("SELECT note FROM xml_destination WHERE code='XML 3'"), '기본값');
+
   mutateFixture(`CREATE TABLE multi_edit (id INTEGER PRIMARY KEY, label TEXT NOT NULL, amount INTEGER NOT NULL,
     CHECK ((label='원래' AND amount=3) OR (label='함께' AND amount=8)))`);
   mutateFixture("INSERT INTO multi_edit VALUES (1, '원래', 3)");
@@ -516,6 +561,7 @@ async function main() {
   mutateFixture('DROP TABLE multi_edit');
   mutateFixture('DROP TABLE imported_records');
   mutateFixture('DROP TABLE json_destination');
+  mutateFixture('DROP TABLE xml_destination');
   mutateFixture('DROP TABLE row_actions');
   mutateFixture('DROP TABLE display_examples');
   await refreshObjects.click();
@@ -932,7 +978,7 @@ async function main() {
   await page.getByRole('heading', { name: /복원 검증/ }).waitFor();
 
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
-  console.log('SQLite browsing, cancellation, editing, CSV/JSON, restore, audit, project lifecycle and workspace copy passed.');
+  console.log('SQLite browsing, cancellation, editing, CSV/JSON/XML import, restore, audit, project lifecycle and workspace copy passed.');
   await browser.close();
 }
 

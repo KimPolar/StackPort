@@ -53,8 +53,8 @@ function formatJson(source: string): StructuredPreview {
   return { kind: "json", text: output.join("") };
 }
 
-function parseXml(source: string): StructuredPreview {
-  const invalid = { error: "올바른 XML 형식으로 읽을 수 없어 원문을 표시합니다." };
+export function parseXmlDocument(source: string): Document | { error: string } {
+  const invalid = { error: "올바른 XML 형식으로 읽을 수 없습니다." };
   // Inspect declarations before the parser sees them. Comments and CDATA are inert.
   const declarations = /<!--|<!\[CDATA\[|<!DOCTYPE\b|<\?/gi;
   for (let marker; (marker = declarations.exec(source));) {
@@ -65,7 +65,7 @@ function parseXml(source: string): StructuredPreview {
       if (end < 0) return invalid;
       declarations.lastIndex = end + closing.length;
     } else if (value !== "<?" || !/^xml[ \t\r\n]/.test(source.slice(declarations.lastIndex, declarations.lastIndex + 4))) {
-      return { error: "DTD 또는 처리 지시문이 있는 XML은 원문으로 표시합니다." };
+      return { error: "DTD 또는 처리 지시문이 있는 XML은 읽을 수 없습니다." };
     }
   }
   let doc: Document;
@@ -79,6 +79,12 @@ function parseXml(source: string): StructuredPreview {
     || node.namespaceURI === "http://www.mozilla.org/newlayout/xml/parsererror.xml")) {
     return invalid;
   }
+  return doc;
+}
+
+function parseXml(source: string): StructuredPreview {
+  const doc = parseXmlDocument(source);
+  if ("error" in doc) return { error: doc.error + " 원문을 표시합니다." };
   let parts = 0;
   function element(node: Element, depth: number): XmlPart {
     parts += node.attributes.length + 1;

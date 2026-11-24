@@ -4,6 +4,7 @@ import { Dialog, type GridEditExitGuard } from "./Dialog";
 import { clipboardPasteLimits, decodeImportFile, fileImportLimits, delimiterNames, fileEncodings, inferSourceColumn,
   parseClipboardRows, parseDelimitedImport, type Delimiter, type FileEncoding } from "./structuredFilePreview";
 import type { Cell } from "./sqlResults";
+import { inspectXmlRecordPaths, readXmlRecords, type XmlImportTable, type XmlRecordPath } from "./xmlGridImport";
 
 export type GridPasteRequest = ({ engine: "sqlite"; profileId: string } | { engine: "postgres"; id: string; object: number })
   & { source: "clipboard" | "file"; profileName: string; location: string; environment: "DEV" | "STAGING" | "PROD"; table: string };
@@ -15,7 +16,10 @@ type Session = { token: string; columns: Column[] };
 type DelimitedSource = Exclude<ReturnType<typeof parseClipboardRows>, { error: string }>;
 type JsonCell = { kind: "null" | "text" | "integer" | "real" | "number" | "boolean" | "json" | "blob"; value: string };
 type JsonSource = { format: string; headers: string[]; columnCount: number; columnTypes: (string | null)[]; rows: (JsonCell | null)[][] };
-type Source = DelimitedSource | JsonSource;
+type StructuredSource = JsonSource | XmlImportTable;
+type ImportCell = NonNullable<StructuredSource["rows"][number][number]>;
+type Source = DelimitedSource | StructuredSource;
+type XmlSelection = { paths: XmlRecordPath[]; selected: number; encoding: FileEncoding };
 type Kind = "text" | "integer" | "real" | "source" | "blob_hex";
 type Blank = "empty" | "null" | "default";
 type Mapping = { column: string | null; kind: Kind; blank: Blank };
@@ -29,27 +33,27 @@ function mappingFor(postgres: boolean, column: Column | undefined, json = false)
   return { column: column?.name ?? null, kind, blank: preservesEmpty ? "empty" : "default" };
 }
 
-const jsonKindLabels: Record<JsonCell["kind"], string> = {
-  null: "NULL", text: "문자열", integer: "정수", real: "실수", number: "숫자", boolean: "불리언", json: "JSON", blob: "바이너리",
+const importKindLabels: Record<ImportCell["kind"], string> = {
+  null: "NULL", text: "문자열", integer: "정수", real: "실수", number: "숫자", boolean: "불리언", json: "JSON", blob: "바이너리", xml: "XML",
 };
 
-function jsonColumnType(source: JsonSource, index: number) {
+function structuredColumnType(source: StructuredSource, index: number) {
   if (source.columnTypes[index]) return source.columnTypes[index];
   const kinds = new Set(source.rows.flatMap(row => {
     const cell = row[index];
-    return cell && cell.kind !== "null" ? [jsonKindLabels[cell.kind]] : [];
+    return cell && cell.kind !== "null" ? [importKindLabels[cell.kind]] : [];
   }));
   return [...kinds].join(" · ");
 }
 
-function jsonSample(cell: JsonCell | null) {
+function structuredSample(cell: ImportCell | null) {
   if (!cell) return "생략";
   if (cell.kind === "null") return "NULL";
   if (cell.kind === "blob") return "\\x" + cell.value;
   return cell.value || "(빈 문자열)";
 }
 
-function jsonInput(cell: JsonCell, kind: Kind, postgres: boolean, target?: Column) {
+function structuredInput(cell: ImportCell, kind: Kind, postgres: boolean, target?: Column) {
   if (cell.kind === "null") return { kind: "null", value: "" };
   if (postgres) {
     if (cell.kind === "blob" && target?.declared_type !== "bytea") {
@@ -79,10 +83,11 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
   const [session, setSession] = useState<Session | null>(null);
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [format, setFormat] = useState<"auto" | "delimited" | "json">("auto");
+  const [format, setFormat] = useState<"auto" | "delimited" | "json" | "xml">("auto");
   const [encoding, setEncoding] = useState<FileEncoding | "auto">("auto");
   const [delimiter, setDelimiter] = useState<Delimiter | "auto">("auto");
   const [fileFormat, setFileFormat] = useState<{ encoding: FileEncoding; description: string } | null>(null);
+  const [xmlSelection, setXmlSelection] = useState<XmlSelection | null>(null);
   const [header, setHeader] = useState(importing);
   const [preserveBlanks, setPreserveBlanks] = useState(false);
   const [source, setSource] = useState<Source | null>(null);
@@ -99,13 +104,18 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
   const production = request.environment === "PROD";
   const postgres = request.engine === "postgres";
   const isJsonFile = format === "json" || (format === "auto" && (file?.name.toLowerCase().endsWith(".json") || file?.type === "application/json"));
-  const jsonSource = source && "format" in source ? source : null;
+  const isXmlFile = format === "xml" || (format === "auto" && !isJsonFile
+    && (file?.name.toLowerCase().endsWith(".xml") || file?.type === "application/xml" || file?.type === "text/xml"));
+  const structuredFile = isJsonFile || isXmlFile;
+  const structuredSource = source && "format" in source ? source : null;
+  const xmlSource = structuredSource && "matchNames" in structuredSource;
+  const jsonSource = structuredSource && !xmlSource;
   const tableColumns = session?.columns ?? [];
   const editableColumns = tableColumns.filter(column => column.editable);
   const findColumn = (name: string | null) => tableColumns.find(column => column.name === name);
   const inferred = useMemo(() => importing && source
     ? Array.from({ length: source.columnCount }, (_, index) => "format" in source
-      ? jsonColumnType(source, index) : inferSourceColumn(source.rows, index))
+      ? structuredColumnType(source, index) : inferSourceColumn(source.rows, index))
     : [], [importing, source]);
 
   useEffect(() => {
@@ -144,9 +154,16 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
 
   function mapColumns(parsed: Source) {
     const byPosition = editableColumns.filter(column => !column.auto_key);
-    setMapping(Array.from({ length: parsed.columnCount }, (_, index) => mappingFor(postgres,
-      parsed.headers ? findColumn(parsed.headers[index]) : byPosition[index], "format" in parsed,
-    )));
+    const used = new Set<string>();
+    setMapping(Array.from({ length: parsed.columnCount }, (_, index) => {
+      let target = parsed.headers ? findColumn(parsed.headers[index]) : byPosition[index];
+      if ("matchNames" in parsed) {
+        target ??= findColumn(parsed.matchNames[index]);
+        if (target && used.has(target.name)) target = undefined;
+        if (target?.editable) used.add(target.name);
+      }
+      return mappingFor(postgres, target, "format" in parsed && !("matchNames" in parsed));
+    }));
     setSource(parsed);
   }
 
@@ -156,12 +173,26 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
     pending.current = true;
     setBusy(true);
     try {
+      if (xmlSelection) {
+        const path = xmlSelection.paths[xmlSelection.selected];
+        const parsed = readXmlRecords(path);
+        setFileFormat({ encoding: xmlSelection.encoding, description: `XML · ${path.label}` });
+        mapColumns(parsed);
+        return;
+      }
       const bytes = await file.arrayBuffer().catch(() => null);
       if (!live.current) return;
       if (!bytes) { setError("파일을 읽지 못했습니다. 파일을 다시 선택하세요."); return; }
-      if (isJsonFile) {
+      if (structuredFile) {
         const decoded = decodeImportFile(bytes, encoding);
         if ("error" in decoded) { setError(decoded.error); return; }
+        if (isXmlFile) {
+          const paths = inspectXmlRecordPaths(decoded.text);
+          const preferred = paths.findIndex(path => path.records.length > 1 && path.records.some(row => row.childElementCount));
+          const repeated = preferred < 0 ? paths.findIndex(path => path.records.length > 1) : preferred;
+          setXmlSelection({ paths, selected: Math.max(0, repeated), encoding: decoded.encoding });
+          return;
+        }
         const parsed = await invoke<JsonSource>("inspect_json_import", { source: decoded.text });
         if (live.current) {
           setFileFormat({ encoding: decoded.encoding, description: parsed.format });
@@ -223,10 +254,12 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
           if (live.current) onApplied({ ...report, source: request.source });
         }
       } else {
-        const json = "format" in source;
-        const rows = json ? source.rows.map(row => mapping.flatMap(({ column, kind }, index) => {
+        const structured = "format" in source;
+        const rows = structured ? source.rows.map(row => mapping.flatMap(({ column, kind }, index) => {
           const cell = row[index];
-          return column === null || cell === null ? [] : [{ column, input: jsonInput(cell, kind, postgres, findColumn(column)) }];
+          if (column === null || cell === null) return [];
+          const inputKind = xmlSource && cell.kind === "text" && !cell.value ? "text" : kind;
+          return [{ column, input: structuredInput(cell, inputKind, postgres, findColumn(column)) }];
         })) : source.rows.map((row, rowIndex) => mapping.flatMap(({ column, kind, blank }, index) => {
           const value = row[index];
           if (column === null) return [];
@@ -238,7 +271,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
         }));
         const args = { token, columns, rows };
         const result = request.engine === "postgres" ? await invoke<Preview>("preview_postgres_row_paste", { ...args, id: request.id })
-          : await invoke<Preview>(json ? "preview_sqlite_json_import" : "preview_row_paste", args);
+          : await invoke<Preview>(structured ? "preview_sqlite_json_import" : "preview_row_paste", args);
         if (live.current) setPreview(result);
       }
     } catch (reason) {
@@ -267,30 +300,35 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
       </> : <>
         {!session && busy && <p role="status">테이블 열을 읽는 중…</p>}
         {session && importing && <div hidden={source !== null}>
-          <label className="field">가져올 파일<input type="file" accept=".csv,.tsv,.txt,.json,text/csv,text/tab-separated-values,text/plain,application/json"
-            disabled={busy} onChange={event => { setFile(event.target.files?.[0] ?? null); setError(""); }} /></label>
+          <label className="field">가져올 파일<input type="file" accept=".csv,.tsv,.txt,.json,.xml,text/csv,text/tab-separated-values,text/plain,application/json,application/xml,text/xml"
+            disabled={busy} onChange={event => { setFile(event.target.files?.[0] ?? null); setXmlSelection(null); setError(""); }} /></label>
           <label className="field">파일 형식<select value={format} disabled={busy}
-            onChange={event => { setFormat(event.target.value as typeof format); setError(""); }}>
+            onChange={event => { setFormat(event.target.value as typeof format); setXmlSelection(null); setError(""); }}>
             <option value="auto">자동 · 파일 확장자</option>
             <option value="delimited">구분 텍스트</option>
             <option value="json">JSON</option>
+            <option value="xml">XML</option>
           </select></label>
           <label className="field">파일 인코딩<select value={encoding} disabled={busy}
-            onChange={event => { setEncoding(event.target.value as FileEncoding | "auto"); setError(""); }}>
+            onChange={event => { setEncoding(event.target.value as FileEncoding | "auto"); setXmlSelection(null); setError(""); }}>
             <option value="auto">자동 · BOM 또는 UTF-8</option>
             {Object.entries(fileEncodings).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select></label>
-          {!isJsonFile && <label className="field">파일 구분자<select value={delimiter} disabled={busy}
+          {!structuredFile && <label className="field">파일 구분자<select value={delimiter} disabled={busy}
             onChange={event => { setDelimiter(event.target.value as Delimiter | "auto"); setError(""); }}>
             <option value="auto">자동</option>
             {Object.entries(delimiterNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select></label>}
-          <p className="form-note">CSV, TSV, TXT, JSON · 최대 {fileImportLimits.rows.toLocaleString("ko-KR")}행, {fileImportLimits.columns}열, 4 MiB</p>
+          {xmlSelection && <label className="field">XML 레코드 경로<select value={xmlSelection.selected} disabled={busy}
+            onChange={event => { setXmlSelection({ ...xmlSelection, selected: Number(event.target.value) }); setError(""); }}>
+            {xmlSelection.paths.map((path, index) => <option key={index} value={index}>{path.label} · {path.records.length}행</option>)}
+          </select></label>}
+          <p className="form-note">CSV, TSV, TXT, JSON, XML · 최대 {fileImportLimits.rows.toLocaleString("ko-KR")}행, {fileImportLimits.columns}열, 4 MiB</p>
         </div>}
         {session && !source && <>
           {!importing && <label className="field">붙여넣을 범위<textarea rows={8} value={text} disabled={busy} spellCheck={false} autoFocus
             onChange={event => { setText(event.target.value); setError(""); }} /></label>}
-          {!isJsonFile && <><label className="paste-header"><input type="checkbox" checked={header} disabled={busy}
+          {!structuredFile && <><label className="paste-header"><input type="checkbox" checked={header} disabled={busy}
             onChange={event => { setHeader(event.target.checked); setError(""); }} />첫 행에 열 이름이 있음</label>
           <label className="paste-header"><input type="checkbox" checked={preserveBlanks} disabled={busy}
             onChange={event => { setPreserveBlanks(event.target.checked); setError(""); }} />StackPort의 NULL과 빈 문자열 복원</label></>}
@@ -298,17 +336,18 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
         </>}
         {source && file && fileFormat && <p className="form-note">{file.name} · {fileEncodings[fileFormat.encoding]} · {fileFormat.description}</p>}
         {source && !preview && <>
-          <p className="form-note">{source.rows.length}개 행 · {source.columnCount}개 원본 열. {jsonSource
-            ? "저장할 대상 열을 확인하세요. 속성이 없는 값에는 DB 기본값을 사용합니다."
+          <p className="form-note">{source.rows.length}개 행 · {source.columnCount}개 원본 열. {structuredSource
+            ? "저장할 대상 열을 확인하세요. 파일에서 생략된 값에는 DB 기본값을 사용합니다."
             : "저장할 대상과 빈 셀 처리 방식을 확인하세요."}</p>
           {jsonSource && !postgres && <p className="form-note">SQLite가 선택한 입력 형식을 바꾸면 가져오기 전체가 롤백됩니다. 정밀도가 필요한 소수는 문자열로 보존하거나 실수 변환을 선택하세요.</p>}
+          {xmlSource && <p className="form-note">속성은 @로 표시됩니다. 빈 요소는 빈 문자열, xsi:nil은 NULL로 가져옵니다.</p>}
           <div className="grid-paste-mappings">{mapping.map((item, index) => {
             const column = findColumn(item.column);
             return <fieldset key={index} disabled={busy}>
               <legend>원본 열 {index + 1}{source.headers?.[index] && ` · ${source.headers[index]}`}</legend>
               {inferred[index] && <p className="form-note">원본 형식 · {inferred[index]}</p>}
               {"format" in source
-                ? <p className="paste-sample">{jsonSample(source.rows[0][index])}</p>
+                ? <p className="paste-sample">{structuredSample(source.rows[0][index])}</p>
                 : source.rows[0][index] !== "" && <p className="paste-sample">{source.rows[0][index] ?? "NULL"}</p>}
               <label className="field">대상 열<select aria-label={`원본 열 ${index + 1} 대상`} value={item.column === null ? "" : `column:${item.column}`}
                 onChange={event => updateMapping(index, mappingFor(postgres,
@@ -323,7 +362,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
                   <option value="text">문자열</option><option value="integer">정수</option><option value="real">{jsonSource ? "실수 (64비트)" : "실수"}</option>
                   {jsonSource && <option value="blob_hex">HEX 바이너리</option>}
                 </select></label>}
-                {!jsonSource && <label className="field">빈 셀<select aria-label={`원본 열 ${index + 1} 빈 셀`} value={item.blank}
+                {!structuredSource && <label className="field">빈 셀<select aria-label={`원본 열 ${index + 1} 빈 셀`} value={item.blank}
                   onChange={event => updateMapping(index, { ...item, blank: event.target.value as Blank })}>
                   <option value="empty">빈 문자열</option><option value="null">NULL</option><option value="default">DB 기본값</option>
                 </select></label>}
@@ -357,7 +396,7 @@ export function GridPasteDialog({ request, onClose, onApplied, onBusy, onExitGua
             setConfirmation(""); setError("");
           }}>{preview ? "열 매핑 수정" : importing ? "파일 설정 수정" : "범위 수정"}</button>}
           {session && !finished && <button type="submit" className="primary" disabled={busy || !dirty || Boolean(unavailable)}>
-            {busy ? "처리 중…" : preview ? `${action} 적용` : source ? previewLabel : "열 매핑"}
+            {busy ? "처리 중…" : preview ? `${action} 적용` : source ? previewLabel : isXmlFile && !xmlSelection ? "레코드 경로 읽기" : "열 매핑"}
           </button>}
         </div>
       </>}

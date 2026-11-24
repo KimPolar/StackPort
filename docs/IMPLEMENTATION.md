@@ -44,6 +44,8 @@ JSON 가져오기는 일반 객체 배열과 StackPort의 SQLite·PostgreSQL 결
 
 SQLite의 **원본 형식 유지**는 64비트 정수, 내보낸 실수, 불리언의 정수 표현과 BLOB을 각각의 저장 타입으로 넘깁니다. 일반 JSON의 소수와 64비트 범위를 넘는 정수는 원문을 문자열로 보존하며, 필요한 열은 직접 실수나 정수 입력으로 바꿀 수 있습니다. SQLite가 선택한 타입이나 값을 바꾸면 전체를 롤백합니다. StackPort 결과 JSON의 BLOB·`bytea`는 바이트로 복원할 수 있습니다. SQLite BLOB은 셀당 2,048바이트까지 지원하며 PostgreSQL은 서버에서 표시한 값의 미리보기 길이 제한을 적용합니다. [PostgreSQL 바이너리 타입](https://www.postgresql.org/docs/18/datatype-binary.html)
 
+XML 가져오기는 선택한 레코드 경로의 요소를 행으로 읽고, 속성(`@`)과 바로 아래 요소를 열에 매핑합니다. 이름은 네임스페이스 URI와 로컬 이름으로 구분합니다. 빠진 요소는 DB 기본값, 빈 요소는 빈 문자열, 참 값의 `xsi:nil`은 SQL NULL로 처리합니다. 하위 요소나 데이터 속성을 가진 셀은 XML로 직렬화해 전달합니다. 같은 이름의 하위 요소가 한 레코드에서 반복되면 행과 요소를 표시하고 경로를 다시 선택할 수 있습니다. DTD와 처리 지시문은 파싱 전에 거절합니다. XML도 1,000행·64열·4 MiB 한도와 대상 타입 검증을 적용하며, 문자 인코딩은 파일 설정에서 선택합니다. [XML 1.0](https://www.w3.org/TR/xml/) · [XML 네임스페이스](https://www.w3.org/TR/xml-names/) · [`xsi:nil`](https://www.w3.org/TR/xmlschema11-1/#xsi_nil)
+
 PostgreSQL 그리드 **원본 열기**는 상속 자식이 없는 일반 힙 테이블의 긴 텍스트·가변 길이 문자·JSON·JSONB·XML과 `bytea` 셀에서 사용할 수 있습니다. 텍스트는 4,096자, 바이너리는 4,096바이트씩 텍스트 또는 HEX로 확인합니다. **전체 값 저장**은 하나의 읽기 전용 스냅샷에서 순차 조회해 텍스트는 UTF-8, `bytea`는 원본 바이트로 기록합니다. 행 버전과 SELECT 및 행 수준 보안 정책을 다시 확인하며 행이 바뀌면 그리드 재조회를 안내합니다. 읽기가 끝난 뒤 새 파일을 게시하고 작업 기록에는 셀 내용과 파일 경로를 포함하지 않습니다. [PostgreSQL 행 버전 시스템 열](https://www.postgresql.org/docs/18/ddl-system-columns.html) · [바이너리 부분 조회](https://www.postgresql.org/docs/18/functions-binarystring.html)
 
 원본 창에서 JSON·JSONB 들여쓰기와 XML 구조는 요청할 때 최대 256 KiB를 읽습니다. JSON 보기에는 PostgreSQL이 반환한 숫자 토큰과 키를 그대로 표시합니다. XML은 노드와 속성을 텍스트로 렌더링합니다. DTD·처리 지시문이 있거나 구조 한도를 넘으면 원문으로 돌아갑니다. `bytea`는 1 MiB 이하이고 폭과 높이가 각각 2,048픽셀 이하인 정적 PNG를 미리 볼 수 있습니다. 미리보기에서 메타데이터를 제외하고 **전체 값 저장**에서는 실제 셀 바이트를 그대로 기록합니다. [PostgreSQL JSON·JSONB 타입](https://www.postgresql.org/docs/18/datatype-json.html) · [PNG 형식](https://www.w3.org/TR/png-3/)
@@ -362,6 +364,8 @@ PostgreSQL 다중 행 편집 검사는 Windows 그리드에서 같은 열 채우
 Windows 파일 가져오기 검사는 실제 SQLite 파일에 UTF-16 CSV 120행을, 테스트 PostgreSQL 서버에 Windows-949 TSV 105행을 추가합니다. 25행 미리보기, 큰 숫자, NULL과 빈 문자열, 따옴표 안의 줄바꿈, 운영 확인을 검사합니다. SQLite의 중복 키와 PostgreSQL의 마지막 행 수준 보안 오류에서 앞서 처리한 데이터도 롤백되는지 확인합니다.
 
 JSON 검사는 Windows에서 SQLite와 PostgreSQL의 결과를 내보낸 파일을 다른 테이블에 가져와 큰 정수·소수, BLOB·`bytea` 및 중첩 JSON을 다시 조회합니다. SQLite 형식 결과를 PostgreSQL의 `numeric`·`bytea` 열로 매핑하는 흐름도 검사합니다. 일반 객체 배열의 NULL·빈 문자열·생략한 기본값과 SQLite가 타입을 바꿀 때의 전체 롤백도 확인합니다.
+
+XML 검사는 Windows의 두 엔진에서 레코드 경로 선택과 속성 매핑 후 큰 숫자, NULL, 빈 문자열과 기본값을 따로 조회합니다. SQLite에서 UTF-16 입력, 접두사가 다른 같은 네임스페이스, CDATA와 DTD 거절을 검사합니다. PostgreSQL에서 중첩 요소를 `xml` 열에 저장해 네임스페이스를 지정한 XPath로 확인합니다.
 
 행 추가·삭제 검사는 UPDATE 권한 없이 INSERT와 DELETE를 실행할 수 있는지, 미리보기 중 행이 생기지 않는지, 서버 기본값과 자동 생성 키가 적용되는지 확인합니다. 이미 사용한 승인, 행 수준 보안의 삽입 거부, 연쇄 삭제와 다른 연결이 수정한 행의 삭제를 검사합니다. Windows 화면에서 초안 보존, 운영 환경 확인, 저장된 행 보기와 삭제 취소도 확인합니다.
 
