@@ -1,4 +1,4 @@
-use super::PostgresProfile;
+use super::{sql, sql_range, PostgresProfile, PostgresSqlOutcome, PostgresSqlScope};
 use crate::{quote_identifier, Result, SshTunnelManager, Store};
 use native_tls::{Certificate, Protocol, TlsConnector};
 use postgres_native_tls::MakeTlsConnector;
@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
+    sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
     task::JoinHandle,
     time::timeout,
 };
@@ -24,9 +24,9 @@ const CONNECTION_LIMIT: usize = 8;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(12);
 const CATALOG_SIZE: usize = 100;
-const ROW_SIZE: usize = 100;
-const COLUMN_SIZE: usize = 24;
-const VALUE_LENGTH: usize = 512;
+pub(super) const ROW_SIZE: usize = 100;
+pub(super) const COLUMN_SIZE: usize = 24;
+pub(super) const VALUE_LENGTH: usize = 512;
 const CA_SIZE: u64 = 256 * 1024;
 
 #[derive(Deserialize)]
@@ -86,7 +86,7 @@ struct Column {
 }
 
 #[derive(Serialize)]
-struct Cell {
+pub struct Cell {
     value: Option<String>,
     truncated: bool,
 }
@@ -112,6 +112,8 @@ pub struct PostgresManager {
 struct Session {
     client: AsyncMutex<Client>,
     connection: JoinHandle<()>,
+    tls: TlsConnector,
+    running_sql: Mutex<Option<sql::RunningSql>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -159,7 +161,7 @@ impl PostgresManager {
         let mut config = Config::new();
         config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
             .application_name("StackPort").ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
-            .options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog");
+            .options("-c default_transaction_read_only=on -c statement_timeout=8000 -c lock_timeout=2000 -c idle_session_timeout=600000 -c search_path=pg_catalog -c standard_conforming_strings=on");
         let tunnel = if let Some(id) = tunnel_id {
             let endpoint = tunnels
                 .local_database_routes(&profile.project_id, &settings.host, settings.port)?
@@ -182,11 +184,13 @@ impl PostgresManager {
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| "열린 PostgreSQL 연결이 너무 많습니다. 사용하지 않는 연결을 닫으세요.")?;
-        let (client, connection) =
-            timeout(CONNECT_TIMEOUT, config.connect(MakeTlsConnector::new(tls)))
-                .await
-                .map_err(|_| "PostgreSQL 연결 시간이 초과되었습니다.")?
-                .map_err(connect_error)?;
+        let (client, connection) = timeout(
+            CONNECT_TIMEOUT,
+            config.connect(MakeTlsConnector::new(tls.clone())),
+        )
+        .await
+        .map_err(|_| "PostgreSQL 연결 시간이 초과되었습니다.")?
+        .map_err(connect_error)?;
         drop(config);
         drop(password);
         let session = Arc::new(Session {
@@ -194,6 +198,8 @@ impl PostgresManager {
             connection: tokio::spawn(async move {
                 let _ = connection.await;
             }),
+            tls,
+            running_sql: Mutex::default(),
             _permit: permit,
         });
         let id = Uuid::new_v4().to_string();
@@ -287,6 +293,42 @@ impl PostgresManager {
         )
         .await
         .map_err(|_| "데이터 페이지를 읽는 시간이 초과되었습니다.")?
+    }
+
+    pub async fn execute_sql(
+        &self,
+        id: &str,
+        request: &str,
+        source: &str,
+        scope: PostgresSqlScope,
+    ) -> Result<PostgresSqlOutcome> {
+        let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
+        let span = sql_range::statement(source, scope)?;
+        let session = self.session(id)?;
+        let (cancel, signal) = watch::channel(false);
+        let _running = sql::RunningSql::register(&session.running_sql, request, cancel)?;
+        let operation = async {
+            let mut client = session.client.lock().await;
+            let (outcome, reusable) =
+                sql::query(&mut client, source, span, signal, session.tls.clone()).await;
+            if !reusable {
+                session.connection.abort();
+            }
+            outcome
+        };
+        match timeout(QUERY_TIMEOUT, operation).await {
+            Ok(outcome) => Ok(outcome),
+            Err(_) => {
+                session.connection.abort();
+                Ok(PostgresSqlOutcome::interrupted(true, false, true))
+            }
+        }
+    }
+
+    pub fn cancel_sql(&self, id: &str, request: &str) -> Result<bool> {
+        let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
+        let session = self.session(id)?;
+        sql::RunningSql::cancel(&session.running_sql, request)
     }
 }
 
@@ -398,11 +440,26 @@ async fn browse(
         .await
         .map_err(pg_error)?;
     let has_next = result.len() > ROW_SIZE;
-    let rows = result
+    let rows = preview_rows(&result, columns.len())?;
+    tx.commit().await.map_err(pg_error)?;
+    Ok(PostgresPage {
+        schema,
+        name,
+        kind,
+        columns,
+        rows,
+        total_columns,
+        has_next,
+        primary_key_order,
+    })
+}
+
+pub(super) fn preview_rows(result: &[Row], columns: usize) -> Result<Vec<Vec<Cell>>> {
+    result
         .iter()
         .take(ROW_SIZE)
         .map(|row| {
-            (0..columns.len())
+            (0..columns)
                 .map(|index| {
                     let mut value: Option<String> = field(row, index)?;
                     let mut truncated = false;
@@ -416,18 +473,7 @@ async fn browse(
                 })
                 .collect::<Result<Vec<_>>>()
         })
-        .collect::<Result<Vec<_>>>()?;
-    tx.commit().await.map_err(pg_error)?;
-    Ok(PostgresPage {
-        schema,
-        name,
-        kind,
-        columns,
-        rows,
-        total_columns,
-        has_next,
-        primary_key_order,
-    })
+        .collect()
 }
 
 fn primary_key_order(columns: &[Column]) -> String {

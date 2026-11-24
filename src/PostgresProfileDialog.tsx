@@ -50,7 +50,7 @@ export function PostgresProfileDialog({ action, projectId, onClose, onSaved }: {
   return <dialog ref={dialog} className="dialog" aria-labelledby={title} onClose={onClose} onCancel={event => { if (busy) event.preventDefault(); }}>
     <div className="dialog-heading"><h2 id={title}>{heading}</h2><button type="button" className="icon-button" aria-label="PostgreSQL 설정 닫기" disabled={busy} onClick={() => dialog.current?.close()}><X size={17} aria-hidden /></button></div>
     <form onSubmit={save} aria-busy={busy}>
-      {action.kind === "delete" ? <p className="confirm-copy"><strong>{action.profile.settings.name}</strong>의 저장된 연결을 삭제합니다.</p> :
+      {action.kind === "delete" ? <p className="confirm-copy"><strong>{action.profile.settings.name}</strong>의 저장된 연결을 삭제하고 열린 SQL 탭을 닫습니다.</p> :
         <fieldset className="postgres-profile-fields" disabled={busy}>
           <label className="field">연결 이름<input value={values.name} autoFocus required maxLength={80} onChange={event => update("name", event.target.value)} /></label>
           <div className="postgres-profile-address"><label className="field">호스트 이름 또는 IP<input value={values.host} required onChange={event => update("host", event.target.value)} /></label>

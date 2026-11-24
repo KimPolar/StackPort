@@ -1,4 +1,4 @@
-export type EditorLanguage = "sqlite" | "json" | "xml";
+export type EditorLanguage = "sqlite" | "postgres" | "json" | "xml";
 type SyntaxKind = "comment" | "string" | "identifier" | "number" | "keyword" | "parameter" | "property" | "tag";
 type SyntaxToken = { start: number; end: number; kind: SyntaxKind };
 type SyntaxPart = { text: string; kind?: SyntaxKind };
@@ -35,6 +35,24 @@ const sqliteRules = [
 ];
 const sqlite = syntaxGrammar(...sqliteRules);
 const sqliteLex = syntaxGrammar(...sqliteRules, /(?<punctuation>->>|->|<=|>=|<>|!=|==|<<|>>|\|\||[^ \t\r\n\f])/);
+const postgres = syntaxGrammar(
+  /(?<comment>--[^\r\n]*|\/\*)/,
+  /(?<string>(?<pgDollar>\$(?:[A-Za-z_\u0080-\u{10ffff}][A-Za-z_\d\u0080-\u{10ffff}]*)?\$)[\s\S]*?(?:\k<pgDollar>|$)|[eE]'(?:''|\\[\s\S]|[^'\\])*(?:'|$)|(?:[uU]&|[bBxX])?'(?:''|[^'])*(?:'|$))/u,
+  /(?<identifier>(?:[uU]&)?"(?:""|[^"])*(?:"|$))/,
+  /(?<parameter>\$\d+)/,
+  sqliteRules[4], sqliteRules[5],
+);
+const postgresKeywords = new Set([
+  "SELECT FROM WHERE JOIN INNER LEFT RIGHT FULL OUTER CROSS NATURAL ON USING AS DISTINCT ALL UNION INTERSECT EXCEPT",
+  "WITH RECURSIVE MATERIALIZED VALUES TABLE LATERAL ONLY TABLESAMPLE INSERT INTO UPDATE DELETE MERGE RETURNING",
+  "CREATE ALTER DROP VIEW SCHEMA INDEX TRIGGER FUNCTION PROCEDURE EXTENSION TEMP TEMPORARY SET SHOW RESET",
+  "PRIMARY KEY FOREIGN REFERENCES CONSTRAINT CHECK UNIQUE DEFAULT GENERATED ALWAYS COLLATE COPY",
+  "ORDER BY GROUP GROUPING SETS ROLLUP CUBE HAVING LIMIT OFFSET FETCH NEXT ROWS ROW FIRST LAST ASC DESC NULLS",
+  "NULL TRUE FALSE UNKNOWN AND OR NOT IS IN EXISTS BETWEEN LIKE ILIKE SIMILAR ESCAPE CASE WHEN THEN ELSE END",
+  "CAST FILTER OVER WINDOW PARTITION RANGE GROUPS PRECEDING FOLLOWING CURRENT UNBOUNDED EXCLUDE TIES",
+  "BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE TRANSACTION READ WRITE EXPLAIN ANALYZE FOR OF SHARE SKIP LOCKED",
+  "CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER SESSION_USER LOCALTIME LOCALTIMESTAMP",
+].flatMap(line => line.split(" ")));
 
 export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
 
@@ -72,14 +90,19 @@ export function editorLanguageForFile(filename: string): EditorLanguage | undefi
 export function editorSyntaxTokens(value: string, language: EditorLanguage): SyntaxToken[] | null {
   if (value.length > textLimit) return null;
   const tokens: SyntaxToken[] = [];
-  const grammar = { sqlite, json, xml }[language];
-  for (const match of value.matchAll(grammar)) {
+  const grammar = new RegExp({ sqlite, postgres, json, xml }[language]);
+  for (let match = grammar.exec(value); match; match = grammar.exec(value)) {
     const groups = match.groups!;
     const start = match.index;
-    const end = start + match[0].length;
+    let end = start + match[0].length;
+    if (language === "postgres" && groups.comment === "/*") {
+      end = postgresCommentEnd(value, end);
+      grammar.lastIndex = end;
+    }
     let kind: SyntaxKind;
     if (groups.word) {
-      const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : /^(?:true|false|null)$/.test(groups.word);
+      const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : language === "postgres"
+        ? postgresKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
       if (!marked) continue;
       kind = "keyword";
     } else if (groups.string && language === "json") {
@@ -93,6 +116,18 @@ export function editorSyntaxTokens(value: string, language: EditorLanguage): Syn
     tokens.push({ start, end, kind });
   }
   return tokens;
+}
+
+function postgresCommentEnd(value: string, start: number) {
+  let depth = 1;
+  for (let index = start; index < value.length; index++) {
+    if (value.startsWith("/*", index)) { depth++; index++; }
+    else if (value.startsWith("*/", index)) {
+      if (--depth === 0) return index + 2;
+      index++;
+    }
+  }
+  return value.length;
 }
 
 export function editorSyntaxLine(value: string, tokens: SyntaxToken[], start: number, end: number): SyntaxPart[] {

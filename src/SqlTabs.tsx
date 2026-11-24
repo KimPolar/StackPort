@@ -31,17 +31,18 @@ export const isSqlDraftDirty = (draft: SqlDraft) => draft.document.text !== draf
 export const sqlTabButtonId = (id: string) => `sql-tab-${id}`;
 export const sqlTabPanelId = (id: string) => `sql-panel-${id}`;
 
-export function SqlTabStrip({ group, onSelect, onNew, onClose }: {
+export function SqlTabStrip({ group, onSelect, onNew, onClose, closeDisabledFor }: {
   group: SqlTabSet;
   onSelect: (id: string) => void;
   onNew: () => void;
   onClose: (draft: SqlDraft) => void;
+  closeDisabledFor?: string;
 }) {
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     const { tabs } = group;
     if (event.key === "Delete") {
       event.preventDefault();
-      onClose(tabs[index]);
+      if (tabs[index].id !== closeDisabledFor) onClose(tabs[index]);
       return;
     }
     const destination = event.key === "ArrowRight" ? (index + 1) % tabs.length
@@ -67,7 +68,7 @@ export function SqlTabStrip({ group, onSelect, onNew, onClose }: {
             title={draft.savedPath || title} onClick={() => onSelect(draft.id)} onKeyDown={event => onKeyDown(event, index)}>
             <FileCode2 size={14} aria-hidden /><span>{title}</span>{dirty && <span className="sql-tab-dirty" aria-hidden />}
           </button>
-          <button type="button" className="sql-tab-close" aria-label={`${title} 탭 닫기`} tabIndex={selected ? 0 : -1}
+          <button type="button" className="sql-tab-close" aria-label={`${title} 탭 닫기`} tabIndex={selected ? 0 : -1} disabled={draft.id === closeDisabledFor}
             onClick={() => onClose(draft)}><X size={13} aria-hidden /></button>
         </div>;
       })}

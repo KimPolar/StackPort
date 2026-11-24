@@ -28,6 +28,15 @@ test("distinguishes JSON properties and treats XML markup as text ranges", () =>
   ]);
 });
 
+test("highlights PostgreSQL dollar strings, escaped strings, nested comments and positional variables", () => {
+  const text = "/* SELECT /* nested */ still comment ' */ SELECT $값$ ; SELECT $값$, E'it\\'s', \"ILIKE\", $12 ILIKE 'a'";
+  assert.deepEqual(marked(text, "postgres"), [
+    ["comment", "/* SELECT /* nested */ still comment ' */"],
+    ["keyword", "SELECT"], ["string", "$값$ ; SELECT $값$"], ["string", "E'it\\'s'"],
+    ["identifier", '"ILIKE"'], ["parameter", "$12"], ["keyword", "ILIKE"], ["string", "'a'"],
+  ]);
+});
+
 test("clips multiline tokens to the visible line and falls back at rendering limits", () => {
   const text = "/* 첫 줄\n둘😀째 */ SELECT 12";
   const tokens = editorSyntaxTokens(text, "sqlite");

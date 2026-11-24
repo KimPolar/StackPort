@@ -12,7 +12,11 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
 
-PostgreSQL 14 이상에서 시스템 스키마를 제외한 스키마와 테이블·파티션 테이블·뷰·구체화 뷰를 조회합니다. 연결과 조회 트랜잭션에 읽기 전용 정책을 적용하고 스키마 접근 권한과 테이블·뷰의 SELECT 권한을 표시합니다. 데이터는 한 번에 100행과 24열, 값 하나를 512자까지 표시합니다. 숫자는 서버가 반환한 문자열을 유지하며 NULL과 빈 문자열을 구분합니다. 기본 키가 있는 객체는 키 순서로 읽습니다. 다른 객체의 페이지 순서는 서버 실행 계획에 따라 달라질 수 있습니다. PostgreSQL 작업 공간의 범위는 객체 탐색과 데이터 미리보기입니다. [PostgreSQL 세션 제한](https://www.postgresql.org/docs/current/runtime-config-client.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/current/sql-set-transaction.html)
+PostgreSQL 14 이상에서 시스템 스키마를 제외한 스키마와 테이블·파티션 테이블·뷰·구체화 뷰를 조회합니다. 연결과 조회 트랜잭션에 읽기 전용 정책을 적용하고 스키마 접근 권한과 테이블·뷰의 SELECT 권한을 표시합니다. 데이터는 한 번에 100행과 24열, 값 하나를 512자까지 표시합니다. 숫자는 서버가 반환한 문자열을 유지하며 NULL과 빈 문자열을 구분합니다. 기본 키가 있는 객체는 키 순서로 읽습니다. 다른 객체의 페이지 순서는 서버 실행 계획에 따라 달라질 수 있습니다. [PostgreSQL 세션 제한](https://www.postgresql.org/docs/current/runtime-config-client.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/current/sql-set-transaction.html)
+
+PostgreSQL에서 **SQL 편집기**를 선택하거나 객체의 **SQL로 열기**를 눌러 조회를 작성합니다. 연결별 탭과 UTF-8 파일을 지원하며 파일을 저장할 때 BOM과 LF·CRLF를 유지합니다. `Ctrl+Enter`는 선택한 SQL 또는 문서의 단일 문장을, `Ctrl+Shift+Enter`는 커서가 속한 문장을 실행합니다. 달러 인용 문자열, 이스케이프 문자열, 중첩 블록 주석 안의 세미콜론을 문장 경계에서 제외합니다. 서버 파싱 오류에 위치가 있으면 편집기에서 이동할 수 있습니다. [PostgreSQL SQL 문법](https://www.postgresql.org/docs/18/sql-syntax-lexical.html)
+
+SQL은 읽기 전용 트랜잭션 안에서 단일 조회로 준비해 실행한 뒤 롤백하고 세션 상태를 정리합니다. 연결당 한 쿼리가 실행되며 서버의 문장 제한은 8초입니다. 취소는 기존 연결과 같은 검증 TLS 경로를 사용하고 실행 중인 쿼리가 서버 중단을 반환하면 확인 상태를 표시합니다. 연결을 다시 열어야 하는 경우에도 작성 중인 SQL 탭은 메모리에 유지합니다. 탭의 마지막 실행 결과는 최대 100행·24열로 가져오고, 25행씩 다시 실행 없이 표시합니다. 마지막으로 실행한 최대 네 탭의 결과를 현재 작업 공간에서 유지합니다. [PostgreSQL 확장 프로토콜과 취소](https://www.postgresql.org/docs/18/protocol-flow.html) · [PostgreSQL 트랜잭션 모드](https://www.postgresql.org/docs/18/sql-set-transaction.html)
 
 SQLite 연결 헤더의 **관계도** 또는 명령 팔레트에서 읽기 전용 ERD를 엽니다. 한 번의 SQLite 읽기 스냅샷으로 기본 스키마의 테이블·열·외래 키를 가져옵니다. 캔버스에서 선택한 테이블과 직접 연결된 테이블을 표시하고, 화살표는 외래 키를 선언한 테이블에서 참조 대상으로 향합니다. 복합 외래 키는 하나로 묶고 암시 참조는 대상 기본 키 순서로 해석합니다. 참조 테이블·열을 찾을 수 없거나 암시 참조의 열 수가 맞지 않으면 표시합니다. 테이블 이름 및 관계 유형으로 목록을 좁히고, 확대/축소하거나 **테이블 열기**로 열·인덱스·생성 SQL을 확인합니다. 테이블 512개와 열·외래 키 열 대응 30,000개까지 읽으며 한 페이지에 외래 키 16개를 표시합니다. [SQLite 외래 키](https://www.sqlite.org/foreignkeys.html)
 
@@ -274,7 +278,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한, 데이터 페이지를 확인합니다.
+PostgreSQL 검사는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`가 들어 있는 PostgreSQL의 `bin` 폴더와 OpenSSL을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 임시 CA와 DNS 이름이 있는 테스트 인증서를 만들고, 직접 및 로컬 SSH 터널 접속에서 Windows 인증서 검증과 접근 권한을 확인합니다. PostgreSQL 18.6에서 조회 제한, 쓰기 차단, 서버 취소·응답 시간 제한, SQL 초안과 파일·결과 탭을 검증합니다.
 
 ```powershell
 $env:STACKPORT_TEST_ROOT = '<출력된 테스트 폴더>'

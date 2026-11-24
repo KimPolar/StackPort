@@ -274,6 +274,9 @@ function App() {
   const sqlTarget = profile && project ? {
     profileId: profile.id, projectId: project.id, projectName: project.name, profileName: profile.name,
   } : null;
+  const postgresTarget = postgresProfile && project ? {
+    profileId: postgresProfile.id, projectId: project.id, projectName: project.name, profileName: postgresProfile.settings.name,
+  } : null;
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
@@ -750,6 +753,8 @@ function App() {
       if (action.target.profileId === profileId) {
         resetSqlView();
         requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
+      } else if (action.target.profileId === postgresId) {
+        requestAnimationFrame(() => document.getElementById("postgres-sql-editor")?.focus());
       }
       editSqlTabs(action.target, group => addSqlTab(group, action.target, contents, { path }));
     } else if (action.closeAfter) {
@@ -1019,7 +1024,10 @@ function App() {
     setPostgresProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (postgresAction.kind === "create" && saved) selectPostgresProfile(saved.id);
-    if (!saved && previous === postgresId) setPostgresId("");
+    if (!saved && previous) {
+      removeSqlConnections(new Set([previous]));
+      if (previous === postgresId) setPostgresId("");
+    }
     setPostgresAction(null);
   }
 
@@ -1063,7 +1071,7 @@ function App() {
         { id: "create:postgres", title: "PostgreSQL 연결 추가", group: "작업", Icon: Database, run: () => setPostgresAction({ kind: "create" }) },
         { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
       );
-      if (desktop) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
+      if (desktop && !postgresProfile) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
     for (const item of projects) commands.push({
@@ -1199,7 +1207,22 @@ function App() {
       <code>{restoreReport.sha256}</code>
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
-    {postgresProfile && <div hidden={historyOpen}><PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} /></div>}
+    {postgresProfile && postgresTarget && <div hidden={historyOpen}>
+      <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} editor={{
+        tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
+        select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
+        add: (text = "") => {
+          editSqlTabs(postgresTarget, group => addSqlTab(group, postgresTarget, { ...emptySqlDocument, text }));
+          requestAnimationFrame(() => document.getElementById("postgres-sql-editor")?.focus());
+        },
+        close: requestCloseSqlTab,
+        edit: (id, text) => editSqlTabs(postgresTarget, group => ({
+          ...group, tabs: group.tabs.map(draft => draft.id === id ? { ...draft, document: { ...draft.document, text } } : draft),
+        })),
+        openFile: () => setSqlFileAction({ mode: "open", target: postgresTarget }),
+        saveFile: draft => setSqlFileAction({ mode: "save", draft: { ...draft, ...postgresTarget } }),
+      }} />
+    </div>}
     {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
     !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite, PostgreSQL과 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
     postgresProfile ? null :

@@ -14,7 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
-    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo,
+    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlOutcome, PostgresSqlScope,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -823,6 +823,18 @@ async fn postgres_page(postgres: State<'_, PostgresManager>, id: String, object:
 }
 
 #[tauri::command]
+async fn execute_postgres_sql(
+    postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
+) -> Result<PostgresSqlOutcome, String> {
+    postgres.execute_sql(&id, &request, &source, scope).await
+}
+
+#[tauri::command]
+fn cancel_postgres_sql(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<bool, String> {
+    postgres.cancel_sql(&id, &request)
+}
+
+#[tauri::command]
 async fn create_ssh_tunnel(store: State<'_, Store>, project_id: String, input: SshTunnelInput) -> Result<SavedSshTunnel, String> {
     let store = store.inner().clone();
     worker(move || store.create_ssh_tunnel(&project_id, input)).await
@@ -1464,6 +1476,8 @@ fn main() {
             postgres_schemas,
             postgres_objects,
             postgres_page,
+            execute_postgres_sql,
+            cancel_postgres_sql,
             create_ssh_tunnel,
             update_ssh_tunnel,
             delete_ssh_tunnel,

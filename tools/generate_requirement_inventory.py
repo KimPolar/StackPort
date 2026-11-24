@@ -19,7 +19,7 @@ PARTIAL = {
     "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "읽기 전용·실행 중·중단·시간 초과·오류 표시",
-    "SP-UI-019": "SQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
+    "SP-UI-019": "SQLite·PostgreSQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-015": "작업 공간의 라이트·다크·시스템 테마, 컴팩트 밀도, 분할·초안·터미널을 유지하는 집중 모드, 탐색기 펼치기·접기",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL 호스트·포트·사용자·이름·환경 저장",
@@ -87,11 +87,11 @@ PARTIAL = {
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부 열람",
     "SP-DB-021": "PostgreSQL 스키마 내 테이블·뷰 이름 검색",
-    "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 객체의 열·데이터 미리보기",
+    "SP-DB-022": "SQLite 객체의 구조·데이터 조회와 전체 결과 CSV·JSON 내보내기, PostgreSQL 객체의 열·데이터 미리보기와 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·서버 인코딩·시간대 표시",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite 읽기 전용 연결과 쓰기 차단, PostgreSQL 읽기 전용 연결 및 스키마·SELECT 권한 확인",
-    "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션과 읽기 전용 트랜잭션",
+    "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
     "SP-DT-001": "SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",
     "SP-DT-003": "기본 키로 식별한 SQLite 단일 셀 수정",
     "SP-DT-004": "단일 셀 이전·변경 값 미리보기와 취소",
@@ -105,15 +105,15 @@ PARTIAL = {
     "SP-DT-021": "SQLite 행 전체 지문을 이용한 동시 수정 감지",
     "SP-DT-022": "SQLite 단일 셀 트랜잭션·롤백과 저장 값 검증",
     "SP-DT-024": "SQLite 제약·형식·충돌 실패 시 롤백과 오류 표시",
-    "SP-SQ-001": "연결별 다중 SQL 탭과 SQLite 구문 강조, 줄 번호·커서 위치 및 일반 텍스트 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인",
+    "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
-    "SP-SQ-003": "현재 SQLite 연결에서 SQL 준비 단계의 문법·객체 참조·타입·준비 오류 및 읽기 전용 정책 표시, 문서 UTF-16 범위로 이동",
+    "SP-SQ-003": "SQLite 준비 단계의 문법·객체·타입·읽기 전용 진단과 문서 범위 이동, PostgreSQL 실행 전 서버 파싱 오류의 문서 위치 이동",
     "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정보를 호버와 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
-    "SP-SQ-007": "SQLite 문서 전체·선택 영역 일괄 실행과 커서 위치의 개별 실행, 구분자·문자열·주석·트리거 경계 처리",
-    "SP-SQ-008": "각 SQL 탭의 개별·일괄 조회 결과 보관, 문장별 시간·페이지·내보내기, 오류나 중단 위치로 이동",
-    "SP-SQ-009": "SQLite 조회 중단과 시간 초과, 완료 여부 표시",
+    "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회의 문서·선택·현재 문장 실행, 방언별 문자열·주석·SQLite 트리거 경계 처리",
+    "SP-SQ-008": "SQLite SQL 탭별 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회의 결과·시간·오류 위치",
+    "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL의 검증 TLS 경로를 통한 서버 취소와 서버 중단 확인·시간 제한",
     "SP-SQ-010": "SQLite 매개변수 슬롯 감지와 형식 지정·값 바인딩, 입력 숨기기",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
@@ -121,7 +121,8 @@ PARTIAL = {
     "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
     "SP-SQ-016": "SQLite 결과 페이지의 조회 시간·읽은 행·스캔 단계·정렬·자동 인덱스 행·가상 머신 단계, 같은 페이지의 고정 결과와 비교",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
-    "SP-SQ-018": "1 MiB 이하 UTF-8 SQL 파일 열기와 새 파일 저장, BOM·LF/CRLF 유지 및 편집기에서 명시 실행",
+    "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
+    "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
     "SP-MD-002": "SQLite 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
     "SP-MD-006": "SQLite 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
@@ -130,6 +131,7 @@ PARTIAL = {
     "SP-MD-019": "SQLite 외래 키를 따라 탐색하고 관계 없는 테이블, 찾을 수 없는 참조 테이블·열과 암시 참조 키 불일치 표시",
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
+    "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
     "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
     "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
@@ -341,5 +343,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
+            if requirement_id in {
+                "SP-UI-014", "SP-UI-019", "SP-SQ-001", "SP-SQ-003", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009",
+                "SP-SQ-018", "SP-SQ-022", "SP-SQ-025", "SP-SQ-026",
+            }:
+                evidence += "; crates/stackport-core/src/postgres/sql.rs; src/PostgresSqlWorkspace.tsx; tests/postgres-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

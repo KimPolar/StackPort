@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, Database, Plug, ShieldCheck, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Database, FileCode2, Plug, ShieldCheck, X } from "lucide-react";
+import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
 import "./postgresWorkspace.css";
 
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
@@ -13,13 +14,15 @@ type ObjectKind = "table" | "partitioned" | "view" | "materialized";
 type DatabaseObject = { id: number; name: string; kind: ObjectKind; readable: boolean };
 type ObjectPage = { objects: DatabaseObject[]; has_next: boolean };
 type Page = { schema: string; name: string; kind: ObjectKind; columns: { name: string; data_type: string; not_null: boolean; primary_key_position: number | null }[];
-  rows: { value: string | null; truncated: boolean }[][]; total_columns: number; has_next: boolean; primary_key_order: boolean };
+  rows: PostgresCell[][]; total_columns: number; has_next: boolean; primary_key_order: boolean };
 type Route = { id: string; name: string; port: number };
 const kindLabels: Record<ObjectKind, string> = { table: "테이블", partitioned: "파티션 테이블", view: "뷰", materialized: "구체화 뷰" };
 const endpoint = (host: string, port: number) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
+const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
 
-export function PostgresWorkspace({ profile }: { profile: PostgresProfile }) {
+export function PostgresWorkspace({ profile, editor }: { profile: PostgresProfile; editor: PostgresEditorState }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [view, setView] = useState<"catalog" | "sql">("catalog");
   const [dialog, setDialog] = useState(false);
   const [closing, setClosing] = useState(false);
   const [error, setError] = useState("");
@@ -27,6 +30,14 @@ export function PostgresWorkspace({ profile }: { profile: PostgresProfile }) {
   const { name, host, port, database, environment } = profile.settings;
 
   useEffect(() => () => { if (active.current) void invoke("close_postgres", { id: active.current }).catch(() => {}); }, []);
+
+  function closedByQuery(id: string) {
+    if (active.current !== id) return;
+    active.current = null;
+    setSession(null);
+    setError("PostgreSQL 연결이 닫혔습니다. 다시 연결하세요.");
+    void invoke("close_postgres", { id }).catch(() => {});
+  }
 
   async function disconnect() {
     if (!active.current || closing) return;
@@ -50,12 +61,22 @@ export function PostgresWorkspace({ profile }: { profile: PostgresProfile }) {
       </div>
     </div>
     {error && <p className="error-banner" role="alert">{error}</p>}
+    <nav className="postgres-views" aria-label="PostgreSQL 보기">
+      <button type="button" className="secondary small" aria-pressed={view === "catalog"} onClick={() => setView("catalog")}>객체 탐색</button>
+      <button type="button" className="secondary small" aria-pressed={view === "sql"} onClick={() => setView("sql")}><FileCode2 size={14} aria-hidden /> SQL 편집기</button>
+    </nav>
     {session && <>
       <div className="postgres-server" role="status">TLS 연결됨 · PostgreSQL {session.version} · {session.username}@{session.database} · {session.encoding} · {session.timezone}{session.tunnel && ` · SSH 터널 ${session.tunnel}`}</div>
-      <PostgresBrowse key={session.id} id={session.id} />
+      <div hidden={view !== "catalog"}>
+        <PostgresBrowse key={session.id} id={session.id} onOpenSql={(schema, table) => {
+          editor.add(`SELECT *\nFROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)};`);
+          setView("sql");
+        }} />
+      </div>
     </>}
+    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={session?.id ?? null} editor={editor} onClosed={closedByQuery} /></div>
     {dialog && <ConnectDialog profile={profile} onClose={() => setDialog(false)} onOpened={connected => {
-      active.current = connected.id; setSession(connected); setDialog(false);
+      active.current = connected.id; setSession(connected); setDialog(false); setError("");
     }} />}
   </section>;
 }
@@ -118,7 +139,7 @@ function useRead<T>(command: string, args: Record<string, unknown> | null, revis
   return result?.args === args && result.revision === revision ? { ...result, loading: false } : { data: null, error: "", loading: args !== null };
 }
 
-function PostgresBrowse({ id }: { id: string }) {
+function PostgresBrowse({ id, onOpenSql }: { id: string; onOpenSql: (schema: string, name: string) => void }) {
   const [schemaPage, setSchemaPage] = useState(0);
   const [schema, setSchema] = useState<Schema | null>(null);
   const [objectPage, setObjectPage] = useState(0);
@@ -171,8 +192,11 @@ function PostgresBrowse({ id }: { id: string }) {
       </>}
     </aside>
     <section className="postgres-data results-card" aria-label="PostgreSQL 조회 결과" aria-busy={page.loading}>
-      {object ? <div className="panel-heading"><strong>{schema?.name}.{object.name}</strong>
-        <button type="button" className="secondary small" disabled={page.loading} onClick={() => setRefresh(value => value + 1)}>다시 조회</button></div> :
+      {object && schema ? <div className="panel-heading"><strong>{schema.name}.{object.name}</strong>
+        <div className="sql-editor-actions">
+          <button type="button" className="secondary small" onClick={() => onOpenSql(schema.name, object.name)}>SQL로 열기</button>
+          <button type="button" className="secondary small" disabled={page.loading} onClick={() => setRefresh(value => value + 1)}>다시 조회</button>
+        </div></div> :
         <p className="result-empty">스키마와 조회할 테이블 또는 뷰를 선택하세요.</p>}
       {page.error && <p className="error-banner" role="alert">{page.error}</p>}
       {page.loading && <p className="result-empty" role="status">데이터를 읽는 중…</p>}
@@ -183,7 +207,7 @@ function PostgresBrowse({ id }: { id: string }) {
             {column.name}<small>{column.data_type}{column.primary_key_position !== null && ` · PK ${column.primary_key_position}`}{column.not_null && " · NOT NULL"}</small>
           </th>)}</tr></thead>
             <tbody>{page.data.rows.map((row, index) => <tr key={index}>{row.map((cell, column) => <td key={column}>
-              {cell.value === null ? <span className="postgres-null">NULL</span> : <code>{cell.value}{cell.truncated && <span title="512자 미리보기">…</span>}</code>}
+              <PostgresValue cell={cell} />
             </td>)}</tr>)}</tbody></table></div>}
         {page.data.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
         <div className="postgres-paging">

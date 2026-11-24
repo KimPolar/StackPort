@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync, spawn, spawnSync } = require('node:child_process');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -45,7 +45,9 @@ async function startPostgres() {
        9007199254740993.123, '마지막 열' FROM generate_series(1, 105) AS series(i);`.replace(/\s+/g, ' '),
     'CREATE VIEW report.visible AS SELECT id FROM report."quoted table" WHERE id=4;',
     'CREATE TABLE report.denied (id integer);',
+    'CREATE TABLE report.write_probe (id integer);',
     'GRANT SELECT ON report."quoted table", report.visible TO fixture_reader;',
+    'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
   ].join('\n') + '\n';
   const postgres = path.join(bin, 'postgres.exe');
   const initialized = spawnSync(postgres, ['--single', '-D', data, 'postgres'], {
@@ -166,6 +168,54 @@ async function verify(browser, fixture, gateway) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
+  const query = (sql, scope = { kind: 'document' }, request = randomUUID()) =>
+    command('execute_postgres_sql', { id: session.id, request, source: sql, scope });
+  const content = await query("/* outer /* nested ; */ end */ SELECT $tag$한;글$tag$ AS duplicate, 9007199254740993.123::numeric AS duplicate, NULL::text; -- tail");
+  assert.equal(content.status, 'completed', JSON.stringify(content));
+  assert.equal(content.connection_closed, false);
+  assert.deepEqual(content.columns.map(column => column.name), ['duplicate', 'duplicate', 'text']);
+  assert.deepEqual(content.rows[0].map(value => value.value), ['한;글', '9007199254740993.123', null]);
+  const capped = await query('SELECT * FROM report."quoted table" ORDER BY id');
+  assert.equal(capped.rows.length, 100);
+  assert.equal(capped.rows[99][0].value, '100');
+  assert.equal(capped.more_rows, true);
+  assert.equal(capped.total_columns, 26);
+  assert.equal(capped.columns.length, 24);
+  assert.equal(capped.rows[1][1].truncated, true);
+  await assert.rejects(query('SELECT 1; SELECT 2;'), /한 번에 한 문장/);
+  for (const write of [
+    "INSERT INTO report.write_probe VALUES (1) RETURNING id",
+    "WITH inserted AS (INSERT INTO report.write_probe VALUES (2) RETURNING id) SELECT id FROM inserted",
+    "SET TRANSACTION READ WRITE",
+    "CREATE TEMP TABLE fixture_scratch (value integer)",
+  ]) {
+    const result = await query(write);
+    assert.equal(result.status, 'failed', JSON.stringify(result));
+    assert.match(result.error, /읽기 전용/);
+  }
+  const unchanged = await query("SELECT count(*) FROM report.write_probe");
+  assert.equal(unchanged.rows[0][0].value, '0');
+  const deniedSelect = await query('SELECT * FROM report.denied');
+  assert.match(deniedSelect.error, /SQLSTATE 42501/);
+  const positioned = "SELECT '🧪';" + '\n' + "SELECT missing FROM report.visible;";
+  const selectionStart = positioned.indexOf('SELECT missing');
+  const error = await query(positioned, { kind: 'selection', start: selectionStart, end: positioned.length });
+  assert.equal(error.position, positioned.indexOf('missing'));
+  const setting = await query("SELECT set_config('search_path', 'public', false)");
+  assert.equal(setting.rows[0][0].value, 'public');
+  const defaults = await query("SELECT current_setting('search_path'), current_setting('transaction_read_only')");
+  assert.deepEqual(defaults.rows[0].map(value => value.value), ['pg_catalog', 'on']);
+  const request = randomUUID();
+  const slow = query('SELECT pg_sleep(6)', { kind: 'document' }, request);
+  await new Promise(resolve => setTimeout(resolve, 350));
+  await assert.rejects(query('SELECT 1'), /실행 중/);
+  assert.equal(await command('cancel_postgres_sql', { id: session.id, request: randomUUID() }), false);
+  assert.equal(await command('cancel_postgres_sql', { id: session.id, request }), true);
+  assert.deepEqual(await slow, { status: 'interrupted', server_confirmed: true, timed_out: false, connection_closed: false });
+  const afterCancel = await query('SELECT 7');
+  assert.equal(afterCancel.rows[0][0].value, '7');
+  const deadline = await query('SELECT pg_sleep(12)');
+  assert.deepEqual(deadline, { status: 'interrupted', server_confirmed: true, timed_out: true, connection_closed: false });
   await close(session.id);
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
 
@@ -199,6 +249,46 @@ async function verify(browser, fixture, gateway) {
   await page.getByRole('button', { name: '검색', exact: true }).click();
   await page.getByRole('button', { name: /visible 뷰/ }).click();
   await data.getByText('4', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'SQL로 열기', exact: true }).click();
+  const sql = page.getByRole('textbox', { name: 'PostgreSQL SQL 쿼리', exact: true });
+  const results = page.getByRole('table', { name: 'PostgreSQL SQL 데이터', exact: true });
+  assert.equal(await sql.inputValue(), 'SELECT *\nFROM "report"."visible";');
+  await sql.press('Control+Enter');
+  await results.getByText('4', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
+  const multiline = 'SELECT 123;\nSELECT id FROM report."quoted table" ORDER BY id;';
+  await sql.fill(multiline);
+  await sql.evaluate((input, selection) => input.setSelectionRange(selection, input.value.length), multiline.indexOf('SELECT id'));
+  await sql.press('Control+Enter');
+  await results.getByText('25', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '다음 SQL 결과 페이지' }).click();
+  await results.getByText('26', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'SQL 2', exact: true }).click();
+  await results.getByText('4', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: 'SQL 3', exact: true }).click();
+  await sql.evaluate(input => input.setSelectionRange(3, 3));
+  await sql.press('Control+Shift+Enter');
+  await results.getByText('123', { exact: true }).waitFor();
+  await sql.fill('SELECT missing FROM report.visible');
+  await sql.press('Control+Enter');
+  await page.getByRole('button', { name: '오류 위치로 이동' }).click();
+  assert.equal(await sql.evaluate(input => input.selectionStart), 'SELECT '.length);
+  await page.getByRole('button', { name: 'SQL 파일로 저장', exact: true }).click();
+  const savedPath = path.join(root, 'postgres-file.sql');
+  await page.getByLabel('새 SQL 파일 경로', { exact: true }).fill(savedPath);
+  await page.getByRole('button', { name: '새 파일에 저장', exact: true }).click();
+  await page.getByRole('tab', { name: 'postgres-file.sql', exact: true }).waitFor();
+  assert.equal(fs.readFileSync(savedPath, 'utf8'), 'SELECT missing FROM report.visible');
+  const importedPath = path.join(root, 'postgres-import.sql');
+  fs.writeFileSync(importedPath, 'SELECT 321 AS imported;');
+  await page.getByRole('button', { name: 'SQL 파일 열기', exact: true }).click();
+  await page.getByLabel('SQL 파일 경로', { exact: true }).fill(importedPath);
+  await page.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  await page.getByRole('tab', { name: 'postgres-import.sql', exact: true }).waitFor();
+  await sql.press('Control+Enter');
+  await results.getByText('321', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
+  await data.getByText('4', { exact: true }).waitFor();
   await disconnect();
 
   const ssh = await command('create_ssh_profile', { projectId: project.id, input: {
@@ -221,6 +311,18 @@ async function verify(browser, fixture, gateway) {
     await page.getByRole('button', { name: /visible 뷰/ }).click();
     await data.getByText('4', { exact: true }).waitFor();
     assert.equal(gateway.forwarded(), 1);
+    await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+    await sql.fill('SELECT pg_sleep(6)');
+    await sql.press('Control+Enter');
+    const cancel = page.getByRole('button', { name: '쿼리 취소', exact: true });
+    await cancel.waitFor();
+    await new Promise(resolve => setTimeout(resolve, 350));
+    await cancel.click();
+    await page.getByText('PostgreSQL 서버에서 쿼리 중단을 확인했습니다.', { exact: true }).waitFor();
+    assert.equal(gateway.forwarded(), 2);
+    await sql.fill('SELECT 123');
+    await sql.press('Control+Enter');
+    await results.getByText('123', { exact: true }).waitFor();
     await disconnect();
   } finally { await command('stop_ssh_tunnel', { id: tunnel.id }); }
   await assert.rejects(open(profile, password, 'PROD', tunnel.id), /실행 중인 로컬 SSH 터널/);
@@ -235,7 +337,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (verified TLS, SSH tunnel, catalog permissions, paging and exact values).');
+    console.log('Windows PostgreSQL E2E passed (verified TLS, SSH forwarding, catalog, read-only SQL, cancellation and file tabs).');
   } finally {
     await browser?.close();
     gateway?.close();
