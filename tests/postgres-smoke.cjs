@@ -47,7 +47,11 @@ async function startPostgres() {
     'CREATE VIEW report.visible AS SELECT id FROM report."quoted table" WHERE id=4;',
     'CREATE TABLE report.denied (id integer);',
     'CREATE TABLE report.write_probe (id integer);',
+    'CREATE TABLE report.plan_events (id integer PRIMARY KEY, payload text);',
+    "INSERT INTO report.plan_events SELECT i, repeat('abcd', 16) FROM generate_series(1, 4096) AS series(i);",
+    'ANALYZE report.plan_events;',
     'GRANT SELECT ON report."quoted table", report.visible TO fixture_reader;',
+    'GRANT SELECT ON report.plan_events TO fixture_reader;',
     'GRANT SELECT, INSERT, UPDATE ON report.write_probe TO fixture_reader;',
     "CREATE DATABASE fixture_latin ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;",
   ].join('\n') + '\n';
@@ -170,8 +174,9 @@ async function verify(browser, fixture, gateway) {
   assert.equal(first.rows[1][1].truncated, true);
   assert.equal(first.rows[1][1].value.length, 512);
   assert.equal(first.rows[2][1].value, '');
-  const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null) =>
-    command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings });
+  const query = (sql, scope = { kind: 'document' }, request = randomUUID(), bindings = null, mode = undefined) =>
+    command('execute_postgres_sql', { id: session.id, request, source: sql, scope, bindings, mode });
+  const explain = (sql, mode, bindings = null) => query(sql, undefined, undefined, bindings, mode);
   const textValue = value => ({ kind: 'text', value });
   const content = await query("/* outer /* nested ; */ end */ SELECT $tag$한;글$tag$ AS duplicate, 9007199254740993.123::numeric AS duplicate, NULL::text; -- tail");
   assert.equal(content.status, 'completed', JSON.stringify(content));
@@ -185,6 +190,34 @@ async function verify(browser, fixture, gateway) {
   assert.equal(capped.total_columns, 26);
   assert.equal(capped.columns.length, 24);
   assert.equal(capped.rows[1][1].truncated, true);
+  const allRows = 'SELECT id FROM report."quoted table" ORDER BY id';
+  const estimate = await explain(allRows, 'estimate');
+  assert.equal(estimate.status, 'plan', JSON.stringify(estimate));
+  assert.equal(estimate.connection_closed, false);
+  assert.equal(estimate.plan.analyzed, false);
+  assert.equal(estimate.plan.execution_ms, null);
+  assert.ok(estimate.plan.planning_ms >= 0);
+  assert.ok(estimate.plan.steps.every(step => step.actual_rows === null && step.loops === null));
+  assert.ok(estimate.plan.steps.some(step => step.schema === 'report' && step.relation === 'quoted table'));
+  const analysis = await explain(allRows, 'analyze');
+  assert.equal(analysis.status, 'plan', JSON.stringify(analysis));
+  assert.equal(analysis.plan.analyzed, true);
+  assert.ok(analysis.plan.execution_ms >= 0);
+  assert.equal(analysis.plan.steps[0].actual_rows, 105);
+  assert.equal(analysis.plan.steps[0].loops, 1);
+  assert.ok(analysis.plan.steps.some(step => step.shared_hits !== null && step.shared_reads !== null));
+  const indexPlan = await explain('SELECT payload FROM report.plan_events WHERE id=2100', 'estimate');
+  assert.ok(indexPlan.plan.steps.some(step => step.index === 'plan_events_pkey'));
+  const joinPlan = await explain('SELECT a.id, b.payload FROM report."quoted table" a JOIN report.plan_events b ON a.id=b.id ORDER BY a.note', 'analyze');
+  assert.ok(joinPlan.plan.steps.some(step => step.join_type === 'Inner'));
+  assert.ok(joinPlan.plan.steps.some(step => step.operation === 'Sort' && step.sort_method));
+  const estimatedSleep = await explain('SELECT pg_sleep(12)', 'estimate');
+  assert.equal(estimatedSleep.status, 'plan');
+  const analyzedSleep = await explain('SELECT pg_sleep(0.12)', 'analyze');
+  assert.ok(analyzedSleep.plan.execution_ms >= 100);
+  const blockedInto = await explain('SELECT id INTO TEMP copied_fixture FROM report.write_probe', 'analyze');
+  assert.equal(blockedInto.status, 'failed');
+  assert.match(blockedInto.error, /읽기 전용/);
   await assert.rejects(query('SELECT 1; SELECT 2;'), /한 번에 한 문장/);
   for (const write of [
     "INSERT INTO report.write_probe VALUES (1) RETURNING id",
@@ -196,6 +229,11 @@ async function verify(browser, fixture, gateway) {
     const result = await query(write);
     assert.equal(result.status, 'failed', JSON.stringify(result));
     assert.match(result.error, /읽기 전용/);
+    for (const mode of ['estimate', 'analyze']) {
+      const planned = await explain(write, mode);
+      assert.equal(planned.status, 'failed', JSON.stringify(planned));
+      assert.match(planned.error, /읽기 전용/);
+    }
   }
   const unchanged = await query("SELECT count(*) FROM report.write_probe");
   assert.equal(unchanged.rows[0][0].value, '0');
@@ -233,6 +271,16 @@ async function verify(browser, fixture, gateway) {
   await assert.rejects(query(parameterized, undefined, undefined, { ...bindings, values: [textValue('\0'), ...values.slice(1)] }), /NUL/);
   const unknown = await query('SELECT $1 IS NULL');
   assert.match(unknown.error, /타입 캐스트/);
+  const filtered = 'SELECT id FROM report."quoted table" WHERE note = $1::text ORDER BY id';
+  const planParameters = await explain(filtered, 'estimate');
+  assert.equal(planParameters.status, 'parameters_required', JSON.stringify(planParameters));
+  const secretPlanValue = 'fixture-binding-secret-value';
+  const planBindings = { types: planParameters.parameters.map(parameter => parameter.oid), values: [textValue(secretPlanValue)] };
+  for (const mode of ['estimate', 'analyze']) {
+    const plan = await explain(filtered, mode, planBindings);
+    assert.equal(plan.status, 'plan', JSON.stringify(plan));
+    assert.ok(!JSON.stringify(plan).includes(secretPlanValue));
+  }
   const withLimits = await query('SELECT ' + Array.from({ length: 33 }, (_, index) => '$' + (index + 1) + '::int').join(', '));
   assert.match(withLimits.error, /32개/);
 
@@ -358,6 +406,34 @@ async function verify(browser, fixture, gateway) {
   await parameters.waitFor();
   assert.equal(await parameters.getByLabel('$1 값', { exact: true }).inputValue(), '');
   await parameters.getByRole('button', { name: '취소', exact: true }).click();
+  const plan = page.getByRole('region', { name: 'PostgreSQL 실행 계획', exact: true });
+  const analyze = page.getByRole('button', { name: '실행 분석', exact: true });
+  const analyzeDialog = page.getByRole('dialog', { name: 'PostgreSQL 실행 분석', exact: true });
+  const planTable = plan.getByRole('table', { name: 'PostgreSQL 실행 단계', exact: true });
+  await sql.fill('SELECT id FROM report."quoted table" ORDER BY id');
+  await page.getByRole('button', { name: '실행 계획', exact: true }).click();
+  await plan.getByText('예상 실행 계획', { exact: true }).waitFor();
+  await planTable.getByText(/report\.quoted table/).waitFor();
+  assert.equal(await planTable.getByRole('columnheader', { name: '실제 행 / 회' }).count(), 0);
+  await plan.getByRole('button', { name: '텍스트', exact: true }).click();
+  const textPlan = plan.getByLabel('PostgreSQL 계획 텍스트');
+  await textPlan.waitFor();
+  assert.match(await textPlan.textContent(), /예상/);
+  await analyze.click();
+  await analyzeDialog.getByRole('button', { name: '취소', exact: true }).click();
+  await plan.getByText('예상 실행 계획', { exact: true }).waitFor();
+  await analyze.click();
+  await analyzeDialog.getByRole('button', { name: '분석 실행', exact: true }).click();
+  await plan.getByText(/서버 실행.*ms/).waitFor();
+  await planTable.getByRole('columnheader', { name: '실제 행 / 회' }).waitFor();
+  await planTable.getByText('105', { exact: true }).first().waitFor();
+  await plan.getByRole('button', { name: '텍스트', exact: true }).click();
+  const resultViews = page.getByRole('group', { name: 'PostgreSQL 결과 보기', exact: true });
+  await resultViews.getByRole('button', { name: '조회 결과', exact: true }).click();
+  await results.getByText('9007199254740993.123000', { exact: true }).waitFor();
+  await resultViews.getByRole('button', { name: '계획 결과', exact: true }).click();
+  await plan.getByText(/서버 실행.*ms/).waitFor();
+  await textPlan.waitFor();
   await page.getByRole('button', { name: '객체 탐색', exact: true }).click();
   await data.getByText('4', { exact: true }).waitFor();
   await disconnect();
@@ -384,7 +460,8 @@ async function verify(browser, fixture, gateway) {
     assert.equal(gateway.forwarded(), 1);
     await page.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
     await sql.fill('SELECT pg_sleep($1::float8)');
-    await sql.press('Control+Enter');
+    await analyze.click();
+    await analyzeDialog.getByRole('button', { name: '분석 실행', exact: true }).click();
     await parameters.getByLabel('$1 값', { exact: true }).fill('6');
     await submitValues();
     const cancel = parameters.getByRole('button', { name: '쿼리 취소', exact: true });
@@ -410,7 +487,7 @@ async function main() {
     gateway = await startGateway(fixture.port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway);
-    console.log('Windows PostgreSQL E2E passed (TLS, SSH forwarding, catalog, read-only SQL, typed bindings, cancellation and file tabs).');
+    console.log('Windows PostgreSQL E2E passed (TLS, SSH forwarding, read-only SQL, typed bindings, execution plans, cancellation and file tabs).');
   } finally {
     await browser?.close();
     gateway?.close();

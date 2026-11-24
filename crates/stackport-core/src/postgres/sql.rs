@@ -1,9 +1,10 @@
 use super::parameters::{metadata, Parameter, PostgresSqlBindings, Value, MAX_PARAMETERS};
+use super::plan::{self, Plan};
 use super::session::{preview_rows, Cell, COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH};
 use crate::Result;
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     ops::Range,
     sync::Mutex,
@@ -16,6 +17,15 @@ use tokio_postgres::{
 use uuid::Uuid;
 
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresSqlMode {
+    #[default]
+    Query,
+    Estimate,
+    Analyze,
+}
 
 #[derive(Serialize)]
 pub struct PostgresSqlOutcome {
@@ -33,6 +43,9 @@ enum Outcome {
         more_rows: bool,
         total_columns: usize,
         elapsed_ms: u64,
+    },
+    Plan {
+        plan: Plan,
     },
     Failed {
         error: String,
@@ -158,6 +171,7 @@ pub(super) struct Request<'a> {
     pub source: &'a str,
     pub span: Range<usize>,
     pub bindings: Option<&'a PostgresSqlBindings>,
+    pub mode: PostgresSqlMode,
 }
 
 async fn preview(
@@ -175,6 +189,7 @@ async fn preview(
         source,
         span,
         bindings,
+        mode,
     } = request;
     let sql = &source[span.clone()];
     // The server parses the original single statement before it can be embedded
@@ -189,7 +204,7 @@ async fn preview(
             )
         }
     };
-    if described.columns().is_empty() {
+    if mode == PostgresSqlMode::Query && described.columns().is_empty() {
         return (
             message("PostgreSQL 읽기 전용 조회 문장을 입력하세요."),
             false,
@@ -214,25 +229,14 @@ async fn preview(
             data_type: column.type_().name().into(),
         })
         .collect();
-    let aliases: Vec<_> = (0..columns.len())
-        .map(|column| format!("c{column}"))
-        .collect();
-    let projection = aliases
-        .iter()
-        .map(|alias| {
-            format!(
-                "pg_catalog.left(stackport_result.{alias}::pg_catalog.text, {})",
-                VALUE_LENGTH + 1
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let bounded = format!(
-        "SELECT {projection} FROM (\n{sql}\n) AS stackport_result({}) LIMIT {}",
-        aliases.join(", "),
-        ROW_SIZE + 1
-    );
-    let statement = match tx.prepare_typed(&bounded, types).await {
+    // Parse as a subquery before allowing EXPLAIN of the original statement.
+    // This rejects utility statements and data-modifying CTEs for either mode.
+    let read_sql = if mode == PostgresSqlMode::Query {
+        bounded_preview(sql, columns.len())
+    } else {
+        format!("SELECT 1 FROM (\n{sql}\n) AS stackport_source LIMIT 0")
+    };
+    let prepared = match tx.prepare_typed(&read_sql, types).await {
         Ok(statement) => statement,
         Err(error) => {
             let state = if matches!(
@@ -249,6 +253,29 @@ async fn preview(
     if *signal.borrow() {
         return (cancelled(false), false, false);
     }
+    let values = match values_for(bindings, types) {
+        Ok(values) => values,
+        Err(state) => return (state, false, false),
+    };
+    let statement = match mode {
+        PostgresSqlMode::Query => prepared,
+        PostgresSqlMode::Estimate | PostgresSqlMode::Analyze => {
+            let analyze = if mode == PostgresSqlMode::Analyze {
+                "ANALYZE TRUE, BUFFERS TRUE, "
+            } else {
+                ""
+            };
+            let explain =
+                format!("EXPLAIN ({analyze}FORMAT JSON, VERBOSE TRUE, SUMMARY TRUE)\n{sql}");
+            match tx.prepare_typed(&explain, types).await {
+                Ok(statement) => statement,
+                Err(error) => return (failed(error, None), false, false),
+            }
+        }
+    };
+    if *signal.borrow() {
+        return (cancelled(false), false, false);
+    }
     if statement.params() != types {
         return (
             message("PostgreSQL 매개변수 형식을 확인할 수 없습니다."),
@@ -256,10 +283,6 @@ async fn preview(
             false,
         );
     }
-    let values = match values_for(bindings, types) {
-        Ok(values) => values,
-        Err(state) => return (state, false, false),
-    };
     let cancellation = signal.clone();
     let mut running = std::pin::pin!(async {
         if values.is_empty() {
@@ -290,7 +313,11 @@ async fn preview(
         }
     };
     let state = match result {
-        Ok(Some(rows)) => completed(rows, columns, total_columns, started),
+        Ok(Some(rows)) if mode == PostgresSqlMode::Query => completed(rows, columns, total_columns, started),
+        Ok(Some(rows)) => match plan::read(&rows, mode == PostgresSqlMode::Analyze) {
+            Ok(plan) => Outcome::Plan { plan },
+            Err(error) => Outcome::Failed { error, position: None },
+        },
         Ok(None) => cancelled(false),
         Err((error, _)) if sent_cancel && error.code().is_some_and(|code| code.code() == "57014") => {
             cancelled(true)
@@ -303,6 +330,25 @@ async fn preview(
         Err((error, _)) => failed(error, None),
     };
     (state, sent_cancel, true)
+}
+
+fn bounded_preview(sql: &str, columns: usize) -> String {
+    let aliases: Vec<_> = (0..columns).map(|column| format!("c{column}")).collect();
+    let projection = aliases
+        .iter()
+        .map(|alias| {
+            format!(
+                "pg_catalog.left(stackport_result.{alias}::pg_catalog.text, {})",
+                VALUE_LENGTH + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "SELECT {projection} FROM (\n{sql}\n) AS stackport_result({}) LIMIT {}",
+        aliases.join(", "),
+        ROW_SIZE + 1
+    )
 }
 
 fn values_for<'a>(

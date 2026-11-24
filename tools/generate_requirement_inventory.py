@@ -117,9 +117,9 @@ PARTIAL = {
     "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, 입력 숨기기",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
-    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN 텍스트와 단계 트리",
-    "SP-SQ-015": "SQLite 실행 계획에서 스캔·조건 검색·임시 B-Tree 구분",
-    "SP-SQ-016": "SQLite 결과 페이지의 조회 시간·읽은 행·스캔 단계·정렬·자동 인덱스 행·가상 머신 단계, 같은 페이지의 고정 결과와 비교",
+    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL EXPLAIN·EXPLAIN ANALYZE의 텍스트와 단계 트리",
+    "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL 스캔·조인·정렬·인덱스와 비용·예상/실제 행, 긴 리프와 행 오차 표시",
+    "SP-SQ-016": "SQLite 결과 페이지의 조회·스캔·정렬·인덱스·가상 머신 지표와 고정 결과 비교, PostgreSQL 서버 계획·실행 시간 및 공유·임시 버퍼 블록",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
     "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
@@ -165,7 +165,7 @@ PARTIAL = {
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "실제 SQLite 백업을 별도 파일로 복원해 행 수·객체·무결성·SHA-256 검증",
     "SP-AT-010": "SQLite 기본 키 기반 단일 셀 미리보기·적용·롤백·행 충돌 검사",
-    "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩과 SSH 경유 서버 취소 확인",
+    "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
     "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
@@ -350,5 +350,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/sql.rs; src/PostgresSqlWorkspace.tsx; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-SQ-010", "SP-AT-011"}:
                 evidence += "; crates/stackport-core/src/postgres/parameters.rs; src/PostgresParameterDialog.tsx; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-SQ-014", "SP-SQ-015", "SP-SQ-016", "SP-AT-011"}:
+                evidence += "; crates/stackport-core/src/postgres/plan.rs; src/PostgresQueryPlan.tsx"
+                if requirement_id != "SP-AT-011":
+                    evidence += "; tests/postgres-smoke.cjs"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])
 print(f"{len(items)} requirements written to {OUTPUT}")

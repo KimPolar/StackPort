@@ -1,4 +1,5 @@
 mod parameters;
+mod plan;
 mod profiles;
 mod session;
 mod sql;
@@ -11,5 +12,5 @@ pub use session::{
     PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresSchemaPage,
     PostgresSessionInfo,
 };
-pub use sql::PostgresSqlOutcome;
+pub use sql::{PostgresSqlMode, PostgresSqlOutcome};
 pub use sql_range::PostgresSqlScope;

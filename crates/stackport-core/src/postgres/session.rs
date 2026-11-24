@@ -1,5 +1,6 @@
 use super::{
-    sql, sql_range, PostgresProfile, PostgresSqlBindings, PostgresSqlOutcome, PostgresSqlScope,
+    sql, sql_range, PostgresProfile, PostgresSqlBindings, PostgresSqlMode, PostgresSqlOutcome,
+    PostgresSqlScope,
 };
 use crate::{quote_identifier, Result, SshTunnelManager, Store};
 use native_tls::{Certificate, Protocol, TlsConnector};
@@ -304,6 +305,7 @@ impl PostgresManager {
         source: &str,
         scope: PostgresSqlScope,
         bindings: Option<PostgresSqlBindings>,
+        mode: PostgresSqlMode,
     ) -> Result<PostgresSqlOutcome> {
         let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
         let span = sql_range::statement(source, scope)?;
@@ -319,6 +321,7 @@ impl PostgresManager {
                 source,
                 span,
                 bindings: bindings.as_ref(),
+                mode,
             };
             let (outcome, reusable) =
                 sql::query(&mut client, query, signal, session.tls.clone()).await;

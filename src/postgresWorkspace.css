@@ -3,8 +3,21 @@
 .postgres-views { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .postgres-views [aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
 .postgres-sql { display: grid; gap: 12px; }
-.postgres-sql > :is(.results-card, .error-banner, .query-notice) { min-width: 0; margin: 0; }
+.postgres-sql-result { min-width: 0; }
+.postgres-sql-result > :is(.results-card, .error-banner, .query-notice) { min-width: 0; margin: 0; }
 .postgres-sql .error-banner button { margin-inline-start: 8px; }
+.postgres-sql .editor-card > .panel-heading, .postgres-plan .panel-heading { min-height: 44px; height: auto; flex-wrap: wrap; gap: 6px; padding: 7px 12px; }
+.postgres-result-views { display: flex; flex-wrap: wrap; gap: 6px; }
+.postgres-result-views [aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
+.postgres-plan :is(td, th) { vertical-align: top; }
+.postgres-plan tbody th { background: transparent; color: var(--text); text-align: start; }
+.postgres-plan th small { display: block; color: var(--text-muted); font-weight: 400; }
+.postgres-plan th .postgres-plan-mark { color: var(--warning-text); }
+.postgres-plan tr[data-highlight="true"] { background: var(--warning-surface); }
+.postgres-plan td meter { display: block; width: 95px; max-width: 100%; }
+.postgres-plan .table-wrap, .postgres-plan-text { max-height: min(58vh, 650px); overflow: auto; }
+.postgres-plan-text { margin: 0; padding: 12px; line-height: 1.65; border-top: 1px solid var(--divider); }
+.postgres-plan-branch { color: var(--text-muted); }
 .postgres-param-controls > textarea { flex: 1 1 120px; width: auto; min-width: 0; min-height: 32px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 4px; font: inherit; }
 .postgres-layout { display: grid; grid-template-columns: minmax(168px, 230px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .postgres-layout > * { margin: 0; min-width: 0; }

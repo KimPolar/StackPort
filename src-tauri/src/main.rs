@@ -14,7 +14,7 @@ use stackport_core::{
     open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
-    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlOutcome, PostgresSqlScope,
+    LocalTunnelEndpoint, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope,
     SavedSyncProfile, SyncPlan, SyncProfileInput, SyncProgress, SyncReport,
     SyncDeleteInput, SyncDeletePreview,
     TerminalManager, TerminalOutputFormat, TerminalRead, TextLineEnding,
@@ -826,8 +826,9 @@ async fn postgres_page(postgres: State<'_, PostgresManager>, id: String, object:
 async fn execute_postgres_sql(
     postgres: State<'_, PostgresManager>, id: String, request: String, source: String, scope: PostgresSqlScope,
     bindings: Option<PostgresSqlBindings>,
+    mode: Option<PostgresSqlMode>,
 ) -> Result<PostgresSqlOutcome, String> {
-    postgres.execute_sql(&id, &request, &source, scope, bindings).await
+    postgres.execute_sql(&id, &request, &source, scope, bindings, mode.unwrap_or_default()).await
 }
 
 #[tauri::command]

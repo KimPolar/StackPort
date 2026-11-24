@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, FileDown, FolderOpen, Play, Square } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
+import { Dialog } from "./Dialog";
 import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter } from "./PostgresParameterDialog";
+import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
 
 export type PostgresEditorState = {
@@ -16,20 +18,26 @@ export type PostgresEditorState = {
 };
 
 type Scope = { kind: "document" } | { kind: "selection"; start: number; end: number } | { kind: "current"; cursor: number };
+type Mode = "query" | "estimate" | "analyze";
+type ResultView = "data" | "plan";
 export type PostgresCell = { value: string | null; truncated: boolean };
 type Completed = { status: "completed"; columns: { name: string; data_type: string }[]; rows: PostgresCell[][];
   total_columns: number; more_rows: boolean; elapsed_ms: number };
-type QueryStatus = Completed | { status: "failed"; error: string; position?: number | null } |
+type QueryStatus = Completed | { status: "plan"; plan: PostgresPlan } | { status: "failed"; error: string; position?: number | null } |
   { status: "interrupted"; timed_out: boolean; server_confirmed: boolean };
 type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
 type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
-type Preview = { id: string; tab: string; source: string; outcome: QueryStatus };
-type QueryTarget = { session: string; tab: string; title: string; source: string; scope: Scope };
+type Preview = { id: string; source: string; outcome: QueryStatus };
+type TabPreview = { tab: string; active: ResultView; data?: Preview; plan?: Preview };
+type QueryTarget = { session: string; tab: string; title: string; source: string; scope: Scope; mode: Mode };
 type Running = QueryTarget & { request: string };
 type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null };
 const editorId = "postgres-sql-editor";
 const resultPageSize = 25;
 const retainedPreviews = 4;
+const resultViews: ResultView[] = ["data", "plan"];
+const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : "plan";
+const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석" };
 
 export function PostgresSqlWorkspace({ session, editor, onClosed }: {
   session: string | null;
@@ -41,15 +49,17 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
   const [running, setRunning] = useState<Running | null>(null);
   const [cancelStatus, setCancelStatus] = useState("");
   const [selection, setSelection] = useState<{ tab: string; start: number; end: number } | null>(null);
-  const [previews, setPreviews] = useState<Preview[]>([]);
+  const [previews, setPreviews] = useState<TabPreview[]>([]);
   const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null);
+  const [analysisTarget, setAnalysisTarget] = useState<QueryTarget | null>(null);
   const { tabs, select, add, close, edit, openFile, saveFile } = editor;
   const draft = tabs.tabs.find(item => item.id === tabs.activeId);
-  const preview = previews.find(item => item.tab === tabs.activeId);
+  const tabPreview = previews.find(item => item.tab === tabs.activeId);
   const source = draft?.document.text ?? "";
   const selected = selection && selection.tab === draft?.id && selection.start !== selection.end
     ? source.slice(selection.start, selection.end) : "";
   const busy = running !== null;
+  const cannotRun = !session || busy || !source.trim();
 
   async function run(target: QueryTarget, bindings?: PostgresBindings) {
     if (session !== target.session || active.current || !target.source.trim()) return;
@@ -60,7 +70,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
     let outcome: Outcome;
     try {
       outcome = await invoke<Outcome>("execute_postgres_sql", {
-        id: target.session, request: operation.request, source: target.source, scope: target.scope, bindings,
+        id: target.session, request: operation.request, source: target.source, scope: target.scope, bindings, mode: target.mode,
       });
       if (outcome.connection_closed) onClosed(target.session);
     } catch (error) { outcome = { status: "failed", error: String(error) }; }
@@ -80,8 +90,12 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
     setParameterRequest(null);
     const result: QueryStatus = outcome.status === "parameters_required"
       ? { status: "failed", error: "PostgreSQL 연결을 다시 연 뒤 매개변수를 입력하세요." } : outcome;
-    setPreviews(previous => [{ id: operation.request, tab: target.tab, source: target.source, outcome: result },
-      ...previous.filter(item => item.tab !== operation.tab)].slice(0, retainedPreviews));
+    const view = resultView(target.mode);
+    setPreviews(previous => {
+      const existing = previous.find(item => item.tab === target.tab);
+      return [{ ...existing, tab: target.tab, active: view, [view]: { id: operation.request, source: target.source, outcome: result } },
+        ...previous.filter(item => item.tab !== target.tab)].slice(0, retainedPreviews);
+    });
   }
 
   async function stop() {
@@ -95,11 +109,17 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
     }
   }
 
-  function execute(current: boolean, field = input.current) {
-    if (!field || !session || !draft || parameterRequest) return;
+  function execute(current: boolean, mode: Mode = "query", field = input.current) {
+    if (!field || !session || !draft || parameterRequest || analysisTarget) return;
     const { selectionStart: start, selectionEnd: end } = field;
     const scope: Scope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
-    void run({ session, tab: draft.id, title: sqlTabTitle(draft), source, scope });
+    const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope, mode };
+    if (mode === "analyze") setAnalysisTarget(target);
+    else void run(target);
+  }
+
+  function showResult(view: ResultView) {
+    setPreviews(previous => previous.map(item => item.tab === tabs.activeId ? { ...item, active: view } : item));
   }
 
   function closeTab(item: SqlDraft) {
@@ -115,8 +135,11 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
       <div className="panel-heading">
         <strong>SQL 편집기</strong>
         <div className="sql-editor-actions">
-          <button type="button" className="secondary small" title="Ctrl+Shift+Enter" disabled={!session || busy || !source.trim()}
+          <button type="button" className="secondary small" title="Ctrl+Shift+Enter" disabled={cannotRun}
             onClick={() => execute(true)}>현재 문장 실행</button>
+          <button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "estimate")}>
+            <GitBranch size={14} aria-hidden /> 실행 계획</button>
+          <button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "analyze")}>실행 분석</button>
           <button type="button" className="primary small" title="Ctrl+Enter" disabled={!session || busy || !(selected || source).trim()}
             onClick={() => execute(false)}><Play size={14} aria-hidden />{selected ? "선택 영역 실행" : "쿼리 실행"}</button>
           {busy && <button type="button" className="secondary small" disabled={cancelStatus === "취소 요청 중…"}
@@ -135,7 +158,7 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
             onSelect={event => setSelection({ tab: draft.id, start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd })}
             onKeyDown={event => {
               if (event.nativeEvent.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-              if (event.key === "Enter") { event.preventDefault(); execute(event.shiftKey, event.currentTarget); }
+              if (event.key === "Enter") { event.preventDefault(); execute(event.shiftKey, "query", event.currentTarget); }
               else if (event.key.toLowerCase() === "s") { event.preventDefault(); saveFile(draft); }
             }} />
         </>}
@@ -143,14 +166,34 @@ export function PostgresSqlWorkspace({ session, editor, onClosed }: {
       {!draft && <><p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p><div className="editor-footer">{fileActions}</div></>}
     </section>
     {!session && <p className="form-note">PostgreSQL에 연결하면 조회 SQL을 실행할 수 있습니다.</p>}
-    {running && <p className="form-note" role="status">{cancelStatus || `${running.title} 실행 중…`}</p>}
-    {preview && preview.tab !== running?.tab && <PostgresSqlResult key={preview.id} outcome={preview.outcome}
-      jump={source === preview.source ? position => {
-        input.current?.focus();
-        input.current?.setSelectionRange(position, position);
-      } : undefined} />}
+    {running && <p className="form-note" role="status">{cancelStatus || `${running.title} · ${modeNames[running.mode]} 중…`}</p>}
+    {tabPreview?.data && tabPreview.plan && <div className="postgres-result-views" role="group" aria-label="PostgreSQL 결과 보기">
+      <button type="button" className="secondary small" aria-pressed={tabPreview.active === "data"} onClick={() => showResult("data")}>조회 결과</button>
+      <button type="button" className="secondary small" aria-pressed={tabPreview.active === "plan"} onClick={() => showResult("plan")}>계획 결과</button>
+    </div>}
+    {tabPreview && resultViews.map(view => {
+      const preview = tabPreview[view];
+      if (!preview) return null;
+      const pending = running?.tab === tabs.activeId && view === resultView(running.mode);
+      return <div key={view} className="postgres-sql-result" hidden={tabPreview.active !== view || pending}>
+        <PostgresSqlResult key={preview.id} outcome={preview.outcome} jump={source === preview.source ? position => {
+          input.current?.focus();
+          input.current?.setSelectionRange(position, position);
+        } : undefined} />
+      </div>;
+    })}
+    {analysisTarget && session === analysisTarget.session && <Dialog title="PostgreSQL 실행 분석" busy={false}
+      onClose={() => { setAnalysisTarget(null); requestAnimationFrame(() => input.current?.focus()); }}>
+      <div className="workspace-exit-body">
+        <p className="confirm-copy"><strong>{analysisTarget.title}</strong>의 조회를 서버에서 실제로 실행해 시간, 행 수와 버퍼 사용량을 측정합니다. 서버 실행 제한은 8초입니다.</p>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" autoFocus onClick={() => setAnalysisTarget(null)}>취소</button>
+          <button type="button" className="primary" onClick={() => { setAnalysisTarget(null); void run(analysisTarget); }}>분석 실행</button>
+        </div>
+      </div>
+    </Dialog>}
     {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
-      parameters={parameterRequest.parameters} title={parameterRequest.target.title} error={parameterRequest.error}
+      parameters={parameterRequest.parameters} title={`${parameterRequest.target.title} · ${modeNames[parameterRequest.target.mode]}`} error={parameterRequest.error}
       running={busy} cancelStatus={cancelStatus} onSubmit={bindings => void run(parameterRequest.target, bindings)}
       onClose={() => { setParameterRequest(null); requestAnimationFrame(() => input.current?.focus()); }}
       onCancelQuery={() => void stop()} />}
@@ -164,6 +207,7 @@ export function PostgresValue({ cell }: { cell: PostgresCell }) {
 
 function PostgresSqlResult({ outcome, jump }: { outcome: QueryStatus; jump?: (position: number) => void }) {
   const [page, setPage] = useState(0);
+  if (outcome.status === "plan") return <PostgresQueryPlan plan={outcome.plan} />;
   if (outcome.status === "failed") return <div className="error-banner" role="alert">
     {outcome.error}
     {outcome.position != null && jump && <button type="button" className="secondary small"
