@@ -202,9 +202,9 @@ export function PostgresSqlWorkspace({ session, editor, onExport }: {
   </div>;
 }
 
-export function PostgresValue({ cell }: { cell: PostgresCell }) {
+export function PostgresValue({ cell, display }: { cell: PostgresCell; display?: string }) {
   return cell.value === null ? <span className="postgres-null">NULL</span> :
-    <code>{cell.value}{cell.truncated && <span title="512자 미리보기">…</span>}</code>;
+    <code>{display ?? cell.value}{cell.truncated && <span title="512자 미리보기">…</span>}</code>;
 }
 
 function PostgresSqlResult({ outcome, jump, onExport }: { outcome: QueryStatus; jump?: (position: number) => void; onExport?: () => void }) {

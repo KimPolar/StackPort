@@ -9,6 +9,7 @@ import { PostgresServerMonitor } from "./PostgresServerMonitor";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
+import { gridDisplay, gridTypeLabels, postgresGridValueType } from "./gridValuePresentation";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
 import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
@@ -279,6 +280,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
   const page = useRead<Page>("postgres_page", pageArgs, refresh);
   const result = page.data;
   const geometry = result && gridGeometry(result.columns.map(column => column.name), grid.layout.active, result.pinned_columns);
+  const displayFormats = useMemo(() => new Map(grid.layout.active.map(column => [column.name, column.format])), [grid.layout.active]);
   const hasQuery = tableQuery.filters.length > 0 || tableQuery.sort.length > 0;
   const source = page.data?.source ?? (object && schema && !hasQuery
     ? `SELECT *\nFROM ${quoteIdentifier(schema.name)}.${quoteIdentifier(object.name)}` : null);
@@ -433,9 +435,13 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                   && (format || field.value_kind === "binary" || (field.value_kind === "text" && cell.truncated));
                 const canEdit = field.editable && stamp && object;
                 const rowNumber = rowPage * 100 + index + 1;
+                const display = cell.value === null ? undefined : gridDisplay(cell.value, cell.truncated, displayFormats.get(field.name));
+                const type = grid.layout.typeColors ? postgresGridValueType(field.data_type, cell.value === null) : undefined;
                 return <td key={column} className={column < result.pinned_columns ? "grid-sticky-column" : undefined}
-                  style={{ insetInlineStart: geometry?.pins[column] }}>{canPreview || canEdit ? <div className="postgres-editable-cell">
-                  <PostgresValue cell={cell} />
+                  style={{ insetInlineStart: geometry?.pins[column] }} data-grid-value-type={type}
+                  title={display !== undefined && display !== cell.value ? `원본 ${cell.value}` : type ? gridTypeLabels[type] : undefined}>
+                  {canPreview || canEdit ? <div className="postgres-editable-cell">
+                  <PostgresValue cell={cell} display={display} />
                   {canPreview && <button type="button" className="icon-button" aria-label={`${rowNumber}행 ${field.name} 원본 열기`}
                     onClick={event => setValue({ target: { object: object.id, column: field.name, row: valueRow },
                       title: `${result.schema}.${result.name} · ${rowNumber}행 · ${field.name}`, format, trigger: event.currentTarget })}>
@@ -445,7 +451,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
                       setEditNotice("");
                       setEdit({ object: object.id, stamp, column: field.name, trigger: event.currentTarget });
                     }}><Pencil size={14} aria-hidden /></button>}
-                </div> : <PostgresValue cell={cell} />}</td>;
+                </div> : <PostgresValue cell={cell} display={display} />}</td>;
               })}</tr>)}</tbody></table></div>}
           {result.rows.length === 0 && <p className="result-empty">조회된 행이 없습니다.</p>}
           <div className="postgres-paging">
@@ -460,7 +466,7 @@ function PostgresBrowse({ id, profile, onOpenSql, onExport, onFileBusy, onEditUn
         onClose={() => setSearchOpen(false)} onOpen={openSearchHit} />}
       {layoutOpen && !unavailable && filterColumns && schema && object &&
         <GridColumnLayoutDialog title={`${schema.name}.${object.name}`} columns={filterColumns} layout={grid.layout} pinLimit={postgresPinLimit}
-          onProfiles={profiles => grid.apply({ active: grid.layout.active, profiles })}
+          onProfiles={profiles => grid.apply({ ...grid.layout, profiles })}
           onClose={closeLayout} onApply={next => { grid.apply(next); setColumnPage(0); closeLayout(); }} />}
       {value && <PostgresValueDialog id={id} target={value.target} title={value.title} format={value.format} unavailable={unavailable} onBusy={onFileBusy} onClose={() => {
         const trigger = value.trigger;

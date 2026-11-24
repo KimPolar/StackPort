@@ -12,6 +12,7 @@ import { SshProfileExchange } from "./SshProfileExchange";
 import { Dialog } from "./Dialog";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout";
+import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
@@ -1173,8 +1174,10 @@ function App() {
   const sqliteGrid = useGridLayout(tableLayoutTarget);
   const sourceColumns = new Map(result?.columns.map((name, index) => [name, index]));
   const displayColumns = tableLayoutTarget && result ? visibleColumns(result.columns, sqliteGrid.layout.active)
-    .map(column => ({ name: column.name, index: sourceColumns.get(column.name)!, pinned: column.pinned }))
-    : result?.columns.map((name, index) => ({ name, index, pinned: false })) ?? [];
+    .map(column => ({ name: column.name, index: sourceColumns.get(column.name)!, pinned: column.pinned, format: column.format }))
+    : result?.columns.map((name, index) => ({ name, index, pinned: false, format: rawCellFormat })) ?? [];
+  const declaredTypes = new Map(tableLayoutTarget && sqliteGrid.layout.typeColors
+    ? objectDetails?.columns.map(column => [column.name, column.declared_type]) : undefined);
   const rowNumberWidth = 50;
   const actionWidth = 96;
   const sqliteGeometry = tableLayoutTarget && gridGeometry(displayColumns.map(column => column.name), sqliteGrid.layout.active,
@@ -1444,9 +1447,13 @@ function App() {
             return <tr key={rowIndex}><td className="row-number">{rowNumber}</td>
               {displayColumns.map((column, position) => {
                 const cell = row[column.index];
+                const display = gridDisplay(cell.display, cell.truncated, column.format);
+                const type = tableLayoutTarget && sqliteGrid.layout.typeColors
+                  ? sqliteGridValueType(cell.kind, declaredTypes.get(column.name) ?? "", cell.display) : undefined;
                 const classes = [cell.kind === "null" && "null-cell", column.pinned && "grid-sticky-column"].filter(Boolean).join(" ");
                 return <td key={column.index} className={classes} style={{ insetInlineStart: sqliteGeometry?.pins[position] }}
-                  title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다." : undefined}>{cell.display}{cell.truncated ? "…" : ""}</td>;
+                  data-grid-value-type={type} title={cell.truncated ? "표시 길이를 초과하여 일부만 표시됩니다."
+                    : display !== cell.display ? `원본 ${cell.display}` : type ? gridTypeLabels[type] : undefined}>{display}{cell.truncated ? "…" : ""}</td>;
               })}
               {canEditRows && <td>{keys && profile && selectedObject ? <button className="row-edit" disabled={querying}
                 aria-label={`${rowNumber}행 편집`} onClick={() => { setEditReport(null); setEditRequest({ profile, object: selectedObject, keys }); }}>편집</button>
@@ -1457,7 +1464,7 @@ function App() {
       </section>
       {sqliteLayoutDialog && sqliteLayoutDialog === tableLayoutKey && tableLayoutTarget && result &&
         <GridColumnLayoutDialog title={tableLayoutTarget.object} columns={result.columns} layout={sqliteGrid.layout}
-          onProfiles={profiles => sqliteGrid.apply({ active: sqliteGrid.layout.active, profiles })}
+          onProfiles={profiles => sqliteGrid.apply({ ...sqliteGrid.layout, profiles })}
           onClose={closeSqliteLayout} onApply={next => { sqliteGrid.apply(next); closeSqliteLayout(); }} />}
     </>}
     {!profile && error && <div className="error-banner" role="alert">{error}</div>}

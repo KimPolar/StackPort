@@ -106,7 +106,7 @@ PARTIAL = {
     "SP-DT-008": "PostgreSQL 일반 힙 테이블의 긴 텍스트·JSON·XML·bytea 부분 조회, 범위 내 구조·PNG 미리보기와 원본 새 파일 저장",
     "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
     "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
-    "SP-DT-013": "SQLite·PostgreSQL 연결·객체별 열 표시·왼쪽 고정·순서·폭과 보기 프로필 저장, PostgreSQL 열 페이지에 고정 열 반복",
+    "SP-DT-013": "SQLite·PostgreSQL 연결·객체별 열 표시·왼쪽 고정·순서·폭·타입별 색상·숫자 자릿수·ISO 날짜 형식과 보기 프로필 저장, PostgreSQL 열 페이지에 고정 열 반복",
     "SP-DT-018": "SQLite 단일 셀의 기본 형식별 입력",
     "SP-DT-020": "SQLite·PostgreSQL의 셀 변경과 PostgreSQL 다중 셀 행 변경의 시작·성공·실패 감사 기록",
     "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지",
@@ -215,7 +215,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-DT-002", "SP-DT-008"}:
                 evidence = "crates/stackport-core/src/postgres/value.rs; crates/stackport-core/src/local_file.rs; crates/stackport-core/src/png_preview.rs; src/PostgresValueDialog.tsx; src/StructuredPreviewView.tsx; tests/postgres-smoke.cjs"
             elif requirement_id == "SP-DT-013":
-                evidence = "src/GridColumnLayout.ts; src/GridColumnLayoutDialog.tsx; crates/stackport-core/src/postgres/grid_layout.rs; tests/desktop-smoke.cjs; tests/postgres-smoke.cjs"
+                evidence = "src/GridColumnLayout.ts; src/GridColumnLayoutDialog.tsx; src/gridValuePresentation.ts; crates/stackport-core/src/postgres/grid_layout.rs; tests/grid-value-presentation.test.mjs; tests/desktop-smoke.cjs; tests/postgres-smoke.cjs"
             elif requirement_id == "SP-AT-006":
                 evidence = "crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
             elif requirement_id in {"SP-DB-026", "SP-MG-013"}:

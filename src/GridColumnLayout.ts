@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
+import { rawCellFormat, readCellFormat, type CellFormat } from "./gridValuePresentation";
 
 export const minimumColumnWidth = 64;
 export const maximumColumnWidth = 720;
 export const postgresPinLimit = 23;
 const defaultColumnWidth = 144;
 
-export type ColumnChoice = { name: string; hidden: boolean; pinned: boolean; width: number | null };
-export type GridLayout = { active: ColumnChoice[]; profiles: { name: string; columns: ColumnChoice[] }[] };
+export type ColumnChoice = { name: string; hidden: boolean; pinned: boolean; width: number | null; format: CellFormat };
+export type GridLayout = { active: ColumnChoice[]; typeColors: boolean; profiles: { name: string; columns: ColumnChoice[]; typeColors: boolean }[] };
 type Target = { engine: "sqlite" | "postgres"; profile: string; object: string; schema?: string };
-const emptyLayout: GridLayout = { active: [], profiles: [] };
+const emptyLayout: GridLayout = { active: [], typeColors: false, profiles: [] };
 
 function readLayout(key: string | null): GridLayout {
   if (!key) return emptyLayout;
@@ -17,9 +18,12 @@ function readLayout(key: string | null): GridLayout {
     if (!stored || !Array.isArray(stored.active) || !Array.isArray(stored.profiles)) return emptyLayout;
     return {
       active: readChoices(stored.active),
+      typeColors: stored.typeColors === true,
       profiles: stored.profiles.filter((profile: unknown) => profile && typeof profile === "object" && "name" in profile
         && typeof profile.name === "string" && profile.name.trim() && profile.name.length <= 60 && "columns" in profile && Array.isArray(profile.columns))
-        .map((profile: { name: string; columns: unknown[] }) => ({ name: profile.name, columns: readChoices(profile.columns) })),
+        .map((profile: { name: string; columns: unknown[]; typeColors?: boolean }) => ({
+          name: profile.name, columns: readChoices(profile.columns), typeColors: profile.typeColors === true,
+        })),
     };
   } catch { return emptyLayout; }
 }
@@ -28,7 +32,8 @@ function readChoices(values: unknown[]): ColumnChoice[] {
   return values.flatMap(value => {
     if (!value || typeof value !== "object" || !("name" in value) || typeof value.name !== "string") return [];
     return [{ name: value.name, hidden: "hidden" in value && value.hidden === true, pinned: "pinned" in value && value.pinned === true,
-      width: "width" in value && typeof value.width === "number" && validColumnWidth(value.width) ? value.width : null }];
+      width: "width" in value && typeof value.width === "number" && validColumnWidth(value.width) ? value.width : null,
+      format: readCellFormat("format" in value ? value.format : undefined) }];
   });
 }
 
@@ -64,7 +69,7 @@ export function useGridLayout(target: Target | null) {
 export function mergeColumns(columns: string[], choices: ColumnChoice[]): ColumnChoice[] {
   const remaining = new Set(columns);
   const merged = choices.filter(column => remaining.delete(column.name));
-  for (const name of remaining) merged.push({ name, hidden: false, pinned: false, width: null });
+  for (const name of remaining) merged.push({ name, hidden: false, pinned: false, width: null, format: rawCellFormat });
   if (merged.length > 0 && merged.every(column => column.hidden)) merged[0] = { ...merged[0], hidden: false };
   return merged;
 }
