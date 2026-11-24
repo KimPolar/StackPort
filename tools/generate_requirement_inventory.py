@@ -113,11 +113,14 @@ PARTIAL = {
     "SP-MD-002": "SQLite 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
     "SP-MD-006": "SQLite 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
     "SP-MD-015": "선택한 SQLite 테이블과 인접 관계 자동 배치, 60~150% 확대·축소",
+    "SP-MD-016": "SQLite 테이블·뷰 열, 기본값·키·인덱스·트리거·외래 키와 제약을 담은 구조 문서 자동 생성",
     "SP-MD-019": "SQLite 외래 키를 따라 탐색하고 관계 없는 테이블, 찾을 수 없는 참조 테이블·열과 암시 참조 키 불일치 표시",
+    "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-MG-002": "SQLite 테이블과 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-005": "CSV에서 숫자·문자열·NULL·BLOB 구분, JSON에서 SQLite 저장 타입 보존",
     "SP-MG-008": "SQLite CSV·JSON 행 스트리밍·진행 행 수 표시·중단 및 시간 제한",
+    "SP-MG-024": "SQLite 선택 객체 또는 전체 스키마의 열·키·관계·규칙과 생성 SQL 주석을 Markdown·HTML로 내보내기",
     "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·CSV 보호 필드 수 보고와 작업 기록",
     "SP-BK-001": "SQLite 전체 데이터베이스 백업",
     "SP-BK-002": "SQLite 온라인 백업 API",
@@ -179,6 +182,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/backup.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id in {"SP-DB-010", "SP-DB-014", "SP-DB-018"}:
                 evidence = "crates/stackport-core/tests/schema.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
+            elif requirement_id in {"SP-MD-016", "SP-MD-020", "SP-MG-024"}:
+                evidence = "crates/stackport-core/src/schema_document.rs; crates/stackport-core/tests/schema.rs; src/SchemaDocumentDialog.tsx; src-tauri/src/main.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-DB-022" or requirement_id.startswith("SP-MG-"):
                 evidence = "crates/stackport-core/tests/schema.rs; crates/stackport-core/tests/result_export.rs; tests/desktop-smoke.cjs; src/ResultExportDialog.tsx; src-tauri/"
             elif requirement_id in {"SP-UI-011", "SP-SEC-011", "SP-FL-023"}:

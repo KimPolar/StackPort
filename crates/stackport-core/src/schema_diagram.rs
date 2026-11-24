@@ -23,19 +23,7 @@ impl Store {
     pub fn schema_diagram(&self, profile_id: &str) -> Result<Vec<DiagramTable>> {
         let profile = self.profile(profile_id)?;
         let db = open_schema_db(Path::new(&profile.path))?;
-        let mut names = db
-            .prepare(
-                "SELECT name FROM pragma_table_list
-             WHERE schema = 'main' AND type IN ('table', 'virtual')
-               AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE
-             ORDER BY name COLLATE NOCASE LIMIT ?1",
-            )
-            .map_err(db_error)?;
-        let names = names
-            .query_map([TABLE_LIMIT + 1], |row| row.get::<_, String>(0))
-            .map_err(db_error)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_error)?;
+        let names = Self::schema_object_names(&db, false, None, TABLE_LIMIT + 1)?;
         if names.len() > TABLE_LIMIT {
             return Err(format!(
                 "관계도는 테이블을 최대 {TABLE_LIMIT}개까지 열 수 있습니다."

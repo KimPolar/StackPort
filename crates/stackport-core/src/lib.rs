@@ -29,6 +29,8 @@ mod table_query;
 pub use table_query::TableQuery;
 mod schema_diagram;
 pub use schema_diagram::{DiagramColumn, DiagramTable};
+mod schema_document;
+pub use schema_document::{SchemaDocumentFormat, SchemaDocumentReport};
 mod ssh;
 pub use ssh::{SshAuthentication, SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
@@ -687,6 +689,22 @@ impl Store {
         Self::describe_object_on(&db, name)
     }
 
+    fn schema_object_names(db: &Connection, include_views: bool, name: Option<&str>, limit: usize) -> Result<Vec<String>> {
+        let mut statement = db.prepare(
+            "SELECT name FROM pragma_table_list
+             WHERE schema = 'main' AND (type IN ('table', 'virtual') OR (?1 AND type = 'view'))
+               AND substr(name, 1, 7) <> 'sqlite_' COLLATE NOCASE
+               AND (?2 IS NULL OR name = ?2 COLLATE NOCASE)
+             ORDER BY name COLLATE NOCASE LIMIT ?3",
+        ).map_err(db_error)?;
+        let names = statement
+            .query_map(rusqlite::params![include_views, name, limit], |row| row.get(0))
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        Ok(names)
+    }
+
     fn describe_object_on(db: &Connection, name: &str) -> Result<ObjectDetails> {
         let object = Self::read_object(db, name)?;
         let name = object.name.as_str();
@@ -834,6 +852,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
+        "sqlite.schema.export" => "sqlite-readonly-schema-no-overwrite",
         "project.duplicate" => "local-project-metadata-only",
         "workspace.copy" => "local-verified-copy-no-overwrite",
         "sftp.download" | "sftp.download.cancel" => "sftp-pinned-host-local-no-overwrite",

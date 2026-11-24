@@ -108,6 +108,7 @@ const SqlTemplateLibrary = React.lazy(() => import("./SqlTemplateLibrary").then(
 const SqlHistoryDialog = React.lazy(() => import("./SqlHistoryDialog").then(module => ({ default: module.SqlHistoryDialog })));
 const SqlQueryBuilderDialog = React.lazy(() => import("./SqlQueryBuilderDialog").then(module => ({ default: module.SqlQueryBuilderDialog })));
 const SqlSchemaDiagramDialog = React.lazy(() => import("./SqlSchemaDiagramDialog").then(module => ({ default: module.SqlSchemaDiagramDialog })));
+const SchemaDocumentDialog = React.lazy(() => import("./SchemaDocumentDialog").then(module => ({ default: module.SchemaDocumentDialog })));
 const call = <T,>(command: string, args?: Record<string, unknown>): Promise<T> => invoke<T>(command, args);
 const errorText = (error: unknown) => typeof error === "string" ? error : String(error);
 const quoteIdentifier = (name: string) => `"${name.replaceAll('"', '""')}"`;
@@ -184,6 +185,7 @@ function App() {
   const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
   const [sqlBuilderProfile, setSqlBuilderProfile] = useState<string | null>(null);
   const [diagramProfile, setDiagramProfile] = useState<string | null>(null);
+  const [schemaDocumentRequest, setSchemaDocumentRequest] = useState<{ profileId: string; object: string | null } | null>(null);
   const nextSqlHistoryId = useRef(0);
   const pendingSqlHistory = useRef(new Map<number, string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
@@ -237,7 +239,7 @@ function App() {
   const exitPromptOpen = useRef(exitPrompt);
   exitPromptOpen.current = exitPrompt;
   const sftpExitGuard = useRef<(() => void) | null>(null);
-  const sqlFileBusy = useRef(false);
+  const localFileBusy = useRef(false);
   const startupProfile = useRef<{ projectId: string; profileId: string } | null>(null);
   const updateTerminalCount = useCallback((count: number) => {
     terminalCount.current = count;
@@ -403,7 +405,7 @@ function App() {
 
   useEffect(() => {
     function warnBeforeClose(event: BeforeUnloadEvent) {
-      if (!closeApproved.current && (sqlFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
+      if (!closeApproved.current && (localFileBusy.current || sftpExitGuard.current || terminalCount.current > 0 || rdpCount.current > 0 || hasDirtySqlTabs(drafts.current))) {
         event.preventDefault();
         event.returnValue = "";
       }
@@ -413,7 +415,7 @@ function App() {
   }, []);
 
   const finishAppClose = useCallback(() => {
-    if (closeApproved.current || closePending.current || sqlFileBusy.current) return;
+    if (closeApproved.current || closePending.current || localFileBusy.current) return;
     closePending.current = true;
     setExitClosing(true);
     setExitError("");
@@ -432,7 +434,7 @@ function App() {
   }, [flushResume]);
 
   const requestAppClose = useCallback(() => {
-    if (closeApproved.current || closePending.current || sqlFileBusy.current || exitPromptOpen.current) return;
+    if (closeApproved.current || closePending.current || localFileBusy.current || exitPromptOpen.current) return;
     if (sftpExitGuard.current) {
       sftpExitGuard.current();
       return;
@@ -1046,6 +1048,9 @@ function App() {
       keywords: "query builder join group select sql", Icon: Table2, run: openSqlBuilder });
     if (desktop && profile) commands.push({ id: "open:schema-diagram", title: "SQLite 관계도", group: "작업",
       keywords: "erd schema diagram foreign key 외래 키", Icon: Workflow, run: () => setDiagramProfile(profile.id) });
+    if (desktop && profile) commands.push({ id: "open:schema-document", title: "SQLite 데이터 사전", group: "작업",
+      keywords: "schema data dictionary markdown html 구조 문서", Icon: FileDown,
+      run: () => setSchemaDocumentRequest({ profileId: profile.id, object: selectedObject?.name ?? null }) });
     if (profile?.project_id === projectId && !loading) {
       for (const item of objects) commands.push({
         id: `object:${profile.id}:${item.name}`, title: item.name, group: item.kind === "view" ? "뷰" : "테이블",
@@ -1482,7 +1487,7 @@ function App() {
     {sqlFileAction && fileTarget && <SqlFileDialog mode={sqlFileAction.mode}
       target={`${fileTarget.projectName} · ${fileTarget.profileName}${sqlFileAction.mode === "save" ? ` · ${sqlTabTitle(sqlFileAction.draft)}` : ""}`}
       document={sqlFileAction.mode === "save" ? sqlFileAction.draft.document : emptySqlDocument}
-      onClose={() => setSqlFileAction(null)} onBusy={busy => { sqlFileBusy.current = busy; }}
+      onClose={() => setSqlFileAction(null)} onBusy={busy => { localFileBusy.current = busy; }}
       onDone={(document, path) => finishSqlFile(sqlFileAction, document, path)} />}
     {definition && definition.profileId === profile?.id && definition.tabId === sqlDraft?.id && <SqlDefinitionDialog
       source={definition.source} result={definition.result} onClose={() => setDefinition(null)} onReveal={range => {
@@ -1531,7 +1536,12 @@ function App() {
         onOpen={name => {
           setDiagramProfile(null);
           openObject({ name, kind: "table", ddl: null }, true);
-        }} onClose={() => setDiagramProfile(null)} />
+        }} onExport={object => setSchemaDocumentRequest({ profileId: profile.id, object })}
+        onClose={() => setDiagramProfile(null)} />
+    </React.Suspense>}
+    {profile && schemaDocumentRequest?.profileId === profile.id && <React.Suspense fallback={null}>
+      <SchemaDocumentDialog profile={profile} object={schemaDocumentRequest.object}
+        onClose={() => setSchemaDocumentRequest(null)} onBusy={busy => { localFileBusy.current = busy; }} />
     </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
@@ -1590,6 +1600,7 @@ const auditOperationNames: Record<string, string> = {
   "sql_template.delete": "SQL 템플릿 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
+  "sqlite.schema.export": "SQLite 데이터 사전 저장",
   "sqlite.restore": "SQLite 복원",
   "sqlite.export.csv": "SQLite CSV 내보내기",
   "sqlite.export.json": "SQLite JSON 내보내기",

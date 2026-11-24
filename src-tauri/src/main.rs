@@ -6,7 +6,7 @@ use data_location::{DataLocation, DataMode, RuntimeInfo};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     list_local_directory, list_local_tree, local_ports, preview_local_file, save_merged_text, BrowseDirectory, ComparedFile, EditSession, FileContentComparison, FilePreview, FolderTree, NetworkDiagnostics, NetworkManager,
-    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath,
+    ObjectDetails, PortSnapshot, Profile, Project, QueryOutcome, RemotePath, SchemaDocumentFormat, SchemaDocumentReport,
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
@@ -313,6 +313,28 @@ async fn describe_object(
 async fn sqlite_schema_diagram(store: State<'_, Store>, profile_id: String) -> Result<Vec<DiagramTable>, String> {
     let store = store.inner().clone();
     worker(move || store.schema_diagram(&profile_id)).await
+}
+
+#[tauri::command]
+async fn choose_sqlite_schema_document_path(format: SchemaDocumentFormat) -> Result<Option<String>, String> {
+    worker(move || {
+        let extension = format.extension();
+        let label = match format { SchemaDocumentFormat::Markdown => "Markdown", SchemaDocumentFormat::Html => "HTML" };
+        Ok(rfd::FileDialog::new()
+            .set_title("SQLite 데이터 사전을 새 파일로 저장")
+            .set_file_name(format!("StackPort-schema.{extension}"))
+            .add_filter(label, &[extension])
+            .save_file()
+            .map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
+async fn export_sqlite_schema_document(
+    store: State<'_, Store>, profile_id: String, object: Option<String>, format: SchemaDocumentFormat, destination: String,
+) -> Result<SchemaDocumentReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.export_schema_document(&profile_id, object.as_deref(), format, &destination)).await
 }
 
 #[tauri::command]
@@ -1197,6 +1219,8 @@ fn main() {
             list_objects,
             describe_object,
             sqlite_schema_diagram,
+            choose_sqlite_schema_document_path,
+            export_sqlite_schema_document,
             sql_completion_catalog,
             diagnose_sql,
             validate_sql_alias_rename,

@@ -344,8 +344,9 @@ async function main() {
     await verifySqlHistory(page, editor, sqlTabs, dev, prod);
     await verifySqlQueryBuilder(page, editor, sqlTabs);
     await verifySqlSchemaDiagram(page, editor, isolatedPath);
+    await verifySqlSchemaDocument(page, editor);
     assert.deepEqual(errors, []);
-    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, plans, batches, result pins, comparisons and exact exports passed.');
+    console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, plans, batches, result pins, comparisons and exact exports passed.');
   } finally {
     await browser.close();
   }
@@ -1039,6 +1040,63 @@ async function verifySqlSchemaDiagram(page, editor, database) {
   await commands.press('Enter');
   await canvas.getByRole('button', { name: 'departments', exact: true, pressed: true }).waitFor();
   await dialog.getByRole('button', { name: '관계도 닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+}
+
+async function verifySqlSchemaDocument(page, editor) {
+  const draft = await editor.inputValue();
+  const root = process.env.STACKPORT_TEST_ROOT;
+  const md = path.join(root, '테이블 사전.md');
+  const html = path.join(root, '전체 사전.html');
+  await page.getByRole('button', { name: '관계도', exact: true }).click();
+  const diagram = page.getByRole('dialog', { name: 'SQLite 관계도', exact: true });
+  await diagram.getByRole('button', { name: '데이터 사전', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'SQLite 데이터 사전', exact: true });
+  const scope = dialog.getByRole('combobox', { name: '문서 범위', exact: true });
+  const save = dialog.getByRole('button', { name: '새 파일에 저장', exact: true });
+  const success = dialog.getByRole('status');
+  assert.equal(await scope.inputValue(), 'selected');
+  await dialog.getByRole('textbox', { name: '새 Markdown 파일 경로', exact: true }).fill(md);
+  await save.click();
+  await success.getByText(/객체 1개/).waitFor();
+  const markdown = fs.readFileSync(md, 'utf8');
+  assert.match(markdown, /## 테이블 departments/);
+  assert.match(markdown, /    CREATE TABLE departments/);
+  assert.doesNotMatch(markdown, /## 테이블 staff|영업/);
+
+  await scope.selectOption('all');
+  await dialog.getByRole('combobox', { name: '파일 형식', exact: true }).selectOption('html');
+  await dialog.getByRole('textbox', { name: '새 HTML 파일 경로', exact: true }).fill(html);
+  await save.click();
+  await success.getByText('데이터 사전을 저장했습니다.', { exact: true }).waitFor();
+  const output = fs.readFileSync(html, 'utf8');
+  const document = await page.evaluate(html => {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    return { title: doc.title, headings: [...doc.querySelectorAll('h2')].map(node => node.textContent),
+      scripts: doc.scripts.length, tables: doc.querySelectorAll('table').length };
+  }, output);
+  assert.equal(document.title, 'SQLite 데이터 사전');
+  assert.equal(document.scripts, 0);
+  assert.ok(document.tables > 3);
+  assert.ok(document.headings.includes('테이블 departments'));
+  assert.ok(document.headings.includes('테이블 staff'));
+  assert.ok(document.headings.includes('뷰 web view'));
+  assert.doesNotMatch(output, /영업|기획/);
+  await save.click();
+  await dialog.getByRole('alert').getByText(/같은 이름의 파일이 있습니다/).waitFor();
+  assert.equal(fs.readFileSync(html, 'utf8'), output);
+  await dialog.getByRole('button', { name: '데이터 사전 닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await diagram.getByRole('button', { name: '관계도 닫기', exact: true }).click();
+  await diagram.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), draft);
+  await page.keyboard.press('Control+Shift+P');
+  const commands = page.getByRole('combobox', { name: '명령 검색', exact: true });
+  await commands.fill('데이터 사전');
+  await page.getByRole('option', { name: /SQLite 데이터 사전/ }).waitFor();
+  await commands.press('Enter');
+  assert.equal(await scope.inputValue(), 'selected');
+  await dialog.getByRole('button', { name: '데이터 사전 닫기', exact: true }).click();
   await dialog.waitFor({ state: 'detached' });
 }
 
