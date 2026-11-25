@@ -10,7 +10,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
-    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·Redis·SSH 연결 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
+    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·MySQL/MariaDB·Redis·SSH 연결 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "탐색기에서 연결과 즐겨찾기·SQLite 객체 필터링, 연결된 PostgreSQL에 이름·스키마 객체 검색 제출 및 명령 팔레트 검색",
@@ -78,19 +78,19 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite·PostgreSQL 어댑터와 조회·그리드 편집, Redis 단독 서버 키 탐색·타입별 편집",
-    "SP-DB-004": "PostgreSQL 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
-    "SP-DB-005": "PostgreSQL TLS 인증서 검증과 점프 호스트를 지원하는 로컬 SSH 터널 경유",
-    "SP-DB-006": "PostgreSQL 세션별 사용자 이름·암호 인증",
-    "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL 연결 정의",
-    "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL 스키마와 테이블·뷰의 지연 조회 및 접근 불가 표시",
-    "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션 열람",
+    "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB 읽기 전용 탐색·데이터 미리보기, Redis 단독 서버 키 탐색·타입별 편집",
+    "SP-DB-004": "PostgreSQL·MySQL 계열 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
+    "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 인증서 검증, PostgreSQL 로컬 SSH 터널 경유 및 점프 호스트",
+    "SP-DB-006": "PostgreSQL·MySQL 계열 세션별 사용자 이름·암호 인증",
+    "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열 연결 정의",
+    "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL과 MySQL 계열 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시",
+    "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션, MySQL 계열의 열·타입·NULL·키 표시",
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람, PostgreSQL 뷰 조회 정의와 인덱스·트리거 생성 SQL 및 열·제약조건·파티션의 정의 일부 복사·저장",
     "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
-    "SP-DB-022": "SQLite·PostgreSQL 객체의 구조·데이터 조회와 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
+    "SP-DB-022": "SQLite·PostgreSQL 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기, MySQL 계열 열 구조와 데이터 미리보기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계 표시",
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
@@ -458,6 +458,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-DB-001"}:
                 evidence += "; src/RedisProfileDialog.tsx; crates/stackport-core/tests/redis_profiles.rs; tests/redis-smoke.cjs"
+            if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009", "SP-DB-010", "SP-DB-022"}:
+                evidence += "; crates/stackport-core/src/mysql.rs; crates/stackport-core/tests/mysql_profiles.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/edit.rs; src/RedisEditDialog.tsx"
                 if requirement_id in {"SP-SEC-011", "SP-SEC-015"}:

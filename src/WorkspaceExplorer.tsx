@@ -8,6 +8,7 @@ import type { PostgresProfile, PostgresProfileAction, PostgresConnection } from 
 import type { RedisProfile, RedisProfileAction } from "./RedisProfileDialog";
 import type { PostgresSearchPage } from "./PostgresSearchDialog";
 import { postgresObjectLabels } from "./PostgresObjectStructure";
+import type { MysqlProfile, MysqlProfileAction } from "./MysqlProfileDialog";
 import { PostgresPager } from "./PostgresPager";
 import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
@@ -40,6 +41,7 @@ type ExplorerProps = {
     open: (id: string) => void; openObject: (object: PostgresFavorite) => void; action: (action: PostgresProfileAction) => void;
   };
   redis: { profiles: RedisProfile[]; activeId: string; open: (id: string) => void; action: (action: RedisProfileAction) => void };
+  mysql: { profiles: MysqlProfile[]; activeId: string; open: (id: string) => void; action: (action: MysqlProfileAction) => void };
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
@@ -115,7 +117,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, redis, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
+  sqlite, postgres, redis, mysql, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -154,7 +156,9 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     item.name, item.host, item.port, item.environment, "SSH 서버"));
   const redisMatches = redis.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스"));
-  const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + sshMatches.length;
+  const mysqlMatches = mysql.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database ?? undefined, item.settings.environment, "MySQL MariaDB 데이터베이스"));
+  const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length + sshMatches.length;
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
   function favoriteEntry(target: FavoriteTarget) {
@@ -334,6 +338,16 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
             </div>}
           </div>)}
         </ExplorerGroup>
+        {desktop && <ExplorerGroup id="explorer-mysql" name="MySQL · MariaDB" Icon={Database} count={mysqlMatches.length} filtering={filtering}
+          actions={<ExplorerButton label="MySQL 계열 연결 추가" Icon={Plus} onClick={() => mysql.action({ kind: "create" })} />}>
+          {!mysqlMatches.length && <p className="sidebar-empty">저장된 MySQL 계열 연결이 없습니다.</p>}
+          {mysqlMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
+            detail={networkAddressText(item.settings)} label={`MySQL ${item.settings.name} 열기`}
+            Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
+            <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
+            <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
+          </ExplorerProfile>)}
+        </ExplorerGroup>}
         {desktop && <ExplorerGroup id="explorer-redis" name="Redis" Icon={KeyRound} count={redisMatches.length} filtering={filtering}
           actions={<ExplorerButton label="Redis 연결 추가" Icon={Plus} onClick={() => redis.action({ kind: "create" })} />}>
           {!redisMatches.length && <p className="sidebar-empty">저장된 Redis 연결이 없습니다.</p>}

@@ -906,6 +906,53 @@ async fn list_redis_profiles(store: State<'_, Store>, project_id: String) -> Res
 }
 
 #[tauri::command]
+async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_mysql_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_mysql_profile(store: State<'_, Store>, project_id: String, input: stackport_core::MysqlSettings)
+    -> Result<stackport_core::MysqlProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_mysql_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_mysql_profile(store: State<'_, Store>, id: String, revision: i64, input: stackport_core::MysqlSettings)
+    -> Result<stackport_core::MysqlProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_mysql_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_mysql_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_mysql_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_mysql(mysql: State<'_, stackport_core::MysqlManager>, profile_id: String, revision: i64,
+    password: stackport_core::MysqlPassword, confirmation: String) -> Result<stackport_core::MysqlSessionInfo, String> {
+    mysql.open(profile_id, revision, password, &confirmation).await
+}
+
+#[tauri::command]
+fn close_mysql(mysql: State<'_, stackport_core::MysqlManager>, id: String) -> Result<(), String> { mysql.close(&id) }
+
+#[tauri::command]
+async fn mysql_databases(mysql: State<'_, stackport_core::MysqlManager>, id: String, search: String, page: u32)
+    -> Result<stackport_core::MysqlCatalogPage<String>, String> { mysql.databases(&id, search, page).await }
+
+#[tauri::command]
+async fn mysql_objects(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, search: String, page: u32)
+    -> Result<stackport_core::MysqlCatalogPage<stackport_core::MysqlObject>, String> { mysql.objects(&id, database, search, page).await }
+
+#[tauri::command]
+async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String, include_rows: bool)
+    -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows).await }
+
+#[tauri::command]
 async fn create_redis_profile(store: State<'_, Store>, project_id: String, input: stackport_core::RedisSettings)
     -> Result<stackport_core::RedisProfile, String> {
     let store = store.inner().clone();
@@ -1891,6 +1938,7 @@ fn main() {
             app.manage(SshTunnelManager::new(store.clone()));
             app.manage(PostgresManager::new(store.clone()));
             app.manage(stackport_core::RedisManager::new(store.clone()));
+            app.manage(stackport_core::MysqlManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -1989,6 +2037,15 @@ fn main() {
             list_ssh_tunnels,
             list_postgres_profiles,
             list_redis_profiles,
+            list_mysql_profiles,
+            create_mysql_profile,
+            update_mysql_profile,
+            delete_mysql_profile,
+            open_mysql,
+            close_mysql,
+            mysql_databases,
+            mysql_objects,
+            mysql_table,
             create_redis_profile,
             update_redis_profile,
             delete_redis_profile,

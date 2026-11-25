@@ -10,6 +10,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
 
+탐색기의 **MySQL 계열 연결 추가**에서 MySQL·MariaDB의 호스트, 포트, 사용자, 시작 데이터베이스와 환경을 저장합니다. TLS를 기본으로 사용하고, 시스템 신뢰 저장소와 선택한 CA로 호스트 이름과 인증서를 검증합니다. 암호는 연결할 때만 입력하며 운영 연결에는 `PROD` 확인이 필요합니다. 접속 직후 서버 종류·버전을 읽고 세션의 기본 트랜잭션을 읽기 전용으로 설정합니다. 메타데이터 v15에서 연결을 프로젝트에 저장하고 복제할 때 연결 설정을 함께 복사합니다. [mysql_async TLS 옵션](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html)
+
+MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블·뷰를 각각 검색하고 100개씩 표시합니다. 선택한 객체의 열 이름, 타입, NULL 허용 여부와 키 표시를 읽습니다. 데이터 미리보기는 최대 128개 열, 50개 행, 값당 512바이트를 표시합니다. 큰 정수와 소수는 문자열로 보존하고 바이너리 값은 HEX로 표시합니다. 긴 UTF-8 값은 문자 경계를 지켜 자릅니다. [MySQL 열 메타데이터](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html)
+
 탐색기의 **Redis 연결 추가**에서 Redis 6.2 이상과 호환되는 단독 서버의 호스트·포트, DB 번호, ACL 사용자와 환경을 프로젝트에 저장합니다. TLS는 시스템 신뢰 저장소와 선택한 PEM CA를 사용해 TLS 1.2 이상에서 호스트 이름과 인증서를 검증합니다. 일반 TCP도 연결 설정에서 명시적으로 선택할 수 있습니다. 연결마다 암호를 입력하며 `PROD` 연결에는 운영 환경 확인이 필요합니다. `INFO server`와 `INFO cluster`로 접속한 서버의 버전과 단독 구성을 확인합니다. DB 0 이외의 번호는 `SELECT` 권한이 필요합니다. 메타데이터 v14에서 Redis 프로필을 보관하며 프로젝트 복제 시 연결 설정을 복사합니다. [Redis 프로토콜](https://redis.io/docs/latest/develop/reference/protocol-spec/)
 
 **키 탐색**은 `SCAN`으로 서버 패턴과 타입 필터를 실행합니다. `COUNT 100`은 서버에 전달하는 탐색 힌트입니다. 비어 있는 페이지에도 다음 커서가 있을 수 있고, 조회 중 키가 바뀌면 결과에 반영될 수 있습니다. 역할에 해당 권한이 있으면 `DBSIZE`, `PTTL`, `MEMORY USAGE`로 DB 전체 키 수와 선택한 키의 만료 시간 및 메모리를 표시합니다. String은 512바이트 구간, List와 Sorted Set은 순서 범위, Hash와 Set은 커서, Stream은 메시지 ID로 값을 탐색합니다. 바이너리 키와 값은 HEX로 표시합니다. 응답 하나가 4 MiB 또는 8,192개 항목을 초과하면 연결을 닫습니다. Windows 통합 테스트는 실제 Redis 서버와 로컬 TLS 연결로 인증·DB 번호·타입별 읽기 및 단절 감지를 확인합니다. [Redis SCAN](https://redis.io/docs/latest/commands/scan/)
@@ -382,6 +386,8 @@ Write-Output $testRoot
 $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
+
+MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13.1과 MariaDB 11.8.10에서 인증서 호스트 이름과 CA 검증, 계정 권한, 테이블·뷰 탐색, 큰 정수·소수·바이너리 및 긴 UTF-8 값의 미리보기를 확인했습니다.
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 
