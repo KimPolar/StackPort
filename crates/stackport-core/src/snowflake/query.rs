@@ -48,6 +48,14 @@ impl QuerySource {
         parameters::parameter_count(&self.statements()?)
     }
 
+    pub fn parameter_plan(&self) -> Result<crate::SqlParameterPlan<usize>> {
+        let statements = self.statements()?;
+        crate::SqlParameterPlan::new(
+            parameters::parameter_count(&statements)?,
+            statements.iter().map(|part| part.sql.trim().as_bytes()),
+        )
+    }
+
     fn statements(&self) -> Result<Vec<script::Statement<'_>>> {
         if self.sql.len() > SQL_LIMIT
             || self.sql.contains('\0')

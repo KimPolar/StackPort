@@ -232,6 +232,67 @@ fn parameter_sets_migrate_and_keep_one_default_per_sql_and_project() {
 }
 
 #[test]
+fn parameter_sets_retain_native_scalar_types_and_legacy_workspace_values() {
+    let directory = tempfile::tempdir().unwrap();
+    let now = Store::open(directory.path().join("workspace.sqlite")).unwrap();
+    let project = now.create_project("parameters").unwrap();
+    let scope = |engine: &str| -> SqlParameterSetScope {
+        serde_json::from_value(json!({
+            "project_id": project.id, "engine": engine, "key": "a".repeat(64)
+        }))
+        .unwrap()
+    };
+    let save = |engine: &str, values: Json| {
+        let write = serde_json::from_value(json!({
+            "kind": "create", "input": { "name": "typed", "is_default": true, "values": values }
+        }))
+        .unwrap();
+        now.save_sql_parameter_set(&scope(engine), write)
+    };
+    let value = |kind, value| json!({ "kind": "value", "value": { "kind": kind, "value": value } });
+    let decimal = "-12345678901234567890123456789012.345678";
+    let typed = json!([
+        value("decimal", decimal), value("boolean", "true"),
+        { "kind": "secret", "value_kind": "blob" }, { "kind": "value", "value": { "kind": "null" } }
+    ]);
+    for engine in ["sql_server", "snowflake"] {
+        let row = serde_json::to_value(save(engine, typed.clone()).unwrap()).unwrap();
+        let restored = now
+            .read_sql_parameter_set(&scope(engine), row["id"].as_str().unwrap(), 1)
+            .unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap()["values"], typed);
+    }
+    assert!(save("oracle", typed).is_err());
+    assert!(save(
+        "oracle",
+        json!([value("decimal", "0.000012300"), value("blob", "00AB")])
+    )
+    .is_ok());
+    assert!(save("postgres", json!([value("decimal", "1.2")])).is_err());
+    assert!(save(
+        "mysql",
+        json!([
+            value("integer", "18446744073709551615"),
+            value("real", "-0.125")
+        ])
+    )
+    .is_ok());
+    assert!(save("mysql", json!([value("blob", "00")])).is_err());
+    let long = "a".repeat(40 * 1024);
+    assert!(save(
+        "mysql_script",
+        json!([value("text", &long), value("text", &long)])
+    )
+    .is_err());
+    assert!(save("mysql_script", json!([value("text", &long)])).is_ok());
+    assert!(save(
+        "sqlite",
+        json!([value("integer", "3"), value("blob", "00fe")])
+    )
+    .is_ok());
+}
+
+#[test]
 fn explains_the_read_only_query_without_running_it() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("plan.sqlite");

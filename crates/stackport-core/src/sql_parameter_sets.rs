@@ -1,6 +1,6 @@
 use super::{
-    db_error, insert_audit, require_changed, sql_templates::require_active_project, valid_name,
-    AuditRecord, Result, SqlParameterValue, Store,
+    db_error, insert_audit, native_table_filter, require_changed,
+    sql_templates::require_active_project, valid_name, AuditRecord, Result, Store,
 };
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -36,21 +36,37 @@ enum Engine {
     Sqlite,
     Postgres,
     PostgresScript,
+    Mysql,
+    MysqlScript,
+    SqlServer,
+    Oracle,
+    Snowflake,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ValueKind {
     Text,
     Integer,
     Real,
     Blob,
+    Decimal,
+    Boolean,
+    Null,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredValue {
+    kind: ValueKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<String>,
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum SavedValue {
-    Value { value: SqlParameterValue },
+    Value { value: StoredValue },
     Secret { value_kind: ValueKind },
 }
 
@@ -90,6 +106,89 @@ pub enum SqlParameterSetWrite {
     },
 }
 
+#[derive(Serialize)]
+pub struct SqlParameterPlan<T> {
+    pub parameters: T,
+    pub parameter_scope: String,
+}
+
+impl<T: Serialize> SqlParameterPlan<T> {
+    pub(crate) fn new<'a>(
+        parameters: T,
+        sql_parts: impl IntoIterator<Item = &'a [u8]>,
+    ) -> Result<Self> {
+        let signature =
+            serde_json::to_vec(&parameters).map_err(|_| "매개변수 목록을 확인할 수 없습니다.")?;
+        let sql_key = fingerprint(sql_parts);
+        Ok(Self {
+            parameters,
+            parameter_scope: fingerprint([sql_key.as_bytes(), &signature]),
+        })
+    }
+}
+
+impl Engine {
+    fn mysql(&self) -> bool {
+        matches!(self, Self::Mysql | Self::MysqlScript)
+    }
+
+    fn postgres(&self) -> bool {
+        matches!(self, Self::Postgres | Self::PostgresScript)
+    }
+
+    fn accepts(&self, kind: ValueKind) -> bool {
+        match kind {
+            ValueKind::Text | ValueKind::Null => true,
+            ValueKind::Integer | ValueKind::Real => !self.postgres(),
+            ValueKind::Blob => !self.postgres() && !self.mysql(),
+            ValueKind::Decimal => matches!(self, Self::SqlServer | Self::Oracle | Self::Snowflake),
+            ValueKind::Boolean => matches!(self, Self::SqlServer | Self::Snowflake),
+        }
+    }
+
+    fn validate(&self, field: &StoredValue) -> Result<usize> {
+        let invalid = "저장할 매개변수 값과 형식을 확인하세요.";
+        if matches!(field.kind, ValueKind::Null) {
+            return if field.value.is_none() {
+                Ok(0)
+            } else {
+                Err(invalid.into())
+            };
+        }
+        let value = field.value.as_deref().ok_or(invalid)?;
+        let limit = if self.mysql() { 64 * 1024 } else { 16 * 1024 };
+        if value.len() > limit {
+            return Err(format!(
+                "매개변수 값은 {} KiB까지 저장할 수 있습니다.",
+                limit / 1024
+            ));
+        }
+        let parsed = if self.mysql() { value } else { value.trim() };
+        let valid = match field.kind {
+            ValueKind::Text => !self.postgres() || !value.contains('\0'),
+            ValueKind::Integer => {
+                parsed.parse::<i64>().is_ok() || self.mysql() && parsed.parse::<u64>().is_ok()
+            }
+            ValueKind::Real => native_table_filter::finite_float(parsed).is_ok(),
+            ValueKind::Decimal => {
+                native_table_filter::decimal_shape(parsed).is_ok()
+                    && (!matches!(self, Self::Oracle)
+                        || parsed.parse::<oracledb::OracleNumber>().is_ok())
+            }
+            ValueKind::Boolean => matches!(parsed, "true" | "false" | "1" | "0"),
+            ValueKind::Blob => {
+                parsed.len().is_multiple_of(2)
+                    && parsed.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }
+            ValueKind::Null => false,
+        };
+        if !valid {
+            return Err(invalid.into());
+        }
+        Ok(value.len())
+    }
+}
+
 impl SqlParameterSetScope {
     fn storage_key(&self) -> Result<String> {
         if self.key.len() != 64 || !self.key.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -99,48 +198,40 @@ impl SqlParameterSetScope {
             Engine::Sqlite => "sqlite",
             Engine::Postgres => "postgres",
             Engine::PostgresScript => "postgres_script",
+            Engine::Mysql => "mysql",
+            Engine::MysqlScript => "mysql_script",
+            Engine::SqlServer => "sql_server",
+            Engine::Oracle => "oracle",
+            Engine::Snowflake => "snowflake",
         };
         Ok(format!("{engine}:{}", self.key.to_ascii_lowercase()))
     }
 
     fn validate_values(&self, values: &[SavedValue]) -> Result<()> {
-        if values.is_empty() || values.len() > 32 {
+        let limit = if self.engine.postgres() || matches!(self.engine, Engine::Sqlite) {
+            32
+        } else {
+            64
+        };
+        if values.is_empty() || values.len() > limit {
             return Err("매개변수 세트의 값 개수를 확인하세요.".into());
         }
+        let mut bytes = 0usize;
         for field in values {
             match field {
-                SavedValue::Value { value } => {
-                    if let SqlParameterValue::Text(text)
-                    | SqlParameterValue::Integer(text)
-                    | SqlParameterValue::Real(text)
-                    | SqlParameterValue::Blob(text) = value
-                    {
-                        if text.len() > 16 * 1024 {
-                            return Err("매개변수 값은 16 KiB까지 저장할 수 있습니다.".into());
-                        }
-                    }
-                    match (&self.engine, value) {
-                        (Engine::Sqlite, value) => {
-                            value.sqlite_value()?;
-                        }
-                        (_, SqlParameterValue::Null) => {}
-                        (_, SqlParameterValue::Text(value)) if !value.contains('\0') => {}
-                        _ => {
-                            return Err(
-                                "PostgreSQL 매개변수는 NUL 없는 텍스트 또는 NULL이어야 합니다."
-                                    .into(),
-                            )
-                        }
-                    }
+                SavedValue::Value { value } if self.engine.accepts(value.kind) => {
+                    bytes += self.engine.validate(value)?
                 }
                 SavedValue::Secret { value_kind }
-                    if !matches!(self.engine, Engine::Sqlite)
-                        && !matches!(value_kind, ValueKind::Text) =>
-                {
-                    return Err("PostgreSQL 숨김 매개변수는 텍스트로 입력하세요.".into());
+                    if self.engine.accepts(*value_kind)
+                        && !matches!(value_kind, ValueKind::Null) => {}
+                _ => {
+                    return Err("현재 데이터베이스에서 지원하는 매개변수 형식을 선택하세요.".into())
                 }
-                SavedValue::Secret { .. } => {}
             }
+        }
+        if self.engine.mysql() && bytes > 64 * 1024 {
+            return Err("MySQL 매개변수는 합계 64 KiB까지 저장할 수 있습니다.".into());
         }
         Ok(())
     }

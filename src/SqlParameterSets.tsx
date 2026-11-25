@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-export type ParameterSetScope = { project_id: string; engine: "sqlite" | "postgres" | "postgres_script"; key: string };
+export type ParameterSetScope = { project_id: string; engine:
+  "sqlite" | "postgres" | "postgres_script" | "mysql" | "mysql_script" | "sql_server" | "oracle" | "snowflake"; key: string };
+export type ParameterPlan<T> = { parameters: T; parameter_scope: string };
 export type ParameterInput<Kind extends string> = { kind: Kind; value: string; masked: boolean; needsValue?: boolean };
 type Summary = { id: string; name: string; is_default: boolean; revision: number };
 type SavedValue<Kind extends string> = { kind: "secret"; value_kind: Kind } |

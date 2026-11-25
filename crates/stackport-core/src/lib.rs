@@ -107,7 +107,7 @@ mod sql_refactor;
 mod sql_templates;
 pub use sql_templates::{SqlTemplate, SqlTemplateInput, SqlTemplateSummary, SqlTemplateWrite};
 mod sql_parameter_sets;
-pub use sql_parameter_sets::{SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
+pub use sql_parameter_sets::{SqlParameterPlan, SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
 pub use sql_statement::sqlite_statement_at;
 mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};

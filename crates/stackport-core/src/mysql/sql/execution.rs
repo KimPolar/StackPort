@@ -112,6 +112,16 @@ impl MysqlManager {
         Ok(script::parameter_count(&parts))
     }
 
+    pub fn script_parameter_plan(&self, id: &str, sql: &str, scope: &script::Scope) -> Result<crate::SqlParameterPlan<usize>> {
+        let mode = self.session(id)?.sql_mode;
+        let parts = script::parts(sql, scope, mode)?;
+        let key = mode.parameter_key();
+        crate::SqlParameterPlan::new(
+            script::parameter_count(&parts),
+            std::iter::once(key.as_slice()).chain(parts.iter().map(|part| part.sql.trim().as_bytes())),
+        )
+    }
+
     pub async fn run_script(
         &self,
         id: &str,

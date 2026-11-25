@@ -29,7 +29,7 @@ type DataPage = {
 };
 
 type Adapter = { engine: string; prefix: "sql_server" | "oracle" | "snowflake" };
-type Profile = { id: string; revision: number; settings: { name: string; host: string; port?: number; environment: string } };
+type Profile = { id: string; project_id: string; revision: number; settings: { name: string; host: string; port?: number; environment: string } };
 
 export function RelationalWorkspace({ profile, engine, prefix, database, passwordless = false, passwordLimit = 128, transportNote, tokenLabel }: Adapter & {
   profile: Profile; database: string; passwordless?: boolean; passwordLimit?: number; transportNote?: string; tokenLabel?: string;
@@ -127,8 +127,8 @@ function RelationalViews(props: { session: Session; profile: Profile } & Adapter
     </div>
     <div hidden={sqlVisible}><Browse {...props} /></div>
     {sqlOpened && <div hidden={!sqlVisible}>{props.prefix === "sql_server"
-      ? <SqlServerSqlWorkspace id={props.session.id} database={props.session.database} />
-      : <RelationalScriptWorkspace id={props.session.id} database={props.session.database} engine={props.prefix} />}</div>}
+      ? <SqlServerSqlWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} />
+      : <RelationalScriptWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} engine={props.prefix} />}</div>}
   </>;
 }
 

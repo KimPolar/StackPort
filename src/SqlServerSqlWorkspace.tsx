@@ -5,6 +5,7 @@ import { CodeTextarea } from "./CodeTextarea";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { SqlServerParameterFields, type SqlParameter, type SqlServerParameterValue } from "./SqlParameterFields";
+import type { ParameterPlan } from "./SqlParameterSets";
 
 type Scope = "document" | "batch" | "selection";
 type QueryInput = {
@@ -46,7 +47,7 @@ const attentionText = {
 const number = new Intl.NumberFormat("ko-KR");
 const sqlLimit = 256 * 1024;
 
-export function SqlServerSqlWorkspace({ id, database }: { id: string; database: string }) {
+export function SqlServerSqlWorkspace({ id, projectId, database }: { id: string; projectId: string; database: string }) {
   const [text, setText] = useState("");
   const [hasSelection, setHasSelection] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -54,7 +55,7 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [preparing, setPreparing] = useState(false);
-  const [parameterRequest, setParameterRequest] = useState<{ input: QueryInput; parameters: SqlParameter[] } | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ input: QueryInput; parameters: SqlParameter[]; parameterScope: string } | null>(null);
   const [error, setError] = useState("");
   const editor = useRef<HTMLTextAreaElement>(null);
   const active = useRef<string | null>(null);
@@ -91,8 +92,8 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
     active.current = crypto.randomUUID();
     setPreparing(true); setError("");
     try {
-      const indexes = await invoke<number[]>("sql_server_query_parameters", { input });
-      setParameterRequest({ input, parameters: indexes.map(index => ({ index, name: `@P${index}` })) });
+      const plan = await invoke<ParameterPlan<number[]>>("sql_server_query_parameters", { input, withScope: true });
+      setParameterRequest({ input, parameterScope: plan.parameter_scope, parameters: plan.parameters.map(index => ({ index, name: `@P${index}` })) });
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -162,7 +163,9 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
       footer={<span>Ctrl + Enter · 현재 배치 또는 선택 실행</span>} />
     <p className="form-note mysql-table-note" id={noteId}>로그인 계정의 권한으로 실행합니다. 커밋된 변경은 유지되고 열린 트랜잭션은 실행 연결이 닫힐 때 롤백됩니다.</p>
     {parameterRequest && <Dialog title="SQL Server 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
-      <SqlServerParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={values => {
+      <SqlServerParameterFields parameters={parameterRequest.parameters}
+        setScope={{ project_id: projectId, engine: "sql_server", key: parameterRequest.parameterScope }}
+        dismiss={() => setParameterRequest(null)} submit={values => {
         setParameterRequest(null);
         void execute({ ...parameterRequest.input, parameters: parameterRequest.parameters.map(({ index }, position) => ({ index, ...values[position] })) });
       }} />

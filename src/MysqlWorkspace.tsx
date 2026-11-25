@@ -293,7 +293,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
           </div>
         </>}
       </section>
-      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} environment={settings.environment}
+      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} projectId={profile.project_id} database={database} environment={settings.environment}
         text={sqlText} onTextChange={setSqlText} onExport={beginExport} /></div>
       </div>
     </div></div>}

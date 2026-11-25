@@ -48,6 +48,12 @@ impl QueryInput {
     pub fn parameter_indexes(&self) -> Result<Vec<u16>> {
         parameters::indexes(&self.batches()?)
     }
+
+    pub fn parameter_plan(&self) -> Result<crate::SqlParameterPlan<Vec<u16>>> {
+        let batches = self.batches()?;
+        let indexes = parameters::indexes(&batches)?;
+        crate::SqlParameterPlan::new(indexes, batches.iter().map(|part| part.sql.trim().as_bytes()))
+    }
 }
 
 #[derive(Serialize)]

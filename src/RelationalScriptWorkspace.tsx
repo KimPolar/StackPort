@@ -5,12 +5,14 @@ import { CodeTextarea } from "./CodeTextarea";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { OracleParameterFields, SnowflakeParameterFields, type OracleParameterValue, type SnowflakeParameterValue } from "./SqlParameterFields";
+import type { ParameterPlan } from "./SqlParameterSets";
 
 type Scope = "document" | "current" | "selection";
 type Engine = "oracle" | "snowflake";
 type QuerySource = { sql: string; first_line: number; cursor_byte: number | null };
 type OracleBinding = OracleParameterValue & { name: string };
-type ParameterRequest = { input: QuerySource } & ({ engine: "oracle"; names: string[] } | { engine: "snowflake"; count: number });
+type ParameterRequest = { input: QuerySource; parameterScope: string } &
+  ({ engine: "oracle"; names: string[] } | { engine: "snowflake"; count: number });
 type ResultSet = {
   columns: { name: string; data_type: string }[];
   rows: (DatabasePreviewValue | null)[][];
@@ -50,7 +52,7 @@ const statsFields = [
   ["num_rows_deleted", "삭제"], ["num_duplicate_rows_updated", "중복 수정"],
 ] as const;
 
-export function RelationalScriptWorkspace({ id, database, engine }: { id: string; database: string; engine: Engine }) {
+export function RelationalScriptWorkspace({ id, projectId, database, engine }: { id: string; projectId: string; database: string; engine: Engine }) {
   const [text, setText] = useState("");
   const [selected, setSelected] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -84,13 +86,13 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
       setPreparing(true); setError("");
       try {
         if (engine === "snowflake") {
-          const count = await invoke<number>("snowflake_query_parameters", { input });
-          setParameterRequest({ engine, input, count });
+          const plan = await invoke<ParameterPlan<number>>("snowflake_query_parameters", { input, withScope: true });
+          setParameterRequest({ engine, input, count: plan.parameters, parameterScope: plan.parameter_scope });
           return;
         }
-        const names = await invoke<string[]>("oracle_query_parameters", { id, input });
-        if (names.length) {
-          setParameterRequest({ engine, input, names });
+        const plan = await invoke<ParameterPlan<string[]>>("oracle_query_parameters", { id, input, withScope: true });
+        if (plan.parameters.length) {
+          setParameterRequest({ engine, input, names: plan.parameters, parameterScope: plan.parameter_scope });
           return;
         }
       } catch (cause) {
@@ -157,11 +159,14 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
     {outcome && <ScriptResults engine={engine} outcome={outcome} index={statementIndex} onSelect={setStatementIndex} />}
     {parameterRequest && <Dialog title={`${name} SQL 바인드 변수`} busy={false} onClose={() => setParameterRequest(null)}>
       {parameterRequest.engine === "oracle" ? <OracleParameterFields parameters={parameterRequest.names.map((name, index) => ({ index: index + 1, name: oracleBindLabel(name) }))}
+        setScope={{ project_id: projectId, engine: "oracle", key: parameterRequest.parameterScope }}
         dismiss={() => setParameterRequest(null)} submit={values => {
           const parameters = parameterRequest.names.map((name, index) => ({ ...values[index], name }));
           setParameterRequest(null);
           void execute({ ...parameterRequest.input, parameters });
-        }} /> : <SnowflakeParameterFields count={parameterRequest.count} dismiss={() => setParameterRequest(null)} submit={parameters => {
+        }} /> : <SnowflakeParameterFields count={parameterRequest.count}
+          setScope={{ project_id: projectId, engine: "snowflake", key: parameterRequest.parameterScope }}
+          dismiss={() => setParameterRequest(null)} submit={parameters => {
           setParameterRequest(null);
           void execute({ ...parameterRequest.input, parameters });
         }} />}

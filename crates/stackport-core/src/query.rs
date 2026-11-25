@@ -114,7 +114,7 @@ pub enum SqlParameterValue {
 }
 
 impl SqlParameterValue {
-    pub(super) fn sqlite_value(&self) -> Result<Value> {
+    fn sqlite_value(&self) -> Result<Value> {
         match self {
             Self::Null => Ok(Value::Null),
             Self::Text(text) if text.len() <= MAX_PARAMETER_BYTES => Ok(Value::Text(text.clone())),

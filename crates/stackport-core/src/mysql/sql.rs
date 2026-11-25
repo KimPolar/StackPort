@@ -43,6 +43,10 @@ impl SqlMode {
                 .any(|item| item.eq_ignore_ascii_case("ANSI_QUOTES")),
         }
     }
+
+    fn parameter_key(self) -> [u8; 2] {
+        [u8::from(self.no_backslash), u8::from(self.ansi_quotes)]
+    }
 }
 
 #[derive(Deserialize)]
@@ -142,6 +146,11 @@ pub(super) fn stop_active(session: &Session, id: Option<Uuid>) -> Result<bool> {
 impl MysqlManager {
     pub fn sql_parameters(&self, id: &str, sql: &str, select_only: bool) -> Result<usize> {
         inspect_sql(sql, self.session(id)?.sql_mode, select_only)
+    }
+
+    pub fn sql_parameter_plan(&self, id: &str, sql: &str, select_only: bool) -> Result<crate::SqlParameterPlan<usize>> {
+        let mode = self.session(id)?.sql_mode;
+        crate::SqlParameterPlan::new(inspect_sql(sql, mode, select_only)?, [mode.parameter_key().as_slice(), sql.trim().as_bytes()])
     }
 
     pub fn cancel_sql(&self, id: &str, request_id: &str) -> Result<bool> {

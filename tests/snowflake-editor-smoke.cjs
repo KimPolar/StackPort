@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
 
 async function verify(page) {
   const errors = [];
@@ -10,6 +11,9 @@ async function verify(page) {
     window.__TAURI_INTERNALS__.invoke('create_project', { name: 'Snowflake 편집기 검증' }));
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  assert.equal(await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('snowflake_query_parameters', {
+    input: { sql: 'SELECT ?', first_line: 1, cursor_byte: null },
+  })), 1);
   await page.evaluate(() => {
     const bridge = window.__TAURI_INTERNALS__;
     const fetchNative = window.fetch.bind(window);
@@ -151,10 +155,18 @@ async function verify(page) {
   await form.getByLabel('?1 형식', { exact: true }).selectOption('decimal');
   const decimalInput = form.getByLabel('?1 값', { exact: true });
   await decimalInput.fill(decimal);
+  await form.getByLabel('?2 형식', { exact: true }).selectOption('null');
+  const sets = await saveDefaultSet(form, 'Snowflake 정확 소수');
+  await form.getByRole('button', { name: '취소', exact: true }).click();
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await bindAction.click();
+  await sets.getByText('매개변수 세트를 불러왔습니다.', { exact: true }).waitFor();
+  assert.equal(await form.getByLabel('?1 형식', { exact: true }).inputValue(), 'decimal');
+  assert.equal(await form.getByLabel('?2 형식', { exact: true }).inputValue(), 'null');
+  assert.equal(await decimalInput.inputValue(), decimal);
   await form.getByLabel('?1 값 숨기기', { exact: true }).check();
   assert.equal(await decimalInput.getAttribute('type'), 'password');
-  await form.getByLabel('?2 형식', { exact: true }).selectOption('null');
-  assert.equal(await form.getByRole('group').count(), 2);
   await form.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   await form.waitFor({ state: 'detached' });
   await grid.getByText(decimal, { exact: true }).waitFor();

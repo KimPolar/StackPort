@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
 const { execFileSync, spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
@@ -1169,13 +1170,16 @@ async function verifySqlEditor(page, workspace) {
   await parameter.fill('bound-ui-fixture');
   await editor.getByLabel('값 숨기기').check();
   assert.equal(await parameter.getAttribute('type'), 'password');
+  const sets = await saveDefaultSet(editor, 'MySQL 읽기 기본값');
   await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
   await result.getByText('bound-ui-fixture', { exact: true }).waitFor();
   await input.fill('SELECT 404 AS unsaved_query;');
   await editor.getByRole('button', { name: '결과 내보내기', exact: true }).click();
   await editor.getByRole('heading', { name: '내보내기 매개변수 다시 입력' }).waitFor();
+  await sets.getByText('숨김 값은 다시 입력하세요.', { exact: true }).waitFor();
   assert.equal(await parameter.inputValue(), '');
   assert.equal(await parameter.getAttribute('type'), 'password');
+  assert.equal(await editor.getByRole('button', { name: '파일 설정', exact: true }).isEnabled(), false);
   await parameter.fill('exported-ui-fixture');
   await editor.getByRole('button', { name: '파일 설정', exact: true }).click();
   await saveJsonFromDialog(page, 'sql-ui.json');
@@ -1221,13 +1225,23 @@ async function verifySqlEditor(page, workspace) {
 
   await editor.getByRole('button', { name: 'SQL 스크립트', exact: true }).click();
   await editor.getByLabel('자동 커밋', { exact: true }).uncheck();
-  await input.fill("SELECT '스크립트 첫 결과';\nSELECT '스크립트 다음 결과';");
-  await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+  await input.fill("SELECT '스크립트 첫 결과';\nSELECT ? AS next_result;");
   const production = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
   const proceed = production.getByRole('button', { name: '계속', exact: true });
-  assert.equal(await proceed.isDisabled(), true);
-  await production.getByLabel('운영 환경 확인').fill('PROD');
-  await proceed.click();
+  const openScriptBindings = async () => {
+    await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+    assert.equal(await proceed.isDisabled(), true);
+    await production.getByLabel('운영 환경 확인').fill('PROD');
+    await proceed.click();
+  };
+  await openScriptBindings();
+  await parameter.fill('스크립트 다음 결과');
+  await saveDefaultSet(editor, 'MySQL 스크립트 기본값');
+  await editor.getByRole('button', { name: '취소', exact: true }).click();
+  await openScriptBindings();
+  await sets.getByText('매개변수 세트를 불러왔습니다.', { exact: true }).waitFor();
+  assert.equal(await parameter.inputValue(), '스크립트 다음 결과');
+  await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
   const scriptResult = editor.getByRole('region', { name: 'MySQL 스크립트 결과', exact: true });
   const scriptGrid = scriptResult.getByRole('table', { name: 'MySQL 스크립트 결과 표', exact: true });
   await scriptGrid.getByRole('cell', { name: '스크립트 첫 결과', exact: true }).waitFor();

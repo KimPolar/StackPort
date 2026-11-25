@@ -161,6 +161,10 @@ impl Session {
 
 impl Manager {
     pub async fn query_parameters(&self, id: &str, input: QuerySource) -> Result<Vec<String>> {
+        self.query_parameter_plan(id, input).await.map(|plan| plan.parameters)
+    }
+
+    pub async fn query_parameter_plan(&self, id: &str, input: QuerySource) -> Result<crate::SqlParameterPlan<Vec<String>>> {
         self.read(id, move |connection| {
             let statements = input.statements()?;
             let prepared = prepare(connection, &statements, false).map_err(|error| {
@@ -170,10 +174,11 @@ impl Manager {
                     error.message
                 )
             })?;
-            Ok(parameters::names(&prepared)?
+            let names = parameters::names(&prepared)?
                 .into_iter()
                 .map(str::to_owned)
-                .collect())
+                .collect();
+            crate::SqlParameterPlan::new(names, statements.iter().map(|part| part.sql.trim().as_bytes()))
         })
         .await
     }

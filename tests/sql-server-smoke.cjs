@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
-const { seedSqlServer, recreateSqlServerTable, withLockedExportRow } = require('./sql-server-fixture.cjs');
+const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
 const { verifyDefinitionPanel } = require('./relational-definition.cjs');
@@ -221,6 +221,7 @@ async function verify(page, hiddenObject, exportFolder) {
   await workspace.getByRole('button', { name: 'SQL Server 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   const replayDatabase = database + '_replay';
+  const { recreateSqlServerTable } = require('./sql-server-fixture.cjs');
   await recreateSqlServerTable({ port, ca, database: replayDatabase, account, script });
   const replay = await open(await alternate({ name: '생성 SQL 재실행 확인', database: replayDatabase }));
   try {
@@ -333,24 +334,8 @@ async function verifySqlEditor(workspace, command, observerId) {
   await editorPane.getByRole('button', { name: '선택 실행', exact: true }).click();
   await grid.getByText('second result', { exact: true }).waitFor();
 
-  const parameterSql = "SELECT N'outside selection' AS marker;\nSELECT @P3 AS entered, @P7 AS amount;";
-  await editor.fill(parameterSql);
-  await editor.press('Control+End');
-  await editor.press('Shift+Home');
-  await editorPane.getByRole('button', { name: '매개변수 실행', exact: true }).click();
-  const dialog = workspace.page().getByRole('dialog', { name: 'SQL Server 매개변수', exact: true });
-  const secretField = dialog.getByRole('textbox', { name: '@P3 값', exact: true });
-  await secretField.fill('한글 🚀');
-  await dialog.getByRole('checkbox', { name: '@P3 값 숨기기' }).check();
-  assert.equal(await dialog.getByLabel('@P3 값', { exact: true }).getAttribute('type'), 'password');
-  await dialog.getByRole('combobox', { name: '@P7 형식' }).selectOption('decimal');
-  await dialog.getByRole('textbox', { name: '@P7 값', exact: true }).fill('-0.000123400');
-  await dialog.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
-  await dialog.waitFor({ state: 'detached' });
-  await grid.getByText('한글 🚀', { exact: true }).waitFor();
-  await grid.getByText('-0.000123400', { exact: true }).waitFor();
+  await verifyBindForm(editorPane, editor, grid);
   assert.equal(await results.getByRole('combobox', { name: '결과 집합' }).count(), 0);
-  assert.equal(await editor.inputValue(), parameterSql);
 
   await editor.fill(`INSERT [archive].[execution_fixture] VALUES (15);
 WAITFOR DELAY '00:00:08'; INSERT [archive].[execution_fixture] VALUES (14);`);
@@ -495,6 +480,7 @@ async function verifyExportCommands(command, id, profile, folder, { table, view,
   }
 
   const cancelled = randomUUID();
+  const { withLockedExportRow } = require('./sql-server-fixture.cjs');
   await withLockedExportRow({ port, ca, database }, async () => {
     const progress = () => command('sql_server_export_progress', { id, requestId: cancelled });
     const run = exportFile(wide, 'cancelled.json', { requestId: cancelled });
@@ -624,8 +610,124 @@ async function verifyStructurePanel(workspace, detail) {
   await workspace.getByRole('heading', { name: 'order]daily', exact: true }).waitFor();
 }
 
+async function verifyBindForm(pane, editor, grid) {
+  const sql = "SELECT N'outside selection' AS marker;\nSELECT @P3 AS entered, @P7 AS amount;";
+  const reopen = async () => {
+    await editor.press('Control+End');
+    await editor.press('Shift+Home');
+    await pane.getByRole('button', { name: '매개변수 실행', exact: true }).click();
+  };
+  await editor.fill(sql);
+  await reopen();
+  const dialog = pane.page().getByRole('dialog', { name: 'SQL Server 매개변수', exact: true });
+  const secret = dialog.getByLabel('@P3 값', { exact: true });
+  const amount = dialog.getByLabel('@P7 값', { exact: true });
+  await secret.fill('hidden-test-value');
+  await dialog.getByRole('checkbox', { name: '@P3 값 숨기기' }).check();
+  await dialog.getByRole('combobox', { name: '@P7 형식' }).selectOption('decimal');
+  await amount.fill('-0.000123400');
+  const sets = await saveDefaultSet(dialog, 'SQL Server 배치 기본값');
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await reopen();
+  await sets.getByText('숨김 값은 다시 입력하세요.', { exact: true }).waitFor();
+  assert.equal(await secret.getAttribute('type'), 'password');
+  assert.equal(await secret.inputValue(), '');
+  assert.equal(await amount.inputValue(), '-0.000123400');
+  const run = dialog.getByRole('button', { name: '매개변수로 실행', exact: true });
+  assert.equal(await run.isEnabled(), false);
+  await secret.fill('한글 🚀');
+  await run.click();
+  await dialog.waitFor({ state: 'detached' });
+  await grid.getByText('한글 🚀', { exact: true }).waitFor();
+  await grid.getByText('-0.000123400', { exact: true }).waitFor();
+  assert.equal(await editor.inputValue(), sql);
+}
+
+async function verifyMockBindEditor(page) {
+  page.setDefaultTimeout(15_000);
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'SQL Server 바인드 검증' });
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  const sql = 'SELECT @P3 AS entered, @P7 AS amount;';
+  const selected = await command('sql_server_query_parameters', {
+    input: { sql, first_line: 2, cursor_line: null }, withScope: true,
+  });
+  assert.deepEqual(selected.parameters, [3, 7]);
+  const current = await command('sql_server_query_parameters', {
+    input: { sql: "SELECT '@P5';\nGO\n" + sql, first_line: 1, cursor_line: 3 }, withScope: true,
+  });
+  assert.equal(current.parameter_scope, selected.parameter_scope);
+  assert.deepEqual(await command('sql_server_query_parameters', {
+    input: { sql, first_line: 2, cursor_line: null },
+  }), [3, 7]);
+
+  await page.evaluate(() => {
+    const bridge = window.__TAURI_INTERNALS__;
+    const fetchNative = window.fetch.bind(window);
+    const responses = {
+      open_sql_server: () => ({ id: 'tds-editor-fixture', database: 'sample', version: 'fixture', context: 'fixture' }),
+      sql_server_schemas: () => ({ items: ['dbo'], has_next: false }),
+      sql_server_objects: () => ({ items: [], has_next: false }),
+      close_sql_server: () => null,
+      run_sql_server_query: ({ id, input }) => {
+        const [text, decimal] = input.parameters;
+        if (id !== 'tds-editor-fixture' || input.first_line !== 2 || input.cursor_line !== null ||
+            input.sql !== 'SELECT @P3 AS entered, @P7 AS amount;' ||
+            text.index !== 3 || text.kind !== 'text' || text.value !== '한글 🚀' || !text.masked ||
+            decimal.index !== 7 || decimal.kind !== 'decimal' || decimal.value !== '-0.000123400' || decimal.masked) {
+          throw new Error('Invalid restored T-SQL bindings');
+        }
+        return {
+          status: 'succeeded', completed_batches: 1, elapsed_ms: 5, more_sets: false, error: null, transaction: 'none_open',
+          result_sets: [{
+            columns: [{ name: 'entered', data_type: 'nvarchar' }, { name: 'amount', data_type: 'decimal' }],
+            rows: [[text.value, decimal.value].map(value => ({ text: value, encoding: 'utf8', bytes: null, truncated: false }))],
+            rows_received: 1, more_columns: false,
+          }],
+        };
+      },
+    };
+    const routes = new Map(Object.entries(responses).map(([name, reply]) => [bridge.convertFileSrc(name, 'ipc'), reply]));
+    window.fetch = async (resource, options) => {
+      if (!routes.has(resource)) return fetchNative(resource, options);
+      try {
+        return Response.json(routes.get(resource)(JSON.parse(options.body)), { headers: { 'Tauri-Response': 'ok' } });
+      } catch (error) {
+        return Response.json(error.message, { headers: { 'Tauri-Response': 'error' } });
+      }
+    };
+  });
+  await chooseDatabase(page, 'SQL Server');
+  const profile = page.getByRole('dialog', { name: 'SQL Server 연결 추가', exact: true });
+  await profile.getByLabel('연결 이름').fill('SQL Server 바인드 픽스처');
+  await profile.getByLabel('호스트 이름 또는 IP').fill('localhost');
+  await profile.getByLabel('데이터베이스 이름').fill('sample');
+  await profile.getByLabel('인증 방식').selectOption('sql_login');
+  await profile.getByLabel('로그인 이름').fill('fixture');
+  await profile.getByRole('button', { name: '저장', exact: true }).click();
+  const workspace = page.getByRole('region', { name: 'SQL Server 작업 공간', exact: true });
+  await workspace.getByRole('button', { name: 'SQL Server 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'SQL Server 연결', exact: true });
+  await login.getByLabel('SQL Server 암호', { exact: true }).fill('synthetic-fixture');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  const pane = workspace.getByRole('region', { name: 'SQL Server SQL 편집기', exact: true });
+  await verifyBindForm(pane, pane.getByRole('textbox', { name: 'SQL Server SQL 문장', exact: true }),
+    pane.getByRole('table', { name: 'SQL Server SQL 결과 표', exact: true }));
+}
+
 async function main() {
+  if (process.env.STACKPORT_SQL_SERVER_TEST_MOCK_BIND_EDITOR === '1') {
+    const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+    try { await verifyMockBindEditor(browser.contexts()[0].pages()[0]); }
+    finally { await browser.close(); }
+    console.log('SQL Server binding editor Windows E2E passed with mocked SQL execution IPC.');
+    return;
+  }
   assert.ok(Number.isInteger(port) && port >= 1024 && path.isAbsolute(ca));
+  const { seedSqlServer } = require('./sql-server-fixture.cjs');
   const hidden = await seedSqlServer({ port, ca, database, account, password: secret });
   assert.ok(Number.isInteger(hidden) && hidden !== 0);
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');

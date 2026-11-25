@@ -7,13 +7,14 @@ import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./
 import { MysqlQueryPlan, type MysqlPlan } from "./MysqlQueryPlan";
 import { MysqlScriptResults, type MysqlScriptOutcome } from "./MysqlScriptResults";
 import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
+import { SqlParameterSets, type ParameterInput, type ParameterPlan, type ParameterSetScope } from "./SqlParameterSets";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
-type Parameter = { kind: ParameterKind; value: string; masked: boolean };
+type Parameter = ParameterInput<ParameterKind>;
 type Action = "execute" | "estimate" | "analyze" | "script";
 type ScriptScope = { kind: "document" } | { kind: "current"; cursor_byte: number }
   | { kind: "selection"; start_byte: number; end_byte: number };
-type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" | "전체 문서" | "현재 문장";
+type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" | "전체 문서" | "현재 문장"; parameterScope?: string;
   script?: { scope: ScriptScope; autocommit: boolean; confirmation: string } };
 type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValue | null)[][];
   more_rows: boolean; more_columns: boolean; elapsed_ms: number };
@@ -22,8 +23,9 @@ const number = new Intl.NumberFormat("ko-KR");
 const byteLimit = 128 * 1024;
 const encoder = new TextEncoder();
 
-export function MysqlSqlWorkspace({ id, database, environment, text, onTextChange, onExport }: {
+export function MysqlSqlWorkspace({ id, projectId, database, environment, text, onTextChange, onExport }: {
   id: string;
+  projectId: string;
   database: string | null;
   environment: string;
   text: string;
@@ -35,6 +37,7 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
   const [running, setRunning] = useState<string | null>(null);
   const [cancelPending, setCancelPending] = useState(false);
   const [draft, setDraft] = useState<{ statement: Statement; parameters: Parameter[]; action: Action | "export" } | null>(null);
+  const [readyKey, setReadyKey] = useState<string | null>(null);
   const [result, setResult] = useState<{ data: Result; statement: Statement; parameterFields: Pick<Parameter, "kind" | "masked">[] } | null>(null);
   const [plan, setPlan] = useState<MysqlPlan | null>(null);
   const [view, setView] = useState<"data" | "plan">("data");
@@ -48,6 +51,10 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
   const pending = useRef(false);
   const active = useRef<string | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const setScope: ParameterSetScope | undefined = draft?.statement.parameterScope
+    ? { project_id: projectId, engine: draft.statement.script ? "mysql_script" : "mysql", key: draft.statement.parameterScope }
+    : undefined;
+  const cannotSubmit = Boolean(setScope && readyKey !== setScope.key) || Boolean(draft?.parameters.some(parameter => parameter.needsValue));
 
   useEffect(() => {
     mounted.current = true;
@@ -92,12 +99,16 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
     if (pending.current) return;
     pending.current = true; setBusy(true); setError("");
     try {
-      const count = statement.script
-        ? await invoke<number>("mysql_script_parameters", { id, sql: statement.sql, scope: statement.script.scope })
-        : await invoke<number>("mysql_sql_parameters", { id, sql: statement.sql, selectOnly: action !== "execute" });
+      const args = { id, sql: statement.sql, withScope: true };
+      const plan = statement.script
+        ? await invoke<ParameterPlan<number>>("mysql_script_parameters", { ...args, scope: statement.script.scope })
+        : await invoke<ParameterPlan<number>>("mysql_sql_parameters", { ...args, selectOnly: action !== "execute" });
       if (!mounted.current) return;
-      if (count) setDraft({ statement, action, parameters: Array.from({ length: count }, () => ({ kind: "text", value: "", masked: false })) });
-      else await execute(statement, [], action);
+      if (plan.parameters) {
+        setReadyKey(null);
+        setDraft({ statement: { ...statement, parameterScope: plan.parameter_scope }, action,
+          parameters: Array.from({ length: plan.parameters }, () => ({ kind: "text", value: "", masked: false })) });
+      } else await execute(statement, [], action);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
   }
@@ -132,7 +143,7 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!draft || pending.current) return;
+    if (!draft || pending.current || cannotSubmit) return;
     if (draft.action === "export") {
       exportResult(draft.statement, bindings(draft.parameters));
       setDraft(null);
@@ -204,20 +215,25 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
       <h3>{draft.action === "export" ? "내보내기 매개변수 다시 입력"
         : draft.action === "estimate" ? "실행 계획 매개변수" : draft.action === "analyze" ? "실행 분석 매개변수" : "SQL 매개변수"}</h3>
       <p className="form-note">{draft.statement.scope} · {draft.statement.database ?? "기본 DB 선택 안 됨"}</p>
+      {setScope && <SqlParameterSets scope={setScope} fields={draft.parameters} allowedKinds={["text", "integer", "real", "null"]}
+        disabled={busy} onReady={() => setReadyKey(setScope.key)}
+        apply={parameters => setDraft(current => current && { ...current, parameters })} />}
       {draft.parameters.map((parameter, index) => <fieldset className="mysql-parameter" key={index}>
         <legend>매개변수 {index + 1}</legend>
-        <label className="field">타입<select value={parameter.kind} onChange={event => updateParameter(index, { kind: event.target.value as ParameterKind })}>
+        <label className="field">타입<select value={parameter.kind} onChange={event => updateParameter(index, {
+          kind: event.target.value as ParameterKind, needsValue: event.target.value !== "null" && parameter.needsValue,
+        })}>
           <option value="text">문자열</option><option value="integer">정수</option><option value="real">실수</option><option value="null">NULL</option>
         </select></label>
         {parameter.kind !== "null" && <>
           <label className="field">값<input type={parameter.masked ? "password" : "text"} autoComplete="off" aria-label={`매개변수 ${index + 1} 값`}
-            value={parameter.value} maxLength={65536} onChange={event => updateParameter(index, { value: event.target.value })} /></label>
+            value={parameter.value} maxLength={65536} onChange={event => updateParameter(index, { value: event.target.value, needsValue: false })} /></label>
           <label className="mysql-mask"><input type="checkbox" checked={parameter.masked} onChange={event => updateParameter(index, { masked: event.target.checked })} /> 값 숨기기</label>
         </>}
       </fieldset>)}
       <div className="mysql-sql-actions">
         <button type="button" className="secondary small" onClick={() => setDraft(null)}>취소</button>
-        <button type="submit" className="primary small">{draft.action === "export" ? "파일 설정"
+        <button type="submit" className="primary small" disabled={cannotSubmit}>{draft.action === "export" ? "파일 설정"
           : draft.action === "estimate" ? "계획 확인" : "바인딩하고 실행"}</button>
       </div>
     </form>}
@@ -264,7 +280,10 @@ export function MysqlSqlWorkspace({ id, database, environment, text, onTextChang
         {result.data.more_columns && " · 앞 128개 열"} · {number.format(result.data.elapsed_ms)} ms</p>
       <div className="mysql-sql-actions"><button type="button" className="secondary small" disabled={busy || !!draft} onClick={() => {
         if (!result.parameterFields.length) exportResult(result.statement, []);
-        else setDraft({ statement: result.statement, action: "export", parameters: result.parameterFields.map(field => ({ ...field, value: "" })) });
+        else {
+          setReadyKey(null);
+          setDraft({ statement: result.statement, action: "export", parameters: result.parameterFields.map(field => ({ ...field, value: "" })) });
+        }
       }}><Download size={14} aria-hidden /> 결과 내보내기</button></div>
       <DatabasePreviewGrid columns={result.data.columns} rows={result.data.rows} label="MySQL SQL 결과 표" />
     </section>}

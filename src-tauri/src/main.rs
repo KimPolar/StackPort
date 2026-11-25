@@ -4,7 +4,7 @@ mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
-use stackport_core::{SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
+use stackport_core::{SqlParameterPlan, SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -1024,9 +1024,20 @@ async fn sql_server_definition(manager: State<'_, sql_server::Manager>, id: Stri
 async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32, clauses: Option<TableQueryClauses>)
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum ParameterDiscovery<T> {
+    Plain(T),
+    Scoped(SqlParameterPlan<T>),
+}
+
 #[tauri::command]
-fn sql_server_query_parameters(input: sql_server::QueryInput) -> Result<Vec<u16>, String> {
-    input.parameter_indexes()
+fn sql_server_query_parameters(input: sql_server::QueryInput, with_scope: Option<bool>) -> Result<ParameterDiscovery<Vec<u16>>, String> {
+    if with_scope.unwrap_or(false) {
+        input.parameter_plan().map(ParameterDiscovery::Scoped)
+    } else {
+        input.parameter_indexes().map(ParameterDiscovery::Plain)
+    }
 }
 
 #[tauri::command]
@@ -1124,8 +1135,12 @@ async fn run_oracle_query(manager: State<'_, oracle::Manager>, id: String, reque
 
 #[tauri::command]
 async fn oracle_query_parameters(manager: State<'_, oracle::Manager>, id: String,
-    input: oracle::QuerySource) -> Result<Vec<String>, String> {
-    manager.query_parameters(&id, input).await
+    input: oracle::QuerySource, with_scope: Option<bool>) -> Result<ParameterDiscovery<Vec<String>>, String> {
+    if with_scope.unwrap_or(false) {
+        manager.query_parameter_plan(&id, input).await.map(ParameterDiscovery::Scoped)
+    } else {
+        manager.query_parameters(&id, input).await.map(ParameterDiscovery::Plain)
+    }
 }
 
 #[tauri::command]
@@ -1216,8 +1231,12 @@ async fn run_snowflake_query(manager: State<'_, snowflake::Manager>, id: String,
 }
 
 #[tauri::command]
-fn snowflake_query_parameters(input: snowflake::QuerySource) -> Result<usize, String> {
-    input.parameter_count()
+fn snowflake_query_parameters(input: snowflake::QuerySource, with_scope: Option<bool>) -> Result<ParameterDiscovery<usize>, String> {
+    if with_scope.unwrap_or(false) {
+        input.parameter_plan().map(ParameterDiscovery::Scoped)
+    } else {
+        input.parameter_count().map(ParameterDiscovery::Plain)
+    }
 }
 
 #[tauri::command]
@@ -1351,14 +1370,24 @@ fn mysql_export_progress(mysql: State<'_, stackport_core::MysqlManager>, id: Str
     -> Result<Option<u64>, String> { mysql.export_progress(&id, &request_id) }
 
 #[tauri::command]
-fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String, select_only: Option<bool>) -> Result<usize, String> {
-    mysql.sql_parameters(&id, &sql, select_only.unwrap_or_default())
+fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String, select_only: Option<bool>,
+    with_scope: Option<bool>) -> Result<ParameterDiscovery<usize>, String> {
+    let select_only = select_only.unwrap_or_default();
+    if with_scope.unwrap_or(false) {
+        mysql.sql_parameter_plan(&id, &sql, select_only).map(ParameterDiscovery::Scoped)
+    } else {
+        mysql.sql_parameters(&id, &sql, select_only).map(ParameterDiscovery::Plain)
+    }
 }
 
 #[tauri::command]
 fn mysql_script_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String,
-    scope: stackport_core::MysqlScriptScope) -> Result<usize, String> {
-    mysql.script_parameters(&id, &sql, &scope)
+    scope: stackport_core::MysqlScriptScope, with_scope: Option<bool>) -> Result<ParameterDiscovery<usize>, String> {
+    if with_scope.unwrap_or(false) {
+        mysql.script_parameter_plan(&id, &sql, &scope).map(ParameterDiscovery::Scoped)
+    } else {
+        mysql.script_parameters(&id, &sql, &scope).map(ParameterDiscovery::Plain)
+    }
 }
 
 #[tauri::command]

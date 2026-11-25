@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
 const { execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -349,15 +350,26 @@ COMMIT;`);
 
 async function verifyBindForm(pane, editor, grid) {
   await editor.fill("SELECT q'[건너뛸 :x]' AS marker FROM dual;\nSELECT :input || :INPUT AS marker FROM dual;");
-  await editor.press('Control+End');
-  await editor.press('Shift+Home');
-  await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
+  const openBindings = async () => {
+    await editor.press('Control+End');
+    await editor.press('Shift+Home');
+    await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
+  };
+  await openBindings();
   const binding = pane.page().getByRole('dialog', { name: 'Oracle SQL 바인드 변수', exact: true });
   const field = binding.getByLabel(':INPUT 값', { exact: true });
-  await field.fill("한글'");
+  await field.fill("fixture-hidden-oracle-value");
   await binding.getByLabel(':INPUT 값 숨기기', { exact: true }).check();
   assert.equal(await field.getAttribute('type'), 'password');
-  assert.equal(await binding.getByRole('group').count(), 1);
+  assert.equal(await binding.getByRole('group', { name: ':INPUT', exact: true }).count(), 1);
+  const sets = await saveDefaultSet(binding, 'Oracle 바인드');
+  await binding.getByRole('button', { name: '취소', exact: true }).click();
+  await openBindings();
+  await sets.getByText('숨김 값은 다시 입력하세요.', { exact: true }).waitFor();
+  assert.equal(await field.inputValue(), '');
+  assert.equal(await field.getAttribute('type'), 'password');
+  assert.equal(await binding.getByRole('button', { name: '매개변수로 실행', exact: true }).isEnabled(), false);
+  await field.fill("한글'");
   await binding.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   await binding.waitFor({ state: 'detached' });
   await grid.getByText("한글'한글'", { exact: true }).waitFor();
@@ -382,7 +394,11 @@ async function verifyMockBindEditor(page) {
       oracle_schemas: () => ({ items: ['SP_FIXTURE'], has_next: false }),
       oracle_objects: () => ({ items: [], has_next: false }),
       close_oracle: () => null,
-      oracle_query_parameters: args => { check(args); return ['INPUT']; },
+      oracle_query_parameters: args => {
+        check(args);
+        if (args.withScope !== true) throw new Error('Expected Oracle parameter scope');
+        return { parameters: ['INPUT'], parameter_scope: 'a'.repeat(64) };
+      },
       run_oracle_query: args => {
         check(args);
         const [{ name, kind, value, masked }] = args.input.parameters;

@@ -75,33 +75,36 @@ export function SqlParameterFields({ parameters, setScope, submit, dismiss }: {
     submit={fields => submit(fields.map(({ kind, value }) => kind === "null" ? { kind } : { kind, value }))} />;
 }
 
-export function SqlServerParameterFields({ parameters, submit, dismiss }: {
+export function SqlServerParameterFields({ parameters, setScope, submit, dismiss }: {
   parameters: SqlParameter[];
+  setScope: ParameterSetScope;
   submit: (values: SqlServerParameterValue[]) => void;
   dismiss: () => void;
 }) {
-  return <ParameterForm options={sqlServerOptions} parameters={parameters} dismiss={dismiss} allByteLimited
+  return <ParameterForm options={sqlServerOptions} parameters={parameters} setScope={setScope} dismiss={dismiss} allByteLimited
     note="값을 SQL 본문과 분리해 서버로 전달합니다. 숨긴 값이 있으면 서버 오류 상세도 숨깁니다."
     submit={fields => submit(maskedValues(fields))} />;
 }
 
-export function OracleParameterFields({ parameters, submit, dismiss }: {
+export function OracleParameterFields({ parameters, setScope, submit, dismiss }: {
   parameters: SqlParameter[];
+  setScope: ParameterSetScope;
   submit: (values: OracleParameterValue[]) => void;
   dismiss: () => void;
 }) {
-  return <ParameterForm options={oracleOptions} parameters={parameters} dismiss={dismiss} allByteLimited
+  return <ParameterForm options={oracleOptions} parameters={parameters} setScope={setScope} dismiss={dismiss} allByteLimited
     note="같은 이름의 변수는 이 실행에서 같은 값을 사용합니다. 숨긴 값이 있으면 서버 오류 상세와 경고를 숨깁니다."
     submit={fields => submit(maskedValues(fields))} />;
 }
 
-export function SnowflakeParameterFields({ count, submit, dismiss }: {
+export function SnowflakeParameterFields({ count, setScope, submit, dismiss }: {
   count: number;
+  setScope: ParameterSetScope;
   submit: (values: SnowflakeParameterValue[]) => void;
   dismiss: () => void;
 }) {
   const parameters = Array.from({ length: count }, (_, index) => ({ index: index + 1, name: null }));
-  return <ParameterForm options={snowflakeOptions} parameters={parameters} dismiss={dismiss} allByteLimited
+  return <ParameterForm options={snowflakeOptions} parameters={parameters} setScope={setScope} dismiss={dismiss} allByteLimited
     note="문장에 ?가 나온 순서대로 값을 전달합니다. 숨긴 값이 있으면 서버 오류 상세와 경고를 가립니다."
     submit={fields => submit(maskedValues(fields))} />;
 }
