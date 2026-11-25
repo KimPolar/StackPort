@@ -34,11 +34,33 @@ pub(super) struct Api {
 
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Payload {
-    statement_handle: Option<Uuid>,
-    result_set_meta_data: Option<ResultMetadata>,
-    data: Option<Vec<Row>>,
-    sql_state: Option<String>,
+pub(super) struct Payload {
+    pub(super) statement_handle: Option<Uuid>,
+    pub(super) result_set_meta_data: Option<ResultMetadata>,
+    pub(super) data: Option<Vec<Row>>,
+    pub(super) sql_state: Option<String>,
+    pub(super) code: Option<String>,
+    pub(super) message: Option<String>,
+    pub(super) statement_handles: Option<Vec<Uuid>>,
+    pub(super) stats: Option<StatementStats>,
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(rename_all(deserialize = "camelCase"))]
+pub(super) struct StatementStats {
+    pub(super) num_rows_inserted: Option<u64>,
+    pub(super) num_rows_updated: Option<u64>,
+    pub(super) num_rows_deleted: Option<u64>,
+    pub(super) num_duplicate_rows_updated: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ResultColumn {
+    pub(super) name: String,
+    #[serde(rename = "type")]
+    pub(super) data_type: String,
+    pub(super) precision: Option<i64>,
+    pub(super) scale: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -47,6 +69,7 @@ pub(super) struct ResultMetadata {
     pub(super) num_rows: usize,
     #[serde(default)]
     pub(super) partition_info: Vec<Partition>,
+    pub(super) row_type: Option<Vec<ResultColumn>>,
 }
 
 #[derive(Deserialize)]
@@ -167,11 +190,6 @@ impl Api {
         statement_seconds: u64,
         pending: &mut Option<Uuid>,
     ) -> Result<Response> {
-        let mut url = self.endpoint.clone();
-        url.query_pairs_mut()
-            .append_pair("requestId", &Uuid::new_v4().to_string())
-            .append_pair("nullable", "true")
-            .append_pair("async", "true");
         let mut body = json!({
             "statement": statement,
             "database": self.settings.database,
@@ -181,12 +199,6 @@ impl Api {
                 "rows_per_resultset": row_limit
             }
         });
-        if let Some(warehouse) = &self.settings.warehouse {
-            body["warehouse"] = json!(warehouse);
-        }
-        if let Some(role) = &self.settings.role {
-            body["role"] = json!(role);
-        }
         if !bindings.is_empty() {
             let values: Map<String, Value> = bindings
                 .iter()
@@ -206,12 +218,72 @@ impl Api {
         } else {
             Duration::from_secs(12)
         };
-        let mut response = send(
+        let response = self
+            .post(body, Uuid::new_v4(), request_timeout, pending)
+            .await?;
+        successful(response).await
+    }
+
+    pub(super) async fn submit_script(
+        &self,
+        sql: &str,
+        request_id: Uuid,
+        count: usize,
+        row_limit: usize,
+        pending: &mut Option<Uuid>,
+    ) -> Result<Response> {
+        let body = json!({
+            "statement": sql,
+            "database": self.settings.database,
+            "timeout": STATEMENT_SECONDS,
+            "parameters": {
+                "MULTI_STATEMENT_COUNT": count.to_string(),
+                "rows_per_resultset": row_limit,
+                "binary_output_format": "HEX",
+                "date_output_format": "YYYY-MM-DD",
+                "time_output_format": "HH24:MI:SS.FF9",
+                "timestamp_ntz_output_format": "YYYY-MM-DD\"T\"HH24:MI:SS.FF9",
+                "timestamp_ltz_output_format": "YYYY-MM-DD\"T\"HH24:MI:SS.FF9TZH:TZM",
+                "timestamp_tz_output_format": "YYYY-MM-DD\"T\"HH24:MI:SS.FF9TZH:TZM"
+            }
+        });
+        self.post(body, request_id, Duration::from_secs(12), pending)
+            .await
+    }
+
+    async fn post(
+        &self,
+        mut body: Value,
+        request_id: Uuid,
+        request_timeout: Duration,
+        pending: &mut Option<Uuid>,
+    ) -> Result<Response> {
+        let mut url = self.endpoint.clone();
+        url.query_pairs_mut()
+            .append_pair("requestId", &request_id.to_string())
+            .append_pair("nullable", "true")
+            .append_pair("async", "true");
+        if let Some(warehouse) = &self.settings.warehouse {
+            body["warehouse"] = json!(warehouse);
+        }
+        if let Some(role) = &self.settings.role {
+            body["role"] = json!(role);
+        }
+        let response = send(
             self.request(Method::POST, url)?
                 .timeout(request_timeout)
                 .json(&body),
         )
         .await?;
+        self.poll(response, request_timeout, pending).await
+    }
+
+    async fn poll(
+        &self,
+        mut response: Response,
+        request_timeout: Duration,
+        pending: &mut Option<Uuid>,
+    ) -> Result<Response> {
         let mut delay = Duration::from_millis(300);
         while matches!(
             response.status(),
@@ -223,6 +295,7 @@ impl Api {
             } else {
                 read_payload(response).await.unwrap_or_default()
             };
+            check_handle(*pending, payload.statement_handle)?;
             let id = payload.statement_handle.or(*pending);
             let Some(id) = id else {
                 return Err(if status == StatusCode::TOO_MANY_REQUESTS {
@@ -232,9 +305,6 @@ impl Api {
                 }
                 .into());
             };
-            if pending.is_some_and(|previous| previous != id) {
-                return Err(BAD_RESPONSE.into());
-            }
             *pending = Some(id);
             sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(2));
@@ -244,7 +314,22 @@ impl Api {
             )
             .await?;
         }
-        successful(response).await
+        Ok(response)
+    }
+
+    pub(super) async fn script_result(&self, handle: Uuid) -> Result<Payload> {
+        let request_timeout = Duration::from_secs(12);
+        let response = send(
+            self.request(Method::GET, self.statement_url(handle))?
+                .timeout(request_timeout),
+        )
+        .await?;
+        let response = self
+            .poll(response, request_timeout, &mut Some(handle))
+            .await?;
+        let payload = read_payload(successful(response).await?).await?;
+        check_handle(Some(handle), payload.statement_handle)?;
+        Ok(payload)
     }
 
     pub(super) async fn partition(
@@ -276,14 +361,19 @@ impl Api {
         successful(response).await
     }
 
-    pub(super) async fn cancel_pending(&self, handle: Option<Uuid>) {
+    pub(super) async fn cancel_pending(&self, handle: Option<Uuid>) -> bool {
         if let Some(id) = handle {
             let mut url = self.statement_url(id);
             url.path_segments_mut().unwrap().push("cancel");
             if let Ok(request) = self.request(Method::POST, url) {
-                let _ = request.timeout(Duration::from_secs(2)).send().await;
+                return request
+                    .timeout(Duration::from_secs(2))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status() == StatusCode::OK);
             }
         }
+        false
     }
 
     fn statement_url(&self, id: Uuid) -> Url {
@@ -335,7 +425,7 @@ async fn send(request: RequestBuilder) -> Result<Response> {
     })
 }
 
-async fn read_payload(mut response: Response) -> Result<Payload> {
+pub(super) async fn read_payload(mut response: Response) -> Result<Payload> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| BAD_RESPONSE)? {
         if chunk.len() > RESPONSE_LIMIT - body.len() {
@@ -346,7 +436,7 @@ async fn read_payload(mut response: Response) -> Result<Payload> {
     serde_json::from_slice(&body).map_err(|_| BAD_RESPONSE.into())
 }
 
-async fn successful(response: Response) -> Result<Response> {
+pub(super) async fn successful(response: Response) -> Result<Response> {
     match response.status() {
         StatusCode::OK => Ok(response),
         StatusCode::UNAUTHORIZED => Err("Snowflake 토큰이 만료되었거나 올바르지 않습니다.".into()),
@@ -391,7 +481,7 @@ pub(super) fn finish_handle(
     Ok(pending.take().or(received))
 }
 
-fn partition_rows(data: Option<Vec<Row>>, expected: usize) -> Result<Vec<Row>> {
+pub(super) fn partition_rows(data: Option<Vec<Row>>, expected: usize) -> Result<Vec<Row>> {
     let data = data.unwrap_or_default();
     if data.len() == expected {
         Ok(data)

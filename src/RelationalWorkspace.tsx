@@ -1,10 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type FormEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Database, Download, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
-import { OracleSqlWorkspace } from "./OracleSqlWorkspace";
+import { RelationalScriptWorkspace } from "./RelationalScriptWorkspace";
 import { PostgresPager } from "./PostgresPager";
 import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
@@ -47,7 +47,6 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
   const { settings } = profile;
   const production = settings.environment === "PROD";
   const endpoint = settings.port === undefined ? settings.host : networkAddressText({ host: settings.host, port: settings.port });
-  const SqlWorkspace = prefix === "sql_server" ? SqlServerSqlWorkspace : prefix === "oracle" ? OracleSqlWorkspace : null;
 
   useEffect(() => {
     mounted.current = true;
@@ -89,15 +88,13 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
         <p className="path">{engine} · {endpoint} / {session?.database ?? database}{session && <> · {session.version}{session.context && <> · {session.context}</>}</>}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {SqlWorkspace ? "계정 권한 적용" : "읽기 전용"}</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> 계정 권한 적용</span>
         {session ? <button type="button" className="secondary" onClick={disconnect}>{engine} 연결 끊기</button>
           : <button type="button" className="primary" onClick={() => { setError(""); setLogin(true); }}><Plug size={15} aria-hidden /> {engine} 연결</button>}
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && (SqlWorkspace
-      ? <RelationalViews key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} SqlWorkspace={SqlWorkspace} />
-      : <Browse key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />)}
+    {session && <RelationalViews key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
@@ -120,9 +117,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
   </section>;
 }
 
-function RelationalViews({ SqlWorkspace, ...props }: { session: Session; profile: Profile;
-  SqlWorkspace: ComponentType<{ id: string; database: string }>;
-} & Adapter) {
+function RelationalViews(props: { session: Session; profile: Profile } & Adapter) {
   const [sqlVisible, setSqlVisible] = useState(false);
   const [sqlOpened, setSqlOpened] = useState(false);
   return <>
@@ -131,7 +126,9 @@ function RelationalViews({ SqlWorkspace, ...props }: { session: Session; profile
       <button type="button" className="secondary small" aria-pressed={sqlVisible} onClick={() => { setSqlOpened(true); setSqlVisible(true); }}>SQL 편집기</button>
     </div>
     <div hidden={sqlVisible}><Browse {...props} /></div>
-    {sqlOpened && <div hidden={!sqlVisible}><SqlWorkspace id={props.session.id} database={props.session.database} /></div>}
+    {sqlOpened && <div hidden={!sqlVisible}>{props.prefix === "sql_server"
+      ? <SqlServerSqlWorkspace id={props.session.id} database={props.session.database} />
+      : <RelationalScriptWorkspace id={props.session.id} database={props.session.database} engine={props.prefix} />}</div>}
   </>;
 }
 

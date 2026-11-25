@@ -63,6 +63,15 @@ test("highlights Oracle alternative and national strings and PL/SQL keywords", (
   ]);
 });
 
+test("highlights Snowflake scripting strings, quoted names and QUALIFY", () => {
+  const sql = "EXECUTE IMMEDIATE $$BEGIN RETURN '다음;'; END;$$;\n/* inside /* ; */ QUALIFY */ SELECT \"n;\" FROM t QUALIFY $1 = ?";
+  assert.deepEqual(marked(sql, "snowflake"), [
+    ["keyword", "EXECUTE"], ["keyword", "IMMEDIATE"], ["string", "$$BEGIN RETURN '다음;'; END;$$"],
+    ["comment", "/* inside /* ; */ QUALIFY */"], ["keyword", "SELECT"], ["identifier", '"n;"'],
+    ["keyword", "FROM"], ["keyword", "QUALIFY"], ["parameter", "$1"], ["parameter", "?"],
+  ]);
+});
+
 test("clips multiline tokens to the visible line and falls back at rendering limits", () => {
   const text = "/* 첫 줄\n둘😀째 */ SELECT 12";
   const tokens = editorSyntaxTokens(text, "sqlite");

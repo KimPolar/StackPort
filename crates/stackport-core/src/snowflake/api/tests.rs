@@ -17,6 +17,8 @@ use tokio::{
 };
 use tokio_rustls::{server::TlsStream, TlsAcceptor};
 
+mod sql_editor;
+
 const HOST: &str = "snowflake.test";
 const PATH: &str = "/api/v2/statements";
 const HANDLE: &str = "3be31f8c-2b7b-4195-be04-bdd196b9e24d";
@@ -601,6 +603,7 @@ fn test_session(
             profile: profile.clone(),
             operations: tokio::sync::Semaphore::new(3),
             export: Mutex::new(None),
+            query: Mutex::new(None),
             _permit: permit,
         }),
     );

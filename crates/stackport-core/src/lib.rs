@@ -984,6 +984,11 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "oracle.sql.execute" | "oracle.sql.execute.cancel" | "oracle.sql.execute.timeout" => {
             "oracle-session-login-permissions"
         }
+        "snowflake.sql.execute" | "snowflake.sql.execute.cancel" | "snowflake.sql.execute.timeout"
+            if record.environment == Some("PROD") => "snowflake-session-prod-confirmed",
+        "snowflake.sql.execute" | "snowflake.sql.execute.cancel" | "snowflake.sql.execute.timeout" => {
+            "snowflake-session-role-permissions"
+        }
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

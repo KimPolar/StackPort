@@ -5,20 +5,29 @@ import { CodeTextarea } from "./CodeTextarea";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 
 type Scope = "document" | "current" | "selection";
+type Engine = "oracle" | "snowflake";
 type ResultSet = {
   columns: { name: string; data_type: string }[];
   rows: (DatabasePreviewValue | null)[][];
   rows_received: number;
   more_columns: boolean;
 };
-type Statement = { line: number; rows_affected: number | null; data: ResultSet | null; warning: string | null };
+type Statement = {
+  line: number;
+  rows_affected?: number | null;
+  data: ResultSet | null;
+  warning: string | null;
+  query_id?: string | null;
+  stats?: Partial<Record<"num_rows_inserted" | "num_rows_updated" | "num_rows_deleted" | "num_duplicate_rows_updated", number | null>> | null;
+};
 type Outcome = {
   status: "succeeded" | "failed" | "cancelled" | "timed_out";
   statements: Statement[];
   elapsed_ms: number;
-  error: { line: number | null; code: number | null; message: string } | null;
+  error: { line: number | null; code: number | string | null; message: string; sql_state?: string | null; query_id?: string | null } | null;
   server_interrupted: boolean | null;
-  transaction: "not_started" | "rolled_back" | "unknown";
+  transaction?: "not_started" | "rolled_back" | "unknown";
+  server_completed?: boolean;
   audit_warning: boolean;
 };
 
@@ -30,8 +39,13 @@ const transactionText = {
 };
 const number = new Intl.NumberFormat("ko-KR");
 const encoder = new TextEncoder();
+const engineName = { oracle: "Oracle", snowflake: "Snowflake" };
+const statsFields = [
+  ["num_rows_inserted", "삽입"], ["num_rows_updated", "수정"],
+  ["num_rows_deleted", "삭제"], ["num_duplicate_rows_updated", "중복 수정"],
+] as const;
 
-export function OracleSqlWorkspace({ id, database }: { id: string; database: string }) {
+export function RelationalScriptWorkspace({ id, database, engine }: { id: string; database: string; engine: Engine }) {
   const [text, setText] = useState("");
   const [selected, setSelected] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,6 +58,7 @@ export function OracleSqlWorkspace({ id, database }: { id: string; database: str
   const editorId = useId();
   const noteId = useId();
   const ready = !busy && Boolean(text.trim());
+  const name = engineName[engine];
 
   async function run(scope: Scope) {
     const field = editor.current;
@@ -56,7 +71,7 @@ export function OracleSqlWorkspace({ id, database }: { id: string; database: str
     active.current = requestId;
     setBusy(true); setStopping(false); setError(""); setOutcome(null); setStatementIndex(0);
     try {
-      setOutcome(await invoke<Outcome>("run_oracle_query", {
+      setOutcome(await invoke<Outcome>(`run_${engine}_query`, {
         id, requestId,
         input: {
           sql,
@@ -73,7 +88,7 @@ export function OracleSqlWorkspace({ id, database }: { id: string; database: str
     if (!requestId || stopping) return;
     setStopping(true); setError("");
     try {
-      const accepted = await invoke<boolean>("cancel_oracle_query", { id, requestId });
+      const accepted = await invoke<boolean>(`cancel_${engine}_query`, { id, requestId });
       if (!accepted && active.current === requestId) {
         setStopping(false);
         setError("중단할 실행을 찾을 수 없습니다. 실행 중이라면 다시 시도하세요.");
@@ -83,17 +98,17 @@ export function OracleSqlWorkspace({ id, database }: { id: string; database: str
     }
   }
 
-  return <section className="results-card mysql-sql relational-query-editor" aria-label="Oracle SQL 편집기">
+  return <section className="results-card mysql-sql relational-query-editor" aria-label={name + " SQL 편집기"}>
     <div className="panel-heading"><h2>SQL 편집기</h2><span>{database}</span></div>
     <div className="mysql-sql-actions" role="group" aria-label="SQL 실행">
       <button type="button" className="primary small" disabled={!ready} onClick={() => void run("document")}><Play size={14} aria-hidden /> 전체 실행</button>
       <button type="button" className="secondary small" disabled={!ready} onClick={() => void run("current")}>현재 문장 실행</button>
       <button type="button" className="secondary small" disabled={!ready || !selected} onClick={() => void run("selection")}>선택 실행</button>
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}><Square size={14} aria-hidden /> 실행 중단</button>}
-      <span role="status">{stopping ? "중단 요청됨 · 진행 중인 호출 처리 중…" : busy ? "실행 중…" : ""}</span>
+      <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language="oracle" maxLength={256 * 1024} readOnly={busy}
-      aria-label="Oracle SQL 문장" aria-describedby={noteId} placeholder="SELECT … FROM DUAL"
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={256 * 1024} readOnly={busy}
+      aria-label={name + " SQL 문장"} aria-describedby={noteId} placeholder={engine === "oracle" ? "SELECT … FROM DUAL" : "SELECT …"}
       onChange={event => setText(event.target.value)}
       onSelect={event => setSelected(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {
@@ -101,22 +116,36 @@ export function OracleSqlWorkspace({ id, database }: { id: string; database: str
         event.preventDefault();
         void run(event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? "current" : "selection");
       }} footer={<span>Ctrl + Enter · 현재 문장 또는 선택 실행</span>} />
-    <p className="form-note mysql-table-note" id={noteId}>PL/SQL 블록은 별도 줄의 <code>/</code>로 구분합니다. 실행 연결을 닫을 때 열린 트랜잭션은 롤백합니다.</p>
+    <p className="form-note mysql-table-note" id={noteId}>{engine === "oracle"
+      ? <>PL/SQL 블록은 별도 줄의 <code>/</code>로 구분합니다. 실행 연결을 닫을 때 열린 트랜잭션은 롤백합니다.</>
+      : <>연결 역할에서 실행을 시작합니다. 같은 트랜잭션의 문장은 한 번에 실행하고 익명 블록은 <code>EXECUTE IMMEDIATE $$…$$</code>로 감싸세요.</>}</p>
     {error && <p className="error-banner" role="alert">{error}</p>}
-    {outcome && <OracleResults outcome={outcome} index={statementIndex} onSelect={setStatementIndex} />}
+    {outcome && <ScriptResults engine={engine} outcome={outcome} index={statementIndex} onSelect={setStatementIndex} />}
   </section>;
 }
 
-function OracleResults({ outcome, index, onSelect }: { outcome: Outcome; index: number; onSelect: (index: number) => void }) {
+function ScriptResults({ engine, outcome, index, onSelect }: { engine: Engine; outcome: Outcome; index: number; onSelect: (index: number) => void }) {
   const statement = outcome.statements[index];
   const data = statement?.data;
-  return <section aria-label="Oracle 실행 결과">
+  const state = outcome.server_completed && outcome.status !== "succeeded"
+    ? `서버 실행 완료 · 결과 수신 ${outcome.status === "cancelled" ? "중단" : outcome.status === "timed_out" ? "시간 초과" : "실패"}`
+    : statusText[outcome.status];
+  const statistics = statsFields.flatMap(([key, label]) => {
+    const value = statement?.stats?.[key];
+    return value == null ? [] : [`${label} ${number.format(value)}행`];
+  });
+  return <section aria-label={engineName[engine] + " 실행 결과"}>
     <div className="panel-heading"><h3>실행 결과</h3><span>{number.format(outcome.elapsed_ms)} ms</span></div>
-    <p className="form-note mysql-table-note" role="status">{statusText[outcome.status]} · 완료한 문장 {number.format(outcome.statements.length)}개
+    <p className="form-note mysql-table-note" role="status">{state} · {engine === "snowflake" ? "결과를 받은 문장" : "완료한 문장"} {number.format(outcome.statements.length)}개
       {outcome.server_interrupted === true && <> · 서버가 실행 중단을 확인했습니다.</>}
-      {outcome.server_interrupted === false && <> · 서버의 중단 응답을 확인하지 못했습니다.</>} {transactionText[outcome.transaction]}</p>
+      {outcome.server_interrupted === false && <> · 서버의 중단 응답을 확인하지 못했습니다.</>}
+      {outcome.transaction && <> {transactionText[outcome.transaction]}</>}</p>
     {outcome.error && <p className="error-banner" role="alert">
-      {outcome.error.line !== null && <>문장 시작 {outcome.error.line}행 · </>}{outcome.error.message}
+      {outcome.error.line !== null && <>문장 시작 {outcome.error.line}행 · </>}
+      {engine === "snowflake" && outcome.error.code && <>오류 {outcome.error.code} · </>}
+      {outcome.error.sql_state && <>SQLSTATE {outcome.error.sql_state} · </>}
+      {outcome.error.message}
+      {outcome.error.query_id && <>{"\n"}쿼리 ID <code>{outcome.error.query_id}</code></>}
     </p>}
     {outcome.audit_warning && <p className="form-note mysql-table-note">SQL 실행을 감사 로그에 저장하지 못했습니다.</p>}
     {outcome.statements.length > 1 && <div className="mysql-sql-actions">
@@ -125,12 +154,14 @@ function OracleResults({ outcome, index, onSelect }: { outcome: Outcome; index: 
       </select></label>
     </div>}
     {statement?.warning && <p className="form-note mysql-table-note">{statement.warning}</p>}
+    {statement?.query_id && <p className="form-note mysql-table-note">쿼리 ID <code>{statement.query_id}</code></p>}
     {statement?.rows_affected != null && <p className="form-note mysql-table-note">영향받은 행 {number.format(statement.rows_affected)}개</p>}
+    {statistics.length > 0 && <p className="form-note mysql-table-note">{statistics.join(" · ")}</p>}
     {data && <>
-      <p className="form-note mysql-table-note">{number.format(data.rows_received)}행 수신
+      <p className="form-note mysql-table-note">{number.format(data.rows_received)}행 {engine === "snowflake" ? "결과" : "수신"}
         {data.rows.length < data.rows_received && <> · 앞 {number.format(data.rows.length)}행 표시</>}
         {data.more_columns && <> · 앞 {data.columns.length}개 열 표시</>}</p>
-      <DatabasePreviewGrid columns={data.columns} rows={data.rows} label="Oracle SQL 결과 표" />
+      <DatabasePreviewGrid columns={data.columns} rows={data.rows} label={engineName[engine] + " SQL 결과 표"} />
     </>}
   </section>;
 }

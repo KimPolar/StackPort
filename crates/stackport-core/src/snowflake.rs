@@ -2,12 +2,14 @@ mod api;
 mod catalog;
 mod export;
 mod profiles;
+mod query;
 
 pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Auth, Profile, ProfileSettings};
+pub use query::{QueryInput, QueryOutcome};
 
 use self::api::Api;
 use crate::{Result, Store};
@@ -46,6 +48,7 @@ struct Session {
     profile: Profile,
     operations: Semaphore,
     export: Mutex<Option<export::ActiveExport>>,
+    query: Mutex<Option<query::ActiveQuery>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -132,6 +135,7 @@ impl Manager {
                     profile,
                     operations: Semaphore::new(3),
                     export: Mutex::new(None),
+                    query: Mutex::new(None),
                     _permit: permit,
                 }),
             );

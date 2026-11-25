@@ -1,4 +1,4 @@
-export type EditorLanguage = "sqlite" | "postgres" | "mysql" | "tsql" | "oracle" | "json" | "xml";
+export type EditorLanguage = "sqlite" | "postgres" | "mysql" | "tsql" | "oracle" | "snowflake" | "json" | "xml";
 type SyntaxKind = "comment" | "string" | "identifier" | "number" | "keyword" | "parameter" | "property" | "tag";
 type SyntaxToken = { start: number; end: number; kind: SyntaxKind };
 type SyntaxPart = { text: string; kind?: SyntaxKind };
@@ -92,6 +92,23 @@ const oracleKeywords = new Set(`SELECT FROM DUAL WHERE JOIN INNER LEFT RIGHT FUL
   DECLARE BEGIN EXCEPTION RAISE LOOP WHILE FOR RETURN COMMIT ROLLBACK SAVEPOINT SET TYPE BODY CURSOR OPEN CLOSE EXECUTE IMMEDIATE
 `.trim().split(/\s+/));
 const oracleQuoteClosers = new Map([["[", "]"], ["{", "}"], ["(", ")"], ["<", ">"]]);
+const snowflake = syntaxGrammar(
+  /(?<comment>--[^\r\n]*|\/\*)/,
+  /(?<string>\$\$[\s\S]*?(?:\$\$|$)|'(?:''|\\[\s\S]|[^'\\])*(?:'|$))/,
+  /(?<identifier>"(?:""|[^"])*(?:"|$))/,
+  /(?<parameter>\?|[:$][\p{L}_\d][\p{L}\p{M}\p{N}_$]*)/u,
+  sqliteRules[4], sqliteRules[5],
+);
+const snowflakeKeywords = new Set(`SELECT FROM WHERE JOIN INNER LEFT RIGHT FULL OUTER CROSS LATERAL ON USING AS DISTINCT ALL UNION INTERSECT MINUS
+  WITH RECURSIVE TABLE VALUES INSERT INTO UPDATE SET DELETE MERGE WHEN MATCHED TRUNCATE COPY CREATE ALTER DROP SHOW DESCRIBE USE
+  DATABASE SCHEMA WAREHOUSE ROLE TABLE VIEW FUNCTION PROCEDURE STAGE FILE FORMAT STORAGE INTEGRATION TASK STREAM TEMPORARY TRANSIENT
+  QUALIFY ORDER BY GROUP HAVING LIMIT OFFSET FETCH FIRST NEXT ROWS NULLS FIRST LAST ASC DESC OVER PARTITION RANGE ROWS UNBOUNDED
+  NULL TRUE FALSE AND OR NOT IS IN EXISTS BETWEEN LIKE ILIKE RLIKE ESCAPE CASE WHEN THEN ELSE END CAST FLATTEN PIVOT UNPIVOT
+  BEGIN DECLARE END EXCEPTION RETURN CALL EXECUTE IMMEDIATE TRANSACTION COMMIT ROLLBACK
+`.trim().split(/\s+/));
+const sqlWordSets: Partial<Record<EditorLanguage, Set<string>>> = {
+  postgres: postgresKeywords, mysql: mysqlKeywords, tsql: tsqlKeywords, oracle: oracleKeywords, snowflake: snowflakeKeywords,
+};
 
 export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
 
@@ -129,12 +146,13 @@ export function editorLanguageForFile(filename: string): EditorLanguage | undefi
 export function editorSyntaxTokens(value: string, language: EditorLanguage): SyntaxToken[] | null {
   if (value.length > textLimit) return null;
   const tokens: SyntaxToken[] = [];
-  const grammar = new RegExp({ sqlite, postgres, mysql, tsql, oracle, json, xml }[language]);
+  const grammar = new RegExp({ sqlite, postgres, mysql, tsql, oracle, snowflake, json, xml }[language]);
+  const keywords = sqlWordSets[language];
   for (let match = grammar.exec(value); match; match = grammar.exec(value)) {
     const groups = match.groups!;
     const start = match.index;
     let end = start + match[0].length;
-    if ((language === "postgres" || language === "tsql") && groups.comment === "/*") {
+    if ((language === "postgres" || language === "tsql" || language === "snowflake") && groups.comment === "/*") {
       end = nestedCommentEnd(value, end);
       grammar.lastIndex = end;
     }
@@ -146,11 +164,8 @@ export function editorSyntaxTokens(value: string, language: EditorLanguage): Syn
     }
     let kind: SyntaxKind;
     if (groups.word) {
-      const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : language === "postgres"
-        ? postgresKeywords.has(groups.word.toUpperCase()) : language === "mysql"
-          ? mysqlKeywords.has(groups.word.toUpperCase()) : language === "tsql"
-            ? tsqlKeywords.has(groups.word.toUpperCase()) : language === "oracle"
-              ? oracleKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
+      const marked = language === "sqlite" ? isSqliteKeyword(groups.word)
+        : keywords?.has(groups.word.toUpperCase()) ?? /^(?:true|false|null)$/.test(groups.word);
       if (!marked) continue;
       kind = "keyword";
     } else if (groups.string && language === "json") {

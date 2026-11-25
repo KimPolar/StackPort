@@ -58,6 +58,17 @@ async function verify(page) {
     await detail.getByRole('button', { name: '열 구조', exact: true }).click();
     await detail.getByRole('table', { name: 'Snowflake 열 구조' }).getByRole('rowheader').first().waitFor();
     if (testDefinition) await verifyDefinitionPanel(page, detail, 'Snowflake');
+    const mode = workspace.getByRole('group', { name: 'Snowflake 작업 보기' });
+    await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+    const editor = workspace.getByRole('region', { name: 'Snowflake SQL 편집기', exact: true });
+    await editor.getByRole('textbox', { name: 'Snowflake SQL 문장', exact: true }).fill(
+      "SELECT 12345678901234567890123456789012345678 AS VALUE;\nSELECT '다음 결과' AS VALUE;",
+    );
+    await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+    const grid = editor.getByRole('table', { name: 'Snowflake SQL 결과 표', exact: true });
+    await grid.getByText('12345678901234567890123456789012345678', { exact: true }).waitFor();
+    await editor.getByRole('combobox', { name: '문장 결과' }).selectOption('1');
+    await grid.getByText('다음 결과', { exact: true }).waitFor();
   } finally {
     await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
   }
@@ -91,7 +102,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try {
     await verify(browser.contexts()[0].pages()[0]);
-    console.log(`Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns${testDefinition ? ', object definition' : ''}${testExport ? ', and result export' : ''}).`);
+    console.log(`Snowflake Windows E2E passed (live login, scoped object search, catalog, preview, columns and SQL execution${testDefinition ? ', object definition' : ''}${testExport ? ', and result export' : ''}).`);
   } finally {
     await browser.close();
   }

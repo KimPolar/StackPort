@@ -1203,6 +1203,17 @@ async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, obje
     -> Result<snowflake::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn run_snowflake_query(manager: State<'_, snowflake::Manager>, id: String, request_id: String,
+    input: snowflake::QueryInput) -> Result<snowflake::QueryOutcome, String> {
+    manager.run_query(&id, &request_id, input).await
+}
+
+#[tauri::command]
+fn cancel_snowflake_query(manager: State<'_, snowflake::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_query(&id, &request_id)
+}
+
+#[tauri::command]
 async fn export_snowflake(manager: State<'_, snowflake::Manager>, id: String, request_id: String, object: String,
     clauses: TableQueryClauses, options: snowflake::ExportOptions) -> Result<snowflake::ExportOutcome, String> {
     manager.export(&id, request_id, object, clauses, options).await
@@ -2557,6 +2568,8 @@ fn main() {
             snowflake_columns,
             snowflake_definition,
             snowflake_data,
+            run_snowflake_query,
+            cancel_snowflake_query,
             export_snowflake,
             snowflake_export_progress,
             cancel_snowflake_export,
