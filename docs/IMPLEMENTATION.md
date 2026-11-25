@@ -20,6 +20,10 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **생성 SQL**은 테이블 또는 뷰의 `SHOW CREATE` 결과를 표시합니다. 정의 전체를 읽은 경우 복사하거나 새 UTF-8 SQL 파일로 저장할 수 있습니다. 표시 한도는 262,144자입니다. 뷰의 정의를 읽는 데 필요한 권한이 없으면 해당 구역에 사유를 표시합니다. [MySQL SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.4/en/show-create-view.html)
 
+**서버 모니터**는 현재 연결과 같은 사용자 및 TLS 설정으로 별도의 읽기 전용 세션을 엽니다. 서버 버전·문자셋·시간대·기본 스토리지 엔진과 가동 시간, 연결 수·한도·실패, 누적 문장·느린 쿼리·트래픽, 행 잠금 대기와 교착 상태 통계를 표시합니다. 보이는 세션은 50개씩 조회하며 실행 중, 잠금 대기, 지정 시간 이상 실행 중인 세션으로 필터링할 수 있습니다. 시간 열은 서버가 보고한 현재 상태의 경과 시간입니다. 실행 SQL은 사용자가 켤 때만 최대 2,048자를 읽습니다. 수동 갱신 또는 5초마다 갱신할 수 있으며 화면을 나가면 모니터 연결을 닫습니다. [MySQL 세션 목록](https://dev.mysql.com/doc/refman/8.4/en/information-schema-processlist-table.html) · [MariaDB 세션 목록](https://mariadb.com/docs/server/reference/system-tables/information-schema/information-schema-tables/information-schema-processlist-table)
+
+차단 세션은 MySQL의 Performance Schema 데이터 잠금 또는 MariaDB의 InnoDB 잠금 대기 정보에서 읽습니다. 두 엔진 모두 계정에 보이는 세션만 표시합니다. MySQL에서 잠금 테이블을 읽을 수 있어도 계정의 세션 목록에 없는 차단 세션은 식별 정보를 표시하지 않습니다. 잠금 메타데이터를 사용할 수 없으면 그 사유와 세션 상태에 나타나는 잠금 대기를 표시합니다. 한 번에 잠금 관계 1,000개와 세션별 차단 ID 16개까지 읽습니다. [MySQL 데이터 잠금 대기](https://dev.mysql.com/doc/refman/8.4/en/performance-schema-data-lock-waits-table.html) · [MariaDB InnoDB 잠금 대기](https://mariadb.com/docs/server/reference/system-tables/information-schema/information-schema-tables/information-schema-innodb-tables/information-schema-innodb_lock_waits-table)
+
 **필터 및 정렬**은 화면에 표시되지 않는 열에도 적용합니다. 비교·범위·포함·NULL 조건을 최대 16개까지 AND 또는 OR로 결합하고, 정렬은 최대 8개 열의 방향과 NULL 순서를 지정합니다. 서버가 필터와 정렬을 적용한 뒤 페이지를 반환합니다. 기본 키가 있으면 정렬에 포함되지 않은 키 열을 마지막에 적용합니다. 기본 키가 없는 결과는 동률 행의 순서가 달라질 수 있으며, 조회 사이에 데이터가 변경되면 페이지 구성이 달라질 수 있습니다. 날짜만 입력해 DATETIME 또는 TIMESTAMP와 비교하면 해당 날짜의 자정을 사용합니다. 큰 정수와 고정 소수 비교는 정밀도를 유지합니다. [MySQL 비교 시 자료형 변환](https://dev.mysql.com/doc/refman/8.4/en/type-conversion.html) · [MariaDB 비교 시 자료형 변환](https://mariadb.com/docs/server/reference/sql-functions/string-functions/type-conversion)
 
 **조회 SQL**에는 입력값 대신 실제 바인딩에 사용한 매개변수를 표시합니다. **저장된 조건**에서 현재 필터 값과 정렬을 로컬 작업 공간에 보관하고 다시 적용할 수 있습니다. 메타데이터 v16은 기존 SQLite·PostgreSQL 조건의 이름, 범위와 개정 번호를 유지하면서 MySQL 계열 연결을 지원합니다.
@@ -408,6 +412,8 @@ node tests/desktop-smoke.cjs
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인했습니다.
 
 구조 검사는 인덱스 순서·접두 길이·가시성, 권한별 제약조건 조회, 전체 101개 제약조건의 두 페이지, 교차 데이터베이스 복합 외래 키와 자기 참조, 공개되지 않은 참조 대상, 뷰 정의 권한과 SQL 파일 저장을 다룹니다.
+
+모니터 검사는 두 엔진에서 실제 행 잠금 대기를 만들고 차단 ID, 실행 시간 필터, SQL 표시 한도 및 권한 제한을 확인합니다. MySQL에서는 잠금 테이블을 읽을 수 있지만 다른 계정의 세션이 보이지 않는 계정도 검증합니다. Windows 화면은 SQL 표시 옵션, 자동 갱신, 모니터를 나간 뒤 객체 화면 복귀를 확인합니다.
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 

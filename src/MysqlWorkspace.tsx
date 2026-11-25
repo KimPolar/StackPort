@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
+import { Activity, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
 import { MysqlObjectStructure, mysqlStructureLabels, type MysqlObjectInfo, type MysqlStructure, type MysqlStructureSection } from "./MysqlObjectStructure";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import { MysqlResultExport, type MysqlExportTarget } from "./MysqlResultExport";
+import { MysqlServerMonitor } from "./MysqlServerMonitor";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
 import type { ExportReport } from "./ResultExportDialog";
@@ -44,7 +45,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [object, setObject] = useState<MysqlObjectInfo | null>(null);
   const [view, setView] = useState<ObjectView>("columns");
   const [structurePage, setStructurePage] = useState(0);
-  const [sqlOpen, setSqlOpen] = useState(false);
+  const [mode, setMode] = useState<"objects" | "sql" | "monitor">("objects");
   const [schemaSearch, setSchemaSearch] = useState("");
   const [objectSearch, setObjectSearch] = useState("");
   const [schemaPage, setSchemaPage] = useState(0);
@@ -58,6 +59,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const mounted = useRef(false);
   const connecting = useRef(false);
   const production = settings.environment === "PROD";
+  const sqlOpen = mode === "sql";
+  const monitorOpen = mode === "monitor";
 
   const schemaArgs = useMemo(() => session ? { id: session.id, search: schemaSearch, page: schemaPage } : null, [session, schemaSearch, schemaPage]);
   const objectArgs = useMemo(() => session && database ? { id: session.id, database, search: objectSearch, page: objectPage } : null,
@@ -126,7 +129,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       const next = await invoke<Session>("open_mysql", { profileId: profile.id, revision: profile.revision, password, confirmation });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
-      setSession(next); setSqlOpen(false); setLogin(false); setExportReport(null);
+      setSession(next); setMode("objects"); setLogin(false); setExportReport(null);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { connecting.current = false; if (mounted.current) setBusy(false); }
   }
@@ -152,8 +155,9 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       </div>
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
-        {session ? <><button type="button" className="secondary" aria-pressed={sqlOpen} onClick={() => setSqlOpen(value => !value)}><Code2 size={15} aria-hidden /> SQL 편집기</button>
-          <button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
+        {session ? <><button type="button" className="secondary" aria-pressed={sqlOpen} onClick={() => setMode(sqlOpen ? "objects" : "sql")}><Code2 size={15} aria-hidden /> SQL 편집기</button>
+          <button type="button" className="secondary" aria-pressed={monitorOpen} onClick={() => setMode(monitorOpen ? "objects" : "monitor")}><Activity size={15} aria-hidden /> 서버 모니터</button>
+          {!monitorOpen && <button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>}
           <button type="button" className="secondary" onClick={() => void disconnect()}>MySQL 연결 끊기</button></> :
           <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setLogin(true); }}><Plug size={15} aria-hidden /> MySQL 연결</button>}
       </div>
@@ -167,7 +171,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       </div>
       <button type="button" className="secondary small" onClick={() => setExportReport(null)}>확인</button>
     </div>}
-    {session && <div className="mysql-layout">
+    {session && <div hidden={monitorOpen}><div className="mysql-layout">
       <div className="mysql-catalog">
         <section className="results-card" aria-label="MySQL 데이터베이스 목록">
           <div className="panel-heading"><h2>데이터베이스</h2></div>
@@ -186,7 +190,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
             <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => {
               if (object?.name !== item.name) chooseObject(item);
               else showView("columns");
-              setSqlOpen(false);
+              setMode("objects");
             }}>
               <Table2 size={14} aria-hidden /><span>{item.name}</span><small>{item.kind.endsWith("VIEW") ? "뷰" : "테이블"}</small>
             </button>
@@ -230,7 +234,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       </section>
       <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} onExport={beginExport} /></div>
       </div>
-    </div>}
+    </div></div>}
+    {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}
     {session && exportTarget && <MysqlResultExport id={session.id} profile={settings} target={exportTarget}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>

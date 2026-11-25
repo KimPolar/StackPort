@@ -91,9 +91,9 @@ PARTIAL = {
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
     "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기, MySQL·MariaDB 참조 객체 열기와 생성 SQL 저장",
-    "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계 표시",
-    "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계",
-    "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
+    "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계, MySQL·MariaDB 버전·문자셋·시간대·기본 스토리지와 연결·문장·트래픽·잠금 지표",
+    "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계, MySQL·MariaDB 세션·느린 실행·InnoDB 잠금 대기와 차단 세션",
+    "SP-DB-025": "PostgreSQL 현재 DB 작업 세션과 MySQL·MariaDB 서버 세션의 권한 범위 실행 SQL·잠금 대기 조회",
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 그리드의 SELECT·INSERT·UPDATE·DELETE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
@@ -416,6 +416,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/search.rs; src/PostgresSearchDialog.tsx"
             if requirement_id in {"SP-DB-024", "SP-SQ-016"}:
                 evidence += "; crates/stackport-core/src/postgres/statement_stats.rs; src/PostgresStatementStats.tsx"
+            if requirement_id in {"SP-DB-023", "SP-DB-024", "SP-DB-025"}:
+                evidence += "; crates/stackport-core/src/mysql/monitor.rs; src/MysqlServerMonitor.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
                 evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"

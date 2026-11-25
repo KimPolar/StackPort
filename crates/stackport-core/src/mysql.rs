@@ -1,10 +1,12 @@
 mod export;
 mod grid;
+mod monitor;
 mod profiles;
 mod sql;
 mod structure;
 
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
+pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};
@@ -121,6 +123,8 @@ struct Session {
     options: Opts,
     sql_mode: sql::SqlMode,
     running_sql: Mutex<Option<sql::RunningSql>>,
+    monitor: AsyncMutex<Option<monitor::MonitorConnection>>,
+    engine: &'static str,
     profile_id: String,
     project_id: String,
     environment: String,
@@ -228,6 +232,8 @@ impl MysqlManager {
                     options: connection.opts().clone(),
                     sql_mode: mode,
                     running_sql: Mutex::default(),
+                    monitor: AsyncMutex::new(None),
+                    engine,
                     connection: AsyncMutex::new(Some(connection)),
                     profile_id: profile.id,
                     project_id: profile.project_id,

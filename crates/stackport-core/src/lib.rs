@@ -28,6 +28,7 @@ pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, Mys
 pub use mysql::{MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
+pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};

@@ -111,6 +111,8 @@ async function fixture() {
       ) ENGINE=InnoDB;
       CREATE TABLE visible_db.sample_limit (number INT NOT NULL PRIMARY KEY);
       INSERT INTO visible_db.sample_limit VALUES ${Array.from({ length: 65 }, (_, i) => `(${i})`).join(',')};
+      CREATE TABLE visible_db.monitor_case (id INT PRIMARY KEY, watch_counter INT NOT NULL) ENGINE=InnoDB;
+      INSERT INTO visible_db.monitor_case VALUES (1, 0);
       CREATE TABLE visible_db.grid_filter (
         id BIGINT UNSIGNED, part INT, \`tag\`\`text\` VARCHAR(60), amount DECIMAL(30,6),
         booked DATE, touched DATETIME(6), elapsed TIME(6), weight DOUBLE, ratio FLOAT, PRIMARY KEY (part, id)
@@ -124,7 +126,16 @@ async function fixture() {
       );
       INSERT INTO visible_db.wide_filter(id, col_128) VALUES (1, 100), (2, 200);
       CREATE USER 'catalog_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
+      CREATE USER 'monitor_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';
+      GRANT SELECT ON visible_db.* TO 'monitor_reader'@'%';
+      GRANT PROCESS ON *.* TO 'monitor_reader'@'%';
+      ${maria ? '' : `CREATE USER 'monitor_limited'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
+        GRANT SELECT, UPDATE ON visible_db.monitor_case TO 'monitor_limited'@'%';
+        GRANT SELECT ON performance_schema.data_lock_waits TO 'monitor_reader'@'%';
+        GRANT SELECT ON performance_schema.threads TO 'monitor_reader'@'%';
+        GRANT SELECT ON performance_schema.data_lock_waits TO 'monitor_limited'@'%';
+        GRANT SELECT ON performance_schema.threads TO 'monitor_limited'@'%';`}
       GRANT SELECT ON linked_db.catalog_parent TO 'catalog_reader'@'%';
       GRANT SHOW VIEW ON visible_db.order_view TO 'catalog_reader'@'%';
       ${maria ? `CREATE USER 'metadata_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
@@ -202,6 +213,7 @@ async function verify(page, server) {
     assert.deepEqual([incoming.items[0].on_update, incoming.items[0].on_delete], ['CASCADE', 'SET NULL']);
     await command('close_mysql', { id: metadata.id });
   }
+  await verifyMonitor(command, id, async user => open(await alternate(user, { username: user })), server);
   await verifyDataGrid(command, id, profile);
   await verifyExports(command, id, profile);
   await verifySql(command, id, server.port);
@@ -225,11 +237,147 @@ async function verify(page, server) {
   await grid.getByText('00ff21', { exact: true }).waitFor();
   await grid.getByText('NULL', { exact: true }).waitFor();
   await verifyStructureControls(page, workspace, list);
+  await verifyMonitorControls(page, workspace);
   await verifySqlEditor(page, workspace);
   await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifyMonitor(command, id, openAs, server) {
+  const openMonitor = id => command('open_mysql_monitor', { id });
+  const closeMonitor = (id, monitorId) => command('close_mysql_monitor', { id, monitorId });
+  const read = (id, monitorId, filter = 'all', includeSql = false, slow = 1) => command('mysql_server_activity', {
+    id, monitorId, input: { filter, slow_seconds: slow, page: 0, include_sql: includeSql },
+  });
+  const processes = [];
+  const monitors = [];
+  const extraSessions = [];
+  const start = (user, sql) => {
+    const rootUser = user === 'root';
+    const tls = rootUser ? [maria ? '--skip-ssl' : '--ssl-mode=DISABLED']
+      : [`--ssl-ca=${server.ca}`, maria ? '--ssl-verify-server-cert' : '--ssl-mode=VERIFY_IDENTITY'];
+    const child = spawn(client, ['--no-defaults', '--protocol=TCP', '-h', rootUser ? '127.0.0.1' : 'localhost',
+      '-P', String(server.port), '-u', user, ...tls, '--batch', `--execute=${sql}`], {
+      cwd: root, windowsHide: true, stdio: 'ignore',
+      env: { ...process.env, MYSQL_PWD: rootUser ? (maria ? rootPassword : '') : secret },
+    });
+    const entry = { process: child, id: null };
+    processes.push(entry);
+    return entry;
+  };
+  async function awaitProcess(entry, marker) {
+    for (let attempt = 0; attempt < 40 && entry.process.exitCode === null; attempt++) {
+      const result = admin(server.port, `SELECT ID FROM information_schema.PROCESSLIST
+        WHERE ID <> CONNECTION_ID() AND INFO LIKE '%${marker}%' ORDER BY ID LIMIT 1;`).trim();
+      if (/^\d+$/.test(result)) { entry.id = result; return result; }
+      await delay(100);
+    }
+    throw new Error('The isolated lock fixture did not start: ' + marker);
+  }
+  async function monitorFor(base) {
+    const monitorId = await openMonitor(base);
+    monitors.push([base, monitorId]);
+    return monitorId;
+  }
+  try {
+    const limited = await monitorFor(id);
+    const first = await read(id, limited);
+    assert.match(first.server.version, maria ? /MariaDB/ : /^8\./);
+    assert.match(first.server.max_connections, /^\d+$/);
+    assert.match(first.counters.uptime, /^\d+$/);
+    assert.match(first.counters.connections, /^\d+$/);
+    assert.equal(first.lock_metadata, 'restricted');
+    assert.ok(first.sessions.some(session => session.username === 'catalog_reader'));
+    assert.ok(first.sessions.every(session => session.sql === null));
+    await assert.rejects(read(id, limited, 'slow', false, 0), /느린 실행 기준/);
+
+    const authorized = (await openAs('monitor_reader')).id;
+    extraSessions.push(authorized);
+    const monitor = await monitorFor(authorized);
+    const holder = await awaitProcess(start('root',
+      `START TRANSACTION; UPDATE visible_db.monitor_case SET watch_counter=watch_counter+1 WHERE id=1;
+       SELECT SLEEP(90) AS monitor_lock_holder, '${'x'.repeat(2300)}' AS monitor_preview; ROLLBACK;`),
+    'monitor_lock_holder');
+    const waiter = await awaitProcess(start(maria ? 'root' : 'monitor_limited',
+      'START TRANSACTION; UPDATE visible_db.monitor_case SET watch_counter=watch_counter+2 WHERE id=1; ROLLBACK;'),
+    'watch_counter+2');
+    let blocked;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const snapshot = await read(authorized, monitor, 'blocked', true);
+      assert.equal(snapshot.lock_metadata, 'available');
+      blocked = snapshot.sessions.find(row => row.id === waiter && row.blocker_ids.includes(holder));
+      if (blocked) break;
+      await delay(150);
+    }
+    assert.ok(blocked, 'A real InnoDB waiter should identify the lock holder');
+    assert.equal(blocked.lock_wait, true);
+    assert.match(blocked.sql, /watch_counter\+2/);
+    assert.equal(blocked.hidden_blocker, false);
+    let slow;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      slow = (await read(authorized, monitor, 'slow', true)).sessions.find(row => row.id === holder);
+      if (slow) break;
+      await delay(150);
+    }
+    assert.ok(slow, 'An active query should appear after crossing the slow execution threshold');
+    assert.match(slow.sql, /monitor_lock_holder/);
+    assert.equal(slow.sql.length, 2048);
+    assert.equal(slow.sql_truncated, true);
+    const restricted = await read(id, limited, 'all', true);
+    assert.ok(!restricted.sessions.some(row => row.id === waiter || row.id === holder));
+
+    if (!maria) {
+      const privateBase = (await openAs('monitor_limited')).id;
+      extraSessions.push(privateBase);
+      const privateMonitor = await monitorFor(privateBase);
+      const ownWait = (await read(privateBase, privateMonitor, 'blocked', true)).sessions.find(row => row.id === waiter);
+      assert.ok(ownWait);
+      assert.equal(ownWait.hidden_blocker, true);
+      assert.deepEqual(ownWait.blocker_ids, []);
+    }
+    await closeMonitor(id, limited);
+    await assert.rejects(read(id, limited), /모니터 연결이 닫혔습니다/);
+    const reopened = await monitorFor(id);
+    await closeMonitor(id, limited);
+    assert.ok((await read(id, reopened)).sessions.length > 0);
+    assert.ok((await command('mysql_databases', { id, search: 'visible', page: 0 })).items.includes('visible_db'));
+  } finally {
+    for (const [base, monitor] of monitors) await closeMonitor(base, monitor);
+    for (const session of extraSessions) await command('close_mysql', { id: session });
+    for (const { process, id } of processes.reverse()) {
+      if (process.exitCode !== null) continue;
+      if (id) {
+        try { admin(server.port, `KILL ${id};`); } catch {}
+      }
+      if (process.exitCode === null) process.kill();
+    }
+  }
+}
+
+async function verifyMonitorControls(page, workspace) {
+  const toggle = workspace.getByRole('button', { name: '서버 모니터', exact: true });
+  await toggle.click();
+  const monitor = workspace.getByRole('region', { name: 'MySQL 서버 모니터', exact: true });
+  await monitor.getByRole('button', { name: '모니터 연결', exact: true }).click();
+  const sessions = monitor.getByRole('table', { name: 'MySQL 세션 활동', exact: true });
+  await sessions.getByText('catalog_reader', { exact: true }).waitFor();
+  await monitor.getByText('현재 계정에 잠금 관계 조회 권한이 없습니다.', { exact: false }).waitFor();
+  assert.equal(await sessions.getByRole('columnheader', { name: '실행 SQL', exact: true }).count(), 0);
+  await monitor.getByLabel('실행 SQL 가져오기').check();
+  await sessions.getByRole('columnheader', { name: '실행 SQL', exact: true }).waitFor();
+  const stamp = monitor.getByText(/서버 시간대.*조회/);
+  const previous = await stamp.textContent();
+  await monitor.getByLabel('5초마다 새로 고침').check();
+  await page.waitForFunction(prior => {
+    const text = document.querySelector('.mysql-monitor [aria-label="MySQL 세션 활동"]');
+    const notes = Array.from(document.querySelectorAll('.mysql-monitor .mysql-monitor-note'));
+    return text && notes.some(note => note.textContent.includes('서버 시간대') && note.textContent !== prior);
+  }, previous, { timeout: 12000 });
+  await toggle.click();
+  await monitor.waitFor({ state: 'detached' });
+  await workspace.getByRole('region', { name: 'MySQL 객체 상세' }).getByRole('heading', { name: 'catalog_child', exact: true }).waitFor();
 }
 
 async function verifyStructure(command, id) {
@@ -616,7 +764,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (structured catalog, DDL files, data grid, read-only SQL and export).`);
+    console.log(`${engine} Windows E2E passed (catalog, server activity, real lock waits, data grid, read-only SQL and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

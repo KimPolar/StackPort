@@ -29,6 +29,16 @@
 .mysql-definition { padding: 0 10px 10px; }
 .mysql-definition .mysql-views { padding-inline: 0; }
 .mysql-definition p { margin: 8px 0; overflow-wrap: anywhere; }
+.mysql-monitor-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 10px; padding: 10px; margin: 0; }
+.mysql-monitor-totals > div { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); }
+.mysql-monitor-totals :is(dt, small) { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+.mysql-monitor-totals dd { margin: 4px 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.mysql-monitor-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; padding: 10px; border-block: 1px solid var(--border); }
+.mysql-monitor-controls .field { margin: 0; }
+.mysql-monitor-toggle { display: flex; align-items: center; gap: 5px; min-height: 30px; font-size: 12px; }
+.mysql-monitor-note { margin: 6px 10px; }
+.mysql-monitor td small { display: block; margin-top: 3px; }
+.mysql-monitor td pre { max-width: min(34ch, 42vw); max-height: 14rem; margin: 5px 0 0; overflow: auto; white-space: pre-wrap; }
 .mysql-table-note { margin: 0; padding: 4px 10px; }
 .mysql-export-report { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 .mysql-export-report :is(code, span) { display: block; margin-top: 4px; overflow-wrap: anywhere; }

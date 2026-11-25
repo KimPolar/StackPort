@@ -178,7 +178,7 @@ impl MysqlManager {
 pub(super) async fn open_request_connection(options: OptsBuilder) -> Result<Conn> {
     timeout(CONNECT, Conn::new(options))
         .await
-        .map_err(|_| "SQL 실행용 MySQL 연결 시간이 초과되었습니다.")?
+        .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
         .map_err(sql_error)
 }
 

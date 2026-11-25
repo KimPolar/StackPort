@@ -958,6 +958,22 @@ async fn mysql_structure(mysql: State<'_, stackport_core::MysqlManager>, id: Str
     -> Result<stackport_core::MysqlStructure, String> { mysql.structure(&id, database, table, section, page).await }
 
 #[tauri::command]
+async fn open_mysql_monitor(mysql: State<'_, stackport_core::MysqlManager>, id: String) -> Result<String, String> {
+    mysql.open_server_monitor(&id).await
+}
+
+#[tauri::command]
+async fn close_mysql_monitor(mysql: State<'_, stackport_core::MysqlManager>, id: String, monitor_id: String) -> Result<(), String> {
+    mysql.close_server_monitor(&id, &monitor_id).await
+}
+
+#[tauri::command]
+async fn mysql_server_activity(mysql: State<'_, stackport_core::MysqlManager>, id: String, monitor_id: String,
+    input: stackport_core::MysqlActivityInput) -> Result<stackport_core::MysqlActivitySnapshot, String> {
+    mysql.server_activity(&id, &monitor_id, input).await
+}
+
+#[tauri::command]
 async fn export_mysql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
     source: stackport_core::MysqlExportSource, options: stackport_core::MysqlExportOptions)
     -> Result<stackport_core::MysqlExportOutcome, String> { mysql.export(&id, request_id, source, options).await }
@@ -2077,6 +2093,9 @@ fn main() {
             mysql_objects,
             mysql_table,
             mysql_structure,
+            open_mysql_monitor,
+            close_mysql_monitor,
+            mysql_server_activity,
             export_mysql,
             mysql_export_progress,
             mysql_sql_parameters,
