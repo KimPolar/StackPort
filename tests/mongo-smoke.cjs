@@ -109,6 +109,11 @@ async function verify(page, port, ca) {
     const database = 'visible';
     const collections = (await command('mongo_collections', { id, database, search: 'records', page: 0 })).items;
     assert.deepEqual(collections.map(item => [item.name, item.kind]).sort(), [['edit_records', 'collection'], ['recent_records', 'view'], ['records', 'collection']]);
+    const viewOptions = JSON.parse(await command('mongo_namespace_definition', { id, database, collection: 'recent_records' }));
+    assert.equal(viewOptions.viewOn, 'records');
+    assert.deepEqual(viewOptions.pipeline, [{ $match: { rank: { $gte: { $numberInt: '20' } } } }]);
+    await assert.rejects(command('mongo_namespace_definition', { id, database, collection: 'missing' }), /찾을 수 없습니다/);
+    await assert.rejects(command('mongo_namespace_definition', { id, database: 'private', collection: 'data' }), /권한/);
     const query = { filter: '', projection: '', sort_field: '_id', descending: false, page: 0 };
     const list = (changes = {}, target = database) => command('mongo_documents', { id, database: target, collection: 'records', query: { ...query, ...changes } });
     const first = await list();
@@ -340,6 +345,8 @@ async function verifyNamespaceEditor(page, workspace, detail) {
   await dialog.waitFor({ state: 'detached' });
   await detail.getByRole('heading', { name: 'ui_collection', exact: true }).waitFor();
   await button(workspace, 'ui_collection 컬렉션').waitFor();
+  await button(detail, '정의').click();
+  await detail.getByLabel('컬렉션 정의', { exact: true }).filter({ hasText: '$jsonSchema' }).waitFor();
 
   await button(workspace, '컬렉션·뷰 만들기').click();
   await dialog.getByLabel('생성 유형', { exact: true }).selectOption('view');
@@ -355,6 +362,8 @@ async function verifyNamespaceEditor(page, workspace, detail) {
   await button(workspace, 'ui_view 뷰').waitFor();
   await detail.getByLabel('Canonical Extended JSON').filter({ hasText: '문서 21' }).waitFor();
   assert.equal(await detail.locator('.mongo-document-list summary').count(), 1);
+  await button(detail, '정의').click();
+  await detail.getByLabel('뷰 정의', { exact: true }).filter({ hasText: 'viewOn' }).waitFor();
 }
 
 async function verifyIndexCommands(command, openAdmin) {

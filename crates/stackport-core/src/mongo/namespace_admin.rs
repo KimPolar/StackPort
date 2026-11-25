@@ -91,6 +91,39 @@ struct Review {
 }
 
 impl MongoManager {
+    pub async fn namespace_definition(
+        &self,
+        id: &str,
+        database: &str,
+        collection: &str,
+    ) -> Result<String> {
+        validate_namespace(database, collection)?;
+        let db = self.client(id)?.database(database);
+        timeout(READ_TIMEOUT, async {
+            let mut cursor = db
+                .run_cursor_command(doc! {
+                    "listCollections": 1,
+                    "filter": { "name": collection },
+                    "cursor": { "batchSize": 1 },
+                    "maxTimeMS": SERVER_TIME.as_millis() as i32,
+                })
+                .await
+                .map_err(message)?;
+            let row = cursor
+                .try_next()
+                .await
+                .map_err(message)?
+                .ok_or("MongoDB 컬렉션 또는 뷰를 찾을 수 없습니다. 목록을 새로 고치세요.")?;
+            let options = row
+                .get_document("options")
+                .map_err(|_| "MongoDB 컬렉션·뷰 정의를 읽을 수 없습니다.")?;
+            canonical(options)
+                .map_err(|_| "MongoDB 컬렉션·뷰 정의의 표시 한도는 64 KiB입니다.".into())
+        })
+        .await
+        .map_err(|_| "MongoDB 컬렉션·뷰 정의 조회 시간이 초과되었습니다.")?
+    }
+
     fn namespace_admin(&self, id: &str) -> Result<(Client, Arc<NamespaceAdmin>)> {
         let sessions = self
             .sessions

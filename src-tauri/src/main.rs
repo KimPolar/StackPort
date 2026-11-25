@@ -957,6 +957,10 @@ async fn mongo_indexes(mongo: State<'_, stackport_core::MongoManager>, id: Strin
     -> Result<stackport_core::MongoCatalogPage<stackport_core::MongoIndex>, String> { mongo.indexes(&id, &database, &collection).await }
 
 #[tauri::command]
+async fn mongo_namespace_definition(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String)
+    -> Result<String, String> { mongo.namespace_definition(&id, &database, &collection).await }
+
+#[tauri::command]
 async fn review_mongo_index_change(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, input: stackport_core::MongoIndexChange)
     -> Result<stackport_core::MongoIndexReview, String> { mongo.review_index_change(&id, database, collection, input).await }
 
@@ -2722,6 +2726,7 @@ fn main() {
             mongo_databases,
             mongo_collections,
             mongo_indexes,
+            mongo_namespace_definition,
             review_mongo_index_change,
             discard_mongo_index_review,
             apply_mongo_index_change,

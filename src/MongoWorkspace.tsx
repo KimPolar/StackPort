@@ -179,7 +179,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
   allowEdits: boolean; allowIndexes: boolean; environment: string; onBusy: (busy: boolean) => void;
 }) {
-  const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline">("documents");
+  const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline" | "definition">("documents");
   const [draft, setDraft] = useState(defaultQuery);
   const [query, setQuery] = useState(defaultQuery);
   const [findOpen, setFindOpen] = useState(false);
@@ -196,6 +196,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const documents = useNativeRead<MongoDocumentPage>("mongo_documents", docArgs, revision);
   const count = useNativeRead<string>("count_mongo_documents", countArgs, revision);
   const indexes = useNativeRead<Page<Index>>("mongo_indexes", view === "indexes" ? args : null, revision);
+  const definition = useNativeRead<string>("mongo_namespace_definition", view === "definition" ? args : null, revision);
   const update = (change: Partial<Query>) => setDraft(value => ({ ...value, ...change }));
   const narrowDocument = () => { update({ projection: '{"_id": 1}' }); setQuery({ ...query, projection: '{"_id": 1}', page: 0 }); };
   function applyQuery(next: Query) {
@@ -211,9 +212,16 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       {collection.kind !== "view" && <button type="button" className="secondary small" aria-pressed={view === "indexes"} onClick={() => setView("indexes")}>인덱스</button>}
       <button type="button" className="secondary small" aria-pressed={view === "schema"} onClick={() => setView("schema")}>스키마 분석</button>
       <button type="button" className="secondary small" aria-pressed={view === "pipeline"} onClick={() => setView("pipeline")}>집계 파이프라인</button>
+      <button type="button" className="secondary small" aria-pressed={view === "definition"} onClick={() => setView("definition")}>정의</button>
     </div>
     <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
     <div hidden={view !== "pipeline"}><MongoPipeline target={args} projectId={projectId} /></div>
+    {view === "definition" && <>
+      {definition.loading && <p className="result-empty" role="status">정의 조회 중…</p>}
+      {definition.error && <p className="error-banner" role="alert">{definition.error}</p>}
+      {definition.data !== null && <pre className="mongo-command-definition mongo-note"
+        aria-label={collection.kind === "view" ? "뷰 정의" : "컬렉션 정의"} tabIndex={0}><code>{definition.data}</code></pre>}
+    </>}
     {view === "indexes" && <>
       {allowIndexes && <div className="mongo-actions"><button type="button" className="secondary small"
         onClick={() => setIndexAction({ kind: "create" })}>인덱스 생성</button></div>}

@@ -47,6 +47,7 @@
 .mongo-index-keys { display: grid; gap: 8px; padding: 0; list-style: none; }
 .mongo-index-keys li { padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
 .mongo-index-definition, .mongo-command-definition { max-height: 28dvh; overflow: auto; padding: 8px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; }
+.mongo-content .mongo-command-definition { max-height: 48dvh; }
 .mongo-index-impact { padding-inline-start: 20px; font-size: 13px; }
 .mongo-index-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mongo-index-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; }
