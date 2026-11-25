@@ -3,11 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
 
 export type MysqlSettings = { name: string; host: string; port: number; username: string; database: string | null;
-  environment: "DEV" | "STAGING" | "PROD"; tls: boolean; ca_path: string | null };
+  environment: "DEV" | "STAGING" | "PROD"; tls: boolean; ca_path: string | null;
+  client_certificate_path: string | null; client_key_path: string | null };
 export type MysqlProfile = { id: string; project_id: string; revision: number; settings: MysqlSettings };
 export type MysqlProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: MysqlProfile };
 
-const defaults: MysqlSettings = { name: "", host: "", port: 3306, username: "", database: null, environment: "DEV", tls: true, ca_path: null };
+const defaults: MysqlSettings = { name: "", host: "", port: 3306, username: "", database: null, environment: "DEV", tls: true, ca_path: null,
+  client_certificate_path: null, client_key_path: null };
 
 export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
   action: MysqlProfileAction; projectId: string; onSaved: (profile: MysqlProfile | null) => void; onClose: () => void;
@@ -30,7 +32,9 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
     pending.current = true; setBusy(true); setError("");
     try {
       const input = { ...settings, port: Number(port), database: settings.database || null,
-        ca_path: settings.tls ? settings.ca_path || null : null };
+        ca_path: settings.tls ? settings.ca_path || null : null,
+        client_certificate_path: settings.tls ? settings.client_certificate_path || null : null,
+        client_key_path: settings.tls ? settings.client_key_path || null : null };
       if (action.kind === "create") onSaved(await invoke<MysqlProfile>("create_mysql_profile", { projectId, input }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
@@ -41,10 +45,12 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
     finally { pending.current = false; setBusy(false); }
   }
 
-  async function chooseCertificate() {
+  async function chooseTlsFile(field: "ca_path" | "client_certificate_path" | "client_key_path") {
     try {
-      const path = await invoke<string | null>("choose_postgres_ca");
-      if (path) update("ca_path", path);
+      const path = field === "ca_path"
+        ? await invoke<string | null>("choose_postgres_ca")
+        : await invoke<string | null>("choose_mysql_client_tls_file", { key: field === "client_key_path" });
+      if (path) update(field, path);
     } catch (cause) { setError(String(cause)); }
   }
 
@@ -63,10 +69,28 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
             <option>DEV</option><option>STAGING</option><option>PROD</option></select></label>
           <label className="field">전송 방식<select value={settings.tls ? "tls" : "tcp"} onChange={event => update("tls", event.target.value === "tls")}>
             <option value="tls">TLS · 인증서 검증</option><option value="tcp">일반 TCP</option></select></label>
-          {settings.tls ? <label className="field">CA 인증서 경로 (선택)<span className="file-input">
-            <input value={settings.ca_path ?? ""} onChange={event => update("ca_path", event.target.value)} />
-            <button type="button" className="secondary" onClick={() => void chooseCertificate()}>파일 선택</button>
-          </span></label> : <p className="form-note">일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다.</p>}
+          {settings.tls ? <>
+            <label className="field">CA 인증서 경로 (선택)<span className="file-input">
+              <input value={settings.ca_path ?? ""} onChange={event => update("ca_path", event.target.value)} />
+              <button type="button" className="secondary" aria-label="CA 인증서 파일 선택" onClick={() => void chooseTlsFile("ca_path")}>파일 선택</button>
+            </span></label>
+            <details open={Boolean(settings.client_certificate_path || settings.client_key_path) || undefined}>
+              <summary>클라이언트 인증서 (선택)</summary>
+              <p className="form-note">서버가 클라이언트 인증서를 요구하면 PEM 인증서와 암호화되지 않은 PEM 개인 키를 함께 지정하세요.</p>
+              <label className="field">클라이언트 인증서 경로<span className="file-input">
+                <input required={!!settings.client_key_path} value={settings.client_certificate_path ?? ""}
+                  onChange={event => update("client_certificate_path", event.target.value)} />
+                <button type="button" className="secondary" aria-label="클라이언트 인증서 파일 선택"
+                  onClick={() => void chooseTlsFile("client_certificate_path")}>파일 선택</button>
+              </span></label>
+              <label className="field">클라이언트 개인 키 경로<span className="file-input">
+                <input required={!!settings.client_certificate_path} value={settings.client_key_path ?? ""}
+                  onChange={event => update("client_key_path", event.target.value)} />
+                <button type="button" className="secondary" aria-label="클라이언트 개인 키 파일 선택"
+                  onClick={() => void chooseTlsFile("client_key_path")}>파일 선택</button>
+              </span></label>
+            </details>
+          </> : <p className="form-note">일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다.</p>}
         </fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>

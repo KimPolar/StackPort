@@ -4,6 +4,7 @@ mod monitor;
 mod profiles;
 mod sql;
 mod structure;
+mod tls;
 
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
@@ -19,14 +20,12 @@ use crate::{
 use mysql_async::{
     from_row_opt,
     prelude::{FromRow, Queryable},
-    Conn, Error, IoError, Opts, OptsBuilder, Params, Row, SslOpts, Value,
+    Conn, DriverError, Error, IoError, Opts, OptsBuilder, Params, Row, TlsError, Value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
     collections::HashMap,
-    fs::File,
     future::Future,
-    io::Read,
     pin::Pin,
     sync::{Arc, Mutex},
     time::Duration,
@@ -189,7 +188,7 @@ impl MysqlManager {
             if settings.environment == "PROD" && !production_confirmed {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
-            let tls = settings.tls.then(|| ssl_options(settings)).transpose()?;
+            let tls = settings.tls.then(|| tls::options(settings)).transpose()?;
             Ok::<_, String>((profile, tls))
         })
         .await
@@ -460,22 +459,6 @@ async fn through_tunnel<T>(
     result
 }
 
-fn ssl_options(settings: &MysqlSettings) -> Result<SslOpts> {
-    let default = SslOpts::default();
-    let Some(path) = &settings.ca_path else {
-        return Ok(default);
-    };
-    const LIMIT: u64 = 256 * 1024;
-    let mut ca = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(LIMIT + 1).read_to_end(&mut ca))
-        .map_err(|_| "MySQL CA 인증서를 읽을 수 없습니다.")?;
-    if ca.len() as u64 > LIMIT {
-        return Err("CA 인증서 크기는 256 KiB 이하여야 합니다.".into());
-    }
-    Ok(default.with_root_certs(vec![ca.into()]))
-}
-
 fn read_message(error: &ReadError) -> &str {
     match error {
         ReadError::Shape => "MySQL 서버의 응답 형식을 읽을 수 없습니다.",
@@ -486,8 +469,23 @@ fn read_message(error: &ReadError) -> &str {
 }
 
 fn server_message(error: &Error) -> &'static str {
+    const CERTIFICATE: &str =
+        "MySQL TLS 인증서의 호스트 이름, 신뢰 체인과 클라이언트 인증 설정을 확인하세요.";
     match error {
-        Error::Io(IoError::Tls(_)) => "MySQL TLS 인증서의 호스트 이름과 신뢰 체인을 확인하세요.",
+        Error::Driver(DriverError::NoKeyFound) => {
+            "MySQL 클라이언트 개인 키의 PEM 형식과 암호화 여부를 확인하세요."
+        }
+        Error::Io(IoError::Tls(TlsError::Tls(rustls::Error::InconsistentKeys(_)))) => {
+            "MySQL 클라이언트 인증서와 개인 키가 서로 일치하는지 확인하세요."
+        }
+        Error::Io(IoError::Tls(_)) => CERTIFICATE,
+        Error::Io(IoError::Io(error))
+            if error
+                .get_ref()
+                .is_some_and(|cause| cause.is::<rustls::Error>()) =>
+        {
+            CERTIFICATE
+        }
         Error::Server(error) => server_code_message(error.code),
         _ => "MySQL 서버와 통신할 수 없습니다. 주소, 포트와 TLS 설정을 확인하세요.",
     }

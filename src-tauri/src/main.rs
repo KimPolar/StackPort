@@ -1882,6 +1882,18 @@ async fn choose_postgres_ca() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_mysql_client_tls_file(key: bool) -> Result<Option<String>, String> {
+    worker(move || {
+        let dialog = if key {
+            rfd::FileDialog::new().set_title("MySQL 클라이언트 개인 키 선택").add_filter("PEM 개인 키", &["pem", "key"])
+        } else {
+            rfd::FileDialog::new().set_title("MySQL 클라이언트 인증서 선택").add_filter("PEM 인증서", &["pem", "crt", "cer"])
+        };
+        Ok(dialog.pick_file().map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
 async fn choose_ssh_profile_import_file() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -2242,6 +2254,7 @@ fn main() {
             delete_sql_template,
             choose_sqlite_file,
             choose_postgres_ca,
+            choose_mysql_client_tls_file,
             choose_ssh_profile_import_file,
             choose_ssh_identity_file,
             choose_ssh_profile_export_directory,

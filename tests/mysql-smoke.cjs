@@ -36,12 +36,17 @@ function certificates() {
   const ca = path.join(root, 'ca.pem');
   const cert = path.join(root, 'server.pem');
   const key = path.join(root, 'server.key');
+  const clientCertificate = path.join(root, 'client.pem');
+  const clientKey = path.join(root, 'client.key');
   run(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-keyout', 'ca.key', '-out', ca,
     '-subj', '/CN=StackPort MySQL Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
   run(openssl, ['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', 'server.csr', '-subj', '/CN=localhost']);
   fs.writeFileSync(path.join(root, 'server.ext'), 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n');
   run(openssl, ['x509', '-req', '-in', 'server.csr', '-CA', ca, '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-out', cert, '-extfile', 'server.ext']);
-  return { ca, cert, key };
+  run(openssl, ['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', clientKey, '-out', 'client.csr', '-subj', '/CN=StackPort Test Client']);
+  fs.writeFileSync(path.join(root, 'client.ext'), 'basicConstraints=critical,CA:FALSE\nextendedKeyUsage=clientAuth\n');
+  run(openssl, ['x509', '-req', '-in', 'client.csr', '-CA', ca, '-CAkey', 'ca.key', '-days', '2', '-out', clientCertificate, '-extfile', 'client.ext']);
+  return { ca, cert, key, clientCertificate, clientKey };
 }
 
 function admin(port, sql) {
@@ -128,8 +133,10 @@ async function fixture() {
       INSERT INTO visible_db.wide_filter(id, col_128) VALUES (1, 100), (2, 200);
       CREATE USER 'catalog_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       CREATE USER 'monitor_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
+      CREATE USER 'certificate_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE X509;
       GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';
       GRANT SELECT ON visible_db.* TO 'monitor_reader'@'%';
+      GRANT SELECT ON visible_db.* TO 'certificate_reader'@'%';
       GRANT PROCESS ON *.* TO 'monitor_reader'@'%';
       ${maria ? '' : `CREATE USER 'monitor_limited'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
         GRANT SELECT, UPDATE ON visible_db.monitor_case TO 'monitor_limited'@'%';
@@ -142,7 +149,7 @@ async function fixture() {
       ${maria ? `CREATE USER 'metadata_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
         GRANT SELECT, REFERENCES ON visible_db.catalog_child TO 'metadata_reader'@'%';
         GRANT SELECT ON linked_db.catalog_parent TO 'metadata_reader'@'%';` : ''}`);
-    return { server, port, ca: tls.ca };
+    return { server, port, ...tls };
   } catch (cause) {
     await stopServer(server, port);
     throw cause;
@@ -244,7 +251,49 @@ async function verify(page, server) {
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   await verifyTunnel(page, command, workspace, project, profile, server, alternate);
+  await verifyClientIdentity(page, command, project, server, alternate);
   assert.deepEqual(errors, []);
+}
+
+function identitySettings(server) {
+  return { username: 'certificate_reader', client_certificate_path: server.clientCertificate, client_key_path: server.clientKey };
+}
+
+async function verifyClientIdentity(page, command, project, server, alternate) {
+  const open = profile => command('open_mysql', { profileId: profile.id, revision: profile.revision, password: secret, confirmation: 'PROD' });
+  await assert.rejects(open(await alternate('인증서 없는 계정', { username: 'certificate_reader' })), /사용자 이름과 암호/);
+  await assert.rejects(open(await alternate('일치하지 않는 개인 키', { ...identitySettings(server), client_key_path: server.key })), /인증서와 개인 키가 서로 일치/);
+  await assert.rejects(open(await alternate('사라진 개인 키', { ...identitySettings(server), client_key_path: path.join(root, 'absent.key') })), /클라이언트 개인 키 파일/);
+  const invalidKey = path.join(root, 'not-a-key.pem');
+  fs.writeFileSync(invalidKey, 'This test file is not a private key.');
+  await assert.rejects(open(await alternate('잘못된 개인 키 형식', { ...identitySettings(server), client_key_path: invalidKey })), /개인 키의 PEM 형식/);
+
+  const name = engine + ' 클라이언트 인증 검증';
+  await page.getByRole('button', { name: 'MySQL 계열 연결 추가', exact: true }).click();
+  const create = page.getByRole('dialog', { name: 'MySQL 계열 연결 추가', exact: true });
+  await create.getByLabel('연결 이름').fill(name);
+  await create.getByLabel('호스트 이름 또는 IP').fill('localhost');
+  await create.getByLabel('포트').fill(String(server.port));
+  await create.getByLabel('사용자 이름').fill('certificate_reader');
+  await create.getByLabel('시작 데이터베이스 (선택)').fill('visible_db');
+  await create.getByLabel('CA 인증서 경로 (선택)').fill(server.ca);
+  await create.getByText('클라이언트 인증서 (선택)', { exact: true }).click();
+  await create.getByLabel('클라이언트 인증서 경로').fill(server.clientCertificate);
+  await create.getByLabel('클라이언트 개인 키 경로').fill(server.clientKey);
+  await create.getByRole('button', { name: '저장', exact: true }).click();
+  await create.waitFor({ state: 'detached' });
+  const saved = (await command('list_mysql_profiles', { projectId: project.id })).find(item => item.settings.name === name);
+  assert.equal(saved.settings.client_certificate_path, server.clientCertificate);
+  assert.equal(saved.settings.client_key_path, server.clientKey);
+  assert.doesNotMatch(JSON.stringify(saved), /BEGIN .*PRIVATE KEY|stackport-mysql-catalog-test/);
+  const workspace = page.getByRole('region', { name: 'MySQL 작업 공간', exact: true });
+  await workspace.getByRole('heading', { name, exact: false }).waitFor();
+  await workspace.getByRole('button', { name: 'MySQL 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'MySQL 계열 연결', exact: true });
+  await login.getByText('TLS 클라이언트 인증서 사용', { exact: true }).waitFor();
+  await login.getByLabel('MySQL 암호').fill(secret);
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
 }
 
 async function verifyTunnel(page, command, workspace, project, profile, server, alternate) {
@@ -302,7 +351,7 @@ async function verifyTunnel(page, command, workspace, project, profile, server, 
     await assert.rejects(open(otherProfile), /실행 중인 로컬 SSH 터널/);
 
     const before = gateway.forwarded();
-    const session = await open(profile);
+    const session = await open(await alternate('터널 클라이언트 인증', identitySettings(server)));
     assert.equal(session.tunnel.id, tunnel.id);
     assert.ok((await command('mysql_databases', { id: session.id, search: '', page: 0 })).items.includes('visible_db'));
     const monitorId = await command('open_mysql_monitor', { id: session.id });
@@ -888,7 +937,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (TLS, SSH jump and reconnect, catalog, server activity, locks, grid, read-only SQL and export).`);
+    console.log(`${engine} Windows E2E passed (mutual TLS, SSH jump and reconnect, catalog, server activity, locks, grid, read-only SQL and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

@@ -31,7 +31,7 @@ PARTIAL = {
     "SP-CN-008": "Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력",
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
-    "SP-CN-011": "PostgreSQL TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 인증서 체인·호스트 이름·유효기간 검증",
+    "SP-CN-011": "PostgreSQL·MySQL 계열 TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 서버 인증서 체인·호스트 이름·유효기간 검증, MySQL 계열 PEM 클라이언트 인증",
     "SP-CN-012": "PostgreSQL 사용자 이름과 세션별 암호 인증",
     "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
     "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",
@@ -80,7 +80,7 @@ PARTIAL = {
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
     "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB 읽기 전용 탐색·데이터 미리보기, Redis 단독 서버 키 탐색·타입별 편집",
     "SP-DB-004": "PostgreSQL·MySQL 계열 호스트·포트·데이터베이스·사용자 이름과 환경 지정",
-    "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 인증서 검증, 로컬 SSH 터널 경유 및 점프 호스트",
+    "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 서버 인증서 검증과 SSH 터널·점프 호스트, MySQL 계열 PEM 클라이언트 인증",
     "SP-DB-006": "PostgreSQL·MySQL 계열 세션별 사용자 이름·암호 인증",
     "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL과 MySQL 계열 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시",
@@ -471,6 +471,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mysql.rs; crates/stackport-core/tests/mysql_profiles.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id == "SP-AT-006":
                 evidence += "; crates/stackport-core/src/mysql.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
+            if requirement_id in {"SP-CN-011", "SP-DB-005"}:
+                evidence += "; crates/stackport-core/src/mysql/tls.rs; src/MysqlProfileDialog.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-SQ-001", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009", "SP-SQ-010", "SP-SQ-014"}:
                 evidence += "; crates/stackport-core/src/mysql/sql.rs; src/MysqlSqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:

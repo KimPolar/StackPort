@@ -23,9 +23,74 @@ fn migrates_v14_and_keeps_mysql_profiles_project_scoped() {
         environment: "PROD".into(),
         tls: true,
         ca_path: None,
+        client_certificate_path: None,
+        client_key_path: None,
     };
     let profile = store
         .create_mysql_profile(&project.id, settings.clone())
+        .unwrap();
+    let db = Connection::open(&path).unwrap();
+    let stored: String = db
+        .query_row(
+            "SELECT settings_json FROM mysql_profiles WHERE id = ?1",
+            [&profile.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    let object = legacy.as_object_mut().unwrap();
+    object.remove("client_certificate_path");
+    object.remove("client_key_path");
+    db.execute(
+        "UPDATE mysql_profiles SET settings_json = ?1 WHERE id = ?2",
+        [legacy.to_string(), profile.id.clone()],
+    )
+    .unwrap();
+    drop(db);
+    assert_eq!(
+        store
+            .mysql_profile(&profile.id, profile.revision)
+            .unwrap()
+            .settings,
+        settings
+    );
+    let mut identity = MysqlSettings {
+        name: "인증서 연결".into(),
+        client_certificate_path: Some(
+            directory
+                .path()
+                .join("client.pem")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        ..settings.clone()
+    };
+    assert!(store
+        .create_mysql_profile(&project.id, identity.clone())
+        .is_err());
+    identity.client_key_path = Some(
+        directory
+            .path()
+            .join("client.key")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let client_profile = store
+        .create_mysql_profile(&project.id, identity.clone())
+        .unwrap();
+    assert_eq!(client_profile.settings, identity);
+    assert!(store
+        .update_mysql_profile(
+            &client_profile.id,
+            client_profile.revision,
+            MysqlSettings {
+                tls: false,
+                ..identity
+            }
+        )
+        .is_err());
+    store
+        .delete_mysql_profile(&client_profile.id, client_profile.revision)
         .unwrap();
     assert!(store
         .create_mysql_profile(&project.id, settings.clone())

@@ -283,6 +283,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
     {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={closeLogin}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} · {settings.username}</p>
+        {settings.client_certificate_path && <p className="form-note">TLS 클라이언트 인증서 사용</p>}
         <label className="field">연결 경로<select value={route?.id ?? ""} disabled={busy} onChange={event =>
           setRoute(routes.data?.find(item => item.id === event.target.value) ?? null)}>
           <option value="">직접 연결</option>

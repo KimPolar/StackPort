@@ -12,6 +12,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 탐색기의 **MySQL 계열 연결 추가**에서 MySQL·MariaDB의 호스트, 포트, 사용자, 시작 데이터베이스와 환경을 저장합니다. TLS를 기본으로 사용하고, 시스템 신뢰 저장소와 선택한 CA로 호스트 이름과 인증서를 검증합니다. 암호는 연결할 때만 입력하며 운영 연결에는 `PROD` 확인이 필요합니다. 접속 직후 서버 종류·버전을 읽고 세션의 기본 트랜잭션을 읽기 전용으로 설정합니다. 메타데이터 v15에서 연결을 프로젝트에 저장하고 복제할 때 연결 설정을 함께 복사합니다. [mysql_async TLS 옵션](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html)
 
+**클라이언트 인증서**에서 PEM 인증서 체인과 암호화되지 않은 PEM 개인 키의 절대 경로를 지정할 수 있습니다. 두 파일은 각각 256 KiB까지 지원합니다. 프로필에는 경로만 저장하고 드라이버가 연결할 때 파일을 읽습니다. `REQUIRE X509` 계정에 인증서를 제시하며 계정 암호와 서버 인증서도 검증합니다. 직접 연결과 SSH 터널의 SQL·내보내기·서버 모니터에도 같은 인증 설정을 사용합니다. [MySQL 암호화 연결](https://dev.mysql.com/doc/refman/8.4/en/using-encrypted-connections.html) · [MariaDB 계정의 TLS 정책](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
+
 **연결 경로**에는 같은 프로젝트에서 프로필의 호스트와 포트로 전달하는 로컬 SSH 터널이 표시됩니다. SSH 점프를 거쳐 시작한 터널도 선택할 수 있습니다. 목록, SQL 실행, 내보내기, 서버 모니터는 선택한 경로를 사용하며 TLS를 켜면 데이터베이스 프로필의 호스트 이름과 신뢰 체인을 검증합니다. 터널이 중단되면 작업 공간에 연결 끊김을 표시합니다. 같은 작업 공간에서 SQL 초안을 유지하며, 터널을 다시 시작하고 연결 창에서 목록을 새로 고침하면 같은 경로로 연결할 수 있습니다. [터널 연결에서의 TLS 호스트 이름 설정](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html#method.with_danger_tls_hostname_override)
 
 MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블·뷰를 각각 검색하고 100개씩 표시합니다. 선택한 객체의 열 이름, 타입, NULL 허용 여부와 키 표시를 읽습니다. 데이터 미리보기는 50행씩 읽으며 처음·이전·다음 페이지로 이동합니다. 한 화면에 앞 128개 열과 값당 512바이트를 표시합니다. 큰 정수와 소수는 문자열로 보존하고 바이너리 값은 HEX로 표시합니다. 긴 UTF-8 값은 문자 경계를 지켜 자릅니다. [MySQL 열 메타데이터](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html)
@@ -411,7 +413,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, SSH 점프 경유 및 터널 중단 후 재연결, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
+MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 
 구조 검사는 인덱스 순서·접두 길이·가시성, 권한별 제약조건 조회, 전체 101개 제약조건의 두 페이지, 교차 데이터베이스 복합 외래 키와 자기 참조, 공개되지 않은 참조 대상, 뷰 정의 권한과 SQL 파일 저장을 다룹니다.
 

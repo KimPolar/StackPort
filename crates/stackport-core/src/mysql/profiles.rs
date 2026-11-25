@@ -24,6 +24,8 @@ pub struct MysqlSettings {
     pub environment: String,
     pub tls: bool,
     pub ca_path: Option<String>,
+    pub client_certificate_path: Option<String>,
+    pub client_key_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -224,6 +226,19 @@ fn normalize(mut settings: MysqlSettings) -> Result<MysqlSettings> {
             || !Path::new(path).is_absolute()
     }) {
         return Err("TLS를 선택하고 CA 인증서의 절대 경로를 지정하세요.".into());
+    }
+    match (&settings.client_certificate_path, &settings.client_key_path) {
+        (None, None) => {}
+        (Some(certificate), Some(key))
+            if settings.tls
+                && [certificate, key].iter().all(|path| {
+                    path.len() <= 32_768 && !path.contains('\0') && Path::new(path).is_absolute()
+                }) => {}
+        _ => {
+            return Err(
+                "TLS를 선택하고 클라이언트 인증서와 개인 키의 절대 경로를 모두 지정하세요.".into(),
+            )
+        }
     }
     Ok(settings)
 }
