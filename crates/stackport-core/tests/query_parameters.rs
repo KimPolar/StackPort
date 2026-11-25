@@ -113,7 +113,7 @@ fn parameter_sets_migrate_and_keep_one_default_per_sql_and_project() {
     let unrelated = store.create_project("unrelated").unwrap();
     drop(store);
     let old = Connection::open(&path).unwrap();
-    old.execute_batch("DROP TABLE sql_parameter_sets; PRAGMA user_version = 18;")
+    old.execute_batch("DROP TABLE sql_parameter_sets; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version = 18;")
         .unwrap();
     drop(old);
 

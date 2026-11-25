@@ -1312,6 +1312,18 @@ async function verify(browser, fixture, gateway, jump) {
   const withParameters = "SELECT 1;\nSELECT $1::numeric AS amount, coalesce($2::text, '기본값') AS note;";
   await sql.fill(withParameters);
   await sql.evaluate((input, start) => input.setSelectionRange(start, input.value.length), withParameters.indexOf('SELECT $1'));
+  await page.getByRole('button', { name: 'SQL 템플릿', exact: true }).click();
+  const templates = page.getByRole('dialog', { name: 'SQL 템플릿', exact: true });
+  await templates.getByRole('button', { name: '선택 영역으로 만들기', exact: true }).click();
+  assert.equal(await templates.getByLabel('SQL 방언', { exact: true }).inputValue(), 'postgres');
+  await templates.getByLabel('템플릿 이름', { exact: true }).fill('PostgreSQL 금액 조회');
+  const selectedSql = withParameters.slice(withParameters.indexOf('SELECT $1'));
+  assert.equal(await templates.getByLabel('템플릿 SQL', { exact: true }).inputValue(), selectedSql);
+  await templates.getByRole('button', { name: '템플릿 저장', exact: true }).click();
+  await templates.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  await page.getByRole('tab', { name: 'PostgreSQL 금액 조회', selected: true, exact: true }).waitFor();
+  assert.equal(await parameters.count(), 0);
+  assert.equal(await sql.inputValue(), selectedSql);
   await sql.press('Control+Enter');
   await parameters.getByRole('group', { name: /\$1.*numeric/ }).waitFor();
   await parameters.getByLabel('$1 값 숨기기', { exact: true }).check();

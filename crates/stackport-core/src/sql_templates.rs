@@ -13,9 +13,38 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE sql_templates (
     revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
     UNIQUE(project_id, folder, name)
 );";
+pub(crate) const DIALECT_SCHEMA: &str = "ALTER TABLE sql_templates ADD COLUMN dialect TEXT NOT NULL DEFAULT 'common'
+    CHECK(dialect IN ('common', 'sqlite', 'postgres', 'mysql', 'tsql', 'oracle', 'snowflake'));";
 const MAX_TEMPLATES: i64 = 128;
 const MAX_SQL_BYTES: usize = 256 * 1024;
 const STALE: &str = "템플릿이 변경되었거나 삭제되었습니다. 새로 고침 후 다시 시도하세요.";
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SqlTemplateDialect {
+    #[default]
+    Common,
+    Sqlite,
+    Postgres,
+    Mysql,
+    Tsql,
+    Oracle,
+    Snowflake,
+}
+
+impl SqlTemplateDialect {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Common => "common",
+            Self::Sqlite => "sqlite",
+            Self::Postgres => "postgres",
+            Self::Mysql => "mysql",
+            Self::Tsql => "tsql",
+            Self::Oracle => "oracle",
+            Self::Snowflake => "snowflake",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SqlTemplateSummary {
@@ -24,6 +53,7 @@ pub struct SqlTemplateSummary {
     pub folder: String,
     pub favorite: bool,
     pub revision: i64,
+    pub dialect: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +69,8 @@ pub struct SqlTemplateInput {
     pub folder: String,
     pub sql: String,
     pub favorite: bool,
+    #[serde(default)]
+    pub dialect: SqlTemplateDialect,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +96,7 @@ impl Store {
         let db = self.connect()?;
         require_active_project(&db, project_id)?;
         let mut statement = db.prepare(
-            "SELECT id, name, folder, favorite, revision FROM sql_templates WHERE project_id = ?1
+            "SELECT id, name, folder, favorite, revision, dialect FROM sql_templates WHERE project_id = ?1
              ORDER BY favorite DESC, folder COLLATE NOCASE, name COLLATE NOCASE, id",
         ).map_err(db_error)?;
         let rows = statement
@@ -104,8 +136,9 @@ impl Store {
                 }
                 let id = Uuid::new_v4().to_string();
                 tx.execute(
-                    "INSERT INTO sql_templates(id, project_id, name, folder, sql, favorite) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![id, project_id, name, folder, template.sql, template.favorite],
+                    "INSERT INTO sql_templates(id, project_id, name, folder, sql, favorite, dialect)
+                     VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![id, project_id, name, folder, template.sql, template.favorite, template.dialect.as_str()],
                 ).map_err(write_error)?;
                 (id, "sql_template.create")
             }
@@ -116,9 +149,9 @@ impl Store {
             } => {
                 let (name, folder) = validate(&template)?;
                 let changed = tx.execute(
-                    "UPDATE sql_templates SET name = ?4, folder = ?5, sql = ?6, favorite = ?7, revision = revision + 1
+                    "UPDATE sql_templates SET name = ?4, folder = ?5, sql = ?6, favorite = ?7, dialect = ?8, revision = revision + 1
                      WHERE project_id = ?1 AND id = ?2 AND revision = ?3",
-                    params![project_id, id, revision, name, folder, template.sql, template.favorite],
+                    params![project_id, id, revision, name, folder, template.sql, template.favorite, template.dialect.as_str()],
                 ).map_err(write_error)?;
                 require_changed(changed, STALE)?;
                 (id, "sql_template.update")
@@ -169,7 +202,7 @@ pub(crate) fn copy_project_templates(
     destination: &str,
 ) -> Result<usize> {
     let mut statement = db
-        .prepare("SELECT name, folder, sql, favorite FROM sql_templates WHERE project_id = ?1")
+        .prepare("SELECT name, folder, sql, favorite, dialect FROM sql_templates WHERE project_id = ?1")
         .map_err(db_error)?;
     let rows = statement
         .query_map([source], |row| {
@@ -178,6 +211,7 @@ pub(crate) fn copy_project_templates(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, bool>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })
         .map_err(db_error)?
@@ -185,10 +219,11 @@ pub(crate) fn copy_project_templates(
         .map_err(db_error)?;
     drop(statement);
     let mut count = 0;
-    for (name, folder, sql, favorite) in rows {
+    for (name, folder, sql, favorite, dialect) in rows {
         count += db.execute(
-            "INSERT INTO sql_templates(id, project_id, name, folder, sql, favorite) VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
-            params![Uuid::new_v4().to_string(), destination, name, folder, sql, favorite],
+            "INSERT INTO sql_templates(id, project_id, name, folder, sql, favorite, dialect)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![Uuid::new_v4().to_string(), destination, name, folder, sql, favorite, dialect],
         ).map_err(db_error)?;
     }
     Ok(count)
@@ -234,13 +269,14 @@ fn read_summary(row: &Row<'_>) -> rusqlite::Result<SqlTemplateSummary> {
         folder: row.get(2)?,
         favorite: row.get(3)?,
         revision: row.get(4)?,
+        dialect: row.get(5)?,
     })
 }
 
 fn load(db: &Connection, project_id: &str, id: &str) -> Result<SqlTemplate> {
     db.query_row(
-        "SELECT id, name, folder, favorite, revision, sql FROM sql_templates WHERE project_id = ?1 AND id = ?2",
-        params![project_id, id], |row| Ok(SqlTemplate { summary: read_summary(row)?, sql: row.get(5)? }),
+        "SELECT id, name, folder, favorite, revision, dialect, sql FROM sql_templates WHERE project_id = ?1 AND id = ?2",
+        params![project_id, id], |row| Ok(SqlTemplate { summary: read_summary(row)?, sql: row.get(6)? }),
     ).optional().map_err(db_error)?.ok_or_else(|| STALE.into())
 }
 

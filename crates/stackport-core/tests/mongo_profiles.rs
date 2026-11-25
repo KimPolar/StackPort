@@ -13,7 +13,7 @@ fn preserves_version_sixteen_projects_and_validates_mongodb_profiles() {
     drop(store);
     let old = Connection::open(&path).unwrap();
     legacy_presets::restore_legacy_preset_schema(&old, true);
-    old.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; PRAGMA user_version=16;")
+    old.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=16;")
         .unwrap();
     drop(old);
     let store = Store::open(&path).unwrap();

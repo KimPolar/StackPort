@@ -24,6 +24,7 @@ import { RowChangeDialog, RowChangeFields, type RowChangeRequest, type RowChange
 import { SqlParameterFields, type SqlParameter, type SqlParameterValue } from "./SqlParameterFields";
 import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { SqlFileDialog } from "./SqlFileDialog";
+import type { SqlTemplateDialect } from "./SqlTemplateLibrary";
 import {
   addSqlTab, CloseSqlTabDialog, emptySqlDocument, emptySqlTabs, isSqlDraftDirty, SqlTabStrip,
   sqlDocumentEditorId, sqlTabButtonId, sqlTabId, sqlTabPanelId, sqlTabTitle,
@@ -250,7 +251,9 @@ function App() {
     sqlFocusRequest.current = null;
     document.getElementById(id)?.focus({ preventScroll: true });
   }, [sqlTabSets, sqlFileAction]);
-  const [templateLibrary, setTemplateLibrary] = useState<{ projectId: string; source: string; selection: boolean } | null>(null);
+  const [templateLibrary, setTemplateLibrary] = useState<{
+    projectId: string; profileId: string | null; source: string; selection: boolean; dialect: SqlTemplateDialect;
+  } | null>(null);
   const [sqlHistory, setSqlHistory] = useState<SqlHistoryEntry[]>([]);
   const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
   const [sqlBuilderProfile, setSqlBuilderProfile] = useState<string | null>(null);
@@ -355,6 +358,8 @@ function App() {
     : sqlServerProfile ? "tsql" : oracleProfile ? "oracle" : "snowflake";
   const networkSqlEditor = networkSqlTarget && sqlEditorState(networkSqlTarget, networkSqlLanguage);
   const historyTarget = networkSqlTarget ?? (sqliteWorkspace ? sqlTarget : null);
+  const templateTarget = templateLibrary?.projectId === historyTarget?.projectId &&
+    templateLibrary?.profileId === historyTarget?.profileId ? historyTarget : null;
   const historyEnvironment = networkSqlProfile?.settings.environment ?? profile?.environment;
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
@@ -733,9 +738,9 @@ function App() {
     return {
       tabs: sqlTabSets[target.profileId] ?? initialSqlTabs(target),
       select: id => editSqlTabs(target, group => ({ ...group, activeId: id })),
-      add: (text = "") => {
+      add: (text = "", templateName) => {
         requestNewSqlTabFocus(target);
-        editSqlTabs(target, group => addSqlTab(group, target, { ...emptySqlDocument, text }));
+        editSqlTabs(target, group => addSqlTab(group, target, { ...emptySqlDocument, text }, { templateName }));
       },
       close: requestCloseSqlTab,
       edit: (id, text) => editSqlTabs(target, group => ({
@@ -743,6 +748,7 @@ function App() {
       })),
       openFile: () => setSqlFileAction({ mode: "open", target }),
       saveFile: draft => setSqlFileAction({ mode: "save", draft: { ...draft, ...target } }),
+      openTemplates: editor => showSqlTemplates(editor, target, language),
       openHistory: () => setSqlHistoryProfile(target.profileId),
       startHistory: (scope, sql) => startSqlHistory(target.profileId, language, scope, sql),
     };
@@ -891,16 +897,28 @@ function App() {
   }
 
   function openSqlTemplates() {
-    if (!desktop || !project) return;
-    const editor = sqlEditor.current;
-    const selection = !!editor && sqlEditorOpen && editor.selectionStart !== editor.selectionEnd;
-    const source = selection ? editor.value.slice(editor.selectionStart, editor.selectionEnd) : sql;
-    setTemplateLibrary({ projectId: project.id, source, selection });
+    if (networkSqlTarget && networkSqlEditor) {
+      const editor = document.getElementById(postgresProfile ? "postgres-sql-editor" : sqlDocumentEditorId(networkSqlEditor.tabs.activeId));
+      if (editor instanceof HTMLTextAreaElement && editor.getClientRects().length) {
+        showSqlTemplates(editor, networkSqlTarget, networkSqlLanguage);
+        return;
+      }
+    }
+    const target = sqliteWorkspace ? sqlTarget : null;
+    showSqlTemplates(target && sqlEditorOpen ? sqlEditor.current : null, target, target ? "sqlite" : "common", target ? sql : "");
   }
 
-  function openSqlTemplate(template: { name: string; sql: string }, owner: string) {
-    if (sqlTarget?.projectId !== owner) return;
-    openSqlDraft(template.sql, template.name);
+  function showSqlTemplates(editor: HTMLTextAreaElement | null, target: SqlTarget | null, dialect: SqlTemplateDialect, fallback = "") {
+    if (!desktop || !project) return;
+    const selection = !!editor && editor.selectionStart !== editor.selectionEnd;
+    const source = selection ? editor.value.slice(editor.selectionStart, editor.selectionEnd) : editor?.value ?? fallback;
+    setTemplateLibrary({ projectId: project.id, profileId: target?.profileId ?? null, source, selection, dialect });
+  }
+
+  function openSqlTemplate(template: { name: string; sql: string }) {
+    if (!templateTarget) return;
+    if (networkSqlEditor) networkSqlEditor.add(template.sql.replace(/\r\n?/g, "\n"), template.name);
+    else openSqlDraft(template.sql, template.name);
     setTemplateLibrary(null);
   }
 
@@ -1434,7 +1452,7 @@ function App() {
         { id: "import:database-connections", title: "데이터베이스 연결 가져오기", group: "작업", Icon: FileUp, run: () => setDatabaseExchange("import") },
         { id: "export:database-connections", title: "데이터베이스 연결 내보내기", group: "작업", Icon: FileDown, run: () => setDatabaseExchange("export") },
       );
-      if (desktop && sqliteWorkspace) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
+      if (desktop) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
     for (const item of projects) commands.push({
@@ -2168,8 +2186,8 @@ function App() {
     </React.Suspense>}
     {templateLibrary && project && templateLibrary.projectId === project.id && <React.Suspense fallback={null}>
       <SqlTemplateLibrary key={project.id} projectId={project.id} projectName={project.name}
-        source={templateLibrary.source} selection={templateLibrary.selection} canOpen={sqlTarget?.projectId === project.id}
-        onOpen={template => openSqlTemplate(template, project.id)} onClose={() => setTemplateLibrary(null)} />
+        source={templateLibrary.source} selection={templateLibrary.selection} dialect={templateLibrary.dialect}
+        openTarget={templateTarget?.profileName ?? null} onOpen={openSqlTemplate} onClose={() => setTemplateLibrary(null)} />
     </React.Suspense>}
     {historyTarget && sqlHistoryProfile === historyTarget.profileId && <React.Suspense fallback={null}>
       <SqlHistoryDialog key={historyTarget.profileId} connection={`${historyTarget.profileName} · ${historyEnvironment}`}

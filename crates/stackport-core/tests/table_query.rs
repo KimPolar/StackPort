@@ -38,7 +38,7 @@ fn v17_mysql_preset_keeps_its_scope_and_revision_after_migration() {
     drop(store);
     let db = Connection::open(&path).unwrap();
     legacy_presets::restore_legacy_preset_schema(&db, true);
-    db.execute_batch("DROP TABLE sql_parameter_sets; PRAGMA user_version=17;").unwrap();
+    db.execute_batch("DROP TABLE sql_parameter_sets; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=17;").unwrap();
     let clauses = json!({"conjunction": "all", "filters": [],
         "sort": [{"column": "name", "direction": "desc", "nulls": "last"}]});
     db.execute(
@@ -264,6 +264,7 @@ fn saved_conditions_round_trip_by_object_and_reject_stale_replacement() {
          DROP TABLE test_v16_presets;
          DROP TABLE native_db_profiles;
          DROP TABLE sql_parameter_sets;
+         ALTER TABLE sql_templates DROP COLUMN dialect;
          PRAGMA user_version=15;",
     )
     .unwrap();

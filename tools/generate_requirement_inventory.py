@@ -130,7 +130,7 @@ PARTIAL = {
     "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL·MySQL·MariaDB의 예상 계획 및 실제 분석을 텍스트·단계 트리로 표시",
     "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL·MySQL·MariaDB 스캔·조인·정렬·인덱스와 엔진별 비용·예상/실제 행 및 긴 리프 표시, PostgreSQL 행 오차 표시",
     "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
-    "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색과 선택 SQL 저장, 관계형 엔진의 연결별 최근 SQL과 새 탭 열기",
+    "SP-SQ-017": "관계형 엔진의 프로젝트별 템플릿·폴더·방언·즐겨찾기·검색과 선택 SQL 저장, 엔진별 매개변수 구문 안내, 연결별 최근 SQL과 새 탭 열기",
     "SP-SQ-018": "7개 관계형 엔진에서 1 MiB 이하 UTF-8·UTF-16 LE/BE·Windows-949·Windows-1252 SQL 파일을 새 탭에 열고 명시적으로 실행, 새 파일 저장 및 BOM·LF/CRLF 유지",
     "SP-SQ-022": "쓰기 가능한 관계형 SQL 편집기에서 선택한 실행 범위의 조건 없는 DML·DDL·대량 작업·동적 실행 식별, 줄 번호·반복·연결·환경 표시와 운영 확인. SQLite·PostgreSQL·MySQL 계열 읽기 전용 실행 보호",
     "SP-SQ-023": "관계형 SQL 편집기의 연결별 메모리 실행 기록, 현재 문장·배치 범위, 상태·시간·제공된 행 수, 가린 미리보기와 연결별 원문 보관 선택·삭제",
@@ -358,7 +358,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-SQ-016":
                 evidence = "crates/stackport-core/src/query.rs; crates/stackport-core/tests/table_query.rs; src/SqlQueryMetrics.tsx; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-017":
-                evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; crates/stackport-core/tests/migration.rs; src/SqlTemplateLibrary.tsx; src/SqlHistoryDialog.tsx; tests/sql-file-smoke.cjs"
+                evidence = "crates/stackport-core/src/sql_templates.rs; crates/stackport-core/tests/sql_templates.rs; src/SqlTemplateLibrary.tsx; src/SqlHistoryDialog.tsx; tests/sql-file-smoke.cjs; tests/postgres-smoke.cjs; tests/snowflake-editor-smoke.cjs"
             elif requirement_id == "SP-SQ-023":
                 evidence = "src/main.tsx; src/sqlHistory.ts; src/SqlHistoryDialog.tsx; src/SqlTabs.tsx; crates/stackport-core/src/sql_risk.rs; tests/sql-history.test.mjs; tests/sql-file-smoke.cjs; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/snowflake-editor-smoke.cjs"
             elif requirement_id in {"SP-MD-002", "SP-MD-006", "SP-MD-015", "SP-MD-019"}:

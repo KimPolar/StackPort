@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, History, Play, Square } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileCode2, FileDown, FolderOpen, GitBranch, History, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
 import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, postgresCopyCell, useGridRowSelection } from "./GridRowSelection";
@@ -223,6 +223,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
   const fileActions = <div className="sql-file-actions">
     <button type="button" className="secondary small" onClick={openFile}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
     <button type="button" className="secondary small" disabled={!draft} onClick={() => draft && saveFile(draft)}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+    <button type="button" className="secondary small" onClick={() => editor.openTemplates(input.current)}><FileCode2 size={14} aria-hidden /> SQL 템플릿</button>
     <button type="button" className="secondary small" onClick={openHistory}><History size={14} aria-hidden /> 최근 SQL</button>
   </div>;
   return <div className="postgres-sql">

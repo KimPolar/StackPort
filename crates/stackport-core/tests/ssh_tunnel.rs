@@ -111,7 +111,7 @@ fn version_eight_tunnel_becomes_local_and_retains_its_revision_and_addresses() {
         name TEXT NOT NULL COLLATE NOCASE, local_port INTEGER NOT NULL CHECK(local_port BETWEEN 0 AND 65535),
         target_host TEXT NOT NULL, target_port INTEGER NOT NULL CHECK(target_port BETWEEN 1 AND 65535),
         revision INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0), UNIQUE(project_id, name)
-    ); PRAGMA user_version=8;").unwrap();
+    ); ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=8;").unwrap();
     db.execute(
         "INSERT INTO ssh_tunnels VALUES ('legacy', ?1, ?2, 'Legacy', 6082, 'old.invalid', 8443, 6)",
         [&project.id, &profile.id],
@@ -187,7 +187,7 @@ fn version_seven_migration_preserves_the_ssh_profile_and_previous_schema() {
     let profile = gateway(&store, &project.id);
     Connection::open(&path)
         .unwrap()
-        .execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; PRAGMA user_version=7;")
+        .execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=7;")
         .unwrap();
 
     let reopened = Store::open(&path).unwrap();

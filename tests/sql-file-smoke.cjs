@@ -603,7 +603,7 @@ async function verifySqlAliasRename(page, editor) {
   assert.equal(await dialog.getByRole('list', { name: '변경 위치', exact: true }).getByRole('listitem').count(), 3);
   assert.equal(await editor.inputValue(), source);
   await apply.click();
-  await dialog.waitFor({ state: 'detached' });
+  await page.locator('dialog[aria-labelledby="sql-alias-title"]').waitFor({ state: 'detached' });
   assert.equal(await editor.inputValue(), expected);
   await editor.press('Control+z');
   assert.equal(await editor.inputValue(), source);

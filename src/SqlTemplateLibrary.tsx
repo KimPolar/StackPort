@@ -2,10 +2,23 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Star, X } from "lucide-react";
 import { sqliteNameKey } from "./sqlCompletion";
+import type { SqlHistoryLanguage } from "./sqlHistory";
 
-type Summary = { id: string; name: string; folder: string; favorite: boolean; revision: number };
+export type SqlTemplateDialect = "common" | SqlHistoryLanguage;
+const dialects: Record<SqlTemplateDialect, { label: string; parameter?: string }> = {
+  common: { label: "공통 SQL" },
+  sqlite: { label: "SQLite", parameter: ":value" },
+  postgres: { label: "PostgreSQL", parameter: "$1" },
+  mysql: { label: "MySQL · MariaDB", parameter: "?" },
+  tsql: { label: "SQL Server", parameter: "@P1" },
+  oracle: { label: "Oracle Database", parameter: ":value" },
+  snowflake: { label: "Snowflake", parameter: "?" },
+};
+const dialectOptions = Object.entries(dialects).map(([value, { label }]) => <option key={value} value={value}>{label}</option>);
+
+type Summary = { id: string; name: string; folder: string; favorite: boolean; revision: number; dialect: SqlTemplateDialect };
 type Template = Summary & { sql: string };
-type Input = Pick<Template, "name" | "folder" | "favorite" | "sql">;
+type Input = Pick<Template, "name" | "folder" | "favorite" | "sql" | "dialect">;
 type Mode = { kind: "browse" } | { kind: "edit"; original: Summary | null; input: Input } | { kind: "delete"; original: Summary };
 type Write = { kind: "create"; template: Input }
   | { kind: "update"; id: string; revision: number; template: Input }
@@ -14,12 +27,13 @@ const browse = { kind: "browse" } as const;
 
 function summaryOf({ sql: _sql, ...summary }: Template): Summary { return summary; }
 
-export function SqlTemplateLibrary({ projectId, projectName, source, selection, canOpen, onOpen, onClose }: {
+export function SqlTemplateLibrary({ projectId, projectName, source, selection, dialect, openTarget, onOpen, onClose }: {
   projectId: string;
   projectName: string;
   source: string;
   selection: boolean;
-  canOpen: boolean;
+  dialect: SqlTemplateDialect;
+  openTarget: string | null;
   onOpen: (template: { name: string; sql: string }) => void;
   onClose: () => void;
 }) {
@@ -30,6 +44,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
   const [refresh, setRefresh] = useState(0);
   const [search, setSearch] = useState("");
   const [folder, setFolder] = useState("all");
+  const [dialectFilter, setDialectFilter] = useState("all");
   const [favorites, setFavorites] = useState(false);
   const [selectedId, setSelectedId] = useState("");
   const [preview, setPreview] = useState<Template | null>(null);
@@ -42,6 +57,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
   const query = search.trim().toLocaleLowerCase();
   const visible = (catalog ?? []).filter(item => (!favorites || item.favorite)
     && (activeFolder === "all" || activeFolder === `folder:${sqliteNameKey(item.folder)}`)
+    && (dialectFilter === "all" || dialectFilter === item.dialect)
     && (!query || `${item.name} ${item.folder}`.toLocaleLowerCase().includes(query)))
     .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.folder.localeCompare(b.folder) || a.name.localeCompare(b.name));
   const selected = visible.find(item => item.id === selectedId) ?? visible[0];
@@ -49,6 +65,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
   const selectedRevision = selected?.revision;
   const current = preview && preview.id === selectedKey && preview.revision === selectedRevision ? preview : null;
   const editing = mode.kind === "edit" ? mode : null;
+  const parameter = editing && dialects[editing.input.dialect].parameter;
 
   useEffect(() => { dialog.current?.showModal(); }, []);
   useEffect(() => {
@@ -113,6 +130,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
     if (write.kind !== "favorite") {
       setSearch("");
       setFolder("all");
+      setDialectFilter("all");
       setFavorites(false);
     }
     changeMode(browse);
@@ -131,7 +149,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
   }
 
   function create(sql: string) {
-    changeMode({ kind: "edit", original: null, input: { name: "", folder: "", favorite: false, sql } });
+    changeMode({ kind: "edit", original: null, input: { name: "", folder: "", favorite: false, sql, dialect } });
   }
 
   return <dialog ref={dialog} className="dialog sql-template-library" aria-labelledby="sql-template-title"
@@ -150,6 +168,13 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
         <label className="field">폴더<input maxLength={100} list="sql-template-existing-folders" value={editing.input.folder}
           onChange={event => setMode({ ...editing, input: { ...editing.input, folder: event.target.value } })} /></label>
         <datalist id="sql-template-existing-folders">{[...folders.values()].filter(Boolean).map(name => <option key={name} value={name} />)}</datalist>
+        <div className="field">
+          <label htmlFor="sql-template-dialect">SQL 방언</label>
+          <select id="sql-template-dialect" value={editing.input.dialect}
+            onChange={event => setMode({ ...editing, input: { ...editing.input, dialect: event.target.value as SqlTemplateDialect } })}>
+            {dialectOptions}
+          </select>
+        </div>
         <div className="field sql-template-editor-field">
           <label htmlFor="sql-template-content">템플릿 SQL</label>
           <textarea id="sql-template-content" required rows={8} spellCheck={false}
@@ -158,7 +183,9 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
         <label><input type="checkbox" checked={editing.input.favorite}
           onChange={event => setMode({ ...editing, input: { ...editing.input, favorite: event.target.checked } })} /> 즐겨찾기</label>
       </fieldset>
-      <p className="form-note">SQL 본문을 로컬 프로젝트에 저장합니다. 실행할 때 입력할 값은 <code>:value</code> 같은 매개변수로 작성하세요.</p>
+      <p className="form-note">SQL 본문을 로컬 프로젝트에 저장합니다. {parameter
+        ? <>실행할 때 입력할 값은 <code>{parameter}</code> 같은 매개변수로 작성하세요.</>
+        : "실행할 때 입력할 값은 대상 편집기의 매개변수 구문으로 작성하세요."}</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={() => changeMode(browse)}>목록으로</button>
         <button type="submit" className="primary" disabled={busy || !editing.input.name.trim() || !editing.input.sql.trim()}>템플릿 저장</button></div>
@@ -187,6 +214,10 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
             {[...folders].sort(([, a], [, b]) => a.localeCompare(b)).map(([key, name]) =>
               <option key={key} value={key}>{name || "폴더 없음"}</option>)}
           </select>
+          <select aria-label="템플릿 방언" value={dialectFilter} onChange={event => setDialectFilter(event.target.value)}>
+            <option value="all">모든 방언</option>
+            {dialectOptions}
+          </select>
           <label><input type="checkbox" checked={favorites} onChange={event => setFavorites(event.target.checked)} /> 즐겨찾기만</label>
         </div>
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -197,7 +228,7 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
             <button type="button" aria-pressed={item.id === selectedKey} disabled={busy} onClick={() => setSelectedId(item.id)}>
               <strong>{item.name}</strong>
               {item.favorite && <Star size={13} fill="currentColor" aria-label="즐겨찾기" />}
-              {item.folder && <small>{item.folder}</small>}
+              <small>{item.folder ? `${item.folder} · ` : ""}{dialects[item.dialect].label}</small>
             </button>
           </li>)}</ul>
           <div className="sql-template-preview">
@@ -205,13 +236,19 @@ export function SqlTemplateLibrary({ projectId, projectName, source, selection, 
               : current ? <>
                 <strong>{current.name}</strong>
                 <pre aria-label="저장된 템플릿 SQL" tabIndex={0}>{current.sql}</pre>
-                {!canOpen && <p className="form-note">SQLite 연결을 선택하면 새 탭에서 열 수 있습니다.</p>}
+                <p className="form-note">{openTarget ? `${openTarget}의 새 SQL 탭에서 열립니다.`
+                  : "SQL 편집기에서 템플릿을 열면 새 탭으로 가져올 수 있습니다."}</p>
+                {openTarget && current.dialect !== "common" && current.dialect !== dialect && <p className="form-note">
+                  {dialects[current.dialect].label}용 템플릿입니다. 실행 전에 {dialects[dialect].label} 구문을 확인하세요.
+                </p>}
                 <div className="sql-template-controls">
-                  <button type="button" className="primary small" disabled={busy || !canOpen} onClick={() => onOpen(current)}>새 탭에서 열기</button>
+                  <button type="button" className="primary small" disabled={busy || !openTarget} onClick={() => onOpen(current)}>새 탭에서 열기</button>
                   <button type="button" className="secondary small" disabled={busy} aria-pressed={current.favorite} onClick={() => void mutate(() =>
                     save({ kind: "favorite", id: current.id, revision: current.revision, favorite: !current.favorite }))}>즐겨찾기</button>
                   <button type="button" className="secondary small" disabled={busy} onClick={() => changeMode({
-                    kind: "edit", original: current, input: { name: current.name, folder: current.folder, favorite: current.favorite, sql: current.sql },
+                    kind: "edit", original: current, input: {
+                      name: current.name, folder: current.folder, favorite: current.favorite, sql: current.sql, dialect: current.dialect,
+                    },
                   })}>템플릿 편집</button>
                   <button type="button" className="secondary small" disabled={busy} onClick={() =>
                     changeMode({ kind: "delete", original: current })}>템플릿 삭제</button>

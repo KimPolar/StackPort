@@ -253,6 +253,25 @@ async function verify(page) {
   assert.equal(await reveal.count(), 0);
   await history.getByRole('button', { name: '닫기', exact: true }).click();
   await history.waitFor({ state: 'detached' });
+  await page.evaluate(projectId => window.__TAURI_INTERNALS__.invoke('save_sql_template', {
+    projectId, write: { kind: 'create', template: { name: '로컬 상태', folder: '', favorite: false, sql: 'SELECT 1;', dialect: 'sqlite' } },
+  }), project.id);
+  const snowflakeSql = 'SELECT ?::NUMBER AS amount;';
+  await editor.fill(snowflakeSql);
+  await workspace.getByRole('button', { name: 'SQL 템플릿', exact: true }).click();
+  const library = page.getByRole('dialog', { name: 'SQL 템플릿', exact: true });
+  await library.getByText(/SQLite용 템플릿입니다.*Snowflake/u).waitFor();
+  await library.getByRole('button', { name: '현재 SQL로 만들기', exact: true }).click();
+  assert.equal(await library.getByLabel('SQL 방언', { exact: true }).inputValue(), 'snowflake');
+  await library.getByLabel('템플릿 이름', { exact: true }).fill('웨어하우스 조회');
+  await library.getByRole('button', { name: '템플릿 저장', exact: true }).click();
+  await library.getByLabel('템플릿 방언', { exact: true }).selectOption('snowflake');
+  assert.equal(await library.getByRole('button', { name: /로컬 상태/u }).count(), 0);
+  assert.equal(await library.getByLabel('저장된 템플릿 SQL', { exact: true }).textContent(), snowflakeSql);
+  await library.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  await workspace.getByRole('tab', { name: '웨어하우스 조회', selected: true, exact: true }).waitFor();
+  assert.equal(await editor.inputValue(), snowflakeSql);
+  assert.equal(await results.count(), 0);
   await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
   assert.deepEqual(errors, []);
 }

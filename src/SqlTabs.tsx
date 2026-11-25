@@ -17,11 +17,12 @@ export type SqlTabSet = { tabs: SqlDraft[]; activeId: string; nextNumber: number
 export type SqlEditorState = {
   tabs: SqlTabSet;
   select: (id: string) => void;
-  add: (text?: string) => void;
+  add: (text?: string, templateName?: string) => void;
   close: (draft: SqlDraft) => void;
   edit: (id: string, text: string) => void;
   openFile: () => void;
   saveFile: (draft: SqlDraft) => void;
+  openTemplates: (editor: HTMLTextAreaElement | null) => void;
   openHistory: () => void;
   startHistory: StartSqlHistory;
 };
@@ -110,7 +111,7 @@ export function useSqlTabBusy({ tabId, reportBusy }: SqlTabEditor, busy: boolean
   useLayoutEffect(() => { reportBusy(tabId, busy); }, [tabId, reportBusy, busy]);
 }
 
-export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, openFile, saveFile, openHistory, startHistory }, render }: {
+export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, openFile, saveFile, openTemplates, openHistory, startHistory }, render }: {
   editor: SqlEditorState;
   render: (tab: SqlTabEditor) => ReactNode;
 }) {
@@ -132,6 +133,10 @@ export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, ope
       <button type="button" className="secondary small" disabled={busy} onClick={openFile}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" title="Ctrl+S" disabled={busy || !draft}
         onClick={() => draft && saveFile(draft)}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+      <button type="button" className="secondary small" disabled={busy} onClick={() => {
+        const input = draft && document.getElementById(sqlDocumentEditorId(draft.id));
+        openTemplates(input instanceof HTMLTextAreaElement ? input : null);
+      }}><FileCode2 size={14} aria-hidden /> SQL 템플릿</button>
       <button type="button" className="secondary small" disabled={busy} onClick={openHistory}><History size={14} aria-hidden /> 최근 SQL</button>
     </div>
     {!draft && <p className="sql-tabs-empty">새 SQL 탭을 만들거나 파일을 여세요.</p>}
