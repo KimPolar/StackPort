@@ -243,6 +243,7 @@ async function verify(browser, serverPort, secure) {
   await verifyReplica({ command, open, alternate, serverPort });
   await verifyPubSub({ command, open, profile, writer, secure, serverPort });
   await verifyEdits({ command, open, profile, writer, serverPort, secure });
+  await verifyKeyLifecycle({ command, open, profile, writer, serverPort, secure });
 
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'Redis 연결', exact: true });
@@ -278,7 +279,12 @@ async function verify(browser, serverPort, secure) {
   await page.getByRole('button', { name: 'Redis 캐시 검증 열기', exact: true }).click();
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).waitFor();
   await verifyEditDialog(page, workspace);
+  await verifyKeyLifecycleDialog(page, workspace);
   await verifyPubSubDialog(page, workspace, secure);
+  await page.getByRole('button', { name: '작업 기록', exact: true }).click();
+  await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
+  await page.getByText('Redis 키 삭제', { exact: true }).first().waitFor();
+  await page.getByText('Redis 키 삭제 결과 미확인', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
 }
 
@@ -391,6 +397,39 @@ async function verifyEditDialog(page, workspace) {
   await editor.waitFor({ state: 'detached' });
   await detail.getByRole('status').getByText('Redis 변경 완료', { exact: true }).waitFor();
   await detail.getByRole('table', { name: 'Redis 값', exact: true }).getByText('화면에서 적용한 값', { exact: true }).waitFor();
+}
+
+async function verifyKeyLifecycleDialog(page, workspace) {
+  const detail = workspace.getByRole('region', { name: 'Redis 키 상세', exact: true });
+  await findKey(page, workspace, 'lifecycle:screen-ttl', 'string');
+  await detail.getByText('screen-ttl-value', { exact: true }).waitFor();
+  await detail.getByRole('button', { name: '만료 설정', exact: true }).click();
+  const ttl = page.getByRole('dialog', { name: 'Redis 만료 설정', exact: true });
+  await ttl.getByLabel('만료까지 남은 시간 (초)').fill('90');
+  await ttl.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  await ttl.getByText('90초', { exact: true }).waitFor();
+  const apply = ttl.getByRole('button', { name: '변경 적용', exact: true });
+  assert.equal(await apply.isDisabled(), true);
+  await ttl.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await ttl.waitFor({ state: 'detached' });
+  await detail.getByText(/ms$/).waitFor();
+
+  await findKey(page, workspace, 'lifecycle:screen-delete', 'string');
+  const keys = workspace.getByRole('region', { name: 'Redis 키 탐색', exact: true });
+  await keys.getByRole('button', { name: '키 선택', exact: true }).click();
+  await keys.getByRole('checkbox', { name: 'lifecycle:screen-delete 선택', exact: true }).check();
+  await keys.getByRole('button', { name: '선택 키 삭제', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Redis 키 삭제', exact: true });
+  await dialog.getByRole('button', { name: '삭제 미리보기', exact: true }).click();
+  await dialog.getByRole('region', { name: '삭제 대상 Redis 키', exact: true }).getByText('lifecycle:screen-delete', { exact: true }).waitFor();
+  const remove = dialog.getByRole('button', { name: '키 삭제 적용', exact: true });
+  await dialog.getByLabel('키 삭제 확인').fill('DELETE');
+  assert.equal(await remove.isDisabled(), true);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await remove.click();
+  await dialog.waitFor({ state: 'detached' });
+  await detail.getByText('Redis 키 1개를 삭제했습니다.', { exact: true }).waitFor();
 }
 
 async function eventually(read, passes) {
@@ -555,6 +594,84 @@ async function verifyEdits({ command, open, profile, writer, serverPort, secure 
   assert.doesNotMatch(JSON.stringify(events), /다른 클라이언트|00ff61|stackport-redis-fixture-password/);
 }
 
+async function verifyKeyLifecycle({ command, open, profile, writer, serverPort, secure }) {
+  const edit = (id, key, milliseconds) => command('preview_redis_edit', { id, key: keyId(key), input: { kind: 'ttl', milliseconds } });
+  const previewDeletion = (id, keys) => command('preview_redis_key_delete', { id, keys: keys.map(keyId) });
+  const applyEdit = (id, token) => command('apply_redis_edit', { id, token, confirmation: 'PROD' });
+  const applyDelete = (id, token, approval = 'DELETE', confirmation = 'PROD') => command('apply_redis_key_delete', { id, token, approval, confirmation });
+  const read = (id, name) => command('redis_value', { id, input: { key: keyId(name), position: null } });
+
+  const limited = await open(profile, secret, 'PROD', true);
+  const denied = await previewDeletion(limited.id, ['lifecycle:keep']);
+  await assert.rejects(applyDelete(limited.id, denied.token), /권한/);
+  assert.equal((await read(limited.id, 'lifecycle:keep')).kind, 'string');
+  await command('close_redis', { id: limited.id });
+
+  const { id } = await open(writer, secret, 'PROD', true);
+  const ttlKey = 'lifecycle:ttl';
+  await assert.rejects(edit(id, ttlKey, '0'), /1ms 이상/);
+  await assert.rejects(edit(id, ttlKey, null), /설정되어 있지 않습니다/);
+  const expiration = await edit(id, ttlKey, '120000');
+  assert.equal(expiration.ttl_ms, null);
+  assert.equal(expiration.next_ttl_ms, 120000);
+  assert.equal((await read(id, ttlKey)).ttl_ms, null);
+  await assert.rejects(applyDelete(id, expiration.token), /다시 미리 보세요/);
+  assert.equal((await applyEdit(id, expiration.token)).status, 'applied');
+  const expiring = await read(id, ttlKey);
+  assert.ok(expiring.ttl_ms > 0 && expiring.ttl_ms <= 120000);
+  const persistence = await edit(id, ttlKey, null);
+  assert.ok(persistence.ttl_ms > 0);
+  assert.equal(persistence.next_ttl_ms, null);
+  assert.equal((await applyEdit(id, persistence.token)).status, 'applied');
+  const persisted = await read(id, ttlKey);
+  assert.equal(persisted.ttl_ms, null);
+  assert.equal(persisted.rows[0][0].text, 'ttl-value');
+  const competingTtl = await edit(id, ttlKey, '120000');
+  cli(serverPort, [['SELECT', '3'], ['PEXPIRE', ttlKey, '300000']]);
+  assert.equal((await applyEdit(id, competingTtl.token)).status, 'conflict');
+  assert.ok((await read(id, ttlKey)).ttl_ms > 120000);
+
+  const keep = 'lifecycle:keep';
+  const changing = 'lifecycle:changing';
+  await assert.rejects(previewDeletion(id, Array(51).fill(keep)), /1~50개/);
+  await assert.rejects(previewDeletion(id, [keep, keep]), /중복/);
+  await assert.rejects(previewDeletion(id, [keep, 'lifecycle:missing']), /사라졌습니다/);
+  const conflict = await previewDeletion(id, [keep, changing]);
+  cli(serverPort, [['SELECT', '3'], ['SET', changing, 'modified after review']]);
+  assert.equal((await applyDelete(id, conflict.token)).status, 'conflict');
+  assert.equal((await read(id, keep)).kind, 'string');
+  assert.equal((await read(id, changing)).rows[0][0].text, 'modified after review');
+
+  cli(serverPort, [['SELECT', '3'], ['SET', 'lifecycle:expiring', 'fixture', 'PX', '2200']]);
+  const expired = await previewDeletion(id, [keep, 'lifecycle:expiring']);
+  await delay((await read(id, 'lifecycle:expiring')).ttl_ms + 100);
+  assert.equal((await applyDelete(id, expired.token)).status, 'conflict');
+  assert.equal((await read(id, keep)).kind, 'string');
+
+  const binary = Buffer.from([0xff, 0x21, 0x00]);
+  const longName = 'lifecycle:' + '길'.repeat(180);
+  cli(serverPort, [['SELECT', '3'], ['SET', binary, 'binary-fixture'], ['SET', longName, 'long-fixture']]);
+  const reviewed = await previewDeletion(id, [binary, longName]);
+  assert.deepEqual(reviewed.keys.map(key => [key.text, key.encoding, key.truncated]), [['ff2100', 'hex', false], [longName, 'utf8', false]]);
+  await assert.rejects(applyDelete(id, reviewed.token, ''), /DELETE/);
+  await assert.rejects(applyDelete(id, reviewed.token, 'DELETE', ''), /PROD/);
+  await assert.rejects(applyEdit(id, reviewed.token), /다시 미리 보세요/);
+  assert.equal((await read(id, binary)).kind, 'string');
+  const applied = await applyDelete(id, reviewed.token);
+  assert.deepEqual([applied.status, applied.affected_count, applied.audit_warning], ['applied', 2, false]);
+  assert.equal((await read(id, binary)).kind, 'none');
+  assert.equal((await read(id, longName)).kind, 'none');
+  await assert.rejects(applyDelete(id, reviewed.token), /다시 미리 보세요/);
+  const unknown = await previewDeletion(id, [keep]);
+  secure.interruptNextExec();
+  await assert.rejects(applyDelete(id, unknown.token), /변경 결과를 확인할 수 없습니다/);
+  const audit = (await command('list_audit_events', { before: null })).events.filter(event => event.operation.startsWith('redis.key.delete'));
+  assert.ok(audit.some(event => event.outcome === 'succeeded' && event.affected_count === 2 && event.environment === 'PROD'));
+  assert.ok(audit.some(event => event.outcome === 'failed'));
+  assert.ok(audit.some(event => event.operation === 'redis.key.delete.unconfirmed' && event.outcome === 'started'));
+  assert.doesNotMatch(JSON.stringify(audit), /lifecycle:|ff2100|binary-fixture|long-fixture/);
+}
+
 async function main() {
   const port = await availablePort();
   const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no',
@@ -574,6 +691,9 @@ async function main() {
       ['SET', 'cache:string', '문자열 값'], ['SET', 'cache:ttl', 'temporary', 'PX', '180000'],
       ['SET', 'console:space key', 'quoted-key-value'],
       ['RPUSH', 'console:wide', ...Array.from({ length: 310 }, (_, index) => 'console-' + index)],
+      ['SET', 'lifecycle:ttl', 'ttl-value'], ['SET', 'lifecycle:keep', 'keep-value'],
+      ['SET', 'lifecycle:changing', 'changing-value'], ['SET', 'lifecycle:screen-ttl', 'screen-ttl-value'],
+      ['SET', 'lifecycle:screen-delete', 'screen-delete-value'],
       ['HSET', 'cache:hash', 'region', '서울'], ['SADD', 'cache:set', 'alpha', 'beta'],
       ['ZADD', 'cache:zset', '1.25', 'alpha', '3.5', 'beta'],
       ['SET', 'edit:string', '처음 값', 'PX', '180000'],
@@ -584,11 +704,12 @@ async function main() {
       ...Array.from({ length: 34 }, (_, index) => ['XADD', 'cache:stream', (index + 1) + '-0', 'status', 'ready']),
       ...Array.from({ length: 330 }, (_, index) => ['SET', 'noise:' + index, 'fixture']),
       ['ACL', 'SETUSER', 'fixture_reader', 'on', '>' + secret, '~*', '+info', '+select', '+scan', '+dbsize', '+type',
-        '+pttl', '+memory|usage', '+get', '+mget', '+ping', '+strlen', '+getrange', '+llen', '+lrange', '+zcard', '+zrange', '+hlen', '+hscan', '+scard',
+        '+pttl', '+memory|usage', '+exists', '+get', '+mget', '+ping', '+strlen', '+getrange', '+llen', '+lrange', '+zcard', '+zrange', '+hlen', '+hscan', '+scard',
         '+sscan', '+xlen', '+xrange', '+watch', '+unwatch', '+multi', '+exec', '+discard'],
       ['ACL', 'SETUSER', 'fixture_writer', 'on', '>' + secret, '~*',
         '+@read', '-keys', '+info', '+select', '+dbsize', '+memory|usage', '+watch', '+unwatch', '+multi', '+exec', '+discard',
-        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+slowlog|get', 'resetchannels', '&events:*', '+subscribe', '+psubscribe', '+publish'],
+        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+pexpire', '+persist', '+unlink',
+        '+slowlog|get', 'resetchannels', '&events:*', '+subscribe', '+psubscribe', '+publish'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '0'],
       ['SET', 'slowlog:fixture', 'example-private-slowlog-payload'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '-1'],
@@ -596,7 +717,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure);
-    console.log('Windows Redis E2E passed (ACL, TLS, read-only console, server monitor, Pub/Sub and six typed edits).');
+    console.log('Windows Redis E2E passed (ACL, TLS, console, monitor, Pub/Sub, typed edits, TTL and reviewed key deletion).');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
     throw error;

@@ -159,8 +159,10 @@ impl RedisManager {
 
     pub async fn server_snapshot(&self, id: &str) -> Result<RedisServerSnapshot> {
         let session = self.session(id)?;
-        self.run(id, &session, |state| Box::pin(monitor::snapshot(&mut state.wire)))
-            .await
+        self.run(id, &session, |state| {
+            Box::pin(monitor::snapshot(&mut state.wire))
+        })
+        .await
     }
 
     pub async fn preview_edit(
@@ -181,11 +183,44 @@ impl RedisManager {
             .await
     }
 
+    pub async fn preview_delete(
+        &self,
+        id: &str,
+        keys: Vec<String>,
+    ) -> Result<RedisKeyDeletePreview> {
+        let session = self.edit_session(id)?;
+        self.run(id, &session, |state| Box::pin(state.preview_delete(keys)))
+            .await
+    }
+
     pub async fn apply_edit(
         &self,
         id: &str,
         token: &str,
         confirmation: &str,
+    ) -> Result<RedisEditReport> {
+        self.apply_change(id, token, confirmation, false).await
+    }
+
+    pub async fn apply_delete(
+        &self,
+        id: &str,
+        token: &str,
+        confirmation: &str,
+        approval: &str,
+    ) -> Result<RedisEditReport> {
+        if approval != "DELETE" {
+            return Err("선택한 Redis 키를 삭제하려면 DELETE를 입력하세요.".into());
+        }
+        self.apply_change(id, token, confirmation, true).await
+    }
+
+    async fn apply_change(
+        &self,
+        id: &str,
+        token: &str,
+        confirmation: &str,
+        deleting: bool,
     ) -> Result<RedisEditReport> {
         let session = self.edit_session(id)?;
         let token = Uuid::parse_str(token).map_err(|_| "Redis 변경을 다시 미리 보세요.")?;
@@ -194,38 +229,36 @@ impl RedisManager {
         }
         let store = self.store.clone();
         let profile = session.profile.clone();
-        tokio::task::spawn_blocking(move || store.redis_profile(&profile.id, profile.revision))
-            .await
-            .map_err(|_| "Redis 연결 설정을 확인할 수 없습니다.")??;
-        let result = self
-            .run(id, &session, |state| Box::pin(state.apply(token)))
-            .await;
-        let (operation, outcome) = match &result {
-            Ok(report) if matches!(report.status, RedisEditStatus::Applied) => {
-                ("redis.key.edit", "succeeded")
+        tokio::task::spawn_blocking(move || {
+            store.redis_profile(&profile.id, profile.revision)?;
+            if deleting {
+                edit_audit(&store, &profile, token, "redis.key.delete", "started", None)?;
             }
-            Err(message) if message == UPDATE_UNKNOWN => ("redis.key.edit.unconfirmed", "started"),
-            _ => ("redis.key.edit", "failed"),
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|_| "Redis 연결 설정을 확인할 수 없습니다.")??;
+        let result = self
+            .run(id, &session, |state| Box::pin(state.apply(token, deleting)))
+            .await;
+        let (outcome, affected_count) = match &result {
+            Ok(report) if matches!(report.status, RedisEditStatus::Applied) => {
+                ("succeeded", Some(report.affected_count as i64))
+            }
+            Err(message) if message == UPDATE_UNKNOWN => ("started", None),
+            _ => ("failed", None),
+        };
+        let operation = match (deleting, outcome == "started") {
+            (false, false) => "redis.key.edit",
+            (false, true) => "redis.key.edit.unconfirmed",
+            (true, false) => "redis.key.delete",
+            (true, true) => "redis.key.delete.unconfirmed",
         };
         let store = self.store.clone();
         let profile = session.profile.clone();
         let audit_warning = !matches!(
             tokio::task::spawn_blocking(move || {
-                store.connect().and_then(|db| {
-                    insert_audit(
-                        &db,
-                        AuditRecord {
-                            correlation_id: &token.to_string(),
-                            operation,
-                            project_id: Some(&profile.project_id),
-                            profile_id: Some(&profile.id),
-                            environment: Some(&profile.settings.environment),
-                            object_name: None,
-                            outcome,
-                            affected_count: (outcome == "succeeded").then_some(1),
-                        },
-                    )
-                })
+                edit_audit(&store, &profile, token, operation, outcome, affected_count)
             })
             .await,
             Ok(Ok(()))
@@ -302,6 +335,29 @@ impl RedisManager {
     }
 }
 
+fn edit_audit(
+    store: &Store,
+    profile: &RedisProfile,
+    token: Uuid,
+    operation: &'static str,
+    outcome: &'static str,
+    affected_count: Option<i64>,
+) -> Result<()> {
+    insert_audit(
+        &store.connect()?,
+        AuditRecord {
+            correlation_id: &token.to_string(),
+            operation,
+            project_id: Some(&profile.project_id),
+            profile_id: Some(&profile.id),
+            environment: Some(&profile.settings.environment),
+            object_name: None,
+            outcome,
+            affected_count,
+        },
+    )
+}
+
 async fn establish(
     settings: &RedisSettings,
     connector: Option<native_tls::TlsConnector>,
@@ -361,7 +417,10 @@ async fn establish(
 }
 
 fn connector(settings: &RedisSettings) -> Result<Option<native_tls::TlsConnector>> {
-    settings.tls.then(|| tls::verified_connector(settings.ca_path.as_deref(), "Redis")).transpose()
+    settings
+        .tls
+        .then(|| tls::verified_connector(settings.ca_path.as_deref(), "Redis"))
+        .transpose()
 }
 
 async fn verify_status(wire: &mut Wire, args: &[&[u8]], status: &[u8]) -> Result<()> {
@@ -390,4 +449,7 @@ fn info_field<'a>(info: &'a str, field: &str) -> Option<&'a str> {
         .filter_map(|line| line.split_once(':'))
         .find_map(|(key, value)| (key == field).then_some(value))
 }
-pub use edit::{EditStatus as RedisEditStatus, RedisEditInput, RedisEditPreview, RedisEditReport};
+pub use edit::{
+    EditStatus as RedisEditStatus, RedisEditInput, RedisEditPreview, RedisEditReport,
+    RedisKeyDeletePreview,
+};

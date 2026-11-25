@@ -1,14 +1,20 @@
 use super::{
-    keys::{display, key_bytes, valid_stream_id, RedisBytes, DISPLAY_BYTES},
+    keys::{display, display_complete, key_bytes, valid_stream_id, RedisBytes, DISPLAY_BYTES},
     resp::{Failure, Reply, Wire},
 };
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant},
+};
 use uuid::Uuid;
 
 const LIFETIME: Duration = Duration::from_secs(300);
 const MAX_CHANGE_BYTES: usize = 1024 * 1024;
 const MAX_STREAM_FIELDS: usize = 64;
+const MAX_DELETE_KEYS: usize = 50;
+const MAX_DELETE_NAMES_BYTES: usize = 64 * 1024;
+const MAX_TTL_MS: u64 = 9_007_199_254_740_991;
 
 #[derive(Deserialize)]
 #[serde(tag = "encoding", rename_all = "snake_case", deny_unknown_fields)]
@@ -48,6 +54,9 @@ pub enum RedisEditInput {
     Stream {
         fields: Vec<StreamField>,
     },
+    Ttl {
+        milliseconds: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -56,8 +65,17 @@ pub struct RedisEditPreview {
     key: RedisBytes,
     kind: &'static str,
     ttl_ms: Option<u64>,
+    next_ttl_ms: Option<u64>,
     changes: Vec<Change>,
     stream_length: Option<i64>,
+    expires_seconds: u64,
+}
+
+#[derive(Serialize)]
+pub struct RedisKeyDeletePreview {
+    token: String,
+    kind: &'static str,
+    keys: Vec<RedisBytes>,
     expires_seconds: u64,
 }
 
@@ -80,6 +98,7 @@ pub enum EditStatus {
 pub struct RedisEditReport {
     pub status: EditStatus,
     pub entry_id: Option<String>,
+    pub affected_count: usize,
     pub audit_warning: bool,
 }
 
@@ -92,11 +111,15 @@ pub(super) struct State {
 struct Plan {
     token: Uuid,
     expires: Instant,
-    key: Vec<u8>,
-    change: Mutation,
+    change: PlannedChange,
 }
 
 type Bytes = Vec<u8>;
+
+enum PlannedChange {
+    Edit { key: Bytes, change: Mutation },
+    Delete(Vec<Bytes>),
+}
 
 enum Mutation {
     String(Bytes),
@@ -105,6 +128,7 @@ enum Mutation {
     Set(Bytes),
     Zset(Bytes, String),
     Stream(Vec<(Bytes, Bytes)>),
+    Ttl(Option<String>),
 }
 
 impl State {
@@ -134,20 +158,12 @@ impl State {
     ) -> Result<RedisEditPreview, Failure> {
         let key = key_bytes(&key)?;
         let change = Mutation::parse(input)?;
-        if self.plan.is_some() {
-            self.clear().await?;
-        }
-        status(&mut self.wire, &[b"WATCH", &key], b"OK").await?;
+        self.watch(&[b"WATCH", &key]).await?;
         let token = Uuid::new_v4();
         let preview = self.describe(&key, &change, token).await;
         match preview {
             Ok(preview) => {
-                self.plan = Some(Plan {
-                    token,
-                    expires: Instant::now() + LIFETIME,
-                    key,
-                    change,
-                });
+                self.remember(token, PlannedChange::Edit { key, change });
                 Ok(preview)
             }
             Err(error @ Failure::Server(_)) => {
@@ -158,6 +174,57 @@ impl State {
         }
     }
 
+    pub(super) async fn preview_delete(
+        &mut self,
+        keys: Vec<String>,
+    ) -> Result<RedisKeyDeletePreview, Failure> {
+        let keys = deletion_keys(keys)?;
+        self.watch(&key_command(b"WATCH", &keys)).await?;
+        let exists = self
+            .wire
+            .command(&key_command(b"EXISTS", &keys))
+            .await
+            .and_then(Reply::integer);
+        match exists {
+            Ok(count) if count == keys.len() as i64 => {}
+            Ok(_) => {
+                self.clear().await?;
+                return Err(Failure::Server(
+                    "선택한 키가 사라졌습니다. 목록을 새로 고친 뒤 다시 선택하세요.",
+                ));
+            }
+            Err(error @ Failure::Server(_)) => {
+                self.clear().await?;
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+        let token = Uuid::new_v4();
+        let preview = RedisKeyDeletePreview {
+            token: token.to_string(),
+            kind: "delete",
+            keys: keys.iter().map(|key| display_complete(key)).collect(),
+            expires_seconds: LIFETIME.as_secs(),
+        };
+        self.remember(token, PlannedChange::Delete(keys));
+        Ok(preview)
+    }
+
+    async fn watch(&mut self, command: &[&[u8]]) -> Result<(), Failure> {
+        if self.plan.is_some() {
+            self.clear().await?;
+        }
+        status(&mut self.wire, command, b"OK").await
+    }
+
+    fn remember(&mut self, token: Uuid, change: PlannedChange) {
+        self.plan = Some(Plan {
+            token,
+            expires: Instant::now() + LIFETIME,
+            change,
+        });
+    }
+
     async fn describe(
         &mut self,
         key: &[u8],
@@ -166,7 +233,7 @@ impl State {
     ) -> Result<RedisEditPreview, Failure> {
         let kind = change.kind();
         let actual = self.wire.command(&[b"TYPE", key]).await?.bytes()?;
-        if actual != kind.as_bytes() {
+        if actual == b"none" || (kind != "ttl" && actual != kind.as_bytes()) {
             return Err(Failure::Server(
                 "Redis 키가 사라졌거나 타입이 바뀌었습니다. 키를 다시 열어 주세요.",
             ));
@@ -175,12 +242,22 @@ impl State {
         if ttl == -2 {
             return Err(Failure::Server("Redis 키가 만료되었습니다."));
         }
+        if ttl == -1 && matches!(change, Mutation::Ttl(None)) {
+            return Err(Failure::Server(
+                "이 키에는 만료 시간이 설정되어 있지 않습니다.",
+            ));
+        }
+        let next_ttl_ms = match change {
+            Mutation::Ttl(Some(ms)) => ms.parse().ok(),
+            _ => None,
+        };
         let (changes, stream_length) = change.describe(&mut self.wire, key).await?;
         Ok(RedisEditPreview {
             token: token.to_string(),
             key: display(key, false),
             kind,
             ttl_ms: u64::try_from(ttl).ok(),
+            next_ttl_ms,
             changes,
             stream_length,
             expires_seconds: LIFETIME.as_secs(),
@@ -199,8 +276,14 @@ impl State {
         reset(&mut self.wire, b"UNWATCH").await
     }
 
-    pub(super) async fn apply(&mut self, token: Uuid) -> Result<RedisEditReport, Failure> {
-        if !self.plan.as_ref().is_some_and(|plan| plan.token == token) {
+    pub(super) async fn apply(
+        &mut self,
+        token: Uuid,
+        deleting: bool,
+    ) -> Result<RedisEditReport, Failure> {
+        if !self.plan.as_ref().is_some_and(|plan| {
+            plan.token == token && matches!(plan.change, PlannedChange::Delete(_)) == deleting
+        }) {
             return Err(Failure::Server(
                 "Redis 변경 미리보기가 만료되었거나 사용되었습니다. 다시 미리 보세요.",
             ));
@@ -212,7 +295,7 @@ impl State {
             }
             return Err(error);
         }
-        let command = plan.change.command(&plan.key);
+        let command = plan.change.command();
         if let Err(error) = status(&mut self.wire, &command, b"QUEUED").await {
             if matches!(error, Failure::Server(_)) {
                 reset(&mut self.wire, b"DISCARD").await?;
@@ -229,8 +312,8 @@ impl State {
             }
             Err(error) => return Err(error),
         };
-        let (status, entry_id) = match reply {
-            Reply::Null => (EditStatus::Conflict, None),
+        let (status, entry_id, affected_count) = match reply {
+            Reply::Null => (EditStatus::Conflict, None, 0),
             Reply::Array(mut replies) if replies.len() == 1 => {
                 plan.change.receipt(replies.remove(0))?
             }
@@ -240,8 +323,69 @@ impl State {
         Ok(RedisEditReport {
             status,
             entry_id,
+            affected_count,
             audit_warning: false,
         })
+    }
+}
+
+fn deletion_keys(ids: Vec<String>) -> Result<Vec<Bytes>, Failure> {
+    if ids.is_empty() || ids.len() > MAX_DELETE_KEYS {
+        return Err(Failure::Server(
+            "한 번에 삭제할 Redis 키를 1~50개 선택하세요.",
+        ));
+    }
+    let mut names = Vec::with_capacity(ids.len());
+    let mut seen = HashSet::new();
+    let mut bytes = 0;
+    for id in ids {
+        if id.len() > (MAX_DELETE_NAMES_BYTES + 2) / 3 * 4 {
+            return Err(Failure::Server(
+                "선택한 Redis 키 이름의 합계는 64 KiB 이하여야 합니다.",
+            ));
+        }
+        let key = key_bytes(&id)?;
+        bytes += key.len();
+        if bytes > MAX_DELETE_NAMES_BYTES {
+            return Err(Failure::Server(
+                "선택한 Redis 키 이름의 합계는 64 KiB 이하여야 합니다.",
+            ));
+        }
+        if !seen.insert(key.clone()) {
+            return Err(Failure::Server("중복된 키 없이 삭제 대상을 선택하세요."));
+        }
+        names.push(key);
+    }
+    Ok(names)
+}
+
+fn key_command<'a>(command: &'static [u8], keys: &'a [Bytes]) -> Vec<&'a [u8]> {
+    std::iter::once(command)
+        .chain(keys.iter().map(Vec::as_slice))
+        .collect()
+}
+
+impl PlannedChange {
+    fn command(&self) -> Vec<&[u8]> {
+        match self {
+            Self::Edit { key, change } => change.command(key),
+            Self::Delete(keys) => key_command(b"UNLINK", keys),
+        }
+    }
+
+    fn receipt(&self, reply: Reply) -> Result<(EditStatus, Option<String>, usize), Failure> {
+        match (self, reply) {
+            (Self::Edit { change, .. }, reply) => {
+                let (status, entry_id) = change.receipt(reply)?;
+                let affected = usize::from(matches!(status, EditStatus::Applied));
+                Ok((status, entry_id, affected))
+            }
+            (Self::Delete(_), Reply::Error) => Ok((EditStatus::Rejected, None, 0)),
+            (Self::Delete(keys), Reply::Integer(count)) if count == keys.len() as i64 => {
+                Ok((EditStatus::Applied, None, keys.len()))
+            }
+            _ => Err(Failure::Protocol),
+        }
     }
 }
 
@@ -349,6 +493,18 @@ impl Mutation {
                 }
                 Self::Stream(pairs)
             }
+            RedisEditInput::Ttl { milliseconds } => {
+                let ttl = milliseconds
+                    .map(|ms| {
+                        ms.parse::<u64>()
+                            .ok()
+                            .filter(|ms| (1..=MAX_TTL_MS).contains(ms))
+                            .map(|ms| ms.to_string())
+                            .ok_or(Failure::Server("만료 시간은 1ms 이상의 정수로 입력하세요."))
+                    })
+                    .transpose()?;
+                Self::Ttl(ttl)
+            }
         };
         let bytes: usize = change
             .command(&[])
@@ -370,6 +526,7 @@ impl Mutation {
             Self::Set(_) => "set",
             Self::Zset(..) => "zset",
             Self::Stream(_) => "stream",
+            Self::Ttl(_) => "ttl",
         }
     }
 
@@ -380,6 +537,8 @@ impl Mutation {
             Self::List(index, value) => vec![b"LSET", key, index.as_bytes(), value],
             Self::Set(member) => vec![b"SADD", key, member],
             Self::Zset(member, score) => vec![b"ZADD", key, score.as_bytes(), member],
+            Self::Ttl(Some(ms)) => vec![b"PEXPIRE", key, ms.as_bytes()],
+            Self::Ttl(None) => vec![b"PERSIST", key],
             Self::Stream(fields) => {
                 let mut command = vec![b"XADD".as_slice(), key, b"NOMKSTREAM", b"*"];
                 command.extend(
@@ -456,6 +615,7 @@ impl Mutation {
                     .collect();
                 return Ok((rows, Some(previous)));
             }
+            Self::Ttl(_) => return Ok((vec![], None)),
         };
         Ok((vec![row], None))
     }
@@ -464,11 +624,14 @@ impl Mutation {
         match (self, reply) {
             (_, Reply::Error) => Ok((EditStatus::Rejected, None)),
             (Self::String(_) | Self::Stream(_), Reply::Null) => Ok((EditStatus::Conflict, None)),
-            (Self::String(_) | Self::List(..), Reply::Simple(bytes) | Reply::Bytes(bytes)) if bytes == b"OK" => {
+            (Self::String(_) | Self::List(..), Reply::Simple(bytes) | Reply::Bytes(bytes))
+                if bytes == b"OK" =>
+            {
                 Ok((EditStatus::Applied, None))
             }
             (Self::Set(_), Reply::Integer(0)) => Ok((EditStatus::Conflict, None)),
-            (Self::Set(_), Reply::Integer(1))
+            (Self::Ttl(_), Reply::Integer(0)) => Ok((EditStatus::Conflict, None)),
+            (Self::Set(_) | Self::Ttl(_), Reply::Integer(1))
             | (Self::Hash(..) | Self::Zset(..), Reply::Integer(0 | 1)) => {
                 Ok((EditStatus::Applied, None))
             }

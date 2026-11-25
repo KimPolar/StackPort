@@ -39,6 +39,14 @@
 .redis-edit-stream-field { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
 .redis-edit-dialog .redis-values { max-height: 33vh; }
 .redis-edit-dialog .confirm-copy { overflow-wrap: anywhere; }
+.redis-keys .redis-key-list li { display: flex; align-items: flex-start; gap: 6px; }
+.redis-keys .redis-key-list li > input { flex: none; margin-top: 9px; }
+.redis-batch-selection { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+.redis-batch-selection > span { font-size: 12px; color: var(--text-muted); }
+.redis-delete-targets { padding-inline-start: 26px; margin: 0; }
+.redis-delete-targets li { padding: 3px 0; overflow-wrap: anywhere; }
+.redis-delete-targets code { white-space: pre-wrap; }
+.redis-ttl-preview { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; }
 .dialog.redis-monitor { width: min(760px, calc(100vw - 32px)); }
 .redis-monitor-body { display: grid; gap: 14px; padding: 0 21px 21px; }
 .redis-monitor-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }

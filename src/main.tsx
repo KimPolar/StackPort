@@ -2026,6 +2026,8 @@ const auditOperationNames: Record<string, string> = {
   "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
   "redis.key.edit": "Redis 키 편집",
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
+  "redis.key.delete": "Redis 키 삭제",
+  "redis.key.delete.unconfirmed": "Redis 키 삭제 결과 미확인",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.edit.row": "PostgreSQL 행 변경",
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",

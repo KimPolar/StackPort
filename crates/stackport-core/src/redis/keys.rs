@@ -307,7 +307,15 @@ pub(super) fn key_bytes(id: &str) -> Result<Vec<u8>, Failure> {
 }
 
 pub(super) fn display(bytes: &[u8], multiline: bool) -> RedisBytes {
-    let limit = bytes.len().min(DISPLAY_BYTES);
+    format_bytes(bytes, multiline, DISPLAY_BYTES)
+}
+
+pub(super) fn display_complete(bytes: &[u8]) -> RedisBytes {
+    format_bytes(bytes, false, bytes.len())
+}
+
+fn format_bytes(bytes: &[u8], multiline: bool, max_bytes: usize) -> RedisBytes {
+    let limit = bytes.len().min(max_bytes);
     let mut end = limit;
     let data = match std::str::from_utf8(&bytes[..limit]) {
         Ok(text) => Some(text),

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck, SquareTerminal } from "lucide-react";
+import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck, SquareTerminal, Timer, Trash2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
-import { RedisEditDialog, type RedisBytes, type RedisEditKind, type RedisEditReport } from "./RedisEditDialog";
+import { RedisEditDialog, type RedisBytes, type RedisEditTarget, type RedisEditReport } from "./RedisEditDialog";
 import { RedisServerMonitor } from "./RedisServerMonitor";
 import { RedisPubSubDialog } from "./RedisPubSubDialog";
 import { RedisConsoleDialog, type RedisConsoleEntry } from "./RedisConsoleDialog";
@@ -33,8 +33,10 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
   const [allowPublish, setAllowPublish] = useState(false);
-  const [editor, setEditor] = useState<{ key: Key; kind: RedisEditKind } | null>(null);
-  const [editReport, setEditReport] = useState<RedisEditReport | null>(null);
+  const [editor, setEditor] = useState<RedisEditTarget | null>(null);
+  const [editReport, setEditReport] = useState<(RedisEditReport & { deleted: boolean }) | null>(null);
+  const [selectingKeys, setSelectingKeys] = useState(false);
+  const [keySelection, setKeySelection] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [pattern, setPattern] = useState("");
@@ -82,6 +84,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
 
   function resetKeys() {
     setEditReport(null);
+    setKeySelection([]); setSelectingKeys(false);
     setCursors(["0"]); setSelected(null); setPositions([null]);
     setRevision(value => value + 1);
   }
@@ -114,8 +117,9 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     setSelected(key); setPositions([null]); setValueRevision(value => value + 1);
   }
 
-  const editable = session?.allow_edits && selected && detail.data && kinds.includes(detail.data.kind as Kind)
-    ? { key: selected, kind: detail.data.kind as RedisEditKind } : null;
+  const editable = session?.allow_edits && selected && detail.data && detail.data.kind !== "none" ? selected : null;
+  const valueEditor = editable && detail.data && kinds.includes(detail.data.kind as Kind)
+    ? { kind: detail.data.kind as Kind, keyId: editable.id, display: editable.display } : null;
 
   return <section className="redis-workspace" aria-label="Redis 작업 공간">
     <div className="content-header">
@@ -141,7 +145,15 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     {session && <div className="redis-layout">
       <section className="results-card redis-keys" aria-label="Redis 키 탐색">
         <div className="panel-heading"><h2>키</h2>
-          {page.data?.total != null && <span>DB 전체 {number.format(page.data.total)}개</span>}</div>
+          {page.data?.total != null && <span>DB 전체 {number.format(page.data.total)}개</span>}
+          {session.allow_edits && <button type="button" className="secondary small" aria-pressed={selectingKeys}
+            onClick={() => { setKeySelection([]); setSelectingKeys(!selectingKeys); }}>키 선택</button>}
+        </div>
+        {selectingKeys && <div className="redis-batch-selection">
+          <span>{keySelection.length}개 선택 · 현재 페이지에서 최대 50개</span>
+          <button type="button" className="secondary small" aria-haspopup="dialog" disabled={keySelection.length === 0}
+            onClick={() => setEditor({ kind: "delete", keyIds: keySelection })}>선택 키 삭제</button>
+        </div>}
         <form className="redis-search" onSubmit={event => { event.preventDefault(); setFilter({ pattern, kind: kind || null }); resetKeys(); }}>
           <label className="field">검색 패턴<input type="search" placeholder="예: cache:*" maxLength={1024}
             value={pattern} onChange={event => setPattern(event.target.value)} /></label>
@@ -154,6 +166,12 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         {page.error && <p className="error-banner" role="alert">{page.error}</p>}
         {page.data && <>
           <ul className="redis-key-list">{page.data.keys.map(key => <li key={key.id}>
+            {selectingKeys && <input type="checkbox" aria-label={`${key.display.text || "빈 키"} 선택`}
+              checked={keySelection.includes(key.id)} disabled={keySelection.length >= 50 && !keySelection.includes(key.id)}
+              onChange={event => {
+                const checked = event.target.checked;
+                setKeySelection(values => checked ? [...values, key.id] : values.filter(id => id !== key.id));
+              }} />}
             <button type="button" aria-current={selected?.id === key.id || undefined} onClick={() => chooseKey(key)}>
               {key.display.encoding === "hex" && <small>HEX</small>}
               <code>{key.display.text || "(빈 키)"}{key.display.truncated && "…"}</code>
@@ -163,21 +181,30 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         </>}
         <div className="redis-page" aria-label="키 탐색 페이지" role="group">
           <button className="secondary small" type="button" disabled={page.loading || cursors.length <= 1}
-            onClick={() => { setCursors(values => values.slice(0, -1)); setSelected(null); }}>이전 키</button>
+            onClick={() => { setCursors(values => values.slice(0, -1)); setSelected(null); setKeySelection([]); }}>이전 키</button>
           <span>{cursors.length} 페이지</span>
           <button className="secondary small" type="button" disabled={!page.data || page.data.cursor === "0" || page.data.cursor === cursor}
-            onClick={() => { if (page.data) setCursors(values => [...values, page.data!.cursor]); setSelected(null); }}>다음 키</button>
+            onClick={() => { if (page.data) setCursors(values => [...values, page.data!.cursor]); setSelected(null); setKeySelection([]); }}>다음 키</button>
         </div>
       </section>
       <section className="results-card redis-detail" aria-label="Redis 키 상세">
         <div className="panel-heading"><h2>{selected?.display.text || (selected ? "(빈 키)" : "키 상세")}{selected?.display.truncated && "…"}</h2>
           {selected && <div className="redis-detail-actions">
-            {editable && <button className="secondary small" type="button" aria-haspopup="dialog" onClick={() => setEditor(editable)}>
-              <Pencil size={14} aria-hidden /> 값 편집</button>}
+            {valueEditor &&
+              <button className="secondary small" type="button" aria-haspopup="dialog"
+                onClick={() => setEditor(valueEditor)}>
+                <Pencil size={14} aria-hidden /> 값 편집</button>}
+            {editable && <>
+              <button className="secondary small" type="button" aria-haspopup="dialog"
+                onClick={() => setEditor({ kind: "ttl", keyId: editable.id, display: editable.display })}><Timer size={14} aria-hidden /> 만료 설정</button>
+              <button className="secondary small" type="button" aria-haspopup="dialog"
+                onClick={() => setEditor({ kind: "delete", keyIds: [editable.id] })}><Trash2 size={14} aria-hidden /> 키 삭제</button>
+            </>}
             <button className="secondary small" type="button" disabled={detail.loading} onClick={() => chooseKey(selected)}>
               <RefreshCw size={14} aria-hidden /> 값 새로고침</button>
           </div>}</div>
-        {editReport && <p className="success-banner" role="status">Redis 변경 완료{editReport.entry_id && ` · 메시지 ${editReport.entry_id}`}
+        {editReport && <p className="success-banner" role="status">{editReport.deleted ? `Redis 키 ${number.format(editReport.affected_count)}개를 삭제했습니다.` : "Redis 변경 완료"}
+          {editReport.entry_id && ` · 메시지 ${editReport.entry_id}`}
           {editReport.audit_warning && <strong className="audit-warning">작업 기록을 저장할 수 없습니다.</strong>}</p>}
         {!selected && <p className="result-empty">값을 확인할 키를 선택하세요.</p>}
         {detail.loading && <p className="result-empty" role="status">값을 읽는 중…</p>}
@@ -203,9 +230,14 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
           {pending ? "연결 중…" : "연결"}</button></div>
       </form>
     </Dialog>}
-    {editor && session && <RedisEditDialog id={session.id} keyId={editor.key.id} display={editor.key.display} kind={editor.kind}
+    {editor && session && <RedisEditDialog id={session.id} target={editor} location={`${settings.name} · ${networkAddressText(settings)} / DB ${settings.database}`}
       environment={settings.environment} onBusy={onBusy} onFailure={handleFailure} onClose={() => setEditor(null)}
-      onApplied={report => { setEditor(null); chooseKey(editor.key); setEditReport(report); }} />}
+      onApplied={report => {
+        setEditor(null);
+        if (editor.kind === "delete") resetKeys();
+        else if (selected) chooseKey(selected);
+        setEditReport({ ...report, deleted: editor.kind === "delete" });
+      }} />}
     {monitorOpen && session && <RedisServerMonitor id={session.id} selectedDatabase={settings.database}
       target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`}
       onFailure={handleFailure} onClose={() => setMonitorOpen(false)} />}

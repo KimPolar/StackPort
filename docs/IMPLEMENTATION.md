@@ -18,6 +18,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 **변경 미리보기**는 `WATCH` 후 현재 값과 입력값을 표시합니다. 운영 연결은 적용할 때 `PROD`를 다시 입력하고, 5분 이내의 미리보기를 한 번 사용합니다. 앱은 `MULTI`와 `EXEC` 사이에 타입별 명령 하나만 넣습니다. 다른 클라이언트가 대상 키를 변경하거나 서버가 키를 만료시키면 Redis가 트랜잭션을 중단합니다. 적용 응답을 받기 전에 연결이 끊기면 재접속해 현재 값을 확인하도록 안내합니다. 기록에는 연결과 환경, 결과를 남깁니다. 값과 키 원문은 세션에서 사용합니다. [Redis 트랜잭션](https://redis.io/docs/latest/develop/using-commands/transactions/)
 
+**만료 설정**은 키의 현재 TTL과 적용 시점부터 남을 시간을 보여줍니다. 화면에서 초 단위로 입력하며 `PEXPIRE`로 설정하고 `PERSIST`로 해제합니다. 값은 변경하지 않습니다. [Redis PEXPIRE](https://redis.io/docs/latest/commands/pexpire/) · [Redis PERSIST](https://redis.io/docs/latest/commands/persist/)
+
+**키 삭제**는 개별 키나 현재 페이지에서 고른 최대 50개의 키를 검토합니다. 키 이름 합계는 64 KiB까지 지원하며, 바이너리 키를 포함한 이름 전체와 대상 서버·논리 DB·건수를 표시합니다. `DELETE`를 입력해 승인하고, 운영 환경에서는 `PROD`도 입력합니다. 모든 대상을 `WATCH`한 뒤 단일 `UNLINK`로 적용합니다. 하나라도 검토 뒤 변경되거나 만료되면 트랜잭션 전체가 중단됩니다. 삭제 시도와 결과는 키 이름 없이 감사 기록에 남깁니다. [Redis UNLINK](https://redis.io/docs/latest/commands/unlink/) · [Redis 트랜잭션](https://redis.io/docs/latest/develop/using-commands/transactions/)
+
 **서버 모니터**는 연결된 단독 서버의 `INFO`로 메모리·클라이언트·초당 작업·복제 상태와 DB별 키 수·만료 설정·평균 TTL을 읽습니다. `SLOWLOG GET` 권한이 있으면 최근 20건의 명령 이름, 시각, 실행 시간을 볼 수 있습니다. 명령 인수, 클라이언트 주소와 이름은 화면이나 작업 기록에 전달하지 않습니다. 슬로로그 권한이 제한된 계정도 다른 서버 통계를 계속 볼 수 있습니다. [Redis INFO](https://redis.io/docs/latest/commands/info/) · [Redis SLOWLOG GET](https://redis.io/docs/latest/commands/slowlog-get/)
 
 **Pub/Sub**는 별도 연결에서 채널 이름 하나 또는 패턴 하나를 구독합니다. Redis 논리 DB와 관계없이 서버 전체의 채널에 연결합니다. 연결이 끊기면 재접속을 시도하며, 실패할 때마다 다음 연결까지 대기 시간을 1초에서 늘려 최대 15초까지 기다립니다. 중단된 동안의 메시지는 다시 받지 못합니다. 구독 암호와 최근 100개의 수신 기록은 구독 세션 동안 메모리에 보관합니다. 메시지의 첫 512바이트를 텍스트 또는 HEX로 표시하고, 기록을 비우거나 구독을 종료할 수 있습니다. [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/)

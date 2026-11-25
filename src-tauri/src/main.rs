@@ -1014,6 +1014,14 @@ async fn apply_redis_edit(redis: State<'_, stackport_core::RedisManager>, id: St
     -> Result<stackport_core::RedisEditReport, String> { redis.apply_edit(&id, &token, &confirmation).await }
 
 #[tauri::command]
+async fn preview_redis_key_delete(redis: State<'_, stackport_core::RedisManager>, id: String, keys: Vec<String>)
+    -> Result<stackport_core::RedisKeyDeletePreview, String> { redis.preview_delete(&id, keys).await }
+
+#[tauri::command]
+async fn apply_redis_key_delete(redis: State<'_, stackport_core::RedisManager>, id: String, token: String, confirmation: String, approval: String)
+    -> Result<stackport_core::RedisEditReport, String> { redis.apply_delete(&id, &token, &confirmation, &approval).await }
+
+#[tauri::command]
 async fn create_postgres_profile(store: State<'_, Store>, project_id: String, input: PostgresProfileInput) -> Result<PostgresProfile, String> {
     let store = store.inner().clone();
     worker(move || store.create_postgres_profile(&project_id, input)).await
@@ -1999,6 +2007,8 @@ fn main() {
             preview_redis_edit,
             discard_redis_edit,
             apply_redis_edit,
+            preview_redis_key_delete,
+            apply_redis_key_delete,
             create_postgres_profile,
             update_postgres_profile,
             delete_postgres_profile,
