@@ -8,9 +8,9 @@ import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
-type Session = { id: string; database: string; version: string };
+type Session = { id: string; database: string; version: string; context?: string };
 type CatalogPage<T> = { items: T[]; has_next: boolean };
-type ServerObject = { id: number; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
+type ServerObject = { id: number | string; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
 const objectKind = { table: "테이블", view: "뷰", materialized_view: "구체화 뷰" };
 type Column = { name: string; data_type: string; nullable: boolean; identity: boolean };
 type DataPage = {
@@ -18,11 +18,11 @@ type DataPage = {
   stable_order: boolean; more_columns: boolean;
 };
 
-type Adapter = { engine: string; prefix: "sql_server" | "oracle" };
-type Profile = { id: string; revision: number; settings: { name: string; host: string; port: number; environment: string } };
+type Adapter = { engine: string; prefix: "sql_server" | "oracle" | "snowflake" };
+type Profile = { id: string; revision: number; settings: { name: string; host: string; port?: number; environment: string } };
 
-export function RelationalWorkspace({ profile, engine, prefix, database, passwordless = false, passwordLimit = 128, transportNote }: Adapter & {
-  profile: Profile; database: string; passwordless?: boolean; passwordLimit?: number; transportNote?: string;
+export function RelationalWorkspace({ profile, engine, prefix, database, passwordless = false, passwordLimit = 128, transportNote, tokenLabel }: Adapter & {
+  profile: Profile; database: string; passwordless?: boolean; passwordLimit?: number; transportNote?: string; tokenLabel?: string;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
@@ -36,6 +36,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
   const confirmationHint = useId();
   const { settings } = profile;
   const production = settings.environment === "PROD";
+  const endpoint = settings.port === undefined ? settings.host : networkAddressText({ host: settings.host, port: settings.port });
 
   useEffect(() => {
     mounted.current = true;
@@ -54,7 +55,9 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setPassword("");
     try {
-      const next = await invoke<Session>("open_" + prefix, { profileId: profile.id, revision: profile.revision, password, confirmation });
+      const next = await invoke<Session>("open_" + prefix, {
+        profileId: profile.id, revision: profile.revision, [tokenLabel ? "token" : "password"]: password, confirmation,
+      });
       if (!mounted.current) { await invoke("close_" + prefix, { id: next.id }); return; }
       active.current = next.id; setSession(next); closeLogin();
     } catch (cause) { if (mounted.current) setError(String(cause)); }
@@ -72,7 +75,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
     <header className="content-header">
       <div className="database-target">
         <h1><Database size={21} aria-hidden /><span>{settings.name}</span><span className={`environment ${settings.environment.toLowerCase()}`}>{settings.environment}</span></h1>
-        <p className="path">{engine} · {networkAddressText(settings)} / {session?.database ?? database}{session && ` · ${session.version}`}</p>
+        <p className="path">{engine} · {endpoint} / {session?.database ?? database}{session && <> · {session.version}{session.context && <> · {session.context}</>}</>}</p>
       </div>
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
@@ -84,9 +87,10 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
     {session && <Browse key={session.id} session={session} engine={engine} prefix={prefix} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
-        <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} / {database}</p>
+        <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
         {!passwordless
-          ? <label className="field">{engine} 암호<input autoFocus type="password" autoComplete="off" value={password} maxLength={passwordLimit}
+          ? <label className="field">{tokenLabel ?? engine + " 암호"}<input autoFocus type="password" autoComplete="off" value={password}
+            required={Boolean(tokenLabel)} maxLength={tokenLabel ? 16_384 : passwordLimit}
             disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
           : <p className="form-note">현재 Windows 계정으로 연결합니다.</p>}
         {transportNote && <p className="form-note">{transportNote}</p>}
@@ -172,7 +176,8 @@ function ObjectDetail({ id, object, revision, refresh, engine, prefix }: {
     {view === "data" ? <>
       <ReadStatus {...data} empty={data.data?.rows.length === 0} />
       {data.data && <>
-        {!data.data.stable_order && <p className="form-note mysql-table-note">기본 키가 없어 최대 50행을 한 번에 표시합니다.</p>}
+        {!data.data.stable_order && <p className="form-note mysql-table-note">{prefix === "snowflake"
+          ? "미리보기는 최대 50행을 표시합니다." : "기본 키가 없어 최대 50행을 한 번에 표시합니다."}</p>}
         {data.data.more_columns && <p className="form-note mysql-table-note">앞 64개 열을 표시합니다.</p>}
         {data.data.rows.length > 0 && <DatabasePreviewGrid columns={data.data.columns} rows={data.data.rows} label={engine + " 데이터 미리보기"} />}
       </>}

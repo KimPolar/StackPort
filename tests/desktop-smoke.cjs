@@ -1134,7 +1134,7 @@ async function verifyDatabaseExplorer(page) {
   assert.equal(await group.getAttribute('aria-description'), '연결 0개');
   await page.locator('#workspace-panes').getByRole('button', { name: '데이터베이스 연결 추가', exact: true }).click();
   const picker = page.getByRole('dialog', { name: '데이터베이스 연결 추가', exact: true });
-  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'MongoDB', 'Redis', 'SQL Server', 'Oracle Database']) {
+  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'MongoDB', 'Redis', 'SQL Server', 'Oracle Database', 'Snowflake']) {
     await picker.getByRole('button', { name: engine, exact: true }).waitFor();
   }
   await page.keyboard.press('Escape');
@@ -1148,6 +1148,7 @@ async function verifyDatabaseExplorer(page) {
     ['Redis', 'Redis 연결 추가', '연결 2'],
     ['SQL Server', 'SQL Server 연결 추가', '연결 5'],
     ['Oracle Database', 'Oracle Database 연결 추가', '연결 6'],
+    ['Snowflake', 'Snowflake 연결 추가', '연결 7'],
   ]) {
     await chooseDatabase(page, engine);
     const form = page.getByRole('dialog', { name: dialog, exact: true });
@@ -1157,6 +1158,13 @@ async function verifyDatabaseExplorer(page) {
     } else if (engine === 'MongoDB') {
       await form.getByLabel('연결 이름').fill(name);
       await form.getByLabel('MongoDB 연결 주소').fill('mongodb://localhost:27017');
+    } else if (engine === 'Snowflake') {
+      await form.getByLabel('연결 이름').fill(name);
+      await form.getByLabel('계정 식별자 또는 호스트').fill('stackport-test-account');
+      await form.getByLabel('데이터베이스 이름').fill('TEST_DB');
+      await form.getByLabel('웨어하우스 (선택)').fill('TEST_WH');
+      await form.getByLabel('역할 (선택)').fill('VIEWER');
+      await form.getByLabel('환경').selectOption('PROD');
     } else {
       await form.getByLabel('연결 이름').fill(name);
       await form.getByLabel('호스트 이름 또는 IP').fill('localhost');
@@ -1169,10 +1177,10 @@ async function verifyDatabaseExplorer(page) {
     await form.waitFor({ state: 'detached' });
   }
   const rows = explorer.locator('#explorer-databases .profile-row');
-  await rows.nth(6).waitFor();
-  assert.equal(await group.getAttribute('aria-description'), '연결 7개');
-  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 3', '연결 4', '연결 5', '연결 6', '연결 11', '연결 20']);
-  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'MongoDB', 'PostgreSQL', 'SQL Server', 'Oracle Database', 'MySQL · MariaDB', 'SQLite']);
+  await rows.nth(7).waitFor();
+  assert.equal(await group.getAttribute('aria-description'), '연결 8개');
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 3', '연결 4', '연결 5', '연결 6', '연결 7', '연결 11', '연결 20']);
+  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'MongoDB', 'PostgreSQL', 'SQL Server', 'Oracle Database', 'Snowflake', 'MySQL · MariaDB', 'SQLite']);
   await group.click();
   await rows.first().waitFor({ state: 'hidden' });
   const search = explorer.getByRole('searchbox', { name: '탐색기 검색', exact: true });
@@ -1182,7 +1190,7 @@ async function verifyDatabaseExplorer(page) {
   await search.press('Escape');
   assert.equal(await group.getAttribute('aria-expanded'), 'false');
   await group.click();
-  await rows.nth(6).waitFor();
+  await rows.nth(7).waitFor();
   await explorer.getByRole('button', { name: 'SQL Server 연결 5 열기', exact: true }).click();
   const sqlServer = page.getByRole('region', { name: 'SQL Server 작업 공간', exact: true });
   await sqlServer.getByRole('button', { name: 'SQL Server 연결', exact: true }).click();
@@ -1190,6 +1198,31 @@ async function verifyDatabaseExplorer(page) {
   await login.getByLabel('SQL Server 암호').waitFor();
   await login.getByRole('button', { name: '취소', exact: true }).click();
   await login.waitFor({ state: 'detached' });
+
+  await search.fill('test_wh');
+  await rows.first().waitFor();
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 7']);
+  await search.press('Escape');
+  await explorer.getByRole('button', { name: 'Snowflake 연결 7 열기', exact: true }).click();
+  const snowflake = page.getByRole('region', { name: 'Snowflake 작업 공간', exact: true });
+  await snowflake.getByText(/stackport-test-account\.snowflakecomputing\.com \/ TEST_DB/).waitFor();
+  await snowflake.getByRole('button', { name: 'Snowflake 연결', exact: true }).click();
+  const tokenDialog = page.getByRole('dialog', { name: 'Snowflake 연결', exact: true });
+  const token = tokenDialog.getByLabel('Snowflake 액세스 토큰 (PAT)', { exact: true });
+  assert.equal(await token.getAttribute('type'), 'password');
+  await token.fill('synthetic-token-never-submitted');
+  assert.equal(await tokenDialog.getByRole('button', { name: '연결', exact: true }).isDisabled(), true);
+  await page.keyboard.press('Escape');
+  await tokenDialog.waitFor({ state: 'detached' });
+  await explorer.getByRole('button', { name: '연결 7 Snowflake 연결 수정', exact: true }).click();
+  const edit = page.getByRole('dialog', { name: 'Snowflake 연결 수정', exact: true });
+  await edit.getByLabel('인증 방식', { exact: true }).selectOption('oauth');
+  await edit.getByRole('button', { name: '저장', exact: true }).click();
+  await edit.waitFor({ state: 'detached' });
+  await snowflake.getByRole('button', { name: 'Snowflake 연결', exact: true }).click();
+  assert.equal(await tokenDialog.getByLabel('Snowflake OAuth 액세스 토큰').inputValue(), '');
+  await tokenDialog.getByRole('button', { name: '취소', exact: true }).click();
+  await tokenDialog.waitFor({ state: 'detached' });
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

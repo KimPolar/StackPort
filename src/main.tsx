@@ -53,6 +53,7 @@ import { MongoWorkspace } from "./MongoWorkspace";
 import { SqlServerProfileDialog, type SqlServerProfile, type SqlServerProfileAction } from "./SqlServerProfileDialog";
 import { RelationalWorkspace } from "./RelationalWorkspace";
 import { OracleProfileDialog, ORACLE_TCP_NOTE, type OracleProfile, type OracleProfileAction } from "./OracleProfileDialog";
+import { SnowflakeProfileDialog, type SnowflakeProfile, type SnowflakeProfileAction } from "./SnowflakeProfileDialog";
 import { MysqlProfileDialog, type MysqlProfile, type MysqlProfileAction } from "./MysqlProfileDialog";
 import { MysqlWorkspace } from "./MysqlWorkspace";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
@@ -116,7 +117,7 @@ type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 type SshTrustEvent = { sequence: number; id: string; host: string; port: number; action: "accepted" | "replaced"; previous_fingerprint: string | null; fingerprint: string; occurred_at: string };
 type SshTrustPage = { events: SshTrustEvent[]; next_cursor: number | null };
 type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
-type NetworkEngine = "postgres" | "mysql" | "redis" | "mongo" | "sqlServer" | "oracle";
+type NetworkEngine = "postgres" | "mysql" | "redis" | "mongo" | "sqlServer" | "oracle" | "snowflake";
 
 const desktop = isTauri();
 const initialTheme = readThemePreference();
@@ -213,7 +214,11 @@ function App() {
   const [oracleAction, setOracleAction] = useState<OracleProfileAction | null>(null);
   const oracleId = networkProfile?.engine === "oracle" ? networkProfile.id : "";
   const oracleProfile = oracleProfiles.find(item => item.id === oracleId && item.project_id === projectId);
-  const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile && !mongoProfile && !sqlServerProfile && !oracleProfile;
+  const [snowflakeProfiles, setSnowflakeProfiles] = useState<SnowflakeProfile[]>([]);
+  const [snowflakeAction, setSnowflakeAction] = useState<SnowflakeProfileAction | null>(null);
+  const snowflakeId = networkProfile?.engine === "snowflake" ? networkProfile.id : "";
+  const snowflakeProfile = snowflakeProfiles.find(item => item.id === snowflakeId && item.project_id === projectId);
+  const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile && !mongoProfile && !sqlServerProfile && !oracleProfile && !snowflakeProfile;
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
@@ -440,6 +445,7 @@ function App() {
     setMongoProfiles([]); setMongoAction(null); setNetworkProfile(null);
     setSqlServerProfiles([]); setSqlServerAction(null);
     setOracleProfiles([]); setOracleAction(null);
+    setSnowflakeProfiles([]); setSnowflakeAction(null);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -459,6 +465,7 @@ function App() {
       if (desktop) call<MongoProfile[]>("list_mongo_profiles", { projectId }).then(items => { if (live) setMongoProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
       if (desktop) call<SqlServerProfile[]>("list_sql_server_profiles", { projectId }).then(items => { if (live) setSqlServerProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
       if (desktop) call<OracleProfile[]>("list_oracle_profiles", { projectId }).then(items => { if (live) setOracleProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      if (desktop) call<SnowflakeProfile[]>("list_snowflake_profiles", { projectId }).then(items => { if (live) setSnowflakeProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
   }, [projectId]);
@@ -1132,6 +1139,7 @@ function App() {
   const selectMongoProfile = (id: string) => selectNetworkProfile("mongo", id);
   const selectSqlServerProfile = (id: string) => selectNetworkProfile("sqlServer", id);
   const selectOracleProfile = (id: string) => selectNetworkProfile("oracle", id);
+  const selectSnowflakeProfile = (id: string) => selectNetworkProfile("snowflake", id);
 
   function openPostgresObject(target: PostgresFavorite) {
     selectPostgresProfile(target.profile_id);
@@ -1197,6 +1205,15 @@ function App() {
     if (oracleAction.kind === "create" && saved) selectOracleProfile(saved.id);
     if (!saved && previous === oracleId) setNetworkProfile(null);
     setOracleAction(null);
+  }
+
+  function saveSnowflakeProfile(saved: SnowflakeProfile | null) {
+    if (!snowflakeAction) return;
+    const previous = snowflakeAction.kind === "create" ? null : snowflakeAction.profile.id;
+    setSnowflakeProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
+    if (snowflakeAction.kind === "create" && saved) selectSnowflakeProfile(saved.id);
+    if (!saved && previous === snowflakeId) setNetworkProfile(null);
+    setSnowflakeAction(null);
   }
 
   function openSavedSsh(item: SshProfile) {
@@ -1302,6 +1319,7 @@ function App() {
       if (desktop) commands.push({ id: "create:mongo", title: "MongoDB 연결 추가", group: "작업", Icon: Database, run: () => setMongoAction({ kind: "create" }) });
       if (desktop) commands.push({ id: "create:sql-server", title: "SQL Server 연결 추가", group: "작업", Icon: Database, run: () => setSqlServerAction({ kind: "create" }) });
       if (desktop) commands.push({ id: "create:oracle", title: "Oracle Database 연결 추가", group: "작업", Icon: Database, run: () => setOracleAction({ kind: "create" }) });
+      if (desktop) commands.push({ id: "create:snowflake", title: "Snowflake 연결 추가", group: "작업", Icon: Database, run: () => setSnowflakeAction({ kind: "create" }) });
       if (desktop && sqliteWorkspace) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
@@ -1338,6 +1356,11 @@ function App() {
       id: `oracle:${item.id}`, title: item.settings.name, group: "Oracle Database 연결",
       detail: `${networkAddressText(item.settings)} / ${item.settings.service} · ${item.settings.environment}`,
       Icon: Database, run: () => selectOracleProfile(item.id),
+    });
+    for (const item of snowflakeProfiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `snowflake:${item.id}`, title: item.settings.name, group: "Snowflake 연결",
+      detail: `${item.settings.host} / ${item.settings.database} · ${item.settings.environment}`,
+      Icon: Database, run: () => selectSnowflakeProfile(item.id),
     });
     for (const item of sshProfiles.filter(item => item.project_id === projectId)) commands.push({
       id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
@@ -1535,6 +1558,9 @@ function App() {
     {oracleProfile && <div hidden={historyOpen}><RelationalWorkspace key={`${oracleProfile.id}:${oracleProfile.revision}`}
       engine="Oracle Database" prefix="oracle" profile={oracleProfile} database={oracleProfile.settings.service} passwordLimit={256}
       transportNote={oracleProfile.settings.transport === "tcp" ? ORACLE_TCP_NOTE : undefined} /></div>}
+    {snowflakeProfile && <div hidden={historyOpen}><RelationalWorkspace key={`${snowflakeProfile.id}:${snowflakeProfile.revision}`}
+      engine="Snowflake" prefix="snowflake" profile={snowflakeProfile} database={snowflakeProfile.settings.database}
+      tokenLabel={snowflakeProfile.settings.auth === "pat" ? "Snowflake 액세스 토큰 (PAT)" : "Snowflake OAuth 액세스 토큰"} /></div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
@@ -1898,6 +1924,7 @@ function App() {
           mongo={{ profiles: mongoProfiles, activeId: mongoId, open: selectMongoProfile, action: setMongoAction }}
           sqlServer={{ profiles: sqlServerProfiles, activeId: sqlServerId, open: selectSqlServerProfile, action: setSqlServerAction }}
           oracle={{ profiles: oracleProfiles, activeId: oracleId, open: selectOracleProfile, action: setOracleAction }}
+          snowflake={{ profiles: snowflakeProfiles, activeId: snowflakeId, open: selectSnowflakeProfile, action: setSnowflakeAction }}
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
@@ -1947,6 +1974,7 @@ function App() {
             { name: "MongoDB", Icon: Database, open: () => setMongoAction({ kind: "create" }) },
             { name: "SQL Server", Icon: Database, open: () => setSqlServerAction({ kind: "create" }) },
             { name: "Oracle Database", Icon: Database, open: () => setOracleAction({ kind: "create" }) },
+            { name: "Snowflake", Icon: Database, open: () => setSnowflakeAction({ kind: "create" }) },
           ] : []),
         ].map(({ name, Icon, open }) => <button type="button" key={name} className="secondary"
           onClick={() => { setDatabasePicker(false); open(); }}><Icon size={16} aria-hidden />{name}</button>)}
@@ -2073,6 +2101,7 @@ function App() {
     {mongoAction && project && <MongoProfileDialog action={mongoAction} projectId={project.id} onClose={() => setMongoAction(null)} onSaved={saveMongoProfile} />}
     {sqlServerAction && project && <SqlServerProfileDialog action={sqlServerAction} projectId={project.id} onClose={() => setSqlServerAction(null)} onSaved={saveSqlServerProfile} />}
     {oracleAction && project && <OracleProfileDialog action={oracleAction} projectId={project.id} onClose={() => setOracleAction(null)} onSaved={saveOracleProfile} />}
+    {snowflakeAction && project && <SnowflakeProfileDialog action={snowflakeAction} projectId={project.id} onClose={() => setSnowflakeAction(null)} onSaved={saveSnowflakeProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
@@ -2147,6 +2176,7 @@ const auditOperationNames: Record<string, string> = {
   "mongo_profile.create": "MongoDB 연결 추가", "mongo_profile.update": "MongoDB 연결 수정", "mongo_profile.delete": "MongoDB 연결 삭제",
   "sql_server_profile.create": "SQL Server 연결 추가", "sql_server_profile.update": "SQL Server 연결 수정", "sql_server_profile.delete": "SQL Server 연결 삭제",
   "oracle_profile.create": "Oracle Database 연결 추가", "oracle_profile.update": "Oracle Database 연결 수정", "oracle_profile.delete": "Oracle Database 연결 삭제",
+  "snowflake_profile.create": "Snowflake 연결 추가", "snowflake_profile.update": "Snowflake 연결 수정", "snowflake_profile.delete": "Snowflake 연결 삭제",
   "redis.key.edit": "Redis 키 편집",
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "redis.key.delete": "Redis 키 삭제",

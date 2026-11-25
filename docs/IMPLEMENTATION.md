@@ -18,6 +18,10 @@ SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개�
 
 Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
 
+**Snowflake**는 공식 SQL API에 Windows의 인증서 검증을 사용하는 HTTPS로 연결합니다. 계정 식별자 또는 계정 호스트, 데이터베이스, 선택한 웨어하우스와 역할, 인증 방식과 환경을 프로젝트에 저장합니다. PAT 또는 OAuth 액세스 토큰은 연결할 때 입력하며 운영 프로필에는 PROD 확인이 필요합니다. 업무 화면에 연결된 실제 역할과 웨어하우스를 표시합니다. [Snowflake SQL API](https://docs.snowflake.com/en/developer-guide/sql-api/intro) · [Snowflake 인증 방식](https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/authentication)
+
+Snowflake 작업 공간은 현재 역할로 볼 수 있는 데이터베이스의 스키마, 테이블, 뷰, 구체화 뷰를 검색합니다. 열 구조는 이름, 데이터 타입, NULL 허용 여부와 IDENTITY를 표시합니다. 미리보기는 최대 50행과 64열을 읽습니다. NUMBER의 정밀도를 문자열로 보존하고, 긴 문자와 바이너리 값은 앞 256문자 또는 256바이트를 표시합니다. [Snowflake TABLES](https://docs.snowflake.com/en/sql-reference/info-schema/tables) · [Snowflake COLUMNS](https://docs.snowflake.com/en/sql-reference/info-schema/columns)
+
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
@@ -446,6 +450,10 @@ Oracle 검사는 `tests/oracle-smoke.cjs`를 사용합니다. `STACKPORT_ORACLE_
 Oracle AI Database 26ai Free 23.26.4.0.0에서 Windows 앱의 서비스 이름·SID 로그인, 네이티브 TCPS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰·구체화 뷰, NUMBER·유니코드·RAW·LOB 표시와 복합 기본 키 페이징을 확인했습니다.
 
 시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다.
+
+Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소를 검증합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
+
+실제 계정에 대한 Windows 검사는 `tests/snowflake-smoke.cjs`를 사용합니다. 시험용 계정의 `STACKPORT_SNOWFLAKE_TEST_ACCOUNT`, `STACKPORT_SNOWFLAKE_TEST_DATABASE`, `STACKPORT_SNOWFLAKE_TEST_SCHEMA`, `STACKPORT_SNOWFLAKE_TEST_OBJECT`, `STACKPORT_SNOWFLAKE_TEST_TOKEN`을 지정합니다. 객체에는 미리보기에 사용할 행이 한 개 이상 있어야 합니다. 필요하면 `STACKPORT_SNOWFLAKE_TEST_WAREHOUSE`, `STACKPORT_SNOWFLAKE_TEST_ROLE`, OAuth 사용 시 `STACKPORT_SNOWFLAKE_TEST_AUTH=oauth`를 지정합니다. 격리된 Windows 앱의 디버깅 주소는 `STACKPORT_CDP_URL`로 지정합니다.
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 

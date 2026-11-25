@@ -10,7 +10,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
-    "SP-UI-002": "이름순 단일 데이터베이스 연결 목록·행별 엔진 표시·엔진 선택형 등록(Oracle 포함), 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
+    "SP-UI-002": "이름순 단일 데이터베이스 연결 목록·행별 엔진 표시·명세 9종 엔진 선택형 등록, 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "탐색기에서 연결과 즐겨찾기·SQLite 객체 필터링, 연결된 PostgreSQL에 이름·스키마 객체 검색 제출 및 명령 팔레트 검색",
@@ -78,13 +78,13 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB·SQL Server·Oracle 읽기 전용 탐색·데이터 미리보기, MongoDB 읽기 전용 컬렉션·문서 탐색, Redis 단독 서버 키 탐색·타입별 편집",
-    "SP-DB-004": "PostgreSQL·MySQL 계열·SQL Server 호스트·포트·DB·사용자와 환경, Oracle 호스트·포트·서비스 이름·SID·사용자와 환경",
-    "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 서버 인증서 검증과 SSH 터널·점프 호스트, MySQL 계열 PEM 클라이언트 인증, MongoDB·SQL Server·Oracle 서버 인증서 검증과 선택적 PEM CA",
-    "SP-DB-006": "PostgreSQL·MySQL 계열·SQL Server·Oracle 세션별 사용자 이름·암호 인증, SQL Server Windows 통합 인증 설정",
-    "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열·SQL Server·Oracle 연결 정의",
-    "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL·MySQL 계열·SQL Server·Oracle 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시, Oracle 구체화 뷰 표시",
-    "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션, MySQL·MariaDB 열·인덱스·제약조건·양방향 외래 키, SQL Server·Oracle 열 타입·NULL·IDENTITY",
+    "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB·SQL Server·Oracle·Snowflake 읽기 전용 탐색·데이터 미리보기, MongoDB 읽기 전용 컬렉션·문서 탐색, Redis 단독 서버 키 탐색·타입별 편집. Snowflake 실제 계정 검증 대기",
+    "SP-DB-004": "PostgreSQL·MySQL 계열·SQL Server 호스트·포트·DB·사용자와 환경, Oracle 호스트·포트·서비스 이름·SID·사용자와 환경, Snowflake 계정 호스트·데이터베이스·웨어하우스·역할·환경",
+    "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 서버 인증서 검증과 SSH 터널·점프 호스트, MySQL 계열 PEM 클라이언트 인증, MongoDB·SQL Server·Oracle 서버 인증서 검증과 선택적 PEM CA, Snowflake HTTPS 인증서 검증",
+    "SP-DB-006": "PostgreSQL·MySQL 계열·SQL Server·Oracle 세션별 사용자 이름·암호 인증, SQL Server Windows 통합 인증 설정, Snowflake 세션별 PAT·OAuth 액세스 토큰",
+    "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 연결 정의",
+    "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시, Oracle·Snowflake 구체화 뷰 표시",
+    "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션, MySQL·MariaDB 열·인덱스·제약조건·양방향 외래 키, SQL Server·Oracle·Snowflake 열 타입·NULL·IDENTITY",
     "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람, PostgreSQL 뷰 조회 정의와 인덱스·트리거 생성 SQL 및 열·제약조건·파티션의 정의 일부 복사·저장, MySQL·MariaDB 테이블·뷰의 생성 SQL 열람·복사·저장",
     "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기, MySQL·MariaDB 인덱스 열·식·순서·접두 길이·가시성·고유값 추정치 열람",
@@ -477,6 +477,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009", "SP-DB-010"}:
                 evidence += "; crates/stackport-core/src/sql_server.rs; crates/stackport-core/src/sql_server/catalog.rs; src/RelationalWorkspace.tsx; tests/sql-server-smoke.cjs"
                 evidence += "; crates/stackport-core/src/oracle.rs; crates/stackport-core/src/oracle/catalog.rs; src/OracleProfileDialog.tsx; tests/oracle-smoke.cjs"
+                evidence += "; crates/stackport-core/src/snowflake.rs; crates/stackport-core/src/snowflake/api/tests.rs; src/SnowflakeProfileDialog.tsx; tests/snowflake-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009", "SP-DB-010", "SP-DB-022"}:
                 evidence += "; crates/stackport-core/src/mysql.rs; crates/stackport-core/tests/mysql_profiles.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id == "SP-AT-006":

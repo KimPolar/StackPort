@@ -3,7 +3,7 @@
 mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
-use stackport_core::{oracle, sql_server};
+use stackport_core::{oracle, snowflake, sql_server};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -1058,6 +1058,57 @@ async fn oracle_columns(manager: State<'_, oracle::Manager>, id: String, object:
 #[tauri::command]
 async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32)
     -> Result<oracle::DataPage, String> { manager.data(&id, object, page).await }
+
+#[tauri::command]
+async fn list_snowflake_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<snowflake::Profile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_snowflake_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_snowflake_profile(store: State<'_, Store>, project_id: String, input: snowflake::ProfileSettings) -> Result<snowflake::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_snowflake_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_snowflake_profile(store: State<'_, Store>, id: String, revision: i64, input: snowflake::ProfileSettings) -> Result<snowflake::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_snowflake_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_snowflake_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_snowflake_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_snowflake(manager: State<'_, snowflake::Manager>, profile_id: String, revision: i64,
+    token: snowflake::AccessToken, confirmation: String) -> Result<snowflake::SessionInfo, String> {
+    manager.open(profile_id, revision, token, confirmation).await
+}
+
+#[tauri::command]
+async fn close_snowflake(manager: State<'_, snowflake::Manager>, id: String) -> Result<(), String> {
+    manager.close(&id)
+}
+
+#[tauri::command]
+async fn snowflake_schemas(manager: State<'_, snowflake::Manager>, id: String, search: String, page: u32)
+    -> Result<snowflake::CatalogPage<String>, String> { manager.schemas(&id, search, page).await }
+
+#[tauri::command]
+async fn snowflake_objects(manager: State<'_, snowflake::Manager>, id: String, schema: String, search: String, page: u32)
+    -> Result<snowflake::CatalogPage<snowflake::Object>, String> { manager.objects(&id, schema, search, page).await }
+
+#[tauri::command]
+async fn snowflake_columns(manager: State<'_, snowflake::Manager>, id: String, object: String)
+    -> Result<snowflake::CatalogPage<snowflake::Column>, String> { manager.columns(&id, object).await }
+
+#[tauri::command]
+async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, object: String, page: u32)
+    -> Result<snowflake::DataPage, String> { manager.data(&id, object, page).await }
 
 #[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
@@ -2193,6 +2244,7 @@ fn main() {
             app.manage(stackport_core::MongoManager::new(store.clone()));
             app.manage(sql_server::Manager::new(store.clone()));
             app.manage(oracle::Manager::new(store.clone()));
+            app.manage(snowflake::Manager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -2322,6 +2374,16 @@ fn main() {
             oracle_objects,
             oracle_columns,
             oracle_data,
+            list_snowflake_profiles,
+            create_snowflake_profile,
+            update_snowflake_profile,
+            delete_snowflake_profile,
+            open_snowflake,
+            close_snowflake,
+            snowflake_schemas,
+            snowflake_objects,
+            snowflake_columns,
+            snowflake_data,
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,

@@ -19,7 +19,7 @@ socket2 = "0.6"
 tempfile = "3.0"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 url = "2.5.8"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 zeroize = "1.9"
 tokio-postgres = "0.7.18"
 postgres-native-tls = "0.5"
@@ -30,9 +30,15 @@ mongodb = { version = "=3.10.2", default-features = false, features = ["compat-3
 bson = { version = "3.1", features = ["serde_json-1"] }
 tiberius = "=0.13.0"
 oracledb = "=26.0.0-beta.6"
+reqwest = { version = "=0.13.5", default-features = false, features = ["gzip", "json", "native-tls", "system-proxy"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "0.8"
+
+[dev-dependencies]
+flate2 = "1"
+rcgen = "0.14.10"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 
 [target.'cfg(all(windows, target_arch = "x86_64"))'.dependencies]
 aws-lc-sys = { version = "0.47", features = ["prebuilt-nasm"] }
