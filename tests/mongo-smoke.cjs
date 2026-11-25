@@ -311,12 +311,16 @@ async function verifyDocumentEditor(page, workspace, detail) {
   const edit = dialog('MongoDB 문서 수정');
   const input = edit.getByLabel('문서 Extended JSON', { exact: true });
   await input.waitFor().catch(async error => { throw new Error(await edit.innerText(), { cause: error }); });
-  const source = JSON.parse(await input.inputValue());
+  const original = await input.inputValue();
+  const source = JSON.parse(original);
   assert.equal(source.exact.$numberLong, '9223372036854775807');
   assert.equal(source.z['a.b'], 'literal');
-  source.title = '편집한 문서';
-  source.z.values.push({ new_field: true });
-  await input.fill(JSON.stringify(source));
+  await input.fill('{"nested":');
+  await button(edit, '그리드').click();
+  await edit.getByRole('alert').waitFor();
+  assert.equal(await input.inputValue(), '{"nested":');
+  await input.fill(original);
+  await verifyStructuredDraft(edit, input, button);
   await button(edit, '변경 검토').click();
   await edit.getByRole('region', { name: '변경 후 문서', exact: true }).getByText(/편집한 문서/u).waitFor();
   assert.equal(await button(edit, '검토한 변경 적용').isDisabled(), true);
@@ -331,7 +335,10 @@ async function verifyDocumentEditor(page, workspace, detail) {
   await copyInput.waitFor();
   const copied = JSON.parse(await copyInput.inputValue());
   assert.equal('_id' in copied, false);
-  assert.deepEqual(copied.z.values.at(-1), { new_field: true });
+  assert.deepEqual(copied.z.values[1], { new_field: true });
+  assert.equal(copied.z.values.at(-1), 'keep');
+  assert.equal(copied.z['literal.dot'], 'literal');
+  assert.equal(copied.added_long.$numberLong, '9223372036854775806');
   copied.title = '복제 문서';
   await copyInput.fill(JSON.stringify(copied));
   await button(copy, '변경 검토').click();
@@ -362,6 +369,54 @@ async function verifyDocumentEditor(page, workspace, detail) {
   await second.locator('summary').click();
   assert.equal(JSON.parse(await second.getByLabel('Canonical Extended JSON').textContent()).title, '새 문서');
   await button(workspace, 'MongoDB 연결 끊기').click();
+}
+
+async function verifyStructuredDraft(edit, input, button) {
+  await button(edit, '트리').click();
+  const tree = edit.getByRole('group', { name: '문서 트리', exact: true });
+  await button(tree, '문서._id 펼치기').click();
+  await button(tree, '문서._id.number 선택').click();
+  await edit.getByText('_id 유지', { exact: true }).waitFor();
+  assert.equal(await button(edit, '값 바꾸기').count(), 0);
+  await button(tree, '문서.z 펼치기').click();
+  await button(tree, '문서.z["a.b"] 선택').click();
+  await button(edit, '이름 변경').click();
+  await edit.getByLabel('필드 이름', { exact: true }).fill('literal.dot');
+  assert.equal(await button(edit, '변경 검토').isDisabled(), true);
+  await button(edit, '초안에 반영').click();
+  await button(tree, '문서.z["literal.dot"] 선택').waitFor();
+  await button(tree, '문서.z.values 선택').click();
+  await button(edit, '항목 추가').click();
+  const value = edit.getByLabel('값 Extended JSON', { exact: true });
+  await value.fill('{"new_field":true}');
+  await button(edit, '초안에 반영').click();
+  await tree.getByRole('button', { name: '문서.z.values[2] 선택', pressed: true, exact: true }).waitFor();
+  await button(edit, '위로 이동').click();
+  await tree.getByRole('button', { name: '문서.z.values[1] 선택', pressed: true, exact: true }).waitFor();
+
+  await button(edit, '그리드').click();
+  const grid = edit.getByRole('table', { name: '문서 그리드', exact: true });
+  const path = edit.getByRole('navigation', { name: '문서 경로', exact: true });
+  await grid.getByRole('rowheader', { name: 'new_field', exact: true }).waitFor();
+  await button(path, '문서').click();
+  await button(grid, '문서.title 값 편집').click();
+  await value.fill('"편집한 문서"');
+  await button(edit, '초안에 반영').click();
+  await value.waitFor({ state: 'detached' });
+  await button(path, '문서').click();
+  await button(edit, '필드 추가').click();
+  await edit.getByLabel('필드 이름', { exact: true }).fill('added_long');
+  await edit.getByLabel('BSON 값 예시', { exact: true }).selectOption({ label: 'Int64' });
+  assert.equal(await value.inputValue(), '{"$numberLong":"0"}');
+  await value.fill('{"$numberLong":"9223372036854775806"}');
+  await button(edit, '초안에 반영').click();
+  await grid.getByRole('rowheader', { name: 'added_long', exact: true }).waitFor();
+  await button(edit, 'JSON').click();
+  const changed = JSON.parse(await input.inputValue());
+  assert.equal(changed.title, '편집한 문서');
+  assert.equal(changed.exact.$numberLong, '9223372036854775807');
+  assert.equal(changed.added_long.$numberLong, '9223372036854775806');
+  assert.deepEqual(changed.z.values[1], { new_field: true });
 }
 
 async function verifyPipeline(page, detail) {
@@ -449,7 +504,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, schema and pipelines, reviewed writes and concurrent document/collection changes).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, schema, pipelines, JSON/tree/grid editing and concurrent-change protection).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

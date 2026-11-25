@@ -42,12 +42,22 @@ pub(super) fn canonical(document: &Document) -> Result<String> {
 }
 
 pub(super) fn canonical_id(id: &Bson) -> Option<String> {
-    serde_json::to_string(&Canonical(id))
-        .ok()
-        .filter(|text| text.len() <= 256)
+    canonical_value(id).ok().filter(|text| text.len() <= 256)
 }
 
 struct Canonical<'a>(&'a Bson);
+
+pub(super) fn canonical_value(value: &Bson) -> Result<String> {
+    serde_json::to_string(&Canonical(value)).map_err(|_| INVALID.into())
+}
+
+pub(super) fn parse_value(text: &str) -> Result<Bson> {
+    if text.len() > MAX_BYTES {
+        return Err(INVALID.into());
+    }
+    validate_json_keys(text, 0)?;
+    serde_json::from_str(text).map_err(|_| "올바른 Extended JSON 값을 입력하세요.".into())
+}
 
 impl Serialize for Canonical<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
@@ -101,7 +111,7 @@ fn as_raw(document: &Document) -> Result<RawDocumentBuf> {
     RawDocumentBuf::try_from(document).map_err(|_| INVALID.into())
 }
 
-fn validate_document(document: &Document) -> Result<()> {
+pub(super) fn validate_document(document: &Document) -> Result<()> {
     validate_value(&Bson::Document(document.clone()), 0, &mut 0)?;
     if as_raw(document)?.as_bytes().len() > MAX_BYTES {
         return Err(INVALID.into());

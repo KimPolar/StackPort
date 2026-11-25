@@ -1,15 +1,20 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { MongoDocumentStructure, type MongoDraftChange, type MongoDraftStructure } from "./MongoDocumentStructure";
 
 export type MongoDocumentChange = { kind: "insert" } | { kind: "replace" | "duplicate" | "delete"; document_id: string };
 type Draft = { token: string; draft: string | null };
 type Review = { token: string; before: string | null; after: string | null; expires_seconds: number };
+type EditorMode = "json" | "tree" | "grid";
 export type MongoEditReport = { affected_count: number; audit_warning: boolean };
 
 const titles: Record<MongoDocumentChange["kind"], string> = {
   insert: "MongoDB 문서 삽입", replace: "MongoDB 문서 수정", duplicate: "MongoDB 문서 복제", delete: "MongoDB 문서 삭제",
 };
+const editorModes: { mode: EditorMode; name: string }[] = [
+  { mode: "json", name: "JSON" }, { mode: "tree", name: "트리" }, { mode: "grid", name: "그리드" },
+];
 
 export function MongoDocumentEditDialog({ id, database, collection, environment, change, onBusy, onClose, onApplied }: {
   id: string; database: string; collection: string; environment: string; change: MongoDocumentChange;
@@ -18,6 +23,9 @@ export function MongoDocumentEditDialog({ id, database, collection, environment,
   const inputId = useId();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [text, setText] = useState("");
+  const [editorMode, setEditorMode] = useState<EditorMode>("json");
+  const [structure, setStructure] = useState<MongoDraftStructure | null>(null);
+  const [fieldEditing, setFieldEditing] = useState(false);
   const [review, setReview] = useState<Review | null>(null);
   const [approval, setApproval] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -60,9 +68,33 @@ export function MongoDocumentEditDialog({ id, database, collection, environment,
     setConfirmation("");
   }
 
+  async function updateStructure(operation: MongoDraftChange | null) {
+    if (pending.current) return false;
+    pending.current = true; setBusy(true); setError("");
+    try {
+      const result = await invoke<MongoDraftStructure>("edit_mongo_document_draft", { input: text, change: operation, keepId: change.kind === "replace" });
+      if (operation) setText(result.text);
+      setStructure(result);
+      return true;
+    } catch (reason) {
+      setError(String(reason));
+      return false;
+    } finally {
+      pending.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function selectEditor(mode: EditorMode) {
+    if (mode === editorMode || fieldEditing || pending.current) return;
+    if (mode !== "json" && (editorMode === "json" || !structure) && !await updateStructure(null)) return;
+    setError("");
+    setEditorMode(mode);
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!draft || pending.current || missingApproval) return;
+    if (!draft || pending.current || missingApproval || fieldEditing) return;
     pending.current = true; setBusy(true); setError("");
     if (review) onBusy(true);
     try {
@@ -101,11 +133,16 @@ export function MongoDocumentEditDialog({ id, database, collection, environment,
         {production && <label className="field">운영 환경 확인<input autoComplete="off" placeholder="PROD" value={confirmation} disabled={busy}
           onChange={event => setConfirmation(event.target.value)} /></label>}
       </> : deleting ? <p className="form-note">삭제할 문서의 전체 내용을 확인하세요.</p> : <>
-        <div className="field">
+        <div className="mongo-structure-controls" role="group" aria-label="문서 편집 보기">
+          {editorModes.map(({ mode, name }) => <button key={mode} type="button" className="secondary small" aria-pressed={editorMode === mode}
+            disabled={busy || fieldEditing} onClick={() => void selectEditor(mode)}>{name}</button>)}
+        </div>
+        {editorMode === "json" ? <div className="field">
           <label htmlFor={inputId}>문서 Extended JSON</label>
           <textarea id={inputId} className="mongo-edit-input" rows={13} spellCheck={false} maxLength={65536}
             value={text} disabled={busy} onChange={event => setText(event.target.value)} />
-        </div>
+        </div> : structure && <MongoDocumentStructure mode={editorMode} root={structure.root} keepId={change.kind === "replace"}
+          busy={busy} onChange={updateStructure} onEditing={setFieldEditing} />}
         <p className="form-note">{change.kind === "replace" ? "기존 문서의 _id를 유지하세요." : "_id를 생략하면 새 ObjectId를 생성합니다."}</p>
       </>)}
       {error && <p className="form-error" role="alert">{error}</p>}
@@ -113,7 +150,7 @@ export function MongoDocumentEditDialog({ id, database, collection, environment,
         {review && <button type="button" className="secondary" disabled={busy} onClick={() => { backToDraft(); setError(""); }}>편집으로 돌아가기</button>}
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
         {draft && <button type="submit" className={deleting && review ? "danger" : "primary"}
-          disabled={busy || missingApproval || (!deleting && !text.trim())}>{review ? "검토한 변경 적용" : "변경 검토"}</button>}
+          disabled={busy || fieldEditing || missingApproval || (!deleting && !text.trim())}>{review ? "검토한 변경 적용" : "변경 검토"}</button>}
       </div>
     </form>
   </Dialog>;

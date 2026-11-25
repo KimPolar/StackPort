@@ -33,6 +33,26 @@
 .mongo-edit-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 9px; }
 .mongo-edit-compare section { min-width: 0; font-size: 12px; }
 .mongo-edit-compare pre { max-height: 32dvh; margin-top: 5px; overflow: auto; }
+.mongo-structure-controls, .mongo-structure-breadcrumb, .mongo-structure-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-block: 7px; }
+.mongo-structure-controls button[aria-pressed="true"], .mongo-structure button[aria-pressed="true"] { color: var(--text-accent); background: var(--surface-selected); }
+.mongo-structure-browser { max-height: 32dvh; overflow: auto; border: 1px solid var(--border); border-radius: 5px; }
+.mongo-structure-browser table { width: 100%; }
+.mongo-structure-browser .object-row { min-width: 0; width: 100%; }
+.mongo-structure-root { padding-inline: 8px; }
+.mongo-structure-tree { list-style: none; margin: 0; padding-inline: 5px 0; }
+.mongo-structure-tree .mongo-structure-tree { margin-inline-start: 16px; border-inline-start: 1px solid var(--divider); }
+.mongo-structure-branch { display: flex; align-items: center; min-width: 0; gap: 2px; }
+.mongo-structure-branch .icon-button, .mongo-structure-indent { flex: 0 0 26px; width: 26px; height: 26px; }
+.mongo-structure-branch .object-row { display: flex; justify-content: flex-start; gap: 9px; }
+.mongo-structure-branch strong, .mongo-structure-branch code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mongo-structure-branch small, .mongo-structure-actions small { font-size: 11px; color: var(--text-muted); }
+.mongo-structure-actions strong { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.mongo-structure-form { min-width: 0; margin: 8px 0 0; padding: 8px; border: 1px solid var(--border); border-radius: 5px; }
+.mongo-structure-form legend { padding-inline: 5px; font-size: 12px; }
+.mongo-structure-form .field { margin-bottom: 6px; }
+.mongo-structure-value-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.mongo-structure-value-heading select { width: auto; height: 30px; }
+@media (forced-colors: active) { .mongo-structure button[aria-pressed="true"], .mongo-structure-controls button[aria-pressed="true"] { outline: 1px solid Highlight; outline-offset: -1px; } }
 .mongo-schema-controls { font-size: 12px; }
 .mongo-schema-controls :is(select, input[type="search"]) { min-height: 32px; min-width: 0; padding: 0 8px; color: var(--text); background: var(--surface); border: 1px solid var(--control-border); border-radius: 5px; }
 .mongo-schema-controls input[type="search"] { flex: 1 1 150px; }

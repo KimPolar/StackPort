@@ -149,7 +149,7 @@ impl Sample {
     }
 }
 
-fn type_name(kind: ElementType) -> &'static str {
+pub(super) fn type_name(kind: ElementType) -> &'static str {
     match kind {
         ElementType::Double => "Double",
         ElementType::String => "String",

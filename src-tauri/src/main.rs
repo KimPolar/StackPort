@@ -963,6 +963,12 @@ async fn begin_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager
     -> Result<stackport_core::MongoEditDraft, String> { mongo.begin_document_edit(&id, database, collection, change).await }
 
 #[tauri::command]
+async fn edit_mongo_document_draft(input: String, change: Option<stackport_core::MongoDraftChange>, keep_id: bool)
+    -> Result<stackport_core::MongoDraftStructure, String> {
+    worker(move || stackport_core::edit_mongo_document_draft(&input, change, keep_id)).await
+}
+
+#[tauri::command]
 async fn review_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, input: String)
     -> Result<stackport_core::MongoEditReview, String> { mongo.review_document_edit(&id, &token, &input).await }
 
@@ -2681,6 +2687,7 @@ fn main() {
             mongo_indexes,
             mongo_documents,
             begin_mongo_document_edit,
+            edit_mongo_document_draft,
             review_mongo_document_edit,
             apply_mongo_document_edit,
             discard_mongo_document_edit,
