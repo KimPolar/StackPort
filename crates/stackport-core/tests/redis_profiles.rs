@@ -9,7 +9,7 @@ fn upgrades_v13_and_copies_redis_profiles_with_the_project() {
     let project = store.create_project("Redis 프로젝트").unwrap();
     drop(store);
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE mysql_profiles; DROP TABLE redis_profiles; PRAGMA user_version=13;")
+    db.execute_batch("DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; PRAGMA user_version=13;")
         .unwrap();
     drop(db);
 

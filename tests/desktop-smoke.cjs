@@ -1134,7 +1134,7 @@ async function verifyDatabaseExplorer(page) {
   assert.equal(await group.getAttribute('aria-description'), '연결 0개');
   await page.locator('#workspace-panes').getByRole('button', { name: '데이터베이스 연결 추가', exact: true }).click();
   const picker = page.getByRole('dialog', { name: '데이터베이스 연결 추가', exact: true });
-  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'Redis']) {
+  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'MongoDB', 'Redis']) {
     await picker.getByRole('button', { name: engine, exact: true }).waitFor();
   }
   await page.keyboard.press('Escape');
@@ -1144,6 +1144,7 @@ async function verifyDatabaseExplorer(page) {
     ['SQLite', 'SQLite 연결 추가', '연결 20'],
     ['PostgreSQL', 'PostgreSQL 연결 추가', '연결 4'],
     ['MySQL · MariaDB', 'MySQL 계열 연결 추가', '연결 11'],
+    ['MongoDB', 'MongoDB 연결 추가', '연결 3'],
     ['Redis', 'Redis 연결 추가', '연결 2'],
   ]) {
     await chooseDatabase(page, engine);
@@ -1151,6 +1152,9 @@ async function verifyDatabaseExplorer(page) {
     if (engine === 'SQLite') {
       await form.getByLabel('이름', { exact: true }).fill(name);
       await form.getByLabel('SQLite 파일 경로').fill(database);
+    } else if (engine === 'MongoDB') {
+      await form.getByLabel('연결 이름').fill(name);
+      await form.getByLabel('MongoDB 연결 주소').fill('mongodb://localhost:27017');
     } else {
       await form.getByLabel('연결 이름').fill(name);
       await form.getByLabel('호스트 이름 또는 IP').fill('localhost');
@@ -1161,10 +1165,10 @@ async function verifyDatabaseExplorer(page) {
     await form.waitFor({ state: 'detached' });
   }
   const rows = explorer.locator('#explorer-databases .profile-row');
-  await rows.nth(3).waitFor();
-  assert.equal(await group.getAttribute('aria-description'), '연결 4개');
-  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 4', '연결 11', '연결 20']);
-  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'PostgreSQL', 'MySQL · MariaDB', 'SQLite']);
+  await rows.nth(4).waitFor();
+  assert.equal(await group.getAttribute('aria-description'), '연결 5개');
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 3', '연결 4', '연결 11', '연결 20']);
+  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'MongoDB', 'PostgreSQL', 'MySQL · MariaDB', 'SQLite']);
   await group.click();
   await rows.first().waitFor({ state: 'hidden' });
   const search = explorer.getByRole('searchbox', { name: '탐색기 검색', exact: true });
@@ -1174,7 +1178,7 @@ async function verifyDatabaseExplorer(page) {
   await search.press('Escape');
   assert.equal(await group.getAttribute('aria-expanded'), 'false');
   await group.click();
-  await rows.nth(3).waitFor();
+  await rows.nth(4).waitFor();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

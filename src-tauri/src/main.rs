@@ -906,6 +906,57 @@ async fn list_redis_profiles(store: State<'_, Store>, project_id: String) -> Res
 }
 
 #[tauri::command]
+async fn list_mongo_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MongoProfile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_mongo_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_mongo_profile(store: State<'_, Store>, project_id: String, input: stackport_core::MongoSettings) -> Result<stackport_core::MongoProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_mongo_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_mongo_profile(store: State<'_, Store>, id: String, revision: i64, input: stackport_core::MongoSettings) -> Result<stackport_core::MongoProfile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_mongo_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_mongo_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_mongo_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_mongo(mongo: State<'_, stackport_core::MongoManager>, profile_id: String, revision: i64,
+    password: stackport_core::MongoPassword, confirmation: String) -> Result<stackport_core::MongoSessionInfo, String> {
+    mongo.open(profile_id, revision, password, &confirmation).await
+}
+
+#[tauri::command]
+async fn close_mongo(mongo: State<'_, stackport_core::MongoManager>, id: String) -> Result<(), String> {
+    mongo.close(&id).await
+}
+
+#[tauri::command]
+async fn mongo_databases(mongo: State<'_, stackport_core::MongoManager>, id: String, search: String, page: u32)
+    -> Result<stackport_core::MongoCatalogPage<String>, String> { mongo.databases(&id, &search, page).await }
+
+#[tauri::command]
+async fn mongo_collections(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, search: String, page: u32)
+    -> Result<stackport_core::MongoCatalogPage<stackport_core::MongoCollection>, String> { mongo.collections(&id, &database, &search, page).await }
+
+#[tauri::command]
+async fn mongo_indexes(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String)
+    -> Result<stackport_core::MongoCatalogPage<stackport_core::MongoIndex>, String> { mongo.indexes(&id, &database, &collection).await }
+
+#[tauri::command]
+async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, query: stackport_core::MongoQuery)
+    -> Result<stackport_core::MongoDocumentPage, String> { mongo.documents(&id, &database, &collection, query).await }
+
+#[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_mysql_profiles(&project_id)).await
@@ -2036,6 +2087,7 @@ fn main() {
             app.manage(PostgresManager::new(store.clone()));
             app.manage(stackport_core::RedisManager::new(store.clone()));
             app.manage(stackport_core::MysqlManager::new(store.clone()));
+            app.manage(stackport_core::MongoManager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -2135,6 +2187,16 @@ fn main() {
             list_postgres_profiles,
             list_redis_profiles,
             list_mysql_profiles,
+            list_mongo_profiles,
+            create_mongo_profile,
+            update_mongo_profile,
+            delete_mongo_profile,
+            open_mongo,
+            close_mongo,
+            mongo_databases,
+            mongo_collections,
+            mongo_indexes,
+            mongo_documents,
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,

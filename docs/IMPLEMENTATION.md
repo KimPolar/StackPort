@@ -6,6 +6,10 @@
 
 React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다. 네트워크·파일 처리와 장시간 SQL은 웹 UI에서 직접 수행하지 않고 별도 작업 스레드로 넘깁니다. 브라우저에는 네이티브 명령이나 임의 TCP 프록시를 제공하지 않습니다. 게이트웨이 인증 및 접근 제어는 아직 구현하지 않았습니다.
 
+**MongoDB**는 탐색기의 **데이터베이스 연결 추가**에서 등록합니다. URI·사용자·인증 데이터베이스·환경·선택한 PEM CA 경로를 메타데이터 v17에 저장합니다. 암호는 접속할 때 입력하고, 운영 연결에는 `PROD` 확인이 필요합니다. TLS가 기본이며, 별도 CA를 지정하지 않으면 Rust 드라이버의 기본 신뢰 루트를 사용합니다. `mongodb+srv` 형식도 등록할 수 있으며 TLS가 필요합니다. [MongoDB Rust 드라이버 TLS](https://www.mongodb.com/docs/drivers/rust/current/security/tls/)
+
+MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·뷰를 검색합니다. 문서는 필터·표시 필드·정렬을 서버에 전달해 20개씩 읽고, BSON 타입을 보존하는 Canonical Extended JSON으로 표시합니다. BSON과 표시 문자열 모두 문서당 64 KiB까지 미리 볼 수 있고, 페이지의 표시 문자열 합계는 384 KiB까지입니다. 큰 문서는 표시 필드를 줄여 다시 조회할 수 있습니다. 컬렉션 인덱스는 앞 50개까지 키·고유 여부·TTL을 읽습니다. [MongoDB Rust 드라이버 데이터베이스와 컬렉션](https://www.mongodb.com/docs/drivers/rust/current/database-collection/)
+
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
@@ -418,6 +422,10 @@ Write-Output $testRoot
 $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
+
+MongoDB 검사는 `tests/mongo-smoke.cjs`를 사용합니다. `STACKPORT_CDP_URL`에 격리 앱의 디버깅 주소, `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MONGO_BIN`에 Windows ZIP에서 꺼낸 `mongod.exe`의 절대 경로를 지정합니다. `STACKPORT_TEST_PYTHON`으로 PyMongo가 설치된 Python을 실행해 임시 서버의 문서와 제한 계정을 만듭니다. `STACKPORT_TEST_OPENSSL`은 테스트용 TLS 인증서 생성에 사용합니다.
+
+Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 

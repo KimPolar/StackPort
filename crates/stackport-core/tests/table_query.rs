@@ -201,6 +201,7 @@ fn saved_conditions_round_trip_by_object_and_reject_stale_replacement() {
              SELECT id, sqlite_id, postgres_id, target_key, schema_name, object_name, name, clauses, revision
              FROM test_v16_presets;
          DROP TABLE test_v16_presets;
+         DROP TABLE native_db_profiles;
          PRAGMA user_version=15;",
     )
     .unwrap();

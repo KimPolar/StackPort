@@ -201,7 +201,7 @@ fn version_twelve_favorites_keep_their_scope_and_identity() {
         "CREATE TABLE favorites_before_upgrade AS
            SELECT project_id, scope, kind, sqlite_id, postgres_id, ssh_id, object_name
            FROM workspace_favorites ORDER BY rowid;
-         DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites;
+         DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites;
          ALTER TABLE favorites_before_upgrade RENAME TO workspace_favorites;
          CREATE INDEX workspace_favorite_sqlite_ref ON workspace_favorites(sqlite_id);
          CREATE INDEX workspace_favorite_postgres_ref ON workspace_favorites(postgres_id);
@@ -266,7 +266,7 @@ fn version_eleven_keeps_query_presets_and_gets_a_verified_backup() {
         .unwrap();
     drop(store);
     let db = Connection::open(&metadata).unwrap();
-    db.execute_batch("DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; PRAGMA user_version=11;")
+    db.execute_batch("DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; PRAGMA user_version=11;")
         .unwrap();
     drop(db);
 

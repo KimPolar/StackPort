@@ -1,0 +1,31 @@
+.mongo-workspace { min-width: 0; }
+.mongo-workspace .content-header, .mongo-workspace .header-actions { flex-wrap: wrap; }
+.mongo-layout { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(0, 2.6fr); gap: 14px; align-items: start; }
+.mongo-catalog { display: grid; gap: 12px; min-width: 0; }
+.mongo-content { min-width: 0; }
+.mongo-workspace .panel-heading { flex-wrap: wrap; height: auto; min-height: 42px; gap: 7px; padding-block: 6px; }
+.mongo-workspace .panel-heading h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; font-size: 15px; }
+.mongo-search, .mongo-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 7px 10px; }
+.mongo-search input { min-width: 0; flex: 1; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 5px; padding: 6px; }
+.mongo-catalog-list, .mongo-document-list { margin: 0; padding: 0; list-style: none; }
+.mongo-catalog-list { padding: 0 8px 6px; max-height: 32dvh; overflow: auto; }
+.mongo-catalog-list .object-row { justify-content: space-between; padding-inline: 8px; }
+.mongo-catalog-list small, .mongo-pages span { color: var(--text-muted); font-size: 11px; }
+.mongo-actions button[aria-pressed="true"] { color: var(--text-accent); background: var(--surface-selected); }
+.mongo-query { padding: 8px 12px; border-block: 1px solid var(--divider); }
+.mongo-query summary, .mongo-document-list summary { cursor: pointer; font-size: 13px; }
+.mongo-query form { margin-top: 10px; }
+.mongo-query .field { margin-bottom: 10px; }
+.mongo-query .mongo-actions { padding-inline: 0; }
+.mongo-sort { display: flex; flex-wrap: wrap; gap: 12px; }
+.mongo-sort > label:first-child { min-width: 100px; flex: 1; }
+.mongo-document-list details { border-bottom: 1px solid var(--divider); }
+.mongo-document-list summary { padding: 9px 12px; overflow-wrap: anywhere; }
+.mongo-document-list summary code { margin: 0 8px; font-size: 11px; }
+.mongo-document-list summary small { color: var(--text-muted); }
+.mongo-document-list pre { max-height: 42dvh; margin: 0 10px 10px; padding: 10px; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.mongo-document-list p, .mongo-note { margin: 8px 12px; }
+@media (max-width: 850px) {
+  .mongo-layout { grid-template-columns: 1fr; }
+  .mongo-catalog { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }
+}

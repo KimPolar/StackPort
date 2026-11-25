@@ -31,6 +31,7 @@ pub use mysql::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowSta
 pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
+pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSessionInfo, MongoSettings};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
@@ -135,9 +136,11 @@ use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, String>;
 mod redis;
+mod db_profiles;
+mod mongo;
 mod tls;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -417,6 +420,7 @@ impl Store {
                 tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(redis::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mysql::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(db_profiles::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
@@ -475,6 +479,9 @@ impl Store {
                     tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 } else if current < 16 {
                     table_query_presets::migrate_v15(&tx)?;
+                }
+                if current < 17 {
+                    tx.execute_batch(db_profiles::SCHEMA).map_err(db_error)?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;

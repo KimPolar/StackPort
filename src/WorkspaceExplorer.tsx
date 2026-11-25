@@ -9,6 +9,7 @@ import type { RedisProfile, RedisProfileAction } from "./RedisProfileDialog";
 import type { PostgresSearchPage } from "./PostgresSearchDialog";
 import { postgresObjectLabels } from "./PostgresObjectStructure";
 import type { MysqlProfile, MysqlProfileAction } from "./MysqlProfileDialog";
+import { mongoAddress, type MongoProfile, type MongoProfileAction } from "./MongoProfileDialog";
 import { PostgresPager } from "./PostgresPager";
 import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
@@ -42,6 +43,7 @@ type ExplorerProps = {
   };
   redis: { profiles: RedisProfile[]; activeId: string; open: (id: string) => void; action: (action: RedisProfileAction) => void };
   mysql: { profiles: MysqlProfile[]; activeId: string; open: (id: string) => void; action: (action: MysqlProfileAction) => void };
+  mongo: { profiles: MongoProfile[]; activeId: string; open: (id: string) => void; action: (action: MongoProfileAction) => void };
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
@@ -121,7 +123,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, redis, mysql, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
+  sqlite, postgres, redis, mysql, mongo, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -162,13 +164,16 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스"));
   const mysqlMatches = mysql.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database ?? undefined, item.settings.environment, "MySQL MariaDB 데이터베이스"));
+  const mongoMatches = mongo.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+    item.settings.name, mongoAddress(item.settings.uri), item.settings.environment, "MongoDB 데이터베이스"));
   const databaseItems = [
     ...visibleSqlite.map(item => ({ engine: "sqlite" as const, name: item.name, item })),
     ...visiblePostgres.map(item => ({ engine: "postgres" as const, name: item.settings.name, item })),
     ...(desktop ? mysqlMatches.map(item => ({ engine: "mysql" as const, name: item.settings.name, item })) : []),
     ...(desktop ? redisMatches.map(item => ({ engine: "redis" as const, name: item.settings.name, item })) : []),
+    ...(desktop ? mongoMatches.map(item => ({ engine: "mongo" as const, name: item.settings.name, item })) : []),
   ].sort((left, right) => left.name.localeCompare(right.name, "ko", { numeric: true }));
-  const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length + sshMatches.length;
+  const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length + mongoMatches.length + sshMatches.length;
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
   function favoriteEntry(target: FavoriteTarget) {
@@ -275,6 +280,15 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
         <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
+      </ExplorerProfile>;
+    }
+    if (entry.engine === "mongo") {
+      const item = entry.item;
+      return <ExplorerProfile key={`mongo:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+        detail={mongoAddress(item.settings.uri)} engine="MongoDB" label={`MongoDB ${item.settings.name} 열기`}
+        Icon={Database} selected={item.id === mongo.activeId} onOpen={() => mongo.open(item.id)}>
+        <ExplorerButton label={`${item.settings.name} MongoDB 연결 수정`} Icon={Pencil} onClick={() => mongo.action({ kind: "edit", profile: item })} />
+        <ExplorerButton label={`${item.settings.name} MongoDB 연결 삭제`} Icon={Trash2} onClick={() => mongo.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     const item = entry.item;

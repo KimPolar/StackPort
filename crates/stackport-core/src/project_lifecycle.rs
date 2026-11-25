@@ -94,6 +94,7 @@ impl Store {
         copied_total += crate::postgres::copy_profiles(&tx, source, &duplicate.id)?;
         copied_total += crate::redis::copy_profiles(&tx, source, &duplicate.id)?;
         copied_total += crate::mysql::copy_profiles(&tx, source, &duplicate.id)?;
+        copied_total += crate::db_profiles::copy_profiles(&tx, source, &duplicate.id)?;
         for profile in db_profiles {
             let new_id = Uuid::new_v4().to_string();
             let changed = tx.execute(
