@@ -252,7 +252,6 @@ async function verify(page, port, ca) {
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
   await explorer.getByRole('button', { name: 'MongoDB 편집 검증 열기', exact: true }).click();
   await verifyDocumentEditor(page, workspace, detail);
-  await workspace.getByRole('button', { name: 'MongoDB 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   await explorer.getByRole('button', { name: 'MongoDB 인덱스 검증 열기', exact: true }).click();
   await workspace.getByRole('button', { name: 'MongoDB 연결', exact: true }).click();
@@ -346,7 +345,7 @@ async function verifyNamespaceEditor(page, workspace, detail) {
   await dialog.getByLabel('생성 유형', { exact: true }).selectOption('view');
   await dialog.getByLabel('뷰 이름', { exact: true }).fill('ui_view');
   await dialog.getByLabel('원본 컬렉션 또는 뷰 이름', { exact: true }).fill('records');
-  await dialog.getByLabel('뷰 파이프라인 (Extended JSON 배열)').fill('[{"$match":{"rank":22}}]');
+  await dialog.getByLabel('뷰 파이프라인 (Extended JSON 배열)').fill('[{"$match":{"rank":21}}]');
   await button(dialog, '생성 검토').click();
   await dialog.getByLabel('생성 명령', { exact: true }).filter({ hasText: '$match' }).waitFor();
   await dialog.getByLabel('운영 환경 확인').fill('PROD');
@@ -354,7 +353,8 @@ async function verifyNamespaceEditor(page, workspace, detail) {
   await dialog.waitFor({ state: 'detached' });
   await detail.getByRole('heading', { name: 'ui_view', exact: true }).waitFor();
   await button(workspace, 'ui_view 뷰').waitFor();
-  await detail.locator('summary').filter({ hasText: '"22"' }).waitFor();
+  await detail.getByLabel('Canonical Extended JSON').filter({ hasText: '문서 21' }).waitFor();
+  assert.equal(await detail.locator('.mongo-document-list summary').count(), 1);
 }
 
 async function verifyIndexCommands(command, openAdmin) {
@@ -796,7 +796,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, schema, pipelines, JSON/tree/grid editing and concurrent-change protection).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, and reviewed collection and view creation).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

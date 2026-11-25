@@ -12,7 +12,7 @@ MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·
 
 **이 연결에서 컬렉션·뷰 관리 허용**을 선택하면 **컬렉션·뷰 만들기**에서 기존 데이터베이스를 사용하거나 첫 컬렉션과 함께 새 데이터베이스를 만들 수 있습니다. 컬렉션에는 선택적으로 Extended JSON 유효성 규칙과 검사 범위, 위반 시 쓰기 거부 또는 서버 경고를 설정합니다. 뷰는 같은 데이터베이스의 원본과 읽기 전용 집계 단계 최대 24개를 사용합니다. 생성은 서버 명령을 검토한 뒤 5분 안에 한 번 적용하며 운영 환경에서는 `PROD`를 입력합니다. [MongoDB create](https://www.mongodb.com/docs/manual/reference/command/create/) · [MongoDB 뷰 생성](https://www.mongodb.com/docs/manual/core/views/create-view/) · [MongoDB 유효성 검사 범위](https://www.mongodb.com/docs/manual/core/schema-validation/specify-validation-level/)
 
-Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉션 생성, 규칙 위반 문서의 삽입 거절, 뷰의 필터 결과와 생성 후 목록 갱신을 확인했습니다. 별도 연결에서 같은 이름을 먼저 생성하면 이전 검토의 적용이 거절됩니다.
+Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉션 생성, 규칙 위반 문서의 삽입 거절, 뷰의 필터 결과와 생성 후 목록 갱신을 확인했습니다. TLS와 사용자 인증을 적용한 서버에서 읽기 전용 계정은 생성 요청을 거절당하고, 별도 연결에서 같은 이름을 먼저 생성하면 이전 검토의 적용이 거절됩니다.
 
 **이 연결에서 인덱스 관리 허용**을 선택하면 일반 컬렉션의 **인덱스** 화면에서 이름과 키 순서를 지정해 인덱스를 만들 수 있습니다. 오름차순·내림차순 단일 및 복합 키, 텍스트, 2d·2dsphere, 해시를 지원합니다. TTL은 `_id`를 제외한 일반 키 하나에 지정하고, 이미 만료된 문서에 미칠 영향을 생성 검토에 표시합니다. 인덱스 종류와 옵션 조합은 서버가 검사합니다. [MongoDB createIndexes](https://www.mongodb.com/docs/manual/reference/command/createindexes/) · [MongoDB TTL 인덱스](https://www.mongodb.com/docs/manual/core/index-ttl/)
 
