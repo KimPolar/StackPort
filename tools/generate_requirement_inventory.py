@@ -85,12 +85,12 @@ PARTIAL = {
     "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시, Oracle·Snowflake 구체화 뷰 표시",
     "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션, MySQL·MariaDB·SQL Server 열·인덱스·제약조건·양방향 외래 키, Oracle·Snowflake 열 타입·NULL·IDENTITY",
-    "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람, PostgreSQL 뷰·인덱스·트리거·일부 속성 정의 열람·복사·저장, MySQL·MariaDB·Oracle·Snowflake 테이블·뷰와 SQL Server 뷰 정의 열람·복사·저장. Snowflake 실제 계정 검증 대기",
+    "SP-DB-014": "SQLite 테이블·뷰의 생성 SQL 열람, PostgreSQL 뷰·인덱스·트리거·일부 속성 정의 열람·복사·저장, MySQL·MariaDB·Oracle·Snowflake 테이블·뷰 정의, SQL Server 일반 테이블 생성 SQL과 뷰 정의 열람·복사·저장. Snowflake 실제 계정 검증 대기",
     "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기, MySQL·MariaDB 인덱스 열·식·순서·접두 길이·가시성·고유값 추정치, SQL Server 인덱스 키·순서·포함 열·필터·상태·파티션·추정 행 수 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색. SQL Server·Oracle·Snowflake의 데이터베이스·스키마별 객체명·열명·종류 검색과 결과 이동. Snowflake 실제 계정 검증 대기",
-    "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL, MySQL·MariaDB·SQL Server 참조 객체 구조 열기, SQL Server 뷰와 Oracle·Snowflake 테이블·뷰 정의 열기·저장",
+    "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL, MySQL·MariaDB·SQL Server 참조 객체 구조 열기, SQL Server 일반 테이블·뷰와 Oracle·Snowflake 테이블·뷰 정의 열기·저장",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계, MySQL·MariaDB 버전·문자셋·시간대·기본 스토리지와 연결·문장·트래픽·잠금 지표",
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계, MySQL·MariaDB 세션·느린 실행·InnoDB 잠금 대기와 차단 세션",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션과 MySQL·MariaDB 서버 세션의 권한 범위 실행 SQL·잠금 대기 조회",
@@ -419,6 +419,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mysql/structure.rs; src/MysqlObjectStructure.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-DB-014", "SP-DB-022"}:
                 evidence += "; src/ObjectDefinitionPanel.tsx; crates/stackport-core/src/sql_file.rs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs; crates/stackport-core/src/snowflake/api/tests.rs"
+                evidence += "; crates/stackport-core/src/sql_server/definition.rs; crates/stackport-core/src/sql_server/table_definition.sql"
             if requirement_id in {"SP-DB-010", "SP-DB-018", "SP-DB-022"}:
                 evidence += "; crates/stackport-core/src/sql_server/structure.rs; src/SqlServerObjectStructure.tsx"
                 if requirement_id != "SP-DB-022":

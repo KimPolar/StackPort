@@ -3,10 +3,10 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-async function verifyDefinitionPanel(page, detail, engine) {
-  await detail.getByRole('button', { name: '정의 SQL', exact: true }).click();
-  const panel = detail.getByRole('region', { name: engine + ' 정의 SQL', exact: true });
-  const text = await panel.getByLabel('정의 SQL 원문', { exact: true }).textContent({ timeout: 65_000 });
+async function verifyDefinitionPanel(page, detail, engine, title = '정의 SQL') {
+  await detail.getByRole('button', { name: title, exact: true }).click();
+  const panel = detail.getByRole('region', { name: engine + ' ' + title, exact: true });
+  const text = await panel.getByLabel(title + ' 원문', { exact: true }).textContent({ timeout: 65_000 });
   assert.match(text, /create\b/i);
   await page.evaluate(() => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
@@ -15,7 +15,7 @@ async function verifyDefinitionPanel(page, detail, engine) {
   });
   try {
     await panel.getByRole('button', { name: 'SQL 복사', exact: true }).click();
-    await panel.getByText('정의 SQL을 복사했습니다.', { exact: true }).waitFor();
+    await panel.getByText(title + '을 복사했습니다.', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.testCopiedDefinition), text);
   } finally {
     await page.evaluate(() => { delete navigator.clipboard; delete window.testCopiedDefinition; });

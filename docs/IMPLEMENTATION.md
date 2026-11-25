@@ -30,6 +30,8 @@ SQL Server·Oracle·Snowflake에서 열 타입에 맞는 비교와 범위, 문�
 
 **정의 SQL**에서 SQL Server 뷰의 저장된 모듈 정의, Oracle 테이블·뷰·구체화 뷰의 `DBMS_METADATA.GET_DDL`, Snowflake 테이블·뷰·구체화 뷰의 `GET_DDL` 결과를 확인할 수 있습니다. SQL Server에서 권한이 없거나 뷰가 암호화된 경우, Oracle에서 계정에 객체 메타데이터가 공개되지 않은 경우 원문 대신 사유를 표시합니다. Snowflake 보안 뷰의 정의는 소유 역할에 공개됩니다. [SQL Server sys.sql_modules](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-sql-modules-transact-sql) · [Oracle DBMS_METADATA 권한](https://docs.oracle.com/en/database/oracle/oracle-database/26/arpls/DBMS_METADATA.html) · [Snowflake GET_DDL](https://docs.snowflake.com/en/sql-reference/functions/get_ddl)
 
+SQL Server의 **생성 SQL**은 `VIEW DEFINITION` 권한이 있는 일반 디스크 테이블의 카탈로그에서 스크립트를 구성합니다. 열 타입과 정렬 규칙, `IDENTITY`, 계산 열, 마스킹, `SPARSE`, 기본값, 기본·고유 키, CHECK, 나가는 외래 키, 일반 행 저장소 인덱스와 파일그룹을 포함합니다. 스크립트를 재실행할 때는 참조 스키마, 사용자 정의 타입, XML 스키마 모음, 참조 테이블과 파일그룹이 대상 DB에 있어야 합니다. 파티션, 시스템 버전 관리, 특수 인덱스 또는 참조 메타데이터의 비공개로 완전한 스크립트를 구성할 수 없으면 화면에 사유를 표시합니다. [SQL Server CREATE TABLE](https://learn.microsoft.com/en-us/sql/t-sql/statements/create-table-transact-sql) · [SQL Server CREATE INDEX](https://learn.microsoft.com/en-us/sql/t-sql/statements/create-index-transact-sql)
+
 정의 SQL은 UTF-8 기준 1 MiB까지 표시하고 복사합니다. 새 `.sql` 파일에 저장할 때 원문의 줄바꿈과 문자를 그대로 기록하며 같은 경로의 기존 파일을 보호합니다. MySQL과 MariaDB의 생성 SQL도 같은 복사·저장 화면을 사용합니다.
 
 Oracle Free 컨테이너에서 정의 SQL을 조회하려면 XML DB가 포함된 Full 이미지가 필요합니다. Lite 이미지에서는 소유 객체의 `GET_DDL`을 호출할 때 서버가 XDB 라이브러리 오류를 반환하는 것을 확인했습니다. Oracle 정의 조회는 최대 60초까지 기다리고 완료 후 기존 연결의 호출 제한을 복원합니다. [Oracle Free 컨테이너 이미지 기능 비교](https://container-registry.oracle.com/ords/ocr/ba/database/free)
@@ -508,6 +510,8 @@ SQL Server 2022와 Oracle Database 26ai Free의 Windows 검사에서 큰 소수�
 SQL Server 구조 검사는 내림차순 복합 기본 키, 포함 열과 필터가 있는 인덱스, 컬럼스토어 열의 정렬 방향 생략, 비활성 인덱스·고유 키·CHECK, DEFAULT, 51개 제약조건의 두 페이지를 확인합니다. 교차 스키마·자기 참조 외래 키, 접근할 수 없는 참조 대상 가림, 키보드로 부모·자식 테이블에 오가는 동작도 확인합니다.
 
 정의 SQL 검사는 SQL Server 뷰의 권한 제한·암호화, Oracle의 소유 객체 정의와 타 스키마 메타데이터 제한, 두 엔진에서의 원문 복사 및 UTF-8 파일 저장을 확인합니다.
+
+SQL Server 테이블 검사는 사용자 정의 타입, XML 스키마 모음, 한글·대괄호 이름, IDENTITY, 계산 열, 마스킹, 포함 열과 필터, 비활성 인덱스와 제약조건을 포함합니다. Windows 앱에서 저장한 스크립트를 동일 의존성이 있는 별도 데이터베이스에 실행하고, 재생성한 테이블의 SQL을 다시 읽어 원본 스크립트와 비교합니다.
 
 Oracle 검사는 `tests/oracle-smoke.cjs`를 사용합니다. `STACKPORT_ORACLE_PORT`와 `STACKPORT_ORACLE_TCPS_PORT`에 시험용 루프백 TCP·TCPS 포트, `STACKPORT_ORACLE_CA`에 `localhost` 서버 인증서의 PEM CA 경로, `STACKPORT_ORACLE_SYS_PASSWORD`에 폐기 가능한 인스턴스의 관리자 암호를 지정합니다. `STACKPORT_ORACLE_SERVICE` 기본값은 `FREEPDB1`입니다. `STACKPORT_TEST_PYTHON`으로 지정한 Python에 `oracledb`가 필요하며, 실행할 때마다 별도 테이블스페이스와 제한 계정을 생성합니다.
 

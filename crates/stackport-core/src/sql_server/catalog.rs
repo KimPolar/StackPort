@@ -154,6 +154,10 @@ impl Manager {
     }
 
     pub async fn definition(&self, id: &str, object: i32) -> Result<String> {
+        let target = self.object(id, object).await?;
+        if target.kind == "table" {
+            return self.table_definition(id, object).await;
+        }
         // SQL Server stores the definition as UTF-16. The UTF-8 size is checked after decoding.
         let wire_limit = (MAX_BYTES * 2) as i64;
         let rows = self.rows(id,
@@ -446,7 +450,7 @@ fn decode_column(row: &Row) -> Result<Column> {
     })
 }
 
-fn type_display(name: &str, length: i16, precision: u8, scale: u8) -> String {
+pub(super) fn type_display(name: &str, length: i16, precision: u8, scale: u8) -> String {
     match name {
         "char" | "varchar" | "nchar" | "nvarchar" | "binary" | "varbinary" => {
             let units = if name.starts_with('n') {
@@ -467,7 +471,7 @@ fn type_display(name: &str, length: i16, precision: u8, scale: u8) -> String {
     }
 }
 
-fn ident(name: &str) -> String {
+pub(super) fn ident(name: &str) -> String {
     format!("[{}]", name.replace(']', "]]"))
 }
 

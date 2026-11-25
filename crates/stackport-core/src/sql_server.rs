@@ -1,4 +1,5 @@
 mod catalog;
+mod definition;
 mod profiles;
 mod structure;
 

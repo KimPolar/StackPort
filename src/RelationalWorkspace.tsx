@@ -275,8 +275,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
   const pageArgs = useMemo(() => view === "data" ? { ...target, page, clauses } : null, [target, page, view, clauses]);
   const data = useNativeRead<DataPage>(prefix + "_data", pageArgs, revision);
   const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", target, revision);
-  const canReadDefinition = prefix !== "sql_server" || object.kind === "view";
-  const definition = useNativeRead<string>(prefix + "_definition", view === "definition" && canReadDefinition ? target : null, revision);
+  const definitionTitle = prefix === "sql_server" && object.kind === "table" ? "생성 SQL" : "정의 SQL";
+  const definition = useNativeRead<string>(prefix + "_definition", view === "definition" ? target : null, revision);
   return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"}
     aria-busy={data.loading || columns.loading || definition.loading}>
     <div className="panel-heading"><h2 ref={headingRef} tabIndex={-1}>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
@@ -287,8 +287,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
       <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
       {prefix === "sql_server" && <button type="button" className="secondary small" aria-pressed={view === "structure"}
         onClick={() => setView("structure")}>키와 인덱스</button>}
-      {canReadDefinition && <button type="button" className="secondary small" aria-pressed={view === "definition"}
-        onClick={() => setView("definition")}>정의 SQL</button>}
+      <button type="button" className="secondary small" aria-pressed={view === "definition"}
+        onClick={() => setView("definition")}>{definitionTitle}</button>
     </div>
     <div hidden={view !== "data"}>
       <TableQueryControls columns={columns.data?.items.map(column => column.name) ?? []}
@@ -327,7 +327,7 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
     {view === "definition" && <>
       <ReadStatus {...definition} empty={false} />
       {definition.data && <ObjectDefinitionPanel text={definition.data} target={object.schema + "." + object.name}
-        engine={engine} />}
+        engine={engine} title={definitionTitle} />}
     </>}
   </section>;
 }

@@ -3,7 +3,7 @@ const { randomBytes } = require('node:crypto');
 const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
-const { seedSqlServer } = require('./sql-server-fixture.cjs');
+const { seedSqlServer, recreateSqlServerTable } = require('./sql-server-fixture.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
 const { verifyDefinitionPanel } = require('./relational-definition.cjs');
@@ -58,6 +58,7 @@ async function verify(page, hiddenObject) {
   assert.equal(session.database, database);
   assert.match(session.version, /^\d+[.]\d+[.]/);
   const { id } = session;
+  let generatedTable;
   try {
     const schemas = search => command('sql_server_schemas', { id, search, page: 0 });
     assert.deepEqual((await schemas('')).items, ['archive', 'catalog']);
@@ -107,9 +108,24 @@ async function verify(page, hiddenObject) {
     const definition = object => command('sql_server_definition', { id, object });
     assert.equal(await definition(view.id),
       'CREATE VIEW [catalog].[recent] AS\r\nSELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2\r\n-- 한글 정의');
-    await assert.rejects(definition(table.id), /뷰를 찾을 수 없/);
+    await assert.rejects(definition(table.id), /외래 키 대상/);
     await assert.rejects(definition(hiddenObject), /공개되지/);
     await assert.rejects(definition(remaining.items[0].id), /VIEW DEFINITION/);
+    const archiveObject = async term => (await search({ schema: 'archive', term, kind: 'table' })).items[0].id;
+    await assert.rejects(definition(await archiveObject('accounts')), /VIEW DEFINITION/);
+    await assert.rejects(definition(await archiveObject('analytics_fixture')), /COLUMNSTORE/);
+    assert.match(await definition(objects.items[0].id), /CREATE TABLE \[catalog\]\.\[metadata_only\]/);
+    generatedTable = await definition(await archiveObject('script]sample'));
+    assert.match(generatedTable, /CREATE TABLE \[archive\]\.\[script\]\]sample\]/);
+    assert.match(generatedTable, /IDENTITY\(100, 7\) NOT FOR REPLICATION/);
+    assert.match(generatedTable, /\[금액\] decimal\(30,6\).*DEFAULT/);
+    assert.match(generatedTable, /\[scaled\] AS .* PERSISTED/);
+    assert.match(generatedTable, /xml\(DOCUMENT \[archive\]\.\[fixture_xml\]\)/);
+    assert.match(generatedTable, /MASKED WITH \(FUNCTION = 'email\(\)'\)/);
+    assert.match(generatedTable, /PRIMARY KEY CLUSTERED \(\[id\] DESC\) WITH \(FILLFACTOR = 85\)/);
+    assert.match(generatedTable, /INCLUDE \(\[payload\]\) WHERE .*\[title\].*IS NOT NULL/);
+    assert.match(generatedTable, /REFERENCES \[archive\]\.\[accounts\] \(\[tenant\], \[account\]\) ON DELETE NO ACTION ON UPDATE CASCADE NOT FOR REPLICATION/);
+    assert.match(generatedTable, /ALTER INDEX \[ix_script_disabled\] .* DISABLE;/);
     const sealed = (await search({ schema: 'archive', term: 'sealed_report', kind: 'view' })).items[0];
     await assert.rejects(definition(sealed.id), /암호화/);
     assert.equal((await data(view.id, 0)).stable_order, false);
@@ -172,8 +188,21 @@ async function verify(page, hiddenObject) {
   await workspace.getByRole('button', { name: 'recent 뷰', exact: true }).click();
   await detail.getByText('기본 키가 없어 최대 50행을 한 번에 표시합니다.', { exact: true }).waitFor();
   assert.match(await verifyDefinitionPanel(page, detail, 'SQL Server'), /AS\r\nSELECT/);
+  const tableDetail = await openFromObjectSearch(page, workspace, 'SQL Server', {
+    schema: 'archive', name: 'script]sample', kind: '테이블', term: 'script]sample',
+  });
+  const script = await verifyDefinitionPanel(page, tableDetail, 'SQL Server', '생성 SQL');
+  assert.equal(script, generatedTable);
   await workspace.getByRole('button', { name: 'SQL Server 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
+  const replayDatabase = database + '_replay';
+  await recreateSqlServerTable({ port, ca, database: replayDatabase, account, script });
+  const replay = await open(await alternate({ name: '생성 SQL 재실행 확인', database: replayDatabase }));
+  try {
+    const objects = await command('sql_server_objects', { id: replay.id, schema: 'archive', search: 'script]sample', page: 0 });
+    const rebuilt = await command('sql_server_definition', { id: replay.id, object: objects.items[0].id });
+    assert.equal(rebuilt, script);
+  } finally { await command('close_sql_server', { id: replay.id }); }
   assert.deepEqual(errors, []);
 }
 
@@ -284,7 +313,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], hidden); }
   finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, indexes, constraints, related tables, view definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });
