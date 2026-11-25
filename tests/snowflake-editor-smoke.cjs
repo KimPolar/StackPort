@@ -221,6 +221,38 @@ async function verify(page) {
   await workspace.getByRole('button', { name: 'PUBLIC', exact: true }).waitFor();
   await showEditor.click();
   assert.equal(await editor.inputValue(), "SELECT 'WAITING DOWNLOAD';");
+  const historyAction = workspace.getByRole('button', { name: '최근 SQL', exact: true });
+  const history = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  const entries = history.getByRole('list', { name: '실행 기록 목록' });
+  const reveal = history.getByRole('button', { name: 'SQL 원문 표시', exact: true });
+  await historyAction.click();
+  assert.doesNotMatch(await entries.innerText(), /WAITING|BIND_TEST|1234567890/u);
+  await entries.getByRole('button', { name: /현재 문장 · 완료/u }).click();
+  await reveal.click();
+  assert.equal(await history.getByLabel('실행한 SQL 원문', { exact: true }).textContent(), "SELECT '두 번째'");
+  await history.getByRole('button', { name: '새 탭에서 열기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), "SELECT '두 번째'");
+  assert.equal(await results.count(), 0);
+
+  await historyAction.click();
+  await entries.getByRole('button', { name: /문서 전체 · 완료.*UPDATE/su }).click();
+  await history.getByText(/영향받은 행 2개/u).waitFor();
+  await history.getByRole('checkbox', { name: '이 연결의 SQL 원문 보관', exact: true }).uncheck();
+  await history.getByText('이 기록은 값을 가린 미리보기로 보관했습니다.', { exact: true }).waitFor();
+  assert.equal(await reveal.count(), 0);
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
+  await editor.fill("SELECT '한글';\nSELECT '두 번째';");
+  await all.click();
+  await grid.getByText('한글', { exact: true }).waitFor();
+  await historyAction.click();
+  assert.match(await entries.getByRole('button').first().innerText(), /문서 전체 · 완료/u);
+  assert.equal(await reveal.count(), 0);
+  await history.getByRole('checkbox', { name: '이 연결의 SQL 원문 보관', exact: true }).check();
+  assert.equal(await reveal.count(), 0);
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
   await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
   assert.deepEqual(errors, []);
 }

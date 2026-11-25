@@ -43,7 +43,7 @@ import { SqlAliasRenameDialog } from "./SqlAliasRenameDialog";
 import { SchemaDetails, type DatabaseObject, type ObjectDetails } from "./SqlSchemaDetails";
 import { revealEditorRange } from "./editorSearch";
 import type { EditorHoverInfo } from "./editorHover";
-import { addSqlHistoryEntry, createSqlHistoryEntry, type SqlHistoryEntry, type SqlHistoryOutcome, type SqlHistoryScope } from "./sqlHistory";
+import { addSqlHistoryEntry, createSqlHistoryEntry, type SqlHistoryEntry, type SqlHistoryLanguage, type SqlHistoryScope, type StartSqlHistory } from "./sqlHistory";
 import type { ResultComparisonSource } from "./SqlResultComparison";
 import { SqlQueryMetrics } from "./SqlQueryMetrics";
 import { resultPageBytes, type QueryPage, type Cell } from "./sqlResults";
@@ -258,7 +258,8 @@ function App() {
   const [schemaDocumentRequest, setSchemaDocumentRequest] = useState<{ profileId: string; object: string | null } | null>(null);
   const [schemaComparisonSource, setSchemaComparisonSource] = useState<string | null>(null);
   const nextSqlHistoryId = useRef(0);
-  const pendingSqlHistory = useRef(new Map<number, string>());
+  const pendingSqlHistory = useRef(new Map<number, { profileId: string; keepSource: boolean }>());
+  const maskedOnlyHistory = useRef(new Set<string>());
   const [definition, setDefinition] = useState<SqlDefinitionRequest | null>(null);
   const [formatSelection, setFormatSelection] = useState<SqlFormatSelection | null>(null);
   const [aliasRename, setAliasRename] = useState<SqlAliasRenameRequest | null>(null);
@@ -350,7 +351,11 @@ function App() {
   const networkSqlTarget = networkSqlProfile && project ? {
     profileId: networkSqlProfile.id, projectId: project.id, projectName: project.name, profileName: networkSqlProfile.settings.name,
   } : null;
-  const networkSqlEditor = networkSqlTarget && sqlEditorState(networkSqlTarget);
+  const networkSqlLanguage: SqlHistoryLanguage = postgresProfile ? "postgres" : mysqlProfile ? "mysql"
+    : sqlServerProfile ? "tsql" : oracleProfile ? "oracle" : "snowflake";
+  const networkSqlEditor = networkSqlTarget && sqlEditorState(networkSqlTarget, networkSqlLanguage);
+  const historyTarget = networkSqlTarget ?? (sqliteWorkspace ? sqlTarget : null);
+  const historyEnvironment = networkSqlProfile?.settings.environment ?? profile?.environment;
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
@@ -724,7 +729,7 @@ function App() {
       : sqlDocumentEditorId(sqlTabId(target.profileId, group.nextNumber));
   }
 
-  function sqlEditorState(target: SqlTarget): SqlEditorState {
+  function sqlEditorState(target: SqlTarget, language: SqlHistoryLanguage): SqlEditorState {
     return {
       tabs: sqlTabSets[target.profileId] ?? initialSqlTabs(target),
       select: id => editSqlTabs(target, group => ({ ...group, activeId: id })),
@@ -738,6 +743,8 @@ function App() {
       })),
       openFile: () => setSqlFileAction({ mode: "open", target }),
       saveFile: draft => setSqlFileAction({ mode: "save", draft: { ...draft, ...target } }),
+      openHistory: () => setSqlHistoryProfile(target.profileId),
+      startHistory: (scope, sql) => startSqlHistory(target.profileId, language, scope, sql),
     };
   }
 
@@ -786,13 +793,43 @@ function App() {
     setSqlTabSets(current => Object.fromEntries(Object.entries(current).filter(([id]) => !ids.has(id))));
     forgetSqlQueryViews(new Set(tabs.map(draft => draft.id)));
     clearSqlHistory(ids);
+    for (const id of ids) maskedOnlyHistory.current.delete(id);
   }
 
   function clearSqlHistory(ids: Set<string>) {
-    for (const [id, profileId] of pendingSqlHistory.current) {
-      if (ids.has(profileId)) pendingSqlHistory.current.delete(id);
+    for (const [id, pending] of pendingSqlHistory.current) {
+      if (ids.has(pending.profileId)) pendingSqlHistory.current.delete(id);
     }
     setSqlHistory(current => current.filter(entry => !ids.has(entry.profileId)));
+  }
+
+  function keepSqlHistorySource(id: string, keep: boolean) {
+    if (keep) maskedOnlyHistory.current.delete(id);
+    else {
+      maskedOnlyHistory.current.add(id);
+      for (const pending of pendingSqlHistory.current.values()) {
+        if (pending.profileId === id) pending.keepSource = false;
+      }
+    }
+    setSqlHistory(current => current.map(entry => !keep && entry.profileId === id && entry.sql !== null
+      ? { ...entry, sql: null, withheld: "masked_only" } : entry));
+  }
+
+  function startSqlHistory(profileId: string, language: SqlHistoryLanguage, scope: SqlHistoryScope, sql?: string): ReturnType<StartSqlHistory> {
+    const id = ++nextSqlHistoryId.current;
+    const startedAt = Date.now();
+    const started = performance.now();
+    pendingSqlHistory.current.set(id, { profileId, keepSource: !maskedOnlyHistory.current.has(profileId) });
+    return (outcome, resolvedSql) => {
+      const pending = pendingSqlHistory.current.get(id);
+      if (!pending) return;
+      pendingSqlHistory.current.delete(id);
+      if (!outcome) return;
+      const elapsedMs = outcome.elapsedMs ?? Math.round(performance.now() - started);
+      const entry = createSqlHistoryEntry(id, profileId, scope, resolvedSql ?? sql, startedAt,
+        { ...outcome, elapsedMs }, language, pending.keepSource);
+      setSqlHistory(current => addSqlHistoryEntry(current, entry));
+    };
   }
 
   function activateSqlView() {
@@ -1020,15 +1057,7 @@ function App() {
     abandonQuery();
     const generation = ++queryGeneration.current;
     const task: ActiveQuery = { kind: target.kind, token: null, cancelRequested: false, cancellation: null };
-    const started = performance.now();
-    const history = scope && target.kind === "sql" ? { id: ++nextSqlHistoryId.current, scope, sql: target.sql, startedAt: Date.now() } : null;
-    if (history) pendingSqlHistory.current.set(history.id, profileId);
-    function finishHistory(outcome: SqlHistoryOutcome | null) {
-      if (!history || !pendingSqlHistory.current.delete(history.id) || !outcome) return;
-      const elapsedMs = Math.round(performance.now() - started);
-      const entry = createSqlHistoryEntry(history.id, profileId, history.scope, history.sql, history.startedAt, { ...outcome, elapsedMs });
-      setSqlHistory(current => addSqlHistoryEntry(current, entry));
-    }
+    const finishHistory = scope && target.kind === "sql" ? startSqlHistory(profileId, "sqlite", scope, target.sql) : () => {};
     activeQuery.current = task;
     setQuerying(true); setCancelling(false); setQueryNotice(""); setError("");
     const planning = target.kind === "sql" && target.planSource !== undefined;
@@ -2142,11 +2171,17 @@ function App() {
         source={templateLibrary.source} selection={templateLibrary.selection} canOpen={sqlTarget?.projectId === project.id}
         onOpen={template => openSqlTemplate(template, project.id)} onClose={() => setTemplateLibrary(null)} />
     </React.Suspense>}
-    {profile && sqlHistoryProfile === profile.id && <React.Suspense fallback={null}>
-      <SqlHistoryDialog key={profile.id} connection={`${profile.name} · ${profile.environment}`}
-        entries={sqlHistory.filter(entry => entry.profileId === profile.id)}
-        onClear={() => clearSqlHistory(new Set([profile.id]))}
-        onOpen={text => { setSqlHistoryProfile(null); openSqlDraft(text); }}
+    {historyTarget && sqlHistoryProfile === historyTarget.profileId && <React.Suspense fallback={null}>
+      <SqlHistoryDialog key={historyTarget.profileId} connection={`${historyTarget.profileName} · ${historyEnvironment}`}
+        entries={sqlHistory.filter(entry => entry.profileId === historyTarget.profileId)}
+        keepSource={!maskedOnlyHistory.current.has(historyTarget.profileId)}
+        onKeepSource={keep => keepSqlHistorySource(historyTarget.profileId, keep)}
+        onClear={() => clearSqlHistory(new Set([historyTarget.profileId]))}
+        onOpen={text => {
+          setSqlHistoryProfile(null);
+          if (networkSqlEditor) networkSqlEditor.add(text);
+          else openSqlDraft(text);
+        }}
         onClose={() => setSqlHistoryProfile(null)} />
     </React.Suspense>}
     {profile && sqlBuilderProfile === profile.id && <React.Suspense fallback={null}>

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, Play, Square } from "lucide-react";
+import { ArrowLeft, ArrowRight, FileDown, FolderOpen, GitBranch, History, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
 import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, postgresCopyCell, useGridRowSelection } from "./GridRowSelection";
@@ -11,6 +11,7 @@ import { PostgresScriptResults, type PostgresScriptOutcome } from "./PostgresScr
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlEditorState } from "./SqlTabs";
 import type { QueryActivity } from "./WorkspaceStatus";
 import { needsSqlReview, SqlRiskSummary, type SqlExecutionReview } from "./SqlRiskReview";
+import { sqlHistorySource, sqlHistoryStatus, sumHistoryCounts, type SqlHistoryOutcome, type SqlSourceRange } from "./sqlHistory";
 
 type Mode = "query" | "estimate" | "analyze" | "script";
 type ResultView = "data" | "plan" | "script";
@@ -20,10 +21,10 @@ type Completed = { status: "completed"; columns: { name: string; data_type: stri
 type QueryStatus = Completed | { status: "plan"; plan: PostgresPlan } | { status: "failed"; error: string; position?: number | null } |
   { status: "interrupted"; timed_out: boolean; server_confirmed: boolean } | { status: "script"; script: PostgresScriptOutcome };
 type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null; parameter_scope: string };
-type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
+type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean; source_range?: SqlSourceRange };
 type Preview = { id: string; target: QueryTarget; outcome: QueryStatus };
 type TabPreview = { tab: string; active: ResultView } & Partial<Record<ResultView, Preview>>;
-type ScriptTarget = PostgresExportTarget & { tab: string; mode: "script"; autocommit: boolean; confirmation: string; exportDestination?: string };
+type ScriptTarget = PostgresExportTarget & { tab: string; mode: "script"; autocommit: boolean; confirmation: string; exportDestination?: string; historySql?: string };
 type QueryTarget = (PostgresExportTarget & { tab: string; mode: Exclude<Mode, "script"> }) | ScriptTarget;
 type Running = QueryTarget & { request: string };
 type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null; parameterScope: string };
@@ -34,6 +35,23 @@ const resultViews: ResultView[] = ["data", "plan", "script"];
 const viewNames: Record<ResultView, string> = { data: "조회 결과", plan: "계획 결과", script: "스크립트 결과" };
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : mode === "script" ? "script" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석", script: "스크립트 실행" };
+
+function historyOutcome(outcome: Outcome, database: string): SqlHistoryOutcome | null {
+  switch (outcome.status) {
+    case "parameters_required": return null;
+    case "completed": return { status: "completed", elapsedMs: outcome.elapsed_ms, database, displayedRows: outcome.rows.length };
+    case "plan": return { status: "planned", database };
+    case "failed": return { status: "error", database };
+    case "interrupted": return { status: outcome.timed_out ? "timed_out" : "cancelled", database };
+    case "script": return {
+      status: sqlHistoryStatus(outcome.script.status),
+      elapsedMs: outcome.script.elapsed_ms,
+      database,
+      displayedRows: sumHistoryCounts(outcome.script.statements.map(part => part.total_columns ? part.rows.length : undefined)),
+      affectedRows: sumHistoryCounts(outcome.script.statements.map(part => part.total_columns ? undefined : part.affected_rows)),
+    };
+  }
+}
 
 export function PostgresSqlWorkspace({ session, projectId, environment, connection, database, editor, onExport, onQueryActivity }: {
   session: string | null;
@@ -62,7 +80,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
   const reviewPending = useRef(false);
   const currentSession = useRef(session);
   currentSession.current = session;
-  const { tabs, select, add, close, edit, openFile, saveFile } = editor;
+  const { tabs, select, add, close, edit, openFile, saveFile, openHistory, startHistory } = editor;
   const draft = tabs.tabs.find(item => item.id === tabs.activeId);
   const tabPreview = previews.find(item => item.tab === tabs.activeId);
   const availableViews = resultViews.filter(view => tabPreview?.[view]);
@@ -102,6 +120,10 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
     setRunning(operation);
     setCancelStatus("");
     setWritten(0);
+    const scope = target.scope.kind === "current" ? "statement" : target.scope.kind;
+    const submitted = target.scope.kind === "document" ? target.source : target.scope.kind === "selection"
+      ? target.source.slice(target.scope.start, target.scope.end) : target.mode === "script" ? target.historySql : undefined;
+    const finish = startHistory(scope, submitted);
     let outcome: Outcome;
     try {
       const request = { id: target.session, request: operation.request };
@@ -121,6 +143,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
         outcome = await invoke<Outcome>("execute_postgres_sql", { ...request, ...sql, bindings, mode: target.mode });
       }
     } catch (error) { outcome = { status: "failed", error: String(error) }; }
+    finish(historyOutcome(outcome, database), outcome.source_range && sqlHistorySource(target.source, outcome.source_range));
     active.current = null;
     setRunning(null);
     setCancelStatus("");
@@ -177,9 +200,10 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
     try {
       const review = await invoke<SqlExecutionReview>("postgres_script_review", { id: target.session, source: target.source, scope: target.scope });
       if (currentSession.current !== target.session) return;
+      const reviewed = { ...target, historySql: sqlHistorySource(target.source, review.source_range) };
       if (environment === "PROD" || target.exportDestination !== undefined || needsSqlReview(review, environment)) {
-        setScriptTarget({ target, review });
-      } else void run(target);
+        setScriptTarget({ target: reviewed, review });
+      } else void run(reviewed);
     } catch (cause) {
       if (currentSession.current === target.session) setReviewError(String(cause));
     } finally {
@@ -199,6 +223,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, connecti
   const fileActions = <div className="sql-file-actions">
     <button type="button" className="secondary small" onClick={openFile}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
     <button type="button" className="secondary small" disabled={!draft} onClick={() => draft && saveFile(draft)}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+    <button type="button" className="secondary small" onClick={openHistory}><History size={14} aria-hidden /> 최근 SQL</button>
   </div>;
   return <div className="postgres-sql">
     <section className="editor-card" aria-label="PostgreSQL SQL 편집기">

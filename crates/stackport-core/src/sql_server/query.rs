@@ -52,7 +52,12 @@ impl QueryInput {
     }
 
     pub fn review(&self) -> Result<crate::SqlExecutionReview> {
-        Ok(review_batches(&self.batches()?))
+        let batches = self.batches()?;
+        let mut review = review_batches(&batches);
+        if let Some(batch) = batches.first().filter(|_| self.cursor_line.is_some()) {
+            review.set_source_slice(&self.sql, batch.sql);
+        }
+        Ok(review)
     }
 
     pub fn parameter_plan(&self) -> Result<crate::SqlParameterPlan<Vec<u16>>> {

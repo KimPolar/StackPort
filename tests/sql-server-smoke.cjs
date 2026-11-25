@@ -646,6 +646,14 @@ async function verifyBindForm(pane, editor, grid) {
   await grid.getByText('한글 🚀', { exact: true }).waitFor();
   await grid.getByText('-0.000123400', { exact: true }).waitFor();
   assert.equal(await editor.inputValue(), sql);
+  const page = pane.page();
+  await page.getByRole('button', { name: '최근 SQL', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  await history.getByRole('list', { name: '실행 기록 목록' }).getByText('선택 영역 · 완료', { exact: true }).waitFor();
+  await history.getByRole('button', { name: 'SQL 원문 표시', exact: true }).click();
+  assert.equal(await history.getByLabel('실행한 SQL 원문', { exact: true }).textContent(), "SELECT @P3 AS entered, @P7 AS amount;");
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
 }
 
 async function verifyMockBindEditor(page) {

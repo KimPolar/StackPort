@@ -10,13 +10,14 @@ import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 import { SqlParameterSets, type ParameterInput, type ParameterPlan, type ParameterSetScope } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 import { needsSqlReview, SqlRiskSummary, type SqlExecutionReview } from "./SqlRiskReview";
+import { sqlHistorySource, sqlHistoryStatus, sumHistoryCounts } from "./sqlHistory";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
 type Parameter = ParameterInput<ParameterKind>;
 type Action = "execute" | "estimate" | "analyze" | "script";
 type ScriptScope = { kind: "document" } | { kind: "current"; cursor_byte: number }
   | { kind: "selection"; start_byte: number; end_byte: number };
-type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" | "전체 문서" | "현재 문장"; parameterScope?: string;
+type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" | "전체 문서" | "현재 문장"; parameterScope?: string; historySql?: string;
   script?: { scope: ScriptScope; autocommit: boolean; confirmation: string } };
 type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValue | null)[][];
   more_rows: boolean; more_columns: boolean; elapsed_ms: number };
@@ -107,6 +108,9 @@ export function MysqlSqlWorkspace({ id, projectId, database, connection, environ
       if (mounted.current) setBusy(false);
     }
     if (!mounted.current) return;
+    const source = kind === "current" ? sqlHistorySource(value, review.source_range)
+      : kind === "selection" ? value.slice(selectionStart, selectionEnd) : value;
+    statement.historySql = review.delimiter && source ? "DELIMITER " + review.delimiter + "\n" + source : source;
     if (environment === "PROD" || needsSqlReview(review, environment)) setScriptConfirmation({ statement, review, text: "" });
     else void prepareRequest(statement, "script");
   }
@@ -133,24 +137,40 @@ export function MysqlSqlWorkspace({ id, projectId, database, connection, environ
     const requestId = crypto.randomUUID();
     active.current = requestId; setRunning(requestId);
     const args = { id, requestId, database: statement.database, sql: statement.sql, parameters: bindings(values) };
+    const scope = statement.scope === "현재 문장" ? "statement" : statement.scope === "선택 영역" ? "selection" : "document";
+    const finish = tab.startHistory(scope, statement.script ? statement.historySql : statement.sql);
     try {
       if (action === "script" && statement.script) {
         setScriptResult(null);
         const outcome = await invoke<MysqlScriptOutcome>("run_mysql_script", { id, requestId, input: {
           ...statement.script, sql: statement.sql, database: statement.database, parameters: args.parameters,
         } });
+        const sets = outcome.statements.flatMap(item => item.sets);
+        finish({ status: sqlHistoryStatus(outcome.status), elapsedMs: outcome.elapsed_ms, database: statement.database,
+          displayedRows: sumHistoryCounts(sets.map(set => set.columns.length ? set.rows.length : undefined)),
+          affectedRows: sumHistoryCounts(sets.map(set => set.affected_rows)),
+        });
         if (mounted.current) setScriptResult(outcome);
       } else if (action === "execute") {
         const data = await invoke<Result>("run_mysql_sql", args);
+        finish({ status: "completed", elapsedMs: data.elapsed_ms, database: statement.database, displayedRows: data.rows.length });
         if (mounted.current) {
           setResult({ data, statement, parameterFields: values.map(({ kind, masked }) => ({ kind, masked })) });
           setView("data");
         }
       } else {
         const data = await invoke<MysqlPlan>("mysql_sql_plan", { ...args, analyzed: action === "analyze" });
+        finish({ status: "planned", database: statement.database });
         if (mounted.current) { setPlan(data); setView("plan"); }
       }
-    } catch (cause) { if (mounted.current) setError(String(cause)); }
+    } catch (cause) {
+      const message = String(cause);
+      const status = message.startsWith("MySQL 요청을 중단했습니다.") || message.startsWith("MySQL 오류 1317 ")
+        ? "cancelled" : message.startsWith("MySQL 조회 시간이 초과되었습니다.") || message.startsWith("MySQL 오류 3024 ")
+          ? "timed_out" : "error";
+      finish({ status, database: statement.database });
+      if (mounted.current) setError(message);
+    }
     finally {
       active.current = null;
       if (mounted.current) { setRunning(null); setCancelPending(false); }

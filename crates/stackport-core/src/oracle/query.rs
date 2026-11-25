@@ -42,7 +42,12 @@ pub struct QuerySource {
 
 impl QuerySource {
     pub fn review(&self) -> Result<crate::SqlExecutionReview> {
-        Ok(review_statements(&self.statements()?))
+        let statements = self.statements()?;
+        let mut review = review_statements(&statements);
+        if let Some(statement) = statements.first().filter(|_| self.cursor_byte.is_some()) {
+            review.set_source_slice(&self.sql, statement.sql);
+        }
+        Ok(review)
     }
 
     fn statements(&self) -> Result<Vec<script::Statement<'_>>> {

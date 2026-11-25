@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { FileCode2, FileDown, FolderOpen, Plus, X } from "lucide-react";
+import { FileCode2, FileDown, FolderOpen, History, Plus, X } from "lucide-react";
 import { fileEncodings, type FileEncoding } from "./structuredFilePreview";
+import type { StartSqlHistory } from "./sqlHistory";
 
 export type SqlDocument = { text: string; line_ending: "lf" | "crlf"; bom: boolean; encoding: FileEncoding };
 export type SqlTarget = { profileId: string; projectId: string; projectName: string; profileName: string };
@@ -21,12 +22,15 @@ export type SqlEditorState = {
   edit: (id: string, text: string) => void;
   openFile: () => void;
   saveFile: (draft: SqlDraft) => void;
+  openHistory: () => void;
+  startHistory: StartSqlHistory;
 };
 export type SqlTabEditor = {
   tabId: string;
   text: string;
   onTextChange: (text: string) => void;
   reportBusy: (tabId: string, busy: boolean) => void;
+  startHistory: StartSqlHistory;
 };
 
 export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom: false, encoding: "utf-8" };
@@ -106,7 +110,7 @@ export function useSqlTabBusy({ tabId, reportBusy }: SqlTabEditor, busy: boolean
   useLayoutEffect(() => { reportBusy(tabId, busy); }, [tabId, reportBusy, busy]);
 }
 
-export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, openFile, saveFile }, render }: {
+export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, openFile, saveFile, openHistory, startHistory }, render }: {
   editor: SqlEditorState;
   render: (tab: SqlTabEditor) => ReactNode;
 }) {
@@ -128,11 +132,12 @@ export function SqlWorkspaceTabs({ editor: { tabs, select, add, close, edit, ope
       <button type="button" className="secondary small" disabled={busy} onClick={openFile}><FolderOpen size={14} aria-hidden /> SQL 파일 열기</button>
       <button type="button" className="secondary small" title="Ctrl+S" disabled={busy || !draft}
         onClick={() => draft && saveFile(draft)}><FileDown size={14} aria-hidden /> SQL 파일로 저장</button>
+      <button type="button" className="secondary small" disabled={busy} onClick={openHistory}><History size={14} aria-hidden /> 최근 SQL</button>
     </div>
     {!draft && <p className="sql-tabs-empty">새 SQL 탭을 만들거나 파일을 여세요.</p>}
     {tabs.tabs.map(item => <div key={item.id} role="tabpanel" id={sqlTabPanelId(item.id)}
       aria-labelledby={sqlTabButtonId(item.id)} hidden={item.id !== tabs.activeId}>
-      {render({ tabId: item.id, text: item.document.text, onTextChange: text => edit(item.id, text), reportBusy })}
+      {render({ tabId: item.id, text: item.document.text, onTextChange: text => edit(item.id, text), reportBusy, startHistory })}
     </div>)}
   </div>;
 }

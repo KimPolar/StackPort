@@ -829,6 +829,7 @@ impl PostgresManager {
             export,
         } = input;
         let span = sql_range::statement(&source, scope)?;
+        let source_range = matches!(scope, crate::PostgresSqlScope::Current { .. }).then(|| span.clone());
         if let Some(values) = &bindings {
             values.validate()?;
         }
@@ -864,24 +865,30 @@ impl PostgresManager {
             }
             outcome
         };
-        match timeout(deadline, operation).await {
-            Ok(outcome) => Ok(outcome
+        let mut outcome = match timeout(deadline, operation).await {
+            Ok(outcome) => outcome
                 .publish(&running, &self.store, &session.profile, request)
-                .await),
+                .await,
             Err(_) => {
                 session.connection.abort();
-                Ok(PostgresSqlOutcome::interrupted(true, false, true))
+                PostgresSqlOutcome::interrupted(true, false, true)
             }
-        }
+        };
+        outcome.source_range = source_range;
+        Ok(outcome)
     }
 
     pub fn script_review(&self, id: &str, source: &str, scope: crate::PostgresSqlScope) -> Result<crate::SqlExecutionReview> {
         self.session(id)?;
         let spans = sql_range::script(source, scope)?;
-        Ok(crate::sql_risk::review(crate::sql_risk::Dialect::Postgres, spans.into_iter().map(|span| {
+        let mut review = crate::sql_risk::review(crate::sql_risk::Dialect::Postgres, spans.iter().map(|span| {
             let line = sql::script::line_at(source, span.start);
-            (&source[span], line, 1)
-        })))
+            (&source[span.clone()], line, 1)
+        }));
+        if matches!(scope, crate::PostgresSqlScope::Current { .. }) {
+            review.source_range = spans.into_iter().next();
+        }
+        Ok(review)
     }
 
     pub async fn execute_script(

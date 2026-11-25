@@ -8,6 +8,7 @@ import { SqlServerParameterFields, type SqlParameter, type SqlServerParameterVal
 import type { ParameterPlan } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 import { SqlRiskDialog, useSqlExecutionCheck } from "./SqlRiskReview";
+import { sqlHistorySource, sqlHistoryStatus, sumHistoryCounts, type SqlHistorySubmission } from "./sqlHistory";
 
 type Scope = "document" | "batch" | "selection";
 type QueryInput = {
@@ -58,7 +59,7 @@ export function SqlServerSqlWorkspace({ id, projectId, database, connection, env
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [preparing, setPreparing] = useState(false);
-  const [parameterRequest, setParameterRequest] = useState<{ input: QueryInput; parameters: SqlParameter[]; parameterScope: string } | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ input: QueryInput; history: SqlHistorySubmission; parameters: SqlParameter[]; parameterScope: string } | null>(null);
   const [error, setError] = useState("");
   const editor = useRef<HTMLTextAreaElement>(null);
   const active = useRef<string | null>(null);
@@ -91,20 +92,21 @@ export function SqlServerSqlWorkspace({ id, projectId, database, connection, env
     if (!input) return;
     setError("");
     const label = { document: "전체 문서", batch: "현재 배치", selection: "선택 영역" }[scope];
-    void review.check("sql_server_query_review", { input }, label, confirmation => {
+    void review.check("sql_server_query_review", { input }, label, (confirmation, checked) => {
       const approved = { ...input, confirmation };
-      if (withParameters) void prepareParameters(approved);
-      else void execute(approved);
+      const history = { scope, sql: scope === "batch" ? sqlHistorySource(input.sql, checked.source_range) : input.sql };
+      if (withParameters) void prepareParameters(approved, history);
+      else void execute(approved, history);
     }, setError);
   }
 
-  async function prepareParameters(input: QueryInput) {
+  async function prepareParameters(input: QueryInput, history: SqlHistorySubmission) {
     if (active.current || parameterRequest) return;
     active.current = crypto.randomUUID();
     setPreparing(true); setError("");
     try {
       const plan = await invoke<ParameterPlan<number[]>>("sql_server_query_parameters", { input, withScope: true });
-      setParameterRequest({ input, parameterScope: plan.parameter_scope, parameters: plan.parameters.map(index => ({ index, name: `@P${index}` })) });
+      setParameterRequest({ input, history, parameterScope: plan.parameter_scope, parameters: plan.parameters.map(index => ({ index, name: `@P${index}` })) });
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -113,14 +115,19 @@ export function SqlServerSqlWorkspace({ id, projectId, database, connection, env
     }
   }
 
-  async function execute(input: QueryInput) {
+  async function execute(input: QueryInput, history: SqlHistorySubmission) {
     if (active.current) return;
     const requestId = crypto.randomUUID();
     active.current = requestId;
     setBusy(true); setStopping(false); setError(""); setOutcome(null); setResultIndex(0);
+    const finish = tab.startHistory(history.scope, history.sql);
     try {
-      setOutcome(await invoke<Outcome>("run_sql_server_query", { id, requestId, input }));
+      const result = await invoke<Outcome>("run_sql_server_query", { id, requestId, input });
+      finish({ status: sqlHistoryStatus(result.status), elapsedMs: result.elapsed_ms, database,
+        displayedRows: sumHistoryCounts(result.result_sets.map(set => set.rows.length)) });
+      setOutcome(result);
     } catch (cause) {
+      finish({ status: "error", database });
       setError(String(cause));
     } finally {
       active.current = null;
@@ -180,7 +187,8 @@ export function SqlServerSqlWorkspace({ id, projectId, database, connection, env
         setScope={{ project_id: projectId, engine: "sql_server", key: parameterRequest.parameterScope }}
         dismiss={() => setParameterRequest(null)} submit={values => {
         setParameterRequest(null);
-        void execute({ ...parameterRequest.input, parameters: parameterRequest.parameters.map(({ index }, position) => ({ index, ...values[position] })) });
+        void execute({ ...parameterRequest.input, parameters: parameterRequest.parameters.map(({ index }, position) => ({ index, ...values[position] })) },
+          parameterRequest.history);
       }} />
     </Dialog>}
     {error && <p className="error-banner" role="alert">{error}</p>}

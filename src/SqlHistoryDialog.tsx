@@ -5,9 +5,11 @@ import { sqlHistoryScopeLabels, sqlHistoryStatusLabels, type SqlHistoryEntry } f
 const time = new Intl.DateTimeFormat("ko-KR", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const number = new Intl.NumberFormat("ko-KR");
 
-export function SqlHistoryDialog({ connection, entries, onOpen, onClear, onClose }: {
+export function SqlHistoryDialog({ connection, entries, keepSource, onKeepSource, onOpen, onClear, onClose }: {
   connection: string;
   entries: SqlHistoryEntry[];
+  keepSource: boolean;
+  onKeepSource: (keep: boolean) => void;
   onOpen: (sql: string) => void;
   onClear: () => void;
   onClose: () => void;
@@ -41,7 +43,12 @@ export function SqlHistoryDialog({ connection, entries, onOpen, onClear, onClose
           <strong>{connection}</strong>
           {!!entries.length && <button type="button" className="secondary small" onClick={() => setConfirmClear(true)}>이 연결 기록 지우기</button>}
         </div>
-        <p className="form-note">기록은 앱을 실행하는 동안 메모리에 보관합니다. SQL 값과 이름은 기본 화면에서 가립니다.</p>
+        <label className="files-check"><input type="checkbox" checked={keepSource}
+          aria-describedby="sql-history-source-note" onChange={event => {
+            setRevealedId(null);
+            onKeepSource(event.target.checked);
+          }} /> 이 연결의 SQL 원문 보관</label>
+        <p className="form-note" id="sql-history-source-note">기록은 앱을 실행하는 동안 메모리에 보관합니다. 목록에서는 SQL 값과 이름을 가립니다. 원문 보관을 끄면 기존 기록의 원문도 지웁니다.</p>
         {!selected ? <p role="status" className="form-note">이 연결의 최근 실행 기록이 없습니다.</p> :
           <div className="sql-history-layout">
             <ul className="sql-history-list" aria-label="실행 기록 목록">{entries.map(entry => <li key={entry.id}>
@@ -57,12 +64,17 @@ export function SqlHistoryDialog({ connection, entries, onOpen, onClear, onClose
               <strong>{sqlHistoryScopeLabels[selected.scope]} · {sqlHistoryStatusLabels[selected.outcome.status]}</strong>
               <p className="form-note">
                 {time.format(selected.startedAt)}
+                {selected.outcome.database && ` · 기본 데이터베이스 ${selected.outcome.database}`}
                 {selected.outcome.elapsedMs !== undefined && ` · ${number.format(selected.outcome.elapsedMs)} ms`}
                 {selected.outcome.displayedRows !== undefined && ` · 화면에 ${number.format(selected.outcome.displayedRows)}개 행`}
+                {selected.outcome.affectedRows !== undefined && ` · 영향받은 행 ${number.format(selected.outcome.affectedRows)}개`}
                 {selected.outcome.batch && ` · ${selected.outcome.batch.total}개 문장 중 ${selected.outcome.batch.finished}개 완료`}
               </p>
               <pre aria-label={revealed ? "실행한 SQL 원문" : "값을 가린 SQL"} tabIndex={0}>{revealed ? selected.sql : selected.masked}</pre>
-              {selected.sql === null ? <p className="form-note">긴 SQL은 가린 미리보기와 실행 정보를 보관했습니다.</p> :
+              {selected.sql === null ? <p className="form-note">{selected.withheld === "masked_only"
+                ? "이 기록은 값을 가린 미리보기로 보관했습니다."
+                : selected.withheld === "scope_unknown" ? "이 요청의 실행 범위를 확인할 수 없어 실행 정보만 보관했습니다."
+                  : "긴 SQL은 가린 미리보기와 실행 정보를 보관했습니다."}</p> :
                 <div className="sql-history-controls">
                   <button type="button" className="secondary small" aria-pressed={revealed}
                     onClick={() => setRevealedId(revealed ? null : selected.id)}>SQL 원문 표시</button>

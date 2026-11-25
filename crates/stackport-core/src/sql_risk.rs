@@ -1,5 +1,6 @@
 use crate::Result;
 use serde::Serialize;
+use std::ops::Range;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Dialect {
@@ -14,6 +15,10 @@ pub(crate) enum Dialect {
 pub struct SqlExecutionReview {
     risks: Vec<Risk>,
     more_risks: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) source_range: Option<Range<usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) delimiter: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -35,6 +40,13 @@ enum RiskKind {
 }
 
 impl SqlExecutionReview {
+    pub(crate) fn set_source_slice(&mut self, source: &str, slice: &str) {
+        let start = (slice.as_ptr() as usize).checked_sub(source.as_ptr() as usize);
+        self.source_range = start
+            .map(|start| start..start + slice.len())
+            .filter(|range| source.get(range.clone()) == Some(slice));
+    }
+
     pub(crate) fn require_production_confirmation(
         &self,
         environment: &str,
@@ -69,6 +81,8 @@ pub(crate) fn review<'a>(
     let mut review = SqlExecutionReview {
         risks: Vec::new(),
         more_risks: false,
+        source_range: None,
+        delimiter: None,
     };
     for (sql, line, repeat) in parts {
         let tokens = tokenize(sql, line, dialect);

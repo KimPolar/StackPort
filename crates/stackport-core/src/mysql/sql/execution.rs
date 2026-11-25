@@ -110,9 +110,16 @@ impl MysqlManager {
     pub fn script_review(&self, id: &str, sql: &str, scope: &script::Scope) -> Result<crate::SqlExecutionReview> {
         let mode = self.session(id)?.sql_mode;
         let parts = script::parts(sql, scope, mode)?;
-        Ok(crate::sql_risk::review(crate::sql_risk::Dialect::Mysql {
+        let mut review = crate::sql_risk::review(crate::sql_risk::Dialect::Mysql {
             backslash: !mode.no_backslash, ansi_quotes: mode.ansi_quotes,
-        }, parts.into_iter().map(|part| (part.sql, part.line, 1))))
+        }, parts.iter().map(|part| (part.sql, part.line, 1)));
+        if let Some(part) = parts.first().filter(|_| !matches!(scope, script::Scope::Document)) {
+            if matches!(scope, script::Scope::Current { .. }) {
+                review.set_source_slice(sql, part.sql);
+            }
+            review.delimiter = (part.delimiter != ";").then(|| part.delimiter.to_owned());
+        }
+        Ok(review)
     }
 
     pub fn script_parameters(&self, id: &str, sql: &str, scope: &script::Scope) -> Result<usize> {

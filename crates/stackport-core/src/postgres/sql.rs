@@ -52,6 +52,8 @@ pub struct PostgresSqlOutcome {
     #[serde(flatten)]
     state: Outcome,
     connection_closed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) source_range: Option<Range<usize>>,
 }
 
 #[derive(Serialize)]
@@ -109,6 +111,7 @@ impl PostgresSqlOutcome {
                 server_confirmed,
             },
             connection_closed,
+            source_range: None,
         }
     }
 
@@ -264,6 +267,7 @@ pub(super) async fn query(
             let outcome = PostgresSqlOutcome {
                 state: failed(error, None),
                 connection_closed: false,
+                source_range: None,
             };
             return (outcome, true);
         }
@@ -278,6 +282,7 @@ pub(super) async fn query(
                 PostgresSqlOutcome {
                     state: failed(error, None),
                     connection_closed: !reusable,
+                    source_range: None,
                 },
                 reusable,
             );
@@ -311,6 +316,7 @@ pub(super) async fn query(
         PostgresSqlOutcome {
             state,
             connection_closed: !reusable,
+            source_range: None,
         },
         reusable,
     )

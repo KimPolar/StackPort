@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import type { SqlSourceRange } from "./sqlHistory";
 
 type RiskKind = "data_change" | "all_rows" | "bulk" | "schema" | "opaque";
 type SqlRisk = { line: number; action: string; kind: RiskKind; repeat: number };
-export type SqlExecutionReview = { risks: SqlRisk[]; more_risks: boolean };
+export type SqlExecutionReview = { risks: SqlRisk[]; more_risks: boolean; source_range?: SqlSourceRange; delimiter?: string };
 export type SqlReviewTarget = { connection: string; database: string | null; environment: string; scope: string };
 
 const descriptions: Record<RiskKind, string> = {
@@ -26,7 +27,7 @@ export function useSqlExecutionCheck(environment: string) {
   const [proposal, setProposal] = useState<{
     review: SqlExecutionReview;
     scope: string;
-    proceed: (confirmation: string) => void;
+    proceed: (confirmation: string, review: SqlExecutionReview) => void;
   } | null>(null);
   useEffect(() => {
     mounted.current = true;
@@ -34,7 +35,7 @@ export function useSqlExecutionCheck(environment: string) {
   }, []);
 
   async function check(command: string, args: Record<string, unknown>, scope: string,
-    proceed: (confirmation: string) => void, error: (message: string) => void) {
+    proceed: (confirmation: string, review: SqlExecutionReview) => void, error: (message: string) => void) {
     if (pending.current || proposal) return;
     pending.current = true;
     setChecking(true);
@@ -42,7 +43,7 @@ export function useSqlExecutionCheck(environment: string) {
       const review = await invoke<SqlExecutionReview>(command, args);
       if (!mounted.current) return;
       if (needsSqlReview(review, environment)) setProposal({ review, scope, proceed });
-      else proceed("");
+      else proceed("", review);
     } catch (cause) {
       if (mounted.current) error(String(cause));
     } finally {
@@ -55,7 +56,7 @@ export function useSqlExecutionCheck(environment: string) {
     checking, proposal, check, close: () => setProposal(null),
     confirm: (confirmation: string) => {
       setProposal(null);
-      proposal?.proceed(confirmation);
+      proposal?.proceed(confirmation, proposal.review);
     },
   };
 }

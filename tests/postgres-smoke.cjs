@@ -1282,6 +1282,13 @@ async function verify(browser, fixture, gateway, jump) {
   await sql.evaluate(input => input.setSelectionRange(3, 3));
   await sql.press('Control+Shift+Enter');
   await results.getByText('123', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '최근 SQL', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  await history.getByRole('list', { name: '실행 기록 목록' }).getByText('현재 문장 · 완료', { exact: true }).waitFor();
+  await history.getByRole('button', { name: 'SQL 원문 표시', exact: true }).click();
+  assert.equal(await history.getByLabel('실행한 SQL 원문', { exact: true }).textContent(), 'SELECT 123');
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
   await sql.fill('SELECT missing FROM report.visible');
   await sql.press('Control+Enter');
   await page.getByRole('button', { name: '오류 위치로 이동' }).click();

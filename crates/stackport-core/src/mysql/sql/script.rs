@@ -17,6 +17,7 @@ pub(super) struct Part<'a> {
     pub(super) sql: &'a str,
     pub(super) line: u32,
     pub(super) parameters: usize,
+    pub(super) delimiter: &'a str,
     end: usize,
 }
 
@@ -101,6 +102,7 @@ fn scan<'a>(
                 at,
                 at + delimiter.len(),
                 parameters,
+                delimiter,
                 &mut parts,
             );
             parameters = 0;
@@ -150,6 +152,7 @@ fn scan<'a>(
         source.len(),
         source.len(),
         parameters,
+        delimiter,
         &mut parts,
     );
     Ok((parts, delimiter))
@@ -201,6 +204,7 @@ fn finish<'a>(
     sql_end: usize,
     end: usize,
     parameters: usize,
+    delimiter: &'a str,
     parts: &mut Vec<Part<'a>>,
 ) {
     if let Some((start, line)) = start {
@@ -208,6 +212,7 @@ fn finish<'a>(
             sql: source[start..sql_end].trim_end(),
             line,
             parameters,
+            delimiter,
             end,
         });
     }
@@ -240,6 +245,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(selection[0].sql, document[0].sql);
+        assert_eq!(selection[0].delimiter, "$$");
+        let reopened = format!("DELIMITER {}\n{}", selection[0].delimiter, selection[0].sql);
+        let reopened = parts(&reopened, &Scope::Document, SqlMode::default()).unwrap();
+        assert_eq!(reopened[0].sql, document[0].sql);
         assert_eq!(
             parts(
                 sql,

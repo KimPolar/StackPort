@@ -1257,6 +1257,13 @@ async function verifySqlEditor(page, workspace) {
   await scriptResult.getByRole('status').filter({ hasText: '결과를 받은 문장 2개' }).waitFor();
   await scriptResult.getByRole('combobox').selectOption('1');
   await scriptGrid.getByRole('cell', { name: '스크립트 다음 결과', exact: true }).waitFor();
+  await workspace.getByRole('button', { name: '최근 SQL', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  await history.getByRole('button', { name: 'SQL 원문 표시', exact: true }).click();
+  assert.equal(await history.getByLabel('실행한 SQL 원문', { exact: true }).textContent(),
+    "SELECT '스크립트 첫 결과';\nSELECT ? AS next_result;");
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
   await editor.getByRole('button', { name: '읽기 전용 조회', exact: true }).click();
   await plan.getByRole('columnheader', { name: '실제 행 / 회' }).waitFor();
   await toggle.click();

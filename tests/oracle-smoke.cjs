@@ -378,6 +378,13 @@ async function verifyBindForm(pane, editor, grid) {
   await binding.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   await binding.waitFor({ state: 'detached' });
   await grid.getByText("한글'한글'", { exact: true }).waitFor();
+  const page = pane.page();
+  await page.getByRole('button', { name: '최근 SQL', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '최근 SQL', exact: true });
+  await history.getByRole('button', { name: 'SQL 원문 표시', exact: true }).click();
+  assert.equal(await history.getByLabel('실행한 SQL 원문', { exact: true }).textContent(), "SELECT :input || :INPUT AS marker FROM dual;");
+  await history.getByRole('button', { name: '닫기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
 }
 
 async function verifyMockBindEditor(page) {

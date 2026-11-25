@@ -8,12 +8,13 @@ import { OracleParameterFields, SnowflakeParameterFields, type OracleParameterVa
 import type { ParameterPlan } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 import { SqlRiskDialog, useSqlExecutionCheck } from "./SqlRiskReview";
+import { sqlHistorySource, sqlHistoryStatus, sumHistoryCounts, type SqlHistorySubmission } from "./sqlHistory";
 
 type Scope = "document" | "current" | "selection";
 type Engine = "oracle" | "snowflake";
 type QuerySource = { sql: string; first_line: number; cursor_byte: number | null; confirmation?: string };
 type OracleBinding = OracleParameterValue & { name: string };
-type ParameterRequest = { input: QuerySource; parameterScope: string } &
+type ParameterRequest = { input: QuerySource; history: SqlHistorySubmission; parameterScope: string } &
   ({ engine: "oracle"; names: string[] } | { engine: "snowflake"; count: number });
 type ResultSet = {
   columns: { name: string; data_type: string }[];
@@ -90,24 +91,26 @@ export function RelationalScriptWorkspace({ id, projectId, database, connection,
     };
     setError("");
     const label = { document: "전체 문서", current: "현재 문장", selection: "선택 영역" }[scope];
-    void review.check(engine + "_query_review", { input }, label, confirmation => {
-      void prepare({ ...input, confirmation }, withParameters);
+    void review.check(engine + "_query_review", { input }, label, (confirmation, checked) => {
+      const history = scope === "current"
+        ? { scope: "statement" as const, sql: sqlHistorySource(sql, checked.source_range) } : { scope, sql };
+      void prepare({ ...input, confirmation }, withParameters, history);
     }, setError);
   }
 
-  async function prepare(input: QuerySource, withParameters: boolean) {
+  async function prepare(input: QuerySource, withParameters: boolean, history: SqlHistorySubmission) {
     if (engine === "oracle" || withParameters) {
       active.current = crypto.randomUUID();
       setPreparing(true); setError("");
       try {
         if (engine === "snowflake") {
           const plan = await invoke<ParameterPlan<number>>("snowflake_query_parameters", { input, withScope: true });
-          setParameterRequest({ engine, input, count: plan.parameters, parameterScope: plan.parameter_scope });
+          setParameterRequest({ engine, input, history, count: plan.parameters, parameterScope: plan.parameter_scope });
           return;
         }
         const plan = await invoke<ParameterPlan<string[]>>("oracle_query_parameters", { id, input, withScope: true });
         if (plan.parameters.length) {
-          setParameterRequest({ engine, input, names: plan.parameters, parameterScope: plan.parameter_scope });
+          setParameterRequest({ engine, input, history, names: plan.parameters, parameterScope: plan.parameter_scope });
           return;
         }
       } catch (cause) {
@@ -118,17 +121,25 @@ export function RelationalScriptWorkspace({ id, projectId, database, connection,
         setPreparing(false);
       }
     }
-    await execute(input);
+    await execute(input, history);
   }
 
-  async function execute(input: QuerySource & { parameters?: OracleBinding[] | SnowflakeParameterValue[] }) {
+  async function execute(input: QuerySource & { parameters?: OracleBinding[] | SnowflakeParameterValue[] }, history: SqlHistorySubmission) {
     if (active.current) return;
     const requestId = crypto.randomUUID();
     active.current = requestId;
     setBusy(true); setStopping(false); setError(""); setOutcome(null); setStatementIndex(0);
+    const finish = tab.startHistory(history.scope, history.sql);
     try {
-      setOutcome(await invoke<Outcome>(`run_${engine}_query`, { id, requestId, input }));
-    } catch (cause) { setError(String(cause)); }
+      const result = await invoke<Outcome>(`run_${engine}_query`, { id, requestId, input });
+      finish({ status: sqlHistoryStatus(result.status), elapsedMs: result.elapsed_ms, database,
+        displayedRows: sumHistoryCounts(result.statements.map(statement => statement.data?.rows.length)),
+        affectedRows: sumHistoryCounts(result.statements.flatMap(({ rows_affected, stats }) => [
+          rows_affected, stats?.num_rows_inserted, stats?.num_rows_updated, stats?.num_rows_deleted,
+        ])),
+      });
+      setOutcome(result);
+    } catch (cause) { finish({ status: "error", database }); setError(String(cause)); }
     finally { active.current = null; setBusy(false); setStopping(false); }
   }
 
@@ -180,12 +191,12 @@ export function RelationalScriptWorkspace({ id, projectId, database, connection,
         dismiss={() => setParameterRequest(null)} submit={values => {
           const parameters = parameterRequest.names.map((name, index) => ({ ...values[index], name }));
           setParameterRequest(null);
-          void execute({ ...parameterRequest.input, parameters });
+          void execute({ ...parameterRequest.input, parameters }, parameterRequest.history);
         }} /> : <SnowflakeParameterFields count={parameterRequest.count}
           setScope={{ project_id: projectId, engine: "snowflake", key: parameterRequest.parameterScope }}
           dismiss={() => setParameterRequest(null)} submit={parameters => {
           setParameterRequest(null);
-          void execute({ ...parameterRequest.input, parameters });
+          void execute({ ...parameterRequest.input, parameters }, parameterRequest.history);
         }} />}
     </Dialog>}
   </section>;
