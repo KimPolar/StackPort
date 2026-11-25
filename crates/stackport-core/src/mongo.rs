@@ -1,9 +1,12 @@
+mod document_edit;
+mod document_snapshot;
 mod pipeline;
 mod pipeline_store;
 mod profiles;
 mod query;
 mod schema;
 
+pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
@@ -16,7 +19,7 @@ use bson::{doc, Bson, Document};
 use futures_util::TryStreamExt;
 use mongodb::{
     error::{Error, ErrorKind},
-    options::{ClientOptions, Credential, Tls, TlsOptions},
+    options::{Acknowledgment, ClientOptions, Credential, ReadPreference, SelectionCriteria, Tls, TlsOptions},
     Client,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -51,6 +54,7 @@ fn deserialize_password<'de, D: Deserializer<'de>>(
 pub struct MongoSessionInfo {
     id: String,
     database: Option<String>,
+    allow_edits: bool,
 }
 
 #[derive(Serialize)]
@@ -75,6 +79,7 @@ pub struct MongoIndex {
 
 struct Session {
     client: Client,
+    editor: Option<Arc<document_edit::DocumentEditor>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -99,12 +104,14 @@ impl MongoManager {
         revision: i64,
         password: MongoPassword,
         confirmation: &str,
+        allow_edits: bool,
     ) -> Result<MongoSessionInfo> {
         let store = self.store.clone();
         let profile =
             tokio::task::spawn_blocking(move || store.mongo_profile(&profile_id, revision))
                 .await
                 .map_err(|_| "MongoDB 연결 설정을 읽을 수 없습니다.")??;
+        let editor = allow_edits.then(|| Arc::new(document_edit::DocumentEditor::new(profile.clone())));
         let settings = profile.settings;
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
@@ -154,6 +161,12 @@ impl MongoManager {
             options.max_pool_size = Some(4);
             options.retry_reads = Some(false);
             options.retry_writes = Some(false);
+            if allow_edits {
+                if options.write_concern.as_ref().is_some_and(|setting| setting.w == Some(Acknowledgment::Nodes(0))) {
+                    return Err("문서 편집에는 서버가 결과를 확인하는 쓰기 설정(w=1 이상)이 필요합니다.".into());
+                }
+                options.selection_criteria = Some(SelectionCriteria::ReadPreference(ReadPreference::Primary));
+            }
             let client =
                 Client::with_options(options).map_err(|_| "MongoDB 연결 설정을 확인하세요.")?;
             client
@@ -173,10 +186,11 @@ impl MongoManager {
                 id.clone(),
                 Session {
                     client,
+                    editor,
                     _permit: permit,
                 },
             );
-        Ok(MongoSessionInfo { id, database })
+        Ok(MongoSessionInfo { id, database, allow_edits })
     }
 
     pub async fn close(&self, id: &str) -> Result<()> {

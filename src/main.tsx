@@ -1690,7 +1690,8 @@ function App() {
     {mysqlProfile && networkSqlEditor && <div hidden={historyOpen}>
       <MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} editor={networkSqlEditor} onOpenTunnels={openTunnels} />
     </div>}
-    {mongoProfile && <div hidden={historyOpen}><MongoWorkspace key={`${mongoProfile.id}:${mongoProfile.revision}`} profile={mongoProfile} /></div>}
+    {mongoProfile && <div hidden={historyOpen}><MongoWorkspace key={`${mongoProfile.id}:${mongoProfile.revision}`} profile={mongoProfile}
+      onBusy={busy => { localFileBusy.current = busy; }} /></div>}
     {sqlServerProfile && networkSqlEditor && <div hidden={historyOpen}><RelationalWorkspace key={`${sqlServerProfile.id}:${sqlServerProfile.revision}`} editor={networkSqlEditor}
       engine="SQL Server" prefix="sql_server" profile={sqlServerProfile} database={sqlServerProfile.settings.database}
       passwordless={sqlServerProfile.settings.authentication === "windows"} /></div>}
@@ -2299,6 +2300,8 @@ const auditOperationNames: Record<string, string> = {
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
   "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
   "mongo_pipeline.create": "MongoDB 파이프라인 생성", "mongo_pipeline.update": "MongoDB 파이프라인 편집", "mongo_pipeline.delete": "MongoDB 파이프라인 삭제",
+  "mongo.document.insert": "MongoDB 문서 삽입", "mongo.document.duplicate": "MongoDB 문서 복제", "mongo.document.replace": "MongoDB 문서 수정",
+  "mongo.document.delete": "MongoDB 문서 삭제", "mongo.document.unconfirmed": "MongoDB 문서 변경 결과 미확인",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",
   "sql_parameter_set.create": "SQL 매개변수 세트 저장",

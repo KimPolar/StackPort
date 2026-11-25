@@ -10,6 +10,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·뷰를 검색합니다. 문서는 필터·표시 필드·정렬을 서버에 전달해 20개씩 읽고, BSON 타입을 보존하는 Canonical Extended JSON으로 표시합니다. BSON과 표시 문자열 모두 문서당 64 KiB까지 미리 볼 수 있고, 페이지의 표시 문자열 합계는 384 KiB까지입니다. 큰 문서는 표시 필드를 줄여 다시 조회할 수 있습니다. 컬렉션 인덱스는 앞 50개까지 키·고유 여부·TTL을 읽습니다. [MongoDB Rust 드라이버 데이터베이스와 컬렉션](https://www.mongodb.com/docs/drivers/rust/current/database-collection/)
 
+접속할 때 **이 연결에서 문서 편집 허용**을 선택하면 일반 컬렉션에서 문서 한 건을 삽입·복제·수정·삭제할 수 있습니다. 수정·복제·삭제는 `_id`로 전체 문서를 새로 읽습니다. Extended JSON으로 64 KiB 이하의 문서를 편집할 수 있으며, 기존 BSON을 손실 없이 표현할 수 있는지 확인합니다. 수정할 때는 `_id`를 유지합니다. 삽입과 복제는 `_id`를 생략하면 검토 화면에 새 ObjectId를 표시합니다. 중복 필드 이름이 있는 입력은 거절합니다.
+
+**변경 검토**에서 전체 원본과 입력값을 확인합니다. 검토는 5분 이내에 한 번 적용할 수 있습니다. `PROD`에서 적용할 때는 `PROD`, 삭제할 때는 `DELETE`를 입력합니다. 수정과 삭제는 MongoDB 단일 문서 쓰기 조건으로 원본 값과 BSON 타입을 검사합니다. 쓰기 명령에는 검토한 컬렉션의 UUID를 포함합니다. 서버의 `collectionUUID`와 `$getField` 지원이 필요합니다. 권한·컬렉션 유효성 검사·고유 인덱스는 서버에서 적용되며, 응답이 끊겨 결과를 확인하지 못한 경우 다시 조회하도록 안내합니다. 작업 기록에는 연결·환경·결과를 남깁니다. [MongoDB 단일 문서 쓰기](https://www.mongodb.com/docs/manual/core/write-operations-atomicity/) · [MongoDB BSON 비교](https://www.mongodb.com/docs/manual/reference/bson-type-comparison-order/)
+
 컬렉션과 뷰의 **스키마 분석**은 선택한 대상에서 `$sample`로 최대 20·50·100개의 문서를 읽습니다. 분석에 포함된 문서를 분모로 필드 등장 비율을 계산하고, 각 BSON 유형을 문서당 한 번 집계합니다. 배열 항목은 `[]`로 표시하며, `a.b`처럼 점이 포함된 단일 필드 이름은 `["a.b"]`로 구분합니다. 화면에서 필드 경로를 검색하고 두 가지 이상의 유형이 나온 경로만 볼 수 있습니다. 64 KiB를 넘는 문서, 경로 제한을 넘는 필드는 집계에서 제외하고 화면에 알립니다. 결과에는 필드 경로와 유형별 개수를 표시합니다. 서버 처리 시간은 최대 7초로 설정하고, 디스크를 사용하는 집계는 비활성화합니다. [MongoDB 무작위 표본](https://www.mongodb.com/docs/manual/reference/operator/aggregation/sample/) · [MongoDB 집계 실행 옵션](https://www.mongodb.com/docs/manual/reference/command/aggregate/)
 
 **집계 파이프라인**에서 단계의 연산자와 Extended JSON 값을 편집하고, 위아래로 옮기거나 활성화 여부를 바꿀 수 있습니다. **여기까지 미리보기**는 지정한 단계까지의 활성 단계만 실행합니다. **전체 미리보기**는 모든 활성 단계를 실행합니다. `$match`, `$project`, `$group`, `$sort`, `$lookup`, `$facet` 등을 지원합니다. 중첩 파이프라인을 포함해 최대 24단계까지 실행하고, 실행 단계에서 서버 JavaScript와 쓰기 연산자를 차단합니다. 현재 연결의 권한으로 실행하며 서버 처리 시간은 7초, 디스크 사용은 비활성으로 설정합니다. 미리보기는 최대 문서 20개를 Canonical Extended JSON으로 표시하고 문서당 64 KiB, 전체 384 KiB 한도를 적용합니다. [MongoDB 집계 단계](https://www.mongodb.com/docs/manual/reference/mql/aggregation-stages/) · [MongoDB Rust 드라이버 집계](https://www.mongodb.com/docs/drivers/rust/current/aggregation/)
@@ -569,7 +573,7 @@ node tests/desktop-smoke.cjs
 
 MongoDB 검사는 `tests/mongo-smoke.cjs`를 사용합니다. `STACKPORT_CDP_URL`에 격리 앱의 디버깅 주소, `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MONGO_BIN`에 Windows ZIP에서 꺼낸 `mongod.exe`의 절대 경로를 지정합니다. `STACKPORT_TEST_PYTHON`으로 PyMongo가 설치된 Python을 실행해 임시 서버의 문서와 제한 계정을 만듭니다. `STACKPORT_TEST_OPENSSL`은 테스트용 TLS 인증서 생성에 사용합니다.
 
-Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 스키마 분석은 같은 계정에서 배열 내부 유형의 문서별 집계, 점이 포함된 필드와 중첩 경로 구분, 크기 초과 문서 제외, 권한 범위와 뷰를 검사합니다. 집계는 단계 이동과 비활성화의 결과 차이, 중간 및 전체 미리보기, 프로젝트 저장·다시 열기·JSON 교환, 중첩 쓰기 단계 차단을 검사합니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
+Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 문서 편집은 네 가지 변경, 표시 필드를 제한한 조회에서 전체 문서 편집, 쓰기 권한 확인, BSON 타입만 바뀐 원본과 같은 이름으로 다시 생성한 컬렉션의 변경 거절을 검사합니다. 스키마 분석은 같은 계정에서 배열 내부 유형의 문서별 집계, 점이 포함된 필드와 중첩 경로 구분, 크기 초과 문서 제외, 권한 범위와 뷰를 검사합니다. 집계는 단계 이동과 비활성화의 결과 차이, 중간 및 전체 미리보기, 프로젝트 저장·다시 열기·JSON 교환, 중첩 쓰기 단계 차단을 검사합니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
 
 SQL Server 검사는 `tests/sql-server-smoke.cjs`를 사용합니다. `STACKPORT_SQL_SERVER_PORT`에 루프백 테스트 인스턴스의 TCP 포트, `STACKPORT_SQL_SERVER_CA`에 PEM CA 경로, `STACKPORT_SQL_SERVER_SA_PASSWORD`에 테스트 인스턴스의 관리자 암호를 지정합니다. 스크립트는 Node의 `tedious` 패키지로 실행마다 별도 데이터베이스, 테이블·뷰와 제한 계정을 생성합니다. 패키지 경로는 `STACKPORT_TEDIOUS_PATH`로 지정할 수 있습니다. 격리 인스턴스에서 검사하고, 앱의 디버깅 주소는 `STACKPORT_CDP_URL`에 지정합니다.
 

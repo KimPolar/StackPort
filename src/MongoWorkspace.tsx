@@ -5,11 +5,12 @@ import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
+import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
-type Session = { id: string; database: string | null };
+type Session = { id: string; database: string | null; allow_edits: boolean };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
 type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null };
@@ -18,12 +19,13 @@ type Query = { filter: string; projection: string; sort_field: string; descendin
 const defaultQuery: Query = { filter: "", projection: "", sort_field: "_id", descending: false, page: 0 };
 const displayNumber = new Intl.NumberFormat("ko-KR");
 
-export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
+export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onBusy: (busy: boolean) => void }) {
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [allowEdits, setAllowEdits] = useState(false);
   const [error, setError] = useState("");
   const active = useRef<string | null>(null);
   const pending = useRef(false);
@@ -44,7 +46,7 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setPassword("");
     try {
-      const next = await invoke<Session>("open_mongo", { profileId: profile.id, revision: profile.revision, password, confirmation });
+      const next = await invoke<Session>("open_mongo", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits });
       if (!mounted.current) { await invoke("close_mongo", { id: next.id }); return; }
       active.current = next.id; setSession(next); setLogin(false);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
@@ -65,13 +67,13 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
         <p className="path">MongoDB · {mongoAddress(settings.uri)}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.allow_edits ? "문서 편집 허용" : "읽기 전용"}</span>
         {session ? <button type="button" className="secondary" onClick={disconnect}>MongoDB 연결 끊기</button> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setLogin(true); }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
+          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setLogin(true); }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} projectId={profile.project_id} />}
+    {session && <Browse key={session.id} session={session} projectId={profile.project_id} environment={settings.environment} onBusy={onBusy} />}
     {login && <Dialog title="MongoDB 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{mongoAddress(settings.uri)}</p>
@@ -79,6 +81,8 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
           maxLength={4096} disabled={busy} onChange={event => setPassword(event.target.value)} /></label>}
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" autoComplete="off"
           value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
+        <label className="mongo-edit-permission"><input type="checkbox" checked={allowEdits} disabled={busy}
+          onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 문서 편집 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP는 암호와 데이터를 평문으로 전송합니다.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
@@ -87,7 +91,7 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
   </section>;
 }
 
-function Browse({ session, projectId }: { session: Session; projectId: string }) {
+function Browse({ session, projectId, environment, onBusy }: { session: Session; projectId: string; environment: string; onBusy: (busy: boolean) => void }) {
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
@@ -104,7 +108,8 @@ function Browse({ session, projectId }: { session: Session; projectId: string })
     </div>
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
-        projectId={projectId} revision={revision} refresh={() => setRevision(value => value + 1)} />
+        projectId={projectId} revision={revision} refresh={() => setRevision(value => value + 1)}
+        allowEdits={session.allow_edits && collection.kind === "collection" && !collection.name.startsWith("system.")} environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
   </div>;
 }
@@ -135,12 +140,15 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, projectId, revision, refresh }: {
+function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, environment, onBusy }: {
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
+  allowEdits: boolean; environment: string; onBusy: (busy: boolean) => void;
 }) {
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline">("documents");
   const [draft, setDraft] = useState(defaultQuery);
   const [query, setQuery] = useState(defaultQuery);
+  const [documentEdit, setDocumentEdit] = useState<MongoDocumentChange | null>(null);
+  const [documentNotice, setDocumentNotice] = useState("");
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
   const documents = useNativeRead<MongoDocumentPage>("mongo_documents", docArgs, revision);
@@ -170,6 +178,10 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       {indexes.data?.has_next && <p className="form-note mongo-note">앞 50개 인덱스를 표시합니다.</p>}
     </>}
     {view === "documents" && <>
+      {allowEdits && <div className="mongo-actions">
+        <button type="button" className="secondary small" onClick={() => setDocumentEdit({ kind: "insert" })}>문서 삽입</button>
+      </div>}
+      {documentNotice && <p className="form-note mongo-note" role="status">{documentNotice}</p>}
       <details className="mongo-query">
         <summary>필터 및 정렬</summary>
         <form onSubmit={event => { event.preventDefault(); setQuery({ ...draft, page: 0 }); }}>
@@ -191,13 +203,24 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       </details>
       <ReadStatus {...documents} />
       {documents.data?.items.length ? <MongoDocumentList items={documents.data.items} offset={query.page * 20} heading="MongoDB 문서"
-        limitMessage="미리보기 한도를 초과했습니다. 표시 필드를 지정해 다시 조회하세요." /> : null}
+        limitMessage="미리보기 한도를 초과했습니다. 표시 필드를 지정해 다시 조회하세요."
+        actions={allowEdits ? (documentId, row) => <div className="mongo-actions">
+          <button type="button" className="secondary small" aria-label={`${row}행 문서 수정`} onClick={() => setDocumentEdit({ kind: "replace", document_id: documentId })}>수정</button>
+          <button type="button" className="secondary small" aria-label={`${row}행 문서 복제`} onClick={() => setDocumentEdit({ kind: "duplicate", document_id: documentId })}>복제</button>
+          <button type="button" className="secondary small" aria-label={`${row}행 문서 삭제`} onClick={() => setDocumentEdit({ kind: "delete", document_id: documentId })}>삭제</button>
+        </div> : undefined} /> : null}
       {documents.data?.items.some(item => item.json === null) && <div className="mongo-actions">
         <button type="button" className="secondary small" onClick={narrowDocument}>문서 ID만 보기</button>
       </div>}
       <Pager label="MongoDB 문서 페이지" page={query.page} next={documents.data?.has_next === true} loading={documents.loading}
         change={page => setQuery(value => ({ ...value, page }))} />
     </>}
+    {documentEdit && <MongoDocumentEditDialog id={id} database={database} collection={collection.name} change={documentEdit}
+      environment={environment} onBusy={onBusy} onClose={() => setDocumentEdit(null)} onApplied={report => {
+        setDocumentEdit(null);
+        setDocumentNotice(`문서 ${report.affected_count}개 변경 완료${report.audit_warning ? " · 완료 감사 기록 저장 실패" : ""}`);
+        refresh();
+      }} />}
   </section>;
 }
 

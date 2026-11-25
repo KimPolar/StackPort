@@ -63,13 +63,13 @@ struct PostgresColumn {
     data_type: String,
 }
 
-struct Properties<'a>(Vec<(String, &'a RawValue)>);
+pub(crate) struct Properties<'a, const LIMIT: usize = COLUMNS>(pub(crate) Vec<(String, &'a RawValue)>);
 
-impl<'de> Deserialize<'de> for Properties<'de> {
+impl<'de, const LIMIT: usize> Deserialize<'de> for Properties<'de, LIMIT> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        struct UniqueProperties;
-        impl<'de> Visitor<'de> for UniqueProperties {
-            type Value = Properties<'de>;
+        struct UniqueProperties<const LIMIT: usize>;
+        impl<'de, const LIMIT: usize> Visitor<'de> for UniqueProperties<LIMIT> {
+            type Value = Properties<'de, LIMIT>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a JSON record with distinct properties")
@@ -82,7 +82,7 @@ impl<'de> Deserialize<'de> for Properties<'de> {
                 let mut entries = Vec::new();
                 let mut names = HashSet::new();
                 while let Some((key, value)) = reader.next_entry::<String, &'de RawValue>()? {
-                    if entries.len() >= COLUMNS || !names.insert(key.clone()) {
+                    if entries.len() >= LIMIT || !names.insert(key.clone()) {
                         return Err(A::Error::custom("duplicate property or too many columns"));
                     }
                     entries.push((key, value));
@@ -90,7 +90,7 @@ impl<'de> Deserialize<'de> for Properties<'de> {
                 Ok(Properties(entries))
             }
         }
-        deserializer.deserialize_map(UniqueProperties)
+        deserializer.deserialize_map(UniqueProperties::<LIMIT>)
     }
 }
 

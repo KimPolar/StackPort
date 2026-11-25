@@ -933,8 +933,8 @@ async fn delete_mongo_profile(store: State<'_, Store>, id: String, revision: i64
 
 #[tauri::command]
 async fn open_mongo(mongo: State<'_, stackport_core::MongoManager>, profile_id: String, revision: i64,
-    password: stackport_core::MongoPassword, confirmation: String) -> Result<stackport_core::MongoSessionInfo, String> {
-    mongo.open(profile_id, revision, password, &confirmation).await
+    password: stackport_core::MongoPassword, confirmation: String, allow_edits: Option<bool>) -> Result<stackport_core::MongoSessionInfo, String> {
+    mongo.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -957,6 +957,22 @@ async fn mongo_indexes(mongo: State<'_, stackport_core::MongoManager>, id: Strin
 #[tauri::command]
 async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, query: stackport_core::MongoQuery)
     -> Result<stackport_core::MongoDocumentPage, String> { mongo.documents(&id, &database, &collection, query).await }
+
+#[tauri::command]
+async fn begin_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, change: stackport_core::MongoDocumentChange)
+    -> Result<stackport_core::MongoEditDraft, String> { mongo.begin_document_edit(&id, database, collection, change).await }
+
+#[tauri::command]
+async fn review_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, input: String)
+    -> Result<stackport_core::MongoEditReview, String> { mongo.review_document_edit(&id, &token, &input).await }
+
+#[tauri::command]
+async fn apply_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, approval: String, confirmation: String)
+    -> Result<stackport_core::MongoEditReport, String> { mongo.apply_document_edit(&id, &token, &approval, &confirmation).await }
+
+#[tauri::command]
+async fn discard_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
+    -> Result<(), String> { mongo.discard_document_edit(&id, &token).await }
 
 #[tauri::command]
 async fn mongo_schema_sample(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, sample_size: u32)
@@ -2664,6 +2680,10 @@ fn main() {
             mongo_collections,
             mongo_indexes,
             mongo_documents,
+            begin_mongo_document_edit,
+            review_mongo_document_edit,
+            apply_mongo_document_edit,
+            discard_mongo_document_edit,
             mongo_schema_sample,
             mongo_pipeline_preview,
             list_mongo_pipelines,

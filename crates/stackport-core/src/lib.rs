@@ -33,6 +33,7 @@ pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
+pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
@@ -975,6 +976,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "redis.key.edit" | "redis.key.edit.unconfirmed" => "redis-key-edit-reviewed-transaction",
         "redis.key.delete" | "redis.key.delete.unconfirmed" => "redis-selected-keys-delete-reviewed-transaction",
         "redis.pubsub.publish" | "redis.pubsub.publish.unconfirmed" => "redis-pubsub-publish-confirmed",
+        "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" if record.environment == Some("PROD") => "mongo-typed-document-prod-reviewed",
+        "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" => "mongo-typed-document-reviewed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",

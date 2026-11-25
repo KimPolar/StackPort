@@ -13,6 +13,7 @@ const binary = process.env.STACKPORT_MONGO_BIN;
 const openssl = process.env.STACKPORT_TEST_OPENSSL || 'openssl';
 const python = process.env.STACKPORT_TEST_PYTHON || 'python';
 const secret = 'stackport-mongo-catalog-test';
+const editSecret = 'stackport-mongo-edit-test';
 const log = path.join(root, 'mongo-server.log');
 assert.ok(path.isAbsolute(root) && path.isAbsolute(binary));
 
@@ -80,7 +81,8 @@ async function verify(page, port, ca) {
   const [profile] = await command('list_mongo_profiles', { projectId: project.id });
   assert.doesNotMatch(JSON.stringify(profile), new RegExp(secret));
   const alternate = changes => command('create_mongo_profile', { projectId: project.id, input: { ...profile.settings, ...changes } });
-  const open = (item, password = secret, confirmation = 'PROD') => command('open_mongo', { profileId: item.id, revision: item.revision, password, confirmation });
+  const open = (item, password = secret, confirmation = 'PROD', allowEdits = false) =>
+    command('open_mongo', { profileId: item.id, revision: item.revision, password, confirmation, allowEdits });
   await assert.rejects(open(profile, secret, ''), /PROD/);
   await assert.rejects(open(profile, 'wrong-mongo-password'), /암호|TLS/);
   const badHostname = await alternate({ name: '인증서 호스트 이름 불일치', uri: profile.settings.uri.replace('localhost', '127.0.0.1') });
@@ -90,11 +92,15 @@ async function verify(page, port, ca) {
   assert.equal(session.database, 'visible');
   const id = session.id;
   try {
+    assert.equal(session.allow_edits, false);
+    await assert.rejects(command('begin_mongo_document_edit', {
+      id, database: 'visible', collection: 'edit_records', change: { kind: 'insert' },
+    }), /편집을 허용한/);
     assert.deepEqual((await command('mongo_databases', { id, search: '', page: 0 })).items, ['visible']);
     assert.deepEqual((await command('mongo_databases', { id, search: '.*', page: 0 })).items, []);
     const database = 'visible';
     const collections = (await command('mongo_collections', { id, database, search: 'records', page: 0 })).items;
-    assert.deepEqual(collections.map(item => [item.name, item.kind]).sort(), [['recent_records', 'view'], ['records', 'collection']]);
+    assert.deepEqual(collections.map(item => [item.name, item.kind]).sort(), [['edit_records', 'collection'], ['recent_records', 'view'], ['records', 'collection']]);
     const query = { filter: '', projection: '', sort_field: '_id', descending: false, page: 0 };
     const list = (changes = {}, target = database) => command('mongo_documents', { id, database: target, collection: 'records', query: { ...query, ...changes } });
     const first = await list();
@@ -211,7 +217,151 @@ async function verify(page, port, ca) {
   assert.equal(await detail.getByRole('table', { name: 'MongoDB 문서 스키마', exact: true }).count(), 0);
   await workspace.getByRole('button', { name: 'MongoDB 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
+
+  const editProfile = await alternate({ name: '편집 검증', username: 'document_editor' });
+  await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await explorer.getByRole('button', { name: 'MongoDB 편집 검증 열기', exact: true }).click();
+  await verifyDocumentEditor(page, workspace, detail);
+  const audit = await command('list_audit_events', { before: null });
+  const edits = audit.events.filter(event => event.operation.startsWith('mongo.document.'));
+  for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
+    assert.ok(edits.some(event => event.operation === `mongo.document.${kind}` && event.outcome === 'succeeded'));
+  }
+  assert.ok(edits.some(event => event.operation === 'mongo.document.delete' && event.outcome === 'failed'));
+  assert.doesNotMatch(JSON.stringify(edits), /9223372036854775807|write-fixture|편집한 문서/u);
   assert.deepEqual(errors, []);
+}
+
+async function verifyDocumentCommands(command, open, reader, writer, port, ca) {
+  const database = 'visible';
+  const collection = 'edit_records';
+  const begin = (id, change, target = collection) => command('begin_mongo_document_edit', { id, database, collection: target, change });
+  const review = (id, draft, input = draft.draft ?? '') => command('review_mongo_document_edit', { id, token: draft.token, input });
+  const apply = (id, prepared, confirmation = 'PROD', approval = '') =>
+    command('apply_mongo_document_edit', { id, token: prepared.token, confirmation, approval });
+  const rows = (id, name = collection) => command('mongo_documents', { id, database, collection: name, query: {} });
+  const first = await open(writer, editSecret, 'PROD', true);
+  const second = await open(writer, editSecret, 'PROD', true);
+  const limited = await open(reader, secret, 'PROD', true);
+  try {
+    assert.equal(first.allow_edits, true);
+    const denied = await review(limited.id, await begin(limited.id, { kind: 'insert' }), '{"title":"denied"}');
+    await assert.rejects(apply(limited.id, denied), /쓰기 권한/);
+    await assert.rejects(begin(first.id, { kind: 'insert' }, 'recent_records'), /일반 MongoDB 컬렉션/);
+    const originalId = (await rows(first.id)).items[0].id;
+    assert.equal(originalId, '{"zone":"west","number":{"$numberLong":"7"}}');
+    const target = { document_id: originalId };
+    const obsolete = await review(first.id, await begin(first.id, { kind: 'delete', ...target }));
+    const rival = await begin(second.id, { kind: 'replace', ...target });
+    assert.match(rival.draft, /9223372036854775807/);
+    const next = JSON.parse(rival.draft);
+    next.z.values[0].precision = { $numberDouble: '5.0' };
+    const changedType = await review(second.id, rival, JSON.stringify(next));
+    assert.equal((await apply(second.id, changedType)).affected_count, 1);
+    await assert.rejects(apply(first.id, obsolete, 'PROD', 'DELETE'), /변경되었거나/);
+    assert.equal(JSON.parse((await rows(first.id)).items[0].json).z.values[0].precision.$numberDouble, '5.0');
+
+    const generationDraft = await begin(first.id, { kind: 'insert' }, 'edit_generation');
+    const oldCollection = await review(first.id, generationDraft, '{"title":"wrong-generation"}');
+    run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, 'recreate_edit_collection']);
+    await assert.rejects(apply(first.id, oldCollection), /변경되었거나/);
+    const recreated = await rows(first.id, 'edit_generation');
+    assert.deepEqual(recreated.items.map(item => JSON.parse(item.json)._id), ['seed']);
+
+    const newDocument = await begin(first.id, { kind: 'insert' });
+    const input = '{"_id":"write-fixture","z":[{"n":{"$numberLong":"9223372036854775807"}}]}';
+    const superseded = await review(first.id, newDocument, input);
+    await assert.rejects(review(first.id, newDocument, '{"z":[{"n":1,"n":2}]}'), /중복/);
+    await assert.rejects(apply(first.id, superseded), /다시 검토/);
+    const insertion = await review(first.id, newDocument, input);
+    await assert.rejects(apply(first.id, insertion, ''), /PROD/);
+    assert.equal((await rows(first.id)).items.length, 1);
+    assert.equal((await apply(first.id, insertion)).affected_count, 1);
+    await assert.rejects(apply(first.id, insertion), /다시 검토/);
+    const deleting = await begin(first.id, { kind: 'delete', document_id: '"write-fixture"' });
+    const deletion = await review(first.id, deleting);
+    await assert.rejects(apply(first.id, deletion), /DELETE/);
+    assert.equal((await apply(first.id, deletion, 'PROD', 'DELETE')).affected_count, 1);
+    assert.equal((await rows(first.id)).items.length, 1);
+  } finally {
+    for (const item of [first, second, limited]) await command('close_mongo', { id: item.id });
+  }
+}
+
+async function verifyDocumentEditor(page, workspace, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  const dialog = name => page.getByRole('dialog', { name, exact: true });
+  await button(workspace, 'MongoDB 연결').click();
+  const login = dialog('MongoDB 연결');
+  await login.getByLabel('MongoDB 암호').fill(editSecret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('checkbox', { name: '이 연결에서 문서 편집 허용', exact: true }).check();
+  await button(login, '연결').click();
+  await login.waitFor({ state: 'detached' });
+  await button(workspace, 'edit_records 컬렉션').click();
+  await detail.getByText('필터 및 정렬', { exact: true }).click();
+  await detail.getByLabel('표시 필드 JSON').fill('{"title":1}');
+  await button(detail, '조회 적용').click();
+  const preview = detail.getByLabel('Canonical Extended JSON').first();
+  await preview.waitFor();
+  assert.deepEqual(Object.keys(JSON.parse(await preview.textContent())).sort(), ['_id', 'title']);
+  await button(detail, '1행 문서 수정').click();
+  const edit = dialog('MongoDB 문서 수정');
+  const input = edit.getByLabel('문서 Extended JSON', { exact: true });
+  await input.waitFor().catch(async error => { throw new Error(await edit.innerText(), { cause: error }); });
+  const source = JSON.parse(await input.inputValue());
+  assert.equal(source.exact.$numberLong, '9223372036854775807');
+  assert.equal(source.z['a.b'], 'literal');
+  source.title = '편집한 문서';
+  source.z.values.push({ new_field: true });
+  await input.fill(JSON.stringify(source));
+  await button(edit, '변경 검토').click();
+  await edit.getByRole('region', { name: '변경 후 문서', exact: true }).getByText(/편집한 문서/u).waitFor();
+  assert.equal(await button(edit, '검토한 변경 적용').isDisabled(), true);
+  await edit.getByLabel('운영 환경 확인').fill('PROD');
+  await button(edit, '검토한 변경 적용').click();
+  await edit.waitFor({ state: 'detached' });
+  await preview.filter({ hasText: '편집한 문서' }).waitFor();
+
+  await button(detail, '1행 문서 복제').click();
+  const copy = dialog('MongoDB 문서 복제');
+  const copyInput = copy.getByLabel('문서 Extended JSON', { exact: true });
+  await copyInput.waitFor();
+  const copied = JSON.parse(await copyInput.inputValue());
+  assert.equal('_id' in copied, false);
+  assert.deepEqual(copied.z.values.at(-1), { new_field: true });
+  copied.title = '복제 문서';
+  await copyInput.fill(JSON.stringify(copied));
+  await button(copy, '변경 검토').click();
+  await copy.getByLabel('운영 환경 확인').fill('PROD');
+  await button(copy, '검토한 변경 적용').click();
+  await copy.waitFor({ state: 'detached' });
+  const second = detail.getByRole('list', { name: 'MongoDB 문서', exact: true }).getByRole('listitem').nth(1);
+  await second.locator('summary').click();
+  assert.equal(JSON.parse(await second.getByLabel('Canonical Extended JSON').textContent()).title, '복제 문서');
+  await button(second, '2행 문서 삭제').click();
+  const deleting = dialog('MongoDB 문서 삭제');
+  await button(deleting, '변경 검토').click();
+  await deleting.getByLabel('운영 환경 확인').fill('PROD');
+  assert.equal(await button(deleting, '검토한 변경 적용').isDisabled(), true);
+  await deleting.getByLabel('삭제 확인').fill('DELETE');
+  await button(deleting, '검토한 변경 적용').click();
+  await deleting.waitFor({ state: 'detached' });
+  await second.waitFor({ state: 'detached' });
+
+  await button(detail, '문서 삽입').click();
+  const newDoc = dialog('MongoDB 문서 삽입');
+  await newDoc.getByLabel('문서 Extended JSON', { exact: true }).fill('{"title":"새 문서"}');
+  await button(newDoc, '변경 검토').click();
+  await newDoc.getByRole('region', { name: '변경 후 문서', exact: true }).getByText(/\$oid/u).waitFor();
+  await newDoc.getByLabel('운영 환경 확인').fill('PROD');
+  await button(newDoc, '검토한 변경 적용').click();
+  await newDoc.waitFor({ state: 'detached' });
+  await second.locator('summary').click();
+  assert.equal(JSON.parse(await second.getByLabel('Canonical Extended JSON').textContent()).title, '새 문서');
+  await button(workspace, 'MongoDB 연결 끊기').click();
 }
 
 async function verifyPipeline(page, detail) {
@@ -299,7 +449,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, permissions, catalog, BSON, querying, schema analysis and aggregation pipelines).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, schema and pipelines, reviewed writes and concurrent document/collection changes).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

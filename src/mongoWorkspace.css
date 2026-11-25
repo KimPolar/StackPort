@@ -25,6 +25,14 @@
 .mongo-document-list summary small { color: var(--text-muted); }
 .mongo-document-list pre { max-height: 42dvh; margin: 0 10px 10px; padding: 10px; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 .mongo-document-list p, .mongo-note { margin: 8px 12px; }
+.mongo-edit-permission { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+.dialog.mongo-edit-dialog { width: min(850px, calc(100vw - 32px)); }
+.mongo-edit-input, .mongo-edit-compare pre { min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--control-border); border-radius: 5px; color: var(--text); background: var(--surface-inset); font: 12px/1.6 Consolas, monospace; }
+.mongo-edit-input { max-height: 45dvh; width: 100%; resize: vertical; }
+.mongo-edit-review-heading { margin-block: 12px 8px; font-size: 14px; }
+.mongo-edit-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 9px; }
+.mongo-edit-compare section { min-width: 0; font-size: 12px; }
+.mongo-edit-compare pre { max-height: 32dvh; margin-top: 5px; overflow: auto; }
 .mongo-schema-controls { font-size: 12px; }
 .mongo-schema-controls :is(select, input[type="search"]) { min-height: 32px; min-width: 0; padding: 0 8px; color: var(--text); background: var(--surface); border: 1px solid var(--control-border); border-radius: 5px; }
 .mongo-schema-controls input[type="search"] { flex: 1 1 150px; }

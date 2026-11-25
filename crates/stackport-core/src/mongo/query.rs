@@ -1,4 +1,4 @@
-use super::{message, validate_namespace, MongoManager, READ_TIMEOUT, SERVER_TIME};
+use super::{document_snapshot::canonical_id, message, validate_namespace, MongoManager, READ_TIMEOUT, SERVER_TIME};
 use crate::Result;
 use bson::{doc, raw::RawDocumentBuf, Bson, Document};
 use futures_util::TryStreamExt;
@@ -119,10 +119,7 @@ pub(super) async fn read_document_page(
         if bytes <= DOCUMENT_LIMIT && bytes <= remaining {
             let document =
                 Document::try_from(raw).map_err(|_| "MongoDB BSON 문서를 읽을 수 없습니다.")?;
-            item.id = document
-                .get("_id")
-                .map(|value| value.clone().into_canonical_extjson().to_string())
-                .filter(|id| id.len() <= 256);
+            item.id = document.get("_id").and_then(canonical_id);
             let json = Bson::Document(document).into_canonical_extjson();
             if let Ok(serialized) = serde_json::to_string_pretty(&json) {
                 if serialized.len() <= DOCUMENT_LIMIT && serialized.len() <= remaining {

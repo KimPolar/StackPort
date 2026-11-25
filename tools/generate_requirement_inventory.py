@@ -78,7 +78,7 @@ PARTIAL = {
     "SP-RG-003": "RDP의 클립보드·선택 드라이브·프린터·스마트카드 공유와 Windows 단축키 적용 설정",
     "SP-RG-004": "RDP 창 크기에 맞춘 해상도 조정·자동 재연결 및 클라이언트 연결 끊기 옵션",
     "SP-RG-018": "Windows RDP 클라이언트 설치 여부와 브라우저·비지원 OS의 사용 제한 표시",
-    "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB·SQL Server·Oracle·Snowflake 객체 탐색·데이터 미리보기와 SQL 편집기 세션 권한 적용, MongoDB 읽기 전용 컬렉션·문서 탐색, Redis 단독 서버 키 탐색·타입별 편집. Snowflake 실제 계정 검증 대기",
+    "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB·SQL Server·Oracle·Snowflake 객체 탐색·데이터 미리보기와 SQL 편집기 세션 권한 적용, MongoDB 컬렉션·문서 탐색과 세션별 문서 편집, Redis 단독 서버 키 탐색·타입별 편집. Snowflake 실제 계정 검증 대기",
     "SP-DB-004": "PostgreSQL·MySQL 계열·SQL Server 호스트·포트·DB·사용자와 환경, Oracle 호스트·포트·서비스 이름·SID·사용자와 환경, Snowflake 계정 호스트·데이터베이스·웨어하우스·역할·환경",
     "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 서버 인증서 검증과 SSH 터널·점프 호스트, MySQL 계열 PEM 클라이언트 인증, MongoDB·SQL Server·Oracle 서버 인증서 검증과 선택적 PEM CA, Snowflake HTTPS 인증서 검증",
     "SP-DB-006": "PostgreSQL·MySQL 계열·SQL Server·Oracle 세션별 사용자 이름·암호 인증, SQL Server Windows 통합 인증 설정, Snowflake 세션별 PAT·OAuth 액세스 토큰",
@@ -171,7 +171,7 @@ PARTIAL = {
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, 지원 키 타입의 읽기 명령 선택과 미지원 타입 표시",
-    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 전체 이름·연결·DB·건수 미리보기, 별도 DELETE 및 PROD 확인과 동시 변경 시 전체 중단",
+    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 전체 이름·연결·DB·건수 미리보기와 동시 변경 시 전체 중단, MongoDB 단일 문서 삭제 전 원본 검토·동시 변경 차단, DELETE 및 PROD 확인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
@@ -182,8 +182,8 @@ PARTIAL = {
     "SP-SEC-003": "SFTP 원격 삭제 및 SQLite 셀 변경의 영향·운영 확인, 쓰기 가능한 SQL 편집기의 실행 범위·연결·환경과 위험 유형 사전 표시",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키 편집·삭제와 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
-    "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키 편집·삭제, SFTP 삭제·원격 편집 저장에도 확인",
+    "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키와 MongoDB 문서 변경·삭제 및 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
+    "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키·MongoDB 문서 변경, SFTP 삭제·원격 편집 저장에도 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
@@ -191,11 +191,12 @@ PARTIAL = {
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회",
+    "SP-NS-002": "MongoDB 일반 컬렉션에서 Extended JSON으로 단일 문서 삽입·복제·수정·삭제, 중첩 필드·배열 편집과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬, 페이지 단위 문서 조회와 BSON Canonical Extended JSON 표시",
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
     "SP-NS-006": "MongoDB 컬렉션의 인덱스 키·고유 여부·TTL 조회",
-    "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·컬렉션·뷰·BSON 문서·인덱스 조회, 표본 스키마 분석과 단계별 집계 미리보기, 프로젝트별 파이프라인 저장 및 교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
+    "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
@@ -229,6 +230,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         if subset:
             if requirement_id in {"SP-NS-001", "SP-NS-003", "SP-NS-006"}:
                 evidence = "crates/stackport-core/src/mongo.rs; crates/stackport-core/src/mongo/query.rs; src/MongoWorkspace.tsx; tests/mongo-smoke.cjs"
+            elif requirement_id == "SP-NS-002":
+                evidence = "crates/stackport-core/src/mongo/document_edit.rs; crates/stackport-core/src/mongo/document_snapshot.rs; src/MongoDocumentEditDialog.tsx; tests/mongo-smoke.cjs"
             elif requirement_id == "SP-NS-004":
                 evidence = "crates/stackport-core/src/mongo/pipeline.rs; crates/stackport-core/src/mongo/pipeline_store.rs; crates/stackport-core/tests/mongo_pipelines.rs; src/MongoPipeline.tsx; tests/mongo-smoke.cjs"
             elif requirement_id == "SP-NS-005":
@@ -506,6 +509,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; src/RedisProfileDialog.tsx; crates/stackport-core/tests/redis_profiles.rs; tests/redis-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-005", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/mongo.rs; src/MongoProfileDialog.tsx; tests/mongo-smoke.cjs"
+            if requirement_id in {"SP-DB-001", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
+                evidence += "; crates/stackport-core/src/mongo/document_edit.rs; src/MongoDocumentEditDialog.tsx"
+                if requirement_id in {"SP-NS-018", "SP-SEC-011", "SP-SEC-015"}:
+                    evidence += "; tests/mongo-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009", "SP-DB-010"}:
                 evidence += "; crates/stackport-core/src/sql_server.rs; crates/stackport-core/src/sql_server/catalog.rs; src/RelationalWorkspace.tsx; tests/sql-server-smoke.cjs"
                 evidence += "; crates/stackport-core/src/oracle.rs; crates/stackport-core/src/oracle/catalog.rs; src/OracleProfileDialog.tsx; tests/oracle-smoke.cjs"
