@@ -8,7 +8,7 @@ pub use crate::result_export::{
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Profile, ProfileSettings, Target, Transport};
-pub use query::{QueryInput, QueryOutcome};
+pub use query::{QueryInput, QueryOutcome, QuerySource};
 
 use crate::{Result, Store};
 use base64::{engine::general_purpose::STANDARD, Engine as _};

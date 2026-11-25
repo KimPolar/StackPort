@@ -1,8 +1,10 @@
+mod parameters;
 mod script;
 
 use super::{connect, Manager, Session, IO_TIMEOUT};
 use crate::{insert_audit, AuditRecord, Result};
-use oracledb::{Connection, Error, ErrorKind};
+use oracledb::{Connection, Error, ErrorKind, Statement as NativeStatement};
+use parameters::{Bindings, ParameterInput};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::{
@@ -23,9 +25,29 @@ const STATE_ERROR: &str = "Oracle SQL 실행 상태를 읽을 수 없습니다."
 
 #[derive(Deserialize)]
 pub struct QueryInput {
+    #[serde(flatten)]
+    source: QuerySource,
+    #[serde(default)]
+    parameters: Vec<ParameterInput>,
+}
+
+#[derive(Deserialize)]
+pub struct QuerySource {
     sql: String,
     first_line: u32,
     cursor_byte: Option<usize>,
+}
+
+impl QuerySource {
+    fn statements(&self) -> Result<Vec<script::Statement<'_>>> {
+        if self.sql.len() > SQL_LIMIT
+            || self.sql.contains('\0')
+            || !(1..=1_000_000).contains(&self.first_line)
+        {
+            return Err("Oracle SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
+        }
+        script::split(&self.sql, self.first_line, self.cursor_byte)
+    }
 }
 
 #[derive(Serialize)]
@@ -138,6 +160,24 @@ impl Session {
 }
 
 impl Manager {
+    pub async fn query_parameters(&self, id: &str, input: QuerySource) -> Result<Vec<String>> {
+        self.read(id, move |connection| {
+            let statements = input.statements()?;
+            let prepared = prepare(connection, &statements, false).map_err(|error| {
+                format!(
+                    "문장 시작 {}행 · {}",
+                    error.line.unwrap_or(input.first_line),
+                    error.message
+                )
+            })?;
+            Ok(parameters::names(&prepared)?
+                .into_iter()
+                .map(str::to_owned)
+                .collect())
+        })
+        .await
+    }
+
     pub fn cancel_query(&self, id: &str, request_id: &str) -> Result<bool> {
         let request_id = query_id(request_id)?;
         let session = self.session(id)?;
@@ -156,12 +196,6 @@ impl Manager {
         input: QueryInput,
     ) -> Result<QueryOutcome> {
         let request_id = query_id(request_id)?;
-        if input.sql.len() > SQL_LIMIT
-            || input.sql.contains('\0')
-            || !(1..=1_000_000).contains(&input.first_line)
-        {
-            return Err("Oracle SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
-        }
         let session = self.session(id)?;
         let start = Instant::now();
         let job = Arc::new(Job {
@@ -185,9 +219,10 @@ impl Manager {
         let store = self.store.clone();
         spawn_blocking(move || {
             let registration = registration;
-            let statements = script::split(&input.sql, input.first_line, input.cursor_byte)?;
+            let statements = input.source.statements()?;
+            let bindings = Bindings::new(&input.parameters)?;
             let session = &registration.0;
-            let mut outcome = execute(session, &job, &statements);
+            let mut outcome = execute(session, &job, &statements, &bindings);
             outcome.elapsed_ms = start.elapsed().as_millis() as u64;
             let profile = session.profile.clone();
             drop(registration);
@@ -229,7 +264,12 @@ fn query_id(value: &str) -> Result<Uuid> {
     Uuid::parse_str(value).map_err(|_| "유효한 Oracle SQL 실행 ID를 지정하세요.".into())
 }
 
-fn execute(session: &Session, job: &Job, statements: &[script::Statement<'_>]) -> QueryOutcome {
+fn execute(
+    session: &Session,
+    job: &Job,
+    statements: &[script::Statement<'_>],
+    bindings: &Bindings<'_>,
+) -> QueryOutcome {
     let mut outcome = QueryOutcome {
         status: Status::Succeeded,
         statements: Vec::new(),
@@ -263,9 +303,94 @@ fn execute(session: &Session, job: &Job, statements: &[script::Statement<'_>]) -
             return outcome;
         }
     };
+    match prepare(&connection, statements, bindings.masked).and_then(|prepared| {
+        bindings.validate(&prepared).map_err(|message| QueryError {
+            line: None,
+            code: None,
+            message,
+        })?;
+        Ok(prepared)
+    }) {
+        Ok(prepared) => run_statements(
+            &connection,
+            job,
+            statements,
+            prepared,
+            bindings,
+            &mut outcome,
+        ),
+        Err(error) => {
+            outcome.status = Status::Failed;
+            outcome.error = Some(error);
+        }
+    }
+    outcome.transaction = if connection
+        .set_call_timeout(Some(IO_TIMEOUT))
+        .and_then(|()| connection.rollback())
+        .is_ok()
+    {
+        Transaction::RolledBack
+    } else {
+        Transaction::Unknown
+    };
+    drop(connection);
+    drop(wallet);
+    outcome
+}
+
+fn prepare(
+    connection: &Connection,
+    statements: &[script::Statement<'_>],
+    masked: bool,
+) -> std::result::Result<Vec<NativeStatement>, QueryError> {
+    statements
+        .iter()
+        .map(|statement| {
+            connection
+                .statement(statement.sql)
+                .and_then(|builder| {
+                    builder
+                        .fetch_array_size(32)
+                        .prefetch_rows(1)
+                        .fetch_lobs()
+                        .exclude_from_cache()
+                        .build()
+                })
+                .map_err(|error| driver_error(statement.line, error, masked))
+        })
+        .collect()
+}
+
+fn driver_error(line: u32, error: Error, masked: bool) -> QueryError {
+    QueryError {
+        line: Some(line),
+        code: error.db_error_code(),
+        message: if masked {
+            "숨긴 값이 있어 Oracle 오류 상세를 표시하지 않습니다.".into()
+        } else {
+            preview::limited_text(&error.to_string())
+        },
+    }
+}
+
+fn run_statements(
+    connection: &Connection,
+    job: &Job,
+    statements: &[script::Statement<'_>],
+    prepared: Vec<NativeStatement>,
+    bindings: &Bindings<'_>,
+    outcome: &mut QueryOutcome,
+) {
     let mut budget = preview::PREVIEW_BYTES;
-    for statement in statements {
-        match execute_statement(&connection, job, statement, &mut budget) {
+    for (statement, native) in statements.iter().zip(prepared) {
+        match execute_statement(
+            connection,
+            job,
+            native,
+            statement.line,
+            bindings,
+            &mut budget,
+        ) {
             Ok(result) => {
                 outcome.statements.push(result);
                 if let Some(status) = job.stopped() {
@@ -288,11 +413,7 @@ fn execute(session: &Session, job: &Job, statements: &[script::Statement<'_>]) -
                 if matches!(outcome.status, Status::Cancelled | Status::TimedOut) {
                     outcome.server_interrupted = Some(code == Some(1013));
                 } else {
-                    outcome.error = Some(QueryError {
-                        line: Some(statement.line),
-                        code,
-                        message: preview::limited_text(&error.to_string()),
-                    });
+                    outcome.error = Some(driver_error(statement.line, error, bindings.masked));
                 }
                 break;
             }
@@ -307,49 +428,32 @@ fn execute(session: &Session, job: &Job, statements: &[script::Statement<'_>]) -
             }
         }
     }
-    outcome.transaction = if connection
-        .set_call_timeout(Some(IO_TIMEOUT))
-        .and_then(|()| connection.rollback())
-        .is_ok()
-    {
-        Transaction::RolledBack
-    } else {
-        Transaction::Unknown
-    };
-    drop(connection);
-    drop(wallet);
-    outcome
 }
 
 fn execute_statement(
     connection: &Connection,
     job: &Job,
-    statement: &script::Statement<'_>,
+    mut native: NativeStatement,
+    line: u32,
+    bindings: &Bindings<'_>,
     budget: &mut usize,
 ) -> std::result::Result<StatementResult, Failure> {
-    job.prepare_call(connection)?;
-    let mut native = connection
-        .statement(statement.sql)?
-        .fetch_array_size(32)
-        .prefetch_rows(1)
-        .fetch_lobs()
-        .exclude_from_cache()
-        .build()?;
     let mut result = StatementResult {
-        line: statement.line,
+        line,
         rows_affected: None,
         data: None,
         warning: None,
     };
     job.prepare_call(connection)?;
+    let values = bindings.for_statement(&native);
     if native.is_query() {
-        let cursor = native.query(&[])?;
+        let cursor = native.query_named(&values)?;
         result.data = Some(preview::read(connection, cursor, job, budget)?);
     } else {
-        let execution = native.execute(&[])?;
+        let execution = native.execute_named(&values)?;
         result.rows_affected = native.is_dml().then(|| execution.rows_affected());
     }
-    if job.stopped().is_none() {
+    if job.stopped().is_none() && !bindings.masked {
         result.warning = connection
             .last_warning()
             .ok()

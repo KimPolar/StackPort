@@ -5,11 +5,14 @@ export type SqlParameterValue =
   | { kind: "null" }
   | { kind: "text" | "integer" | "real" | "blob"; value: string };
 type SqliteParameterKind = SqlParameterValue["kind"];
-type SqlServerParameterKind = SqliteParameterKind | "decimal" | "boolean";
+type OracleParameterKind = SqliteParameterKind | "decimal";
+type SqlServerParameterKind = OracleParameterKind | "boolean";
 type Field<Kind extends SqlServerParameterKind> = { kind: Kind; value: string; masked: boolean };
-export type SqlServerParameterValue =
+type MaskedParameterValue<Kind extends SqlServerParameterKind> =
   | { kind: "null"; masked: false }
-  | { kind: Exclude<SqlServerParameterKind, "null">; value: string; masked: boolean };
+  | { kind: Exclude<Kind, "null">; value: string; masked: boolean };
+export type SqlServerParameterValue = MaskedParameterValue<SqlServerParameterKind>;
+export type OracleParameterValue = MaskedParameterValue<OracleParameterKind>;
 
 const sqliteOptions: readonly (readonly [SqliteParameterKind, string])[] = [
   ["text", "텍스트"], ["integer", "정수"], ["real", "실수"], ["blob", "BLOB (16진수)"], ["null", "NULL"],
@@ -18,7 +21,16 @@ const sqlServerOptions: readonly (readonly [SqlServerParameterKind, string])[] =
   ["text", "텍스트 (nvarchar)"], ["integer", "정수 (bigint)"], ["decimal", "소수 (decimal)"],
   ["real", "실수 (float)"], ["boolean", "참·거짓 (bit)"], ["blob", "바이너리 (16진수)"], ["null", "NULL"],
 ];
+const oracleOptions: readonly (readonly [OracleParameterKind, string])[] = [
+  ["text", "텍스트 (VARCHAR2)"], ["integer", "64비트 정수 (NUMBER)"], ["decimal", "십진수 (NUMBER)"],
+  ["real", "실수 (BINARY_DOUBLE)"], ["blob", "RAW (16진수)"], ["null", "NULL"],
+];
 const encoder = new TextEncoder();
+
+function maskedValues<Kind extends SqlServerParameterKind>(fields: Field<Kind>[]): MaskedParameterValue<Kind>[] {
+  return fields.map(({ kind, value, masked }) => kind === "null"
+    ? { kind: "null", masked: false } : { kind: kind as Exclude<Kind, "null">, value, masked });
+}
 
 function invalidValue(field: Field<SqlServerParameterKind>, allByteLimited: boolean): string | undefined {
   if (field.kind === "null") return;
@@ -63,8 +75,17 @@ export function SqlServerParameterFields({ parameters, submit, dismiss }: {
 }) {
   return <ParameterForm options={sqlServerOptions} parameters={parameters} dismiss={dismiss} allByteLimited
     note="값을 SQL 본문과 분리해 서버로 전달합니다. 숨긴 값이 있으면 서버 오류 상세도 숨깁니다."
-    submit={fields => submit(fields.map(({ kind, value, masked }) => kind === "null"
-      ? { kind, masked: false } : { kind, value, masked }))} />;
+    submit={fields => submit(maskedValues(fields))} />;
+}
+
+export function OracleParameterFields({ parameters, submit, dismiss }: {
+  parameters: SqlParameter[];
+  submit: (values: OracleParameterValue[]) => void;
+  dismiss: () => void;
+}) {
+  return <ParameterForm options={oracleOptions} parameters={parameters} dismiss={dismiss} allByteLimited
+    note="같은 이름의 변수는 이 실행에서 같은 값을 사용합니다. 숨긴 값이 있으면 서버 오류 상세와 경고를 숨깁니다."
+    submit={fields => submit(maskedValues(fields))} />;
 }
 
 function ParameterForm<Kind extends SqlServerParameterKind>({ parameters, options, note, allByteLimited = false, submit, dismiss }: {

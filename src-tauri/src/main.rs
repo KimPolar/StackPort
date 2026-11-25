@@ -1122,6 +1122,12 @@ async fn run_oracle_query(manager: State<'_, oracle::Manager>, id: String, reque
 }
 
 #[tauri::command]
+async fn oracle_query_parameters(manager: State<'_, oracle::Manager>, id: String,
+    input: oracle::QuerySource) -> Result<Vec<String>, String> {
+    manager.query_parameters(&id, input).await
+}
+
+#[tauri::command]
 fn cancel_oracle_query(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<bool, String> {
     manager.cancel_query(&id, &request_id)
 }
@@ -2552,6 +2558,7 @@ fn main() {
             oracle_definition,
             oracle_data,
             run_oracle_query,
+            oracle_query_parameters,
             cancel_oracle_query,
             export_oracle,
             oracle_export_progress,

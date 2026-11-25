@@ -202,7 +202,10 @@ async function verify(page, hiddenObject, exportFolder) {
   assert.match(ownDefinition, /"X%_Y"/);
   assert.match(ownDefinition, /"한글 정의"/);
   const observer = await open(profile);
-  try { await verifyOracleEditor(workspace, command, observer.id); }
+  try {
+    await verifyOracleBindings(command, observer.id);
+    await verifyOracleEditor(workspace, command, observer.id);
+  }
   finally { await command('close_oracle', { id: observer.id }); }
   await ownView.getByRole('heading', { name: 'Order Daily', exact: true }).waitFor();
   await workspace.getByRole('button', { name: engine + ' 연결 끊기', exact: true }).click();
@@ -310,6 +313,8 @@ async function verifyOracleEditor(workspace, command, observerId) {
   await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
   await grid.getByText('다음;', { exact: true }).waitFor();
 
+  await verifyBindForm(pane, editor, grid);
+
   await editor.fill(`INSERT INTO ${executionFixture} VALUES (13);
 COMMIT;
 BEGIN SYS.DBMS_SESSION.SLEEP(12); END;
@@ -340,6 +345,132 @@ COMMIT;`);
   await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
   assert.equal(await editor.inputValue(), check);
   await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
+}
+
+async function verifyBindForm(pane, editor, grid) {
+  await editor.fill("SELECT q'[건너뛸 :x]' AS marker FROM dual;\nSELECT :input || :INPUT AS marker FROM dual;");
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
+  const binding = pane.page().getByRole('dialog', { name: 'Oracle SQL 바인드 변수', exact: true });
+  const field = binding.getByLabel(':INPUT 값', { exact: true });
+  await field.fill("한글'");
+  await binding.getByLabel(':INPUT 값 숨기기', { exact: true }).check();
+  assert.equal(await field.getAttribute('type'), 'password');
+  assert.equal(await binding.getByRole('group').count(), 1);
+  await binding.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await binding.waitFor({ state: 'detached' });
+  await grid.getByText("한글'한글'", { exact: true }).waitFor();
+}
+
+async function verifyMockBindEditor(page) {
+  page.setDefaultTimeout(15_000);
+  const project = await page.evaluate(() => window.__TAURI_INTERNALS__.invoke('create_project', { name: 'Oracle 바인드 입력 검증' }));
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await page.evaluate(() => {
+    const bridge = window.__TAURI_INTERNALS__;
+    const fetchNative = window.fetch.bind(window);
+    const source = { sql: 'SELECT :input || :INPUT AS marker FROM dual;', first_line: 2, cursor_byte: null };
+    const check = args => {
+      if (args.id !== 'oracle-fixture' || Object.entries(source).some(([key, value]) => args.input[key] !== value)) {
+        throw new Error('Invalid Oracle selection scope');
+      }
+    };
+    const commands = {
+      open_oracle: () => ({ id: 'oracle-fixture', database: 'FREEPDB1', version: 'fixture' }),
+      oracle_schemas: () => ({ items: ['SP_FIXTURE'], has_next: false }),
+      oracle_objects: () => ({ items: [], has_next: false }),
+      close_oracle: () => null,
+      oracle_query_parameters: args => { check(args); return ['INPUT']; },
+      run_oracle_query: args => {
+        check(args);
+        const [{ name, kind, value, masked }] = args.input.parameters;
+        if (name !== 'INPUT' || kind !== 'text' || value !== "한글'" || !masked || args.input.parameters.length !== 1) {
+          throw new Error('Invalid Oracle binding');
+        }
+        return {
+          status: 'succeeded', elapsed_ms: 50, transaction: 'rolled_back', statements: [{ line: 2, data: {
+            columns: [{ name: 'MARKER', data_type: 'VARCHAR2' }], rows_received: 1, more_columns: false,
+            rows: [[{ text: value + value, encoding: 'utf8', bytes: null, truncated: false }]],
+          } }],
+        };
+      },
+    };
+    const routes = new Map(Object.entries(commands).map(([name, handle]) => [bridge.convertFileSrc(name, 'ipc'), handle]));
+    window.fetch = async (resource, options) => {
+      if (!routes.has(resource)) return fetchNative(resource, options);
+      try {
+        return Response.json(routes.get(resource)(JSON.parse(options.body)), { headers: { 'Tauri-Response': 'ok' } });
+      } catch (error) {
+        return Response.json(error.message, { headers: { 'Tauri-Response': 'error' } });
+      }
+    };
+  });
+  await chooseDatabase(page, engine);
+  const profile = page.getByRole('dialog', { name: engine + ' 연결 추가', exact: true });
+  await profile.getByLabel('연결 이름').fill('Oracle 편집기 픽스처');
+  await profile.getByLabel('호스트 이름 또는 IP').fill('127.0.0.1');
+  await profile.getByLabel('서비스 이름', { exact: true }).fill('FREEPDB1');
+  await profile.getByLabel('사용자 이름').fill('SP_FIXTURE');
+  await profile.getByRole('button', { name: '저장', exact: true }).click();
+  await profile.waitFor({ state: 'detached' });
+  const workspace = page.getByRole('region', { name: engine + ' 작업 공간', exact: true });
+  await workspace.getByRole('button', { name: engine + ' 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: engine + ' 연결', exact: true });
+  await login.getByLabel(engine + ' 암호', { exact: true }).fill('synthetic-local-fixture');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  const pane = workspace.getByRole('region', { name: 'Oracle SQL 편집기', exact: true });
+  await verifyBindForm(pane,
+    pane.getByRole('textbox', { name: 'Oracle SQL 문장', exact: true }),
+    pane.getByRole('table', { name: 'Oracle SQL 결과 표', exact: true }));
+}
+
+async function verifyOracleBindings(command, id) {
+  const source = (sql, cursor_byte = null) => ({ sql, first_line: 1, cursor_byte });
+  const inspect = input => command('oracle_query_parameters', { id, input });
+  const run = (sql, parameters, requestId = randomUUID()) =>
+    command('run_oracle_query', { id, requestId, input: { ...source(sql), parameters } });
+  const example = `SELECT q'[한글 :ignored]', :p, :P FROM dual; -- :comment
+SELECT :"Mixed name", :3 FROM dual;`;
+  assert.deepEqual(await inspect(source(example)), ['P', 'Mixed name', '3']);
+  assert.deepEqual(await inspect(source(example, Buffer.byteLength(example.split('\n')[0] + '\n'))), ['Mixed name', '3']);
+
+  const exact = '-12345678901234567890123456789012.345678';
+  const result = await run(`BEGIN
+  INSERT INTO ${executionFixture} VALUES (:id);
+END;
+/
+SELECT id, :d amount, :r bytes, :M missing, :"Mixed name" caption, :3 measured
+FROM ${executionFixture} WHERE id = :ID + :id - :id;`, [
+    { name: 'Mixed name', kind: 'text', value: "짜'🚀" }, { name: 'D', kind: 'decimal', value: exact },
+    { name: 'R', kind: 'blob', value: '00ff11' }, { name: 'M', kind: 'null' },
+    { name: '3', kind: 'real', value: '1.5' }, { name: 'ID', kind: 'integer', value: '23' },
+  ]);
+  assert.equal(result.status, 'succeeded', JSON.stringify(result.error));
+  assert.equal(result.transaction, 'rolled_back');
+  assert.deepEqual(result.statements[1].data.rows[0].map(cell => cell?.text ?? null),
+    ['23', exact, '00FF11', null, "짜'🚀", '1.5']);
+
+  const mismatch = await run(`INSERT INTO ${executionFixture} VALUES (24); COMMIT; SELECT :missing FROM dual;`, []);
+  assert.equal(mismatch.status, 'failed');
+  assert.equal(mismatch.statements.length, 0);
+  const checked = await oracleQuery(command, id, `SELECT id FROM ${executionFixture} WHERE id IN (23, 24)`);
+  assert.equal(checked.statements[0].data.rows_received, 0);
+
+  const masked = 'stackport-oracle-bind-secret';
+  const requestId = randomUUID();
+  const failed = await run('BEGIN RAISE_APPLICATION_ERROR(-20035, :value); END;\n/',
+    [{ name: 'VALUE', kind: 'text', value: masked, masked: true }], requestId);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.code, 20035);
+  assert.match(failed.error.message, /숨긴 값/);
+  assert.doesNotMatch(JSON.stringify(failed), new RegExp(masked));
+  const event = (await command('list_audit_events', {})).events.find(item => item.correlation_id === requestId);
+  assert.equal(event.outcome, 'failed');
+  assert.doesNotMatch(JSON.stringify(event), new RegExp(masked));
 }
 
 async function verifyExports(command, id, profile, folder, catalog, hiddenObject) {
@@ -441,6 +572,14 @@ async function verifyExports(command, id, profile, folder, catalog, hiddenObject
 }
 
 async function main() {
+  const cdp = process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369';
+  if (process.env.STACKPORT_ORACLE_TEST_MOCK_BIND_EDITOR === '1') {
+    const browser = await chromium.connectOverCDP(cdp);
+    try { await verifyMockBindEditor(browser.contexts()[0].pages()[0]); }
+    finally { await browser.close(); }
+    console.log('Oracle binding editor Windows E2E passed with mocked Oracle IPC.');
+    return;
+  }
   assert.ok(Number.isInteger(port) && port >= 1024 && port <= 65535);
   if (!tcpOnly) {
     assert.ok(Number.isInteger(tcpsPort) && tcpsPort >= 1024 && tcpsPort <= 65535 && port !== tcpsPort);
@@ -452,7 +591,7 @@ async function main() {
     encoding: 'utf8', windowsHide: true, timeout: 90_000,
   }).trim());
   assert.ok(Number.isSafeInteger(object) && object > 0);
-  const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+  const browser = await chromium.connectOverCDP(cdp);
   const exportFolder = fs.mkdtempSync(path.join(process.env.STACKPORT_TEST_ROOT || os.tmpdir(), 'stackport-oracle-export-'));
   try { await verify(browser.contexts()[0].pages()[0], object, exportFolder); }
   finally {
@@ -460,7 +599,7 @@ async function main() {
     for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
     fs.rmdirSync(exportFolder);
   }
-  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging, CSV and JSON exports, SQL and PL/SQL execution, rollback and cancellation).`);
+  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging, CSV and JSON exports, SQL and PL/SQL execution, named binds, rollback and cancellation).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

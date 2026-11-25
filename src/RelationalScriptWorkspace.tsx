@@ -3,9 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
+import { Dialog } from "./Dialog";
+import { OracleParameterFields, type OracleParameterValue } from "./SqlParameterFields";
 
 type Scope = "document" | "current" | "selection";
 type Engine = "oracle" | "snowflake";
+type QuerySource = { sql: string; first_line: number; cursor_byte: number | null };
+type OracleBinding = OracleParameterValue & { name: string };
 type ResultSet = {
   columns: { name: string; data_type: string }[];
   rows: (DatabasePreviewValue | null)[][];
@@ -50,6 +54,8 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
   const [selected, setSelected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [parameterRequest, setParameterRequest] = useState<{ input: QuerySource; names: string[] } | null>(null);
   const [error, setError] = useState("");
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [statementIndex, setStatementIndex] = useState(0);
@@ -57,28 +63,48 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
   const active = useRef<string | null>(null);
   const editorId = useId();
   const noteId = useId();
-  const ready = !busy && Boolean(text.trim());
+  const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
   const name = engineName[engine];
 
   async function run(scope: Scope) {
     const field = editor.current;
-    if (!field || active.current) return;
+    if (!field || active.current || parameterRequest) return;
     const { value, selectionStart, selectionEnd, selectionDirection } = field;
     const sql = scope === "selection" ? value.slice(selectionStart, selectionEnd) : value;
     if (!sql.trim()) return;
     const caret = selectionDirection === "backward" ? selectionStart : selectionEnd;
+    const input: QuerySource = {
+      sql,
+      first_line: scope === "selection" ? value.slice(0, selectionStart).split("\n").length : 1,
+      cursor_byte: scope === "current" ? encoder.encode(value.slice(0, caret)).length : null,
+    };
+    if (engine === "oracle") {
+      active.current = crypto.randomUUID();
+      setPreparing(true); setError("");
+      try {
+        const names = await invoke<string[]>("oracle_query_parameters", { id, input });
+        if (names.length) {
+          setParameterRequest({ input, names });
+          return;
+        }
+      } catch (cause) {
+        setError(String(cause));
+        return;
+      } finally {
+        active.current = null;
+        setPreparing(false);
+      }
+    }
+    await execute(input);
+  }
+
+  async function execute(input: QuerySource & { parameters?: OracleBinding[] }) {
+    if (active.current) return;
     const requestId = crypto.randomUUID();
     active.current = requestId;
     setBusy(true); setStopping(false); setError(""); setOutcome(null); setStatementIndex(0);
     try {
-      setOutcome(await invoke<Outcome>(`run_${engine}_query`, {
-        id, requestId,
-        input: {
-          sql,
-          first_line: scope === "selection" ? value.slice(0, selectionStart).split("\n").length : 1,
-          cursor_byte: scope === "current" ? encoder.encode(value.slice(0, caret)).length : null,
-        },
-      }));
+      setOutcome(await invoke<Outcome>(`run_${engine}_query`, { id, requestId, input }));
     } catch (cause) { setError(String(cause)); }
     finally { active.current = null; setBusy(false); setStopping(false); }
   }
@@ -105,9 +131,9 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
       <button type="button" className="secondary small" disabled={!ready} onClick={() => void run("current")}>현재 문장 실행</button>
       <button type="button" className="secondary small" disabled={!ready || !selected} onClick={() => void run("selection")}>선택 실행</button>
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}><Square size={14} aria-hidden /> 실행 중단</button>}
-      <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : ""}</span>
+      <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : preparing ? "바인드 변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={256 * 1024} readOnly={busy}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={256 * 1024} readOnly={busy || preparing || Boolean(parameterRequest)}
       aria-label={name + " SQL 문장"} aria-describedby={noteId} placeholder={engine === "oracle" ? "SELECT … FROM DUAL" : "SELECT …"}
       onChange={event => setText(event.target.value)}
       onSelect={event => setSelected(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
@@ -117,11 +143,23 @@ export function RelationalScriptWorkspace({ id, database, engine }: { id: string
         void run(event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? "current" : "selection");
       }} footer={<span>Ctrl + Enter · 현재 문장 또는 선택 실행</span>} />
     <p className="form-note mysql-table-note" id={noteId}>{engine === "oracle"
-      ? <>PL/SQL 블록은 별도 줄의 <code>/</code>로 구분합니다. 실행 연결을 닫을 때 열린 트랜잭션은 롤백합니다.</>
+      ? <>PL/SQL 블록은 별도 줄의 <code>/</code>로 구분합니다. <code>:name</code> 변수는 실행 전에 값을 입력합니다. 실행 연결을 닫을 때 열린 트랜잭션은 롤백합니다.</>
       : <>연결 역할에서 실행을 시작합니다. 같은 트랜잭션의 문장은 한 번에 실행하고 익명 블록은 <code>EXECUTE IMMEDIATE $$…$$</code>로 감싸세요.</>}</p>
     {error && <p className="error-banner" role="alert">{error}</p>}
     {outcome && <ScriptResults engine={engine} outcome={outcome} index={statementIndex} onSelect={setStatementIndex} />}
+    {parameterRequest && <Dialog title="Oracle SQL 바인드 변수" busy={false} onClose={() => setParameterRequest(null)}>
+      <OracleParameterFields parameters={parameterRequest.names.map((name, index) => ({ index: index + 1, name: oracleBindLabel(name) }))}
+        dismiss={() => setParameterRequest(null)} submit={values => {
+          const parameters = parameterRequest.names.map((name, index) => ({ ...values[index], name }));
+          setParameterRequest(null);
+          void execute({ ...parameterRequest.input, parameters });
+        }} />
+    </Dialog>}
   </section>;
+}
+
+function oracleBindLabel(name: string) {
+  return /^[A-Z][A-Z0-9_#$]*$|^\d+$/.test(name) ? `:${name}` : `:"${name}"`;
 }
 
 function ScriptResults({ engine, outcome, index, onSelect }: { engine: Engine; outcome: Outcome; index: number; onSelect: (index: number) => void }) {
