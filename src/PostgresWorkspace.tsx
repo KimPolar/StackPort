@@ -218,7 +218,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
           }} onExport={requestExport} onBackup={requestBackup} />
       </div>
     </>}
-    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} editor={editor} onExport={requestExport}
+    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} environment={environment} editor={editor} onExport={requestExport}
       onQueryActivity={onQueryActivity} /></div>
     {online && <PostgresServerMonitor key={session.id} workspace={session} environment={environment} database={database} visible={visible && view === "monitor"} />}
     {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}

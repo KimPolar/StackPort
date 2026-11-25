@@ -7,6 +7,7 @@ import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, p
 import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter } from "./PostgresParameterDialog";
 import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
 import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport";
+import { PostgresScriptResults, type PostgresScriptOutcome } from "./PostgresScriptResults";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
 import type { QueryActivity } from "./WorkspaceStatus";
 
@@ -20,29 +21,32 @@ export type PostgresEditorState = {
   saveFile: (draft: SqlDraft) => void;
 };
 
-type Mode = "query" | "estimate" | "analyze";
-type ResultView = "data" | "plan";
+type Mode = "query" | "estimate" | "analyze" | "script";
+type ResultView = "data" | "plan" | "script";
 export type PostgresCell = { value: string | null; truncated: boolean };
 type Completed = { status: "completed"; columns: { name: string; data_type: string }[]; rows: PostgresCell[][];
   total_columns: number; more_rows: boolean; elapsed_ms: number };
 type QueryStatus = Completed | { status: "plan"; plan: PostgresPlan } | { status: "failed"; error: string; position?: number | null } |
-  { status: "interrupted"; timed_out: boolean; server_confirmed: boolean };
+  { status: "interrupted"; timed_out: boolean; server_confirmed: boolean } | { status: "script"; script: PostgresScriptOutcome };
 type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
 type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
 type Preview = { id: string; target: QueryTarget; outcome: QueryStatus };
-type TabPreview = { tab: string; active: ResultView; data?: Preview; plan?: Preview };
-type QueryTarget = PostgresExportTarget & { tab: string; mode: Mode };
+type TabPreview = { tab: string; active: ResultView } & Partial<Record<ResultView, Preview>>;
+type ScriptTarget = PostgresExportTarget & { tab: string; mode: "script"; autocommit: boolean; confirmation: string };
+type QueryTarget = (PostgresExportTarget & { tab: string; mode: Exclude<Mode, "script"> }) | ScriptTarget;
 type Running = QueryTarget & { request: string };
 type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null };
 const editorId = "postgres-sql-editor";
 const resultPageSize = 25;
 const retainedPreviews = 4;
-const resultViews: ResultView[] = ["data", "plan"];
-const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : "plan";
-const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석" };
+const resultViews: ResultView[] = ["data", "plan", "script"];
+const viewNames: Record<ResultView, string> = { data: "조회 결과", plan: "계획 결과", script: "스크립트 결과" };
+const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : mode === "script" ? "script" : "plan";
+const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석", script: "스크립트 실행" };
 
-export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivity }: {
+export function PostgresSqlWorkspace({ session, environment, editor, onExport, onQueryActivity }: {
   session: string | null;
+  environment: string;
   editor: PostgresEditorState;
   onExport: (target: PostgresExportTarget) => void;
   onQueryActivity: (activity: QueryActivity) => void;
@@ -55,9 +59,13 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
   const [previews, setPreviews] = useState<TabPreview[]>([]);
   const [parameterRequest, setParameterRequest] = useState<ParameterRequest | null>(null);
   const [analysisTarget, setAnalysisTarget] = useState<QueryTarget | null>(null);
+  const [scriptMode, setScriptMode] = useState(false);
+  const [autocommit, setAutocommit] = useState(true);
+  const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
   const { tabs, select, add, close, edit, openFile, saveFile } = editor;
   const draft = tabs.tabs.find(item => item.id === tabs.activeId);
   const tabPreview = previews.find(item => item.tab === tabs.activeId);
+  const availableViews = resultViews.filter(view => tabPreview?.[view]);
   const source = draft?.document.text ?? "";
   const selected = selection && selection.tab === draft?.id && selection.start !== selection.end
     ? source.slice(selection.start, selection.end) : "";
@@ -78,9 +86,16 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
     setCancelStatus("");
     let outcome: Outcome;
     try {
-      outcome = await invoke<Outcome>("execute_postgres_sql", {
-        id: target.session, request: operation.request, source: target.source, scope: target.scope, bindings, mode: target.mode,
-      });
+      const request = { id: target.session, request: operation.request };
+      const sql = { source: target.source, scope: target.scope };
+      if (target.mode === "script") {
+        const script = await invoke<PostgresScriptOutcome>("execute_postgres_script", {
+          ...request, input: { ...sql, autocommit: target.autocommit, confirmation: target.confirmation },
+        });
+        outcome = { status: "script", script };
+      } else {
+        outcome = await invoke<Outcome>("execute_postgres_sql", { ...request, ...sql, bindings, mode: target.mode });
+      }
     } catch (error) { outcome = { status: "failed", error: String(error) }; }
     active.current = null;
     setRunning(null);
@@ -117,13 +132,18 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
     }
   }
 
-  function execute(current: boolean, mode: Mode = "query", field = input.current) {
-    if (!field || !session || !draft || parameterRequest?.target.session === session || analysisTarget?.session === session) return;
+  function execute(current: boolean, mode: Mode = scriptMode ? "script" : "query", field = input.current, whole = false) {
+    if (!field || !session || !draft || cannotRun || active.current ||
+      parameterRequest?.target.session === session || analysisTarget?.session === session || scriptTarget?.session === session) return;
     const { selectionStart: start, selectionEnd: end } = field;
-    const scope: PostgresScope = current ? { kind: "current", cursor: start } : start === end ? { kind: "document" } : { kind: "selection", start, end };
-    const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope, mode };
-    if (mode === "analyze") setAnalysisTarget(target);
-    else void run(target);
+    const scope: PostgresScope = current ? { kind: "current", cursor: start } : whole || start === end ? { kind: "document" } : { kind: "selection", start, end };
+    const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope };
+    if (mode === "script") {
+      const script: ScriptTarget = { ...target, mode, autocommit, confirmation: "" };
+      if (environment === "PROD") setScriptTarget(script);
+      else void run(script);
+    } else if (mode === "analyze") setAnalysisTarget({ ...target, mode });
+    else void run({ ...target, mode });
   }
 
   function showResult(view: ResultView) {
@@ -145,15 +165,28 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
         <div className="sql-editor-actions">
           <button type="button" className="secondary small" title="Ctrl+Shift+Enter" disabled={cannotRun}
             onClick={() => execute(true)}>현재 문장 실행</button>
-          <button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "estimate")}>
+          {!scriptMode && <><button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "estimate")}>
             <GitBranch size={14} aria-hidden /> 실행 계획</button>
-          <button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "analyze")}>실행 분석</button>
+          <button type="button" className="secondary small" disabled={cannotRun} onClick={() => execute(false, "analyze")}>실행 분석</button></>}
+          {scriptMode && selected && <button type="button" className="secondary small" disabled={cannotRun}
+            onClick={() => execute(false, "script", input.current, true)}>전체 실행</button>}
           <button type="button" className="primary small" title="Ctrl+Enter" disabled={!session || busy || !(selected || source).trim()}
-            onClick={() => execute(false)}><Play size={14} aria-hidden />{selected ? "선택 영역 실행" : "쿼리 실행"}</button>
+            onClick={() => execute(false)}><Play size={14} aria-hidden />{selected ? "선택 영역 실행" : scriptMode ? "전체 실행" : "쿼리 실행"}</button>
           {busy && <button type="button" className="secondary small" disabled={cancelStatus === "취소 요청 중…"}
             onClick={() => void stop()}><Square size={13} aria-hidden /> 쿼리 취소</button>}
         </div>
       </div>
+      <div className="postgres-script-toolbar">
+        <div className="postgres-result-views" role="group" aria-label="PostgreSQL SQL 실행 모드">
+          <button type="button" className="secondary small" aria-pressed={!scriptMode} disabled={busy}
+            onClick={() => setScriptMode(false)}>읽기 전용 조회</button>
+          <button type="button" className="secondary small" aria-pressed={scriptMode} disabled={busy}
+            onClick={() => setScriptMode(true)}>SQL 스크립트</button>
+        </div>
+        {scriptMode && <label className="files-check"><input type="checkbox" checked={autocommit} disabled={busy}
+          onChange={event => setAutocommit(event.target.checked)} /> 자동 커밋</label>}
+      </div>
+      {scriptMode && <p className="form-note postgres-page-note">자동 커밋을 끄면 스크립트의 COMMIT으로 변경을 저장합니다. 실행 종료 시 열린 트랜잭션은 롤백합니다.</p>}
       <SqlTabStrip group={tabs} onSelect={id => { setSelection(null); select(id); }} onNew={() => add()} onClose={closeTab}
         closeDisabledFor={running?.tab} />
       {tabs.tabs.map(item => <div key={item.id} role="tabpanel" id={sqlTabPanelId(item.id)}
@@ -166,18 +199,18 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
             onSelect={event => setSelection({ tab: draft.id, start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd })}
             onKeyDown={event => {
               if (event.nativeEvent.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-              if (event.key === "Enter") { event.preventDefault(); execute(event.shiftKey, "query", event.currentTarget); }
+              if (event.key === "Enter") { event.preventDefault(); execute(event.shiftKey, undefined, event.currentTarget); }
               else if (event.key.toLowerCase() === "s") { event.preventDefault(); saveFile(draft); }
             }} />
         </>}
       </div>)}
       {!draft && <><p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p><div className="editor-footer">{fileActions}</div></>}
     </section>
-    {!session && <p className="form-note">PostgreSQL에 연결하면 조회 SQL을 실행할 수 있습니다.</p>}
+    {!session && <p className="form-note">PostgreSQL에 연결하면 SQL을 실행할 수 있습니다.</p>}
     {running && <p className="form-note" role="status">{cancelStatus || `${running.title} · ${modeNames[running.mode]} 중…`}</p>}
-    {tabPreview?.data && tabPreview.plan && <div className="postgres-result-views" role="group" aria-label="PostgreSQL 결과 보기">
-      <button type="button" className="secondary small" aria-pressed={tabPreview.active === "data"} onClick={() => showResult("data")}>조회 결과</button>
-      <button type="button" className="secondary small" aria-pressed={tabPreview.active === "plan"} onClick={() => showResult("plan")}>계획 결과</button>
+    {tabPreview && availableViews.length > 1 && <div className="postgres-result-views" role="group" aria-label="PostgreSQL 결과 보기">
+      {availableViews.map(view => <button key={view} type="button" className="secondary small"
+        aria-pressed={tabPreview.active === view} onClick={() => showResult(view)}>{viewNames[view]}</button>)}
     </div>}
     {tabPreview && resultViews.map(view => {
       const preview = tabPreview[view];
@@ -203,6 +236,23 @@ export function PostgresSqlWorkspace({ session, editor, onExport, onQueryActivit
         </div>
       </div>
     </Dialog>}
+    {scriptTarget && session === scriptTarget.session && <Dialog title="운영 스크립트 실행" busy={false}
+      onClose={() => { setScriptTarget(null); requestAnimationFrame(() => input.current?.focus()); }}>
+      <form onSubmit={event => {
+        event.preventDefault();
+        if (scriptTarget.confirmation !== "PROD") return;
+        setScriptTarget(null);
+        void run(scriptTarget);
+      }}>
+        <p className="form-note"><strong>{scriptTarget.title}</strong>의 스크립트를 운영 PostgreSQL에 실행합니다.</p>
+        <label className="field">운영 확인<input autoFocus value={scriptTarget.confirmation} placeholder="PROD"
+          onChange={event => setScriptTarget({ ...scriptTarget, confirmation: event.target.value })} /></label>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={() => setScriptTarget(null)}>취소</button>
+          <button type="submit" className="primary" disabled={scriptTarget.confirmation !== "PROD"}>스크립트 실행</button>
+        </div>
+      </form>
+    </Dialog>}
     {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
       parameters={parameterRequest.parameters} title={`${parameterRequest.target.title} · ${modeNames[parameterRequest.target.mode]}`} error={parameterRequest.error}
       running={busy} cancelStatus={cancelStatus} onSubmit={bindings => void run(parameterRequest.target, bindings)}
@@ -222,6 +272,7 @@ function PostgresSqlResult({ outcome, jump, onExport }: { outcome: QueryStatus; 
   const snapshot = useMemo(() => ({ outcome, page }), [outcome, page]);
   const length = outcome.status === "completed" ? Math.max(0, Math.min(outcome.rows.length - start, resultPageSize)) : 0;
   const rowSelection = useGridRowSelection(snapshot, length);
+  if (outcome.status === "script") return <PostgresScriptResults outcome={outcome.script} jump={jump} />;
   if (outcome.status === "plan") return <PostgresQueryPlan plan={outcome.plan} />;
   if (outcome.status === "failed") return <div className="error-banner" role="alert">
     {outcome.error}

@@ -1791,6 +1791,14 @@ async fn execute_postgres_sql(
 }
 
 #[tauri::command]
+async fn execute_postgres_script(
+    postgres: State<'_, PostgresManager>, id: String, request: String,
+    input: stackport_core::PostgresScriptInput,
+) -> Result<stackport_core::PostgresScriptOutcome, String> {
+    postgres.execute_script(&id, &request, input).await
+}
+
+#[tauri::command]
 fn postgres_export_progress(postgres: State<'_, PostgresManager>, id: String, request: String) -> Result<Option<u64>, String> {
     postgres.export_progress(&id, &request)
 }
@@ -2688,6 +2696,7 @@ fn main() {
             preview_postgres_row_paste,
             apply_postgres_row_paste,
             execute_postgres_sql,
+            execute_postgres_script,
             postgres_export_progress,
             cancel_postgres_sql,
             create_ssh_tunnel,

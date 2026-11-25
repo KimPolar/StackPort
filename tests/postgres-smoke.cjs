@@ -700,6 +700,7 @@ async function verify(browser, fixture, gateway, jump) {
   await verifyServerMonitor({ command, open, close, unrelated });
   await verifyStatementStats({ command, query, open, close, session, unrelated });
   await verifyGridWrites({ command, open, close, profile, session, findObject });
+  await verifyScripts({ command, query, open, close, session });
   await close(session.id);
   await assert.rejects(command('postgres_schemas', { id: session.id, page: 0 }), /연결이 닫혔습니다/);
 
@@ -1183,6 +1184,25 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(await sql.inputValue(), 'SELECT *\nFROM "report"."visible";');
   await sql.press('Control+Enter');
   await results.getByText('4', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'SQL 스크립트', exact: true }).click();
+  const autocommit = page.getByRole('checkbox', { name: '자동 커밋', exact: true });
+  assert.equal(await autocommit.isChecked(), true);
+  await autocommit.uncheck();
+  await sql.fill("SELECT '첫 결과' AS marker;\nSELECT '둘째 결과' AS marker;");
+  await page.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const scriptConfirmation = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
+  const confirmScript = scriptConfirmation.getByRole('button', { name: '스크립트 실행', exact: true });
+  assert.equal(await confirmScript.isEnabled(), false);
+  await scriptConfirmation.getByLabel('운영 확인', { exact: true }).fill('PROD');
+  await confirmScript.click();
+  const scriptResults = page.getByRole('region', { name: 'PostgreSQL 스크립트 결과', exact: true });
+  await scriptResults.getByRole('cell', { name: '첫 결과', exact: true }).waitFor();
+  await scriptResults.getByRole('combobox', { name: '문장 결과', exact: true }).selectOption('1');
+  await scriptResults.getByRole('cell', { name: '둘째 결과', exact: true }).waitFor();
+  await page.getByRole('button', { name: '읽기 전용 조회', exact: true }).click();
+  await page.getByRole('button', { name: '조회 결과', exact: true }).click();
+  await results.getByText('4', { exact: true }).waitFor();
+  await sql.fill('SELECT *\nFROM "report"."visible";');
   await page.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
   const multiline = 'SELECT 123;\nSELECT id FROM report."quoted table" ORDER BY id;';
   await sql.fill(multiline);
@@ -1773,6 +1793,92 @@ function backupList(destination) {
   return execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--list', destination], {
     windowsHide: true, encoding: 'utf8', timeout: 15_000,
   });
+}
+
+async function verifyScripts({ command, query, open, close, session }) {
+  const document = { kind: 'document' };
+  const execute = (source, { autocommit = true, scope = document, confirmation = 'PROD', request = randomUUID() } = {}) =>
+    command('execute_postgres_script', { id: session.id, request, input: { source, scope, autocommit, confirmation } });
+  const probe = id => `INSERT INTO report.write_probe VALUES (${id}) RETURNING id`;
+  const ids = async () => (await query('SELECT id FROM report.write_probe ORDER BY id')).rows.map(row => row[0].value);
+  await assert.rejects(execute(probe(900), { confirmation: '' }), /PROD/);
+  assert.deepEqual(await ids(), []);
+
+  const manual = await execute([
+    "SET search_path = report, pg_catalog",
+    "CREATE TEMP TABLE stackport_script_temp (id int)",
+    "CREATE FUNCTION pg_temp.stackport_script_value() RETURNS int LANGUAGE SQL BEGIN ATOMIC SELECT CASE WHEN true THEN 7 ELSE 0 END; END",
+    probe(901), "SAVEPOINT script_middle", probe(902), "ROLLBACK TO SAVEPOINT script_middle",
+    "COMMIT", probe(903),
+    "DO $script$ BEGIN RAISE NOTICE '스택포트; 알림'; END $script$",
+    "SELECT pg_temp.stackport_script_value(), 9007199254740993.123::numeric, NULL::text, ''::text",
+  ].join(";\n"), { autocommit: false });
+  assert.equal(manual.status, 'succeeded', JSON.stringify(manual));
+  assert.equal(manual.transaction, 'cleanup_confirmed');
+  assert.equal(manual.connection_closed, false);
+  assert.equal(manual.statements.length, 11);
+  assert.equal(manual.statements[3].affected_rows, 1);
+  assert.deepEqual(manual.statements[9].notices.map(notice => notice.message), ['스택포트; 알림']);
+  assert.deepEqual(manual.statements[10].rows[0].map(cell => cell.value), ['7', '9007199254740993.123', null, '']);
+  assert.deepEqual(await ids(), ['901']);
+  const clean = await execute("SHOW search_path; SHOW default_transaction_read_only; SELECT to_regclass('pg_temp.stackport_script_temp')");
+  assert.equal(clean.statements[0].rows[0][0].value, 'pg_catalog');
+  assert.equal(clean.statements[1].rows[0][0].value, 'off');
+  assert.equal(clean.statements[2].rows[0][0].value, null);
+  assert.match((await query("INSERT INTO report.write_probe VALUES (909)")).error, /읽기 전용/);
+
+  const invalid = `${probe(904)};\nSELECT '😀', missing_script_column;\n${probe(905)}`;
+  const failed = await execute(invalid);
+  assert.equal(failed.status, 'failed', JSON.stringify(failed));
+  assert.equal(failed.statements.length, 1);
+  assert.equal(failed.error.sql_state, '42703');
+  assert.equal(failed.error.position, invalid.indexOf('missing_script_column'));
+  assert.equal(failed.error.line, 2);
+  assert.deepEqual(await ids(), ['901', '904']);
+
+  const scopeSource = "SELECT '😀skip'; SELECT 11; SELECT 22; SELECT 33;";
+  const start = scopeSource.indexOf('SELECT 11');
+  const end = scopeSource.indexOf('SELECT 33');
+  const selection = await execute(scopeSource, { scope: { kind: 'selection', start, end } });
+  assert.deepEqual(selection.statements.map(part => part.rows[0][0].value), ['11', '22']);
+  const current = await execute(scopeSource, { scope: { kind: 'current', cursor: end + 3 } });
+  assert.deepEqual(current.statements.map(part => part.rows[0][0].value), ['33']);
+  const limited = await execute("SELECT repeat('한', 513) FROM generate_series(1, 101)");
+  assert.equal(limited.statements[0].rows.length, 100);
+  assert.equal(limited.statements[0].more_rows, true);
+  assert.equal(limited.statements[0].rows[0][0].truncated, true);
+  await assert.rejects(execute('SELECT 1;'.repeat(101)), /100/);
+
+  const observer = await open();
+  const request = randomUUID();
+  try {
+    const inFlight = execute(`BEGIN; ${probe(906)}; SELECT pg_sleep(6) AS script_cancel_marker; COMMIT`, { request });
+    let sleeping = false;
+    for (let attempt = 0; attempt < 25 && !sleeping; attempt++) {
+      const observed = await command('execute_postgres_sql', { id: observer.id, request: randomUUID(), scope: document,
+        source: "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND wait_event='PgSleep' AND query LIKE '%script_cancel_marker%')" });
+      sleeping = observed.rows?.[0][0].value === 'true';
+      if (!sleeping) await new Promise(resolve => setTimeout(resolve, 45));
+    }
+    assert.equal(sleeping, true);
+    assert.equal(await command('cancel_postgres_sql', { id: session.id, request }), true);
+    const stopped = await inFlight;
+    assert.equal(stopped.status, 'cancelled', JSON.stringify(stopped));
+    assert.equal(stopped.server_confirmed, true);
+    assert.equal(stopped.transaction, 'cleanup_confirmed');
+  } finally { await close(observer.id); }
+  assert.deepEqual(await ids(), ['901', '904']);
+  const audit = (await command('list_audit_events', { before: null })).events;
+  const cancelled = audit.find(event => event.correlation_id === request);
+  assert.equal(cancelled?.operation, 'postgres.sql.script.cancel');
+  assert.equal(cancelled.policy, 'postgres-script-prod-confirmed');
+  assert.equal(cancelled.object_name, null);
+  const timed = await execute(`${probe(907)}; SELECT pg_sleep(12); COMMIT`, { autocommit: false });
+  assert.equal(timed.status, 'timed_out', JSON.stringify(timed));
+  assert.equal(timed.server_confirmed, true);
+  assert.equal(timed.transaction, 'cleanup_confirmed');
+  assert.deepEqual(await ids(), ['901', '904']);
+  console.log('PostgreSQL scripts passed (routine bodies, autocommit, savepoints, rollback, Unicode diagnostics and server cancellation).');
 }
 
 async function verifyBackups({ command, open, close, alternate, session, findObject, archive }) {

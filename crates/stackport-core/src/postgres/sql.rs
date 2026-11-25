@@ -26,6 +26,8 @@ use tokio_postgres::{
 };
 use uuid::Uuid;
 
+pub(super) mod script;
+
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]

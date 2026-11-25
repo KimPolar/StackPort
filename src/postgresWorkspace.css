@@ -9,6 +9,10 @@
 .postgres-sql .editor-card > .panel-heading, .postgres-plan .panel-heading { min-height: 44px; height: auto; flex-wrap: wrap; gap: 6px; padding: 7px 12px; }
 .postgres-result-views { display: flex; flex-wrap: wrap; gap: 6px; }
 .postgres-result-views [aria-pressed="true"] { background: var(--surface-selected); border-color: var(--border-accent); }
+.postgres-script-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 8px 12px; }
+.postgres-script-toolbar > label { margin: 0; }
+.postgres-script-notices { padding-inline: 28px 12px; overflow-wrap: anywhere; }
+.postgres-script-result > .error-banner { margin: 8px 12px; }
 .postgres-object-views { padding: 8px 10px; border-bottom: 1px solid var(--divider); }
 .postgres-pin-object[aria-pressed="true"] { color: var(--warning-text); }
 .postgres-pin-object[aria-pressed="true"] svg { fill: currentColor; }

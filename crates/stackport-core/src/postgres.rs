@@ -37,6 +37,7 @@ pub use session::{
     PostgresCatalogObject, PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
     PostgresSchemaPage, PostgresSessionInfo,
 };
+pub use sql::script::{PostgresScriptInput, PostgresScriptOutcome};
 pub use sql::{PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome};
 pub use sql_range::PostgresSqlScope;
 pub use statement_stats::{PostgresStatementStats, PostgresStatementStatsInput};

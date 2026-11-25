@@ -19,7 +19,7 @@ use super::{
         self, PostgresValuePage, PostgresValueRepresentation, PostgresValueRow, PostgresValueSave,
         PostgresValueTarget, ValueKind,
     },
-    PostgresProfile, PostgresProfileInput, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
+    PostgresProfile, PostgresProfileInput, PostgresScriptInput, PostgresScriptOutcome, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome,
 };
 use crate::{
     edit::{RowChangePreview, RowChangeSession, RowPastePreview},
@@ -191,6 +191,7 @@ struct Session {
     monitor_of: Option<String>,
     tls: TlsConnector,
     running_sql: Mutex<Option<sql::RunningSql>>,
+    script_notices: sql::script::Notices,
     archive_job: Mutex<Option<(Uuid, Arc<AtomicBool>)>>,
     restore_plan: Mutex<Option<restore::Plan>>,
     grid_edit: bool,
@@ -198,6 +199,20 @@ struct Session {
     grid_update: AsyncMutex<Option<grid_update::Plan>>,
     row_edit: AsyncMutex<Option<row_edit::Plan>>,
     _permit: OwnedSemaphorePermit,
+}
+
+struct ScriptConnection<'a> {
+    connection: &'a JoinHandle<()>,
+    reusable: bool,
+}
+
+impl Drop for ScriptConnection<'_> {
+    fn drop(&mut self) {
+        // A dropped invocation can otherwise leave the shared session writable.
+        if !self.reusable {
+            self.connection.abort();
+        }
+    }
 }
 
 struct MonitorOwner {
@@ -425,7 +440,7 @@ impl PostgresManager {
         if tunnel.as_ref().is_some_and(|route| !route.running()) {
             return Err(PostgresDisconnect::TunnelStopped.message().into());
         }
-        let (client, connection) = opened
+        let (client, mut connection) = opened
             .map_err(|_| "PostgreSQL 연결 시간이 초과되었습니다.")?
             .map_err(connect_error)?;
         drop(config);
@@ -433,12 +448,20 @@ impl PostgresManager {
         let (ended, connection_ended) = watch::channel(false);
         let link = tunnel.clone();
         let owner_ended = owner.as_ref().map(|owner| owner.connection_ended.clone());
+        let script_notices = sql::script::Notices::default();
+        let notices = script_notices.clone();
         let session = Arc::new(Session {
             profile,
             client: AsyncMutex::new(client),
             connection: tokio::spawn(async move {
                 tokio::select! {
-                    _ = connection => {}
+                    _ = async {
+                        while let Some(Ok(message)) = std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+                            if let tokio_postgres::AsyncMessage::Notice(notice) = message {
+                                notices.collect(notice);
+                            }
+                        }
+                    } => {}
                     _ = async { match link { Some(route) => route.ended().await, None => pending().await } } => {}
                     _ = async {
                         match owner_ended {
@@ -454,6 +477,7 @@ impl PostgresManager {
             monitor_of: owner.map(|owner| owner.id),
             tls,
             running_sql: Mutex::default(),
+            script_notices,
             archive_job: Mutex::default(),
             restore_plan: Mutex::default(),
             grid_edit,
@@ -849,6 +873,69 @@ impl PostgresManager {
                 Ok(PostgresSqlOutcome::interrupted(true, false, true))
             }
         }
+    }
+
+    pub async fn execute_script(
+        &self,
+        id: &str,
+        request: &str,
+        input: PostgresScriptInput,
+    ) -> Result<PostgresScriptOutcome> {
+        use sql::script::Status;
+
+        let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
+        let spans = sql_range::script(&input.source, input.scope)?;
+        let session = self.session(id)?;
+        if session.profile.settings.environment == "PROD" && input.confirmation != "PROD" {
+            return Err("운영 PostgreSQL 스크립트를 실행하려면 PROD를 입력하세요.".into());
+        }
+        let (cancel, signal) = watch::channel(false);
+        let running = sql::RunningSql::register(&session.running_sql, request, cancel, None)?;
+        let mut queued = signal.clone();
+        let locked = tokio::select! {
+            biased;
+            _ = queued.wait_for(|stop| *stop) => Err(PostgresScriptOutcome::waiting_cancelled()),
+            result = timeout(QUERY_TIMEOUT, session.client.lock()) =>
+                result.map_err(|_| PostgresScriptOutcome::waiting_timeout()),
+        };
+        let mut outcome = match locked {
+            Ok(client) => {
+                let mut guard = ScriptConnection { connection: &session.connection, reusable: false };
+                let outcome = sql::script::run(
+                    &client, &input, &spans, signal, session.tls.clone(), &session.script_notices,
+                ).await;
+                guard.reusable = !outcome.connection_closed;
+                outcome
+            }
+            Err(outcome) => outcome,
+        };
+        drop(running);
+        let operation = match outcome.status {
+            Status::Succeeded | Status::Failed => "postgres.sql.script",
+            Status::Cancelled => "postgres.sql.script.cancel",
+            Status::TimedOut => "postgres.sql.script.timeout",
+        };
+        let result = match outcome.status {
+            Status::Succeeded => "succeeded",
+            Status::Failed | Status::Cancelled | Status::TimedOut => "failed",
+        };
+        let store = self.store.clone();
+        let audited_session = Arc::clone(&session);
+        outcome.audit_warning = !tokio::task::spawn_blocking(move || {
+            let correlation = request.to_string();
+            let audit = AuditRecord {
+                correlation_id: &correlation,
+                operation,
+                project_id: Some(&audited_session.profile.project_id),
+                profile_id: Some(&audited_session.profile.id),
+                environment: Some(&audited_session.profile.settings.environment),
+                object_name: None,
+                outcome: result,
+                affected_count: None,
+            };
+            store.connect().and_then(|db| insert_audit(&db, audit)).is_ok()
+        }).await.unwrap_or(false);
+        Ok(outcome)
     }
 
     pub async fn structure(

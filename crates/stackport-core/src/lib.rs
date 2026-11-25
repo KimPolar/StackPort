@@ -32,7 +32,7 @@ pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSessionInfo, MongoSettings};
-pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
+pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
@@ -992,6 +992,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "mysql.sql.script" | "mysql.sql.script.cancel" | "mysql.sql.script.timeout"
             if record.environment == Some("PROD") => "mysql-script-prod-confirmed",
         "mysql.sql.script" | "mysql.sql.script.cancel" | "mysql.sql.script.timeout" => "mysql-script-login-permissions",
+        "postgres.sql.script" | "postgres.sql.script.cancel" | "postgres.sql.script.timeout"
+            if record.environment == Some("PROD") => "postgres-script-prod-confirmed",
+        "postgres.sql.script" | "postgres.sql.script.cancel" | "postgres.sql.script.timeout" => "postgres-script-login-permissions",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

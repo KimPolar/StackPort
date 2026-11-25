@@ -4,7 +4,7 @@ use std::ops::Range;
 
 pub(super) const MAX_SQL_BYTES: usize = 256 * 1024;
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PostgresSqlScope {
     Document,
@@ -13,6 +13,28 @@ pub enum PostgresSqlScope {
 }
 
 pub(super) fn statement(source: &str, scope: PostgresSqlScope) -> Result<Range<usize>> {
+    let spans = scoped_ranges(source, scope)?;
+    match spans.as_slice() {
+        [span] => Ok(span.clone()),
+        [] => Err("실행할 SQL 문장이 없습니다.".into()),
+        _ => Err(
+            "한 번에 한 문장을 실행하세요. 선택 영역 또는 현재 문장을 실행할 수 있습니다.".into(),
+        ),
+    }
+}
+
+pub(super) fn script(source: &str, scope: PostgresSqlScope) -> Result<Vec<Range<usize>>> {
+    let spans = scoped_ranges(source, scope)?;
+    if spans.is_empty() {
+        return Err("실행할 SQL 문장이 없습니다.".into());
+    }
+    if spans.len() > 100 {
+        return Err("PostgreSQL 스크립트는 한 번에 최대 100개 문장을 실행할 수 있습니다.".into());
+    }
+    Ok(spans)
+}
+
+fn scoped_ranges(source: &str, scope: PostgresSqlScope) -> Result<Vec<Range<usize>>> {
     if source.len() > MAX_SQL_BYTES || source.contains('\0') {
         return Err("SQL은 NUL 문자 없이 256 KiB 이하여야 합니다.".into());
     }
@@ -30,21 +52,13 @@ pub(super) fn statement(source: &str, scope: PostgresSqlScope) -> Result<Range<u
                 .collect()
         }
         PostgresSqlScope::Current { cursor } => {
-            let cursor = byte_at_utf16(source, cursor)?;
-            let spans = ranges(source, Some(cursor))?;
-            return spans
-                .last()
-                .cloned()
-                .ok_or_else(|| "실행할 SQL 문장이 없습니다.".into());
+            ranges(source, Some(byte_at_utf16(source, cursor)?))?
+                .pop()
+                .into_iter()
+                .collect()
         }
     };
-    match spans.as_slice() {
-        [span] => Ok(span.clone()),
-        [] => Err("실행할 SQL 문장이 없습니다.".into()),
-        _ => Err(
-            "한 번에 한 문장을 실행하세요. 선택 영역 또는 현재 문장을 실행할 수 있습니다.".into(),
-        ),
-    }
+    Ok(spans)
 }
 
 fn byte_at_utf16(source: &str, target: usize) -> Result<usize> {
@@ -70,6 +84,7 @@ fn ranges(source: &str, cursor: Option<usize>) -> Result<Vec<Range<usize>>> {
     let mut start = None;
     let mut end = 0;
     let mut index = 0;
+    let mut routine = Routine::default();
     while index < bytes.len() {
         let tail = &bytes[index..];
         let next = match tail[0] {
@@ -88,25 +103,34 @@ fn ranges(source: &str, cursor: Option<usize>) -> Result<Vec<Range<usize>>> {
                 index += block_comment(tail)?;
                 continue;
             }
-            b';' => {
+            b';' if routine.atomic_depth == 0 => {
                 if let Some(first) = start.take() {
                     spans.push(first..end);
                     if cursor.is_some_and(|cursor| cursor <= index) {
                         return Ok(spans);
                     }
                 }
+                routine = Routine::default();
                 index += 1;
                 continue;
             }
             b'e' | b'E' if tail.get(1) == Some(&b'\'') => 1 + quoted(&tail[1..], b'\'', true)?,
             quote @ (b'\'' | b'"') => quoted(tail, quote, false)?,
             b'$' => dollar_quote(source, index)?.unwrap_or(1),
-            byte if identifier_start(byte) => tail
-                .iter()
-                .take_while(|&&b| identifier_part(b) || b == b'$')
-                .count(),
+            byte if identifier_start(byte) => {
+                let width = tail
+                    .iter()
+                    .take_while(|&&b| identifier_part(b) || b == b'$')
+                    .count();
+                routine.word(&tail[..width]);
+                start.get_or_insert(index);
+                index += width;
+                end = index;
+                continue;
+            }
             _ => 1,
         };
+        routine.begin = false;
         start.get_or_insert(index);
         index += next;
         end = index;
@@ -115,6 +139,76 @@ fn ranges(source: &str, cursor: Option<usize>) -> Result<Vec<Range<usize>>> {
         spans.push(first..end);
     }
     Ok(spans)
+}
+
+#[derive(Default)]
+struct Routine<'a> {
+    head: Vec<&'a [u8]>,
+    atomic_depth: usize,
+    case_depth: usize,
+    begin: bool,
+}
+
+impl<'a> Routine<'a> {
+    fn word(&mut self, word: &'a [u8]) {
+        if self.head.len() < 4 {
+            self.head.push(word);
+        }
+        let is = |index: usize, word: &[u8]| {
+            self.head
+                .get(index)
+                .is_some_and(|token| token.eq_ignore_ascii_case(word))
+        };
+        let kind = if is(1, b"OR") && is(2, b"REPLACE") {
+            3
+        } else {
+            1
+        };
+        if !is(0, b"CREATE") || !(is(kind, b"FUNCTION") || is(kind, b"PROCEDURE")) {
+            return;
+        }
+        if self.begin && word.eq_ignore_ascii_case(b"ATOMIC") {
+            self.atomic_depth += 1;
+        } else if self.atomic_depth > 0 && word.eq_ignore_ascii_case(b"CASE") {
+            self.case_depth += 1;
+        } else if self.atomic_depth > 0 && word.eq_ignore_ascii_case(b"END") {
+            if self.case_depth > 0 {
+                self.case_depth -= 1;
+            } else {
+                self.atomic_depth -= 1;
+            }
+        }
+        self.begin = word.eq_ignore_ascii_case(b"BEGIN");
+    }
+}
+
+pub(super) fn head_words(source: &str) -> impl Iterator<Item = &[u8]> {
+    let mut tail = source.as_bytes();
+    std::iter::from_fn(move || {
+        loop {
+            tail = tail.trim_ascii_start();
+            if tail.starts_with(b"--") {
+                tail = &tail[tail
+                    .iter()
+                    .position(|byte| matches!(byte, b'\r' | b'\n'))
+                    .unwrap_or(tail.len())..];
+            } else if tail.starts_with(b"/*") {
+                tail = tail.get(block_comment(tail).ok()?..)?;
+            } else {
+                break;
+            }
+        }
+        let width = tail
+            .iter()
+            .take_while(|&&byte| identifier_part(byte) || byte == b'$')
+            .count();
+        if width == 0 {
+            return None;
+        }
+        let (word, rest) = tail.split_at(width);
+        tail = rest;
+        Some(word)
+    })
 }
 
 fn block_comment(bytes: &[u8]) -> Result<usize> {
@@ -225,5 +319,18 @@ mod tests {
         let selection = statement(source, PostgresSqlScope::Current { cursor: 10 }).unwrap();
         assert_eq!(&source[selection], "SELECT 7");
         assert!(statement(source, PostgresSqlScope::Current { cursor: 16 }).is_err());
+    }
+
+    #[test]
+    fn keeps_sql_standard_routine_bodies_and_case_ends_in_one_statement() {
+        let source = "CREATE OR REPLACE FUNCTION example() RETURNS int LANGUAGE SQL BEGIN /* body */ ATOMIC\n SELECT CASE WHEN true THEN 1 ELSE 2 END;\nEND;\nSELECT example();";
+        let spans = script(source, PostgresSqlScope::Document).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert!(source[spans[0].clone()].ends_with(";\nEND"));
+        let cursor = source.find("CASE").unwrap();
+        assert_eq!(
+            script(source, PostgresSqlScope::Current { cursor }).unwrap(),
+            [spans[0].clone()]
+        );
     }
 }
