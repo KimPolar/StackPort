@@ -5,7 +5,7 @@ import type { TableQueryClauses } from "./TableQueryControls";
 
 export type TableQueryTarget =
   | { engine: "sqlite"; profile_id: string; object: string }
-  | { engine: "postgres"; profile_id: string; revision: number; schema: string; object: string };
+  | { engine: "postgres" | "mysql"; profile_id: string; revision: number; schema: string; object: string };
 type Preset = { id: string; name: string; revision: number };
 type Write =
   | { kind: "create"; name: string; clauses: TableQueryClauses }
@@ -91,7 +91,7 @@ export function TableQueryPresetsDialog({ target, draft, valid, columns, onApply
   }
 
   return <Dialog title="저장된 조회 조건" busy={busy} onClose={onClose}>
-    <p className="form-note">{target.engine === "postgres" ? target.schema + "." : ""}{target.object}</p>
+    <p className="form-note">{"schema" in target ? target.schema + "." : ""}{target.object}</p>
     {error && <p className="form-error" id={errorId} role="alert">{error}</p>}
     {catalogError && <p className="form-error" role="alert">{catalogError}</p>}
     {notice && <p className="form-note" role="status">{notice}</p>}

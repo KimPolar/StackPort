@@ -13,19 +13,35 @@ pub(crate) const SCHEMA: &str = "CREATE TABLE table_query_presets (
     id TEXT PRIMARY KEY,
     sqlite_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
     postgres_id TEXT REFERENCES postgres_profiles(id) ON DELETE CASCADE,
+    mysql_id TEXT REFERENCES mysql_profiles(id) ON DELETE CASCADE,
     target_key TEXT NOT NULL,
     schema_name TEXT NOT NULL,
     object_name TEXT NOT NULL,
     name TEXT NOT NULL COLLATE NOCASE,
     clauses TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK(revision > 0),
-    CHECK ((sqlite_id IS NOT NULL) <> (postgres_id IS NOT NULL)),
+    CHECK ((sqlite_id IS NOT NULL) + (postgres_id IS NOT NULL) + (mysql_id IS NOT NULL) = 1),
     UNIQUE (sqlite_id, target_key, schema_name, object_name, name),
-    UNIQUE (postgres_id, target_key, schema_name, object_name, name)
+    UNIQUE (postgres_id, target_key, schema_name, object_name, name),
+    UNIQUE (mysql_id, target_key, schema_name, object_name, name)
 );";
 
-const SCOPE: &str = "sqlite_id IS ?1 AND postgres_id IS ?2 AND target_key = ?3 AND schema_name = ?4 AND object_name = ?5";
-const SELECTED: &str = "id = ?6 AND revision = ?7";
+pub(crate) fn migrate_v15(db: &Connection) -> Result<()> {
+    db.execute_batch("ALTER TABLE table_query_presets RENAME TO table_query_presets_v15;")
+        .map_err(db_error)?;
+    db.execute_batch(SCHEMA).map_err(db_error)?;
+    db.execute_batch(
+        "INSERT INTO table_query_presets
+           (id, sqlite_id, postgres_id, target_key, schema_name, object_name, name, clauses, revision)
+         SELECT id, sqlite_id, postgres_id, target_key, schema_name, object_name, name, clauses, revision
+           FROM table_query_presets_v15;
+         DROP TABLE table_query_presets_v15;",
+    )
+    .map_err(db_error)
+}
+
+const SCOPE: &str = "sqlite_id IS ?1 AND postgres_id IS ?2 AND mysql_id IS ?3 AND target_key = ?4 AND schema_name = ?5 AND object_name = ?6";
+const SELECTED: &str = "id = ?7 AND revision = ?8";
 const STALE: &str = "저장된 조건이 변경되었거나 삭제되었습니다. 목록을 다시 확인하세요.";
 const MAX_PRESETS: i64 = 50;
 const MAX_BYTES: usize = 512 * 1024;
@@ -38,6 +54,12 @@ pub enum TableQueryTarget {
         object: String,
     },
     Postgres {
+        profile_id: String,
+        revision: i64,
+        schema: String,
+        object: String,
+    },
+    Mysql {
         profile_id: String,
         revision: i64,
         schema: String,
@@ -76,16 +98,21 @@ struct Scope<'a> {
     target_key: String,
     sqlite_id: Option<&'a str>,
     postgres_id: Option<&'a str>,
+    mysql_id: Option<&'a str>,
     schema: &'a str,
     object: &'a str,
 }
 
 impl TableQueryTarget {
     fn scope(&self, db: &Connection) -> Result<Scope<'_>> {
-        let (sqlite_id, postgres_id, schema, object) = match self {
-            Self::Sqlite { profile_id, object } => {
-                (Some(profile_id.as_str()), None, "main", object.as_str())
-            }
+        let (sqlite_id, postgres_id, mysql_id, schema, object) = match self {
+            Self::Sqlite { profile_id, object } => (
+                Some(profile_id.as_str()),
+                None,
+                None,
+                "main",
+                object.as_str(),
+            ),
             Self::Postgres {
                 profile_id,
                 schema,
@@ -94,9 +121,30 @@ impl TableQueryTarget {
             } => (
                 None,
                 Some(profile_id.as_str()),
+                None,
                 schema.as_str(),
                 object.as_str(),
             ),
+            Self::Mysql {
+                profile_id,
+                schema,
+                object,
+                ..
+            } => {
+                if ![schema, object]
+                    .iter()
+                    .all(|name| crate::mysql::valid_identifier(name))
+                {
+                    return Err("조회 조건을 저장할 데이터베이스나 객체 이름을 확인하세요.".into());
+                }
+                (
+                    None,
+                    None,
+                    Some(profile_id.as_str()),
+                    schema.as_str(),
+                    object.as_str(),
+                )
+            }
         };
         if [schema, object]
             .iter()
@@ -119,6 +167,15 @@ impl TableQueryTarget {
                 params![profile_id, revision],
                 read,
             ),
+            Self::Mysql { profile_id, revision, .. } => db.query_row(
+                "SELECT project_id, json_extract(settings_json, '$.environment'),
+                        json_array(json_extract(settings_json, '$.host'), json_extract(settings_json, '$.port'),
+                                   json_extract(settings_json, '$.username'))
+                 FROM mysql_profiles WHERE id = ?1 AND revision = ?2
+                 AND NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id = mysql_profiles.project_id)",
+                params![profile_id, revision],
+                read,
+            ),
         }.optional().map_err(db_error)?.ok_or("활성 연결을 찾을 수 없습니다. 연결을 다시 여세요.")?;
         Ok(Scope {
             project_id,
@@ -126,6 +183,7 @@ impl TableQueryTarget {
             target_key,
             sqlite_id,
             postgres_id,
+            mysql_id,
             schema,
             object,
         })
@@ -134,9 +192,10 @@ impl TableQueryTarget {
 
 impl Scope<'_> {
     fn values<'a>(&'a self, extra: &'a [&'a dyn ToSql]) -> impl Params + 'a {
-        let address: [&dyn ToSql; 5] = [
+        let address: [&dyn ToSql; 6] = [
             &self.sqlite_id,
             &self.postgres_id,
+            &self.mysql_id,
             &self.target_key,
             &self.schema,
             &self.object,
@@ -234,8 +293,8 @@ impl Store {
                 let json = scope.encode(&clauses)?;
                 let id = Uuid::new_v4().to_string();
                 let changed = tx.execute(
-                    "INSERT INTO table_query_presets(sqlite_id, postgres_id, target_key, schema_name, object_name, id, name, clauses, revision)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1) ON CONFLICT DO NOTHING",
+                    "INSERT INTO table_query_presets(sqlite_id, postgres_id, mysql_id, target_key, schema_name, object_name, id, name, clauses, revision)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1) ON CONFLICT DO NOTHING",
                     scope.values(&[&id, &name, &json]),
                 ).map_err(db_error)?;
                 require_changed(changed, "이 객체에 같은 이름의 조회 조건이 있습니다.")?;
@@ -249,7 +308,7 @@ impl Store {
                 let json = scope.encode(&clauses)?;
                 let next = revision.checked_add(1).ok_or(STALE)?;
                 let changed = tx.execute(
-                    &format!("UPDATE table_query_presets SET clauses = ?8, revision = ?9 WHERE {SCOPE} AND {SELECTED}"),
+                    &format!("UPDATE table_query_presets SET clauses = ?9, revision = ?10 WHERE {SCOPE} AND {SELECTED}"),
                     scope.values(&[&id, &revision, &json, &next]),
                 ).map_err(db_error)?;
                 require_changed(changed, STALE)?;
@@ -272,7 +331,7 @@ impl Store {
                 correlation_id: &Uuid::new_v4().to_string(),
                 operation,
                 project_id: Some(&scope.project_id),
-                profile_id: scope.sqlite_id.or(scope.postgres_id),
+                profile_id: scope.sqlite_id.or(scope.postgres_id).or(scope.mysql_id),
                 environment: Some(&scope.environment),
                 object_name: None,
                 outcome: "succeeded",

@@ -151,7 +151,7 @@ export function TableQueryControls({ columns, busy, apply, target, errorId }: {
               {operators.map(([operator, name]) => <option key={operator} value={operator}>{name}</option>)}
             </select>
             {hasValue && row.operator !== "contains" && <select aria-label={`${label} 값 형식`} value={row.kind} onChange={event => updateFilter(row.id, { kind: event.target.value as FilterDraft["kind"] })}>
-              <option value="text">{target.engine === "postgres" ? "열의 형식" : "텍스트"}</option>
+              <option value="text">{target.engine === "sqlite" ? "텍스트" : "열의 형식"}</option>
               {target.engine === "sqlite" && <>
                 <option value="integer">정수</option>
                 <option value="real">실수</option>

@@ -1636,19 +1636,17 @@ async fn browse(
     let table = quote_identifier(&name);
     let mut values = Vec::new();
     let suffix = query.suffix(
+        crate::table_query::TableQueryDialect::Postgres,
         &table,
         column_names.iter().map(String::as_str),
         primary_key_columns.iter().map(String::as_str),
-        |value| {
+        |_, value, _| {
             let value = value.text();
             bounded_filter_text(value)?;
             values.push(Value::Text {
                 value: Zeroizing::new(value.to_owned()),
             });
             Ok(format!("${}", values.len()))
-        },
-        |column, parameter| {
-            format!("pg_catalog.strpos({column}::pg_catalog.text, {parameter}) > 0")
         },
     )?;
     let from = format!("\nFROM {}.{table}{suffix}", quote_identifier(&schema));

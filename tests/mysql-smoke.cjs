@@ -91,6 +91,18 @@ async function fixture() {
       CREATE VIEW visible_db.order_view AS SELECT id, title FROM visible_db.\`orders\`\`daily\`;
       CREATE TABLE visible_db.sample_limit (number INT NOT NULL PRIMARY KEY);
       INSERT INTO visible_db.sample_limit VALUES ${Array.from({ length: 65 }, (_, i) => `(${i})`).join(',')};
+      CREATE TABLE visible_db.grid_filter (
+        id BIGINT UNSIGNED, part INT, \`tag\`\`text\` VARCHAR(60), amount DECIMAL(30,6),
+        booked DATE, touched DATETIME(6), elapsed TIME(6), weight DOUBLE, ratio FLOAT, PRIMARY KEY (part, id)
+      );
+      INSERT INTO visible_db.grid_filter VALUES
+        (18446744073709551615, 0, NULL, 123456789012345678901234.567890, '2024-02-29', '2024-02-29 12:30:00.125000', '-100:01:00.250000', 0.5, 0.1),
+        (18446744073709551614, 1, '%_need''le', 123456789012345678901234.567891, '2024-03-01', '2024-03-01 07:00:00', '00:00:00', 10.25, 0.2),
+        (1, 2, '%Xneed''le', 1.000001, '2024-03-02', '2024-03-02 00:00:00', '12:30:00', 2.5, 0.3);
+      CREATE TABLE visible_db.wide_filter (
+        id INT PRIMARY KEY, ${Array.from({ length: 128 }, (_, i) => `col_${i + 1} INT`).join(',')}
+      );
+      INSERT INTO visible_db.wide_filter(id, col_128) VALUES (1, 100), (2, 200);
       CREATE USER 'catalog_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';`);
     return { server, port, ca: tls.ca };
@@ -154,6 +166,7 @@ async function verify(page, server) {
   assert.equal(capped.rows.length, 50);
   assert.equal(capped.more_rows, true);
   await assert.rejects(read('hidden_db', 'hidden_table', true), /권한/);
+  await verifyDataGrid(command, id, profile);
   await verifySql(command, id, server.port);
   await command('close_mysql', { id });
   await assert.rejects(command('mysql_databases', { id, search: '', page: 0 }), /연결이 닫혔습니다/);
@@ -175,9 +188,100 @@ async function verify(page, server) {
   await grid.getByText('00ff21', { exact: true }).waitFor();
   await grid.getByText('NULL', { exact: true }).waitFor();
   await verifySqlEditor(workspace);
+  await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifyDataGrid(command, id, profile) {
+  const read = (table, grid) => command('mysql_table', { id, database: 'visible_db', table, includeRows: true, grid });
+  const clauses = (filters = [], sort = [], conjunction = 'all') => ({ filters, sort, conjunction });
+  const atom = (value, kind = 'text') => ({ kind, value });
+  const equal = (column, value) => ({ column, condition: { kind: 'eq', value: atom(value) } });
+  const order = (column, direction = 'asc', nulls = 'default') => ({ column, direction, nulls });
+  const result = (query, table = 'grid_filter', page = 0) => read(table, { page, clauses: query });
+  const ids = data => data.rows.map(row => row[0].text);
+  const last = '18446744073709551615';
+  const previous = '18446744073709551614';
+  const initial = await result(clauses());
+  assert.equal(initial.stable_order, true);
+  assert.deepEqual(ids(initial), [last, previous, '1']);
+  assert.match(initial.query_sql, /ORDER BY sp_source\.\x60part\x60 ASC, sp_source\.\x60id\x60 ASC/);
+  const second = await result(clauses(), 'sample_limit', 1);
+  assert.equal(second.more_rows, false);
+  assert.deepEqual(ids(second), Array.from({ length: 15 }, (_, index) => String(index + 50)));
+  assert.equal((await result(clauses(), 'order_view')).stable_order, false);
+
+  assert.deepEqual(ids(await result(clauses([equal('id', previous)]))), [previous]);
+  assert.deepEqual(ids(await result(clauses([equal('amount', '123456789012345678901234.567890')]))), [last]);
+  assert.deepEqual(ids(await result(clauses([equal('touched', '2024-02-29T12:30:00.125')]))), [last]);
+  assert.deepEqual(ids(await result(clauses([equal('elapsed', '-100:01:00.250000')]))), [last]);
+  assert.deepEqual(ids(await result(clauses([equal('weight', '10.25')]))), [previous]);
+  assert.deepEqual(ids(await result(clauses([equal('ratio', '0.1')]))), [last]);
+  const range = { column: 'booked', condition: { kind: 'between', from: atom('2024-02-29', 'date'), to: atom('2024-03-01', 'date') } };
+  const literal = { column: 'tag`text', condition: { kind: 'contains', value: "_need'le" } };
+  const expectedQuery = clauses([literal, range], [order('tag`text', 'desc', 'first')], 'any');
+  const filtered = await result(expectedQuery);
+  assert.deepEqual(ids(filtered), [last, previous]);
+  assert.match(filtered.query_sql, /LOCATE\(\?, sp_source\.\x60tag\x60\x60text\x60\)/);
+  assert.doesNotMatch(filtered.query_sql, /need'le|2024-03-01/);
+  assert.deepEqual(ids(await result(clauses([literal, range]))), [previous]);
+  assert.deepEqual(ids(await result(clauses([], [order('tag`text', 'asc', 'last'), order('id', 'desc')]))).slice(-1), [last]);
+  const nullFilter = { column: 'tag`text', condition: { kind: 'is_null' } };
+  assert.deepEqual(ids(await result(clauses([nullFilter]))), [last]);
+  const wide = await result(clauses([equal('col_128', '200')], [order('col_128')]), 'wide_filter');
+  assert.equal(wide.more_columns, true);
+  assert.equal(wide.columns.length, 128);
+  assert.deepEqual(ids(wide), ['2']);
+  await assert.rejects(result(clauses([equal('booked', '2023-02-29')])), /날짜·시간/);
+  await assert.rejects(result(clauses([equal('id', '2-no')])), /형식이나 범위/);
+  await assert.rejects(result(clauses([equal('not_a_column', 'x')])), /표시되는 열/);
+  assert.deepEqual(ids(await result(clauses([equal('tag`text', "' OR 1=1 -- ")]))), []);
+
+  const target = { engine: 'mysql', profile_id: profile.id, revision: profile.revision, schema: 'visible_db', object: 'grid_filter' };
+  await command('write_table_query_preset', { target, write: { kind: 'create', name: 'Filtered grid', clauses: expectedQuery } });
+  const [saved] = await command('list_table_query_presets', { target });
+  assert.deepEqual(await command('read_table_query_preset', { target, id: saved.id, revision: saved.revision }), expectedQuery);
+  assert.deepEqual(await command('list_table_query_presets', { target: { ...target, object: 'wide_filter' } }), []);
+}
+
+async function verifyGridControls(page, workspace, list) {
+  const detail = workspace.getByRole('region', { name: 'MySQL 객체 상세' });
+  const grid = detail.getByRole('table', { name: 'MySQL 데이터 미리보기', exact: true });
+  await list.getByRole('button', { name: /sample_limit/ }).click();
+  await detail.getByRole('button', { name: '데이터 미리보기' }).click();
+  const pager = detail.getByRole('group', { name: '데이터 페이지' });
+  await grid.getByRole('cell', { name: '49', exact: true }).waitFor();
+  await pager.getByRole('button', { name: '다음' }).click();
+  await grid.getByRole('cell', { name: '64', exact: true }).waitFor();
+  assert.equal(await pager.getByRole('button', { name: '다음' }).isDisabled(), true);
+
+  await detail.getByText('필터 및 정렬', { exact: true }).click();
+  await detail.getByRole('button', { name: '조건 추가' }).click();
+  await detail.getByLabel('필터 1 연산자').selectOption('ge');
+  await detail.getByLabel('필터 1 값', { exact: true }).fill('63');
+  await detail.getByRole('button', { name: '정렬 열 추가' }).click();
+  await detail.getByLabel('정렬 1 방향').selectOption('desc');
+  await detail.getByRole('button', { name: '적용', exact: true }).click();
+  await detail.getByText('1–2행', { exact: true }).waitFor();
+  assert.deepEqual(await grid.getByRole('cell').allTextContents(), ['64', '63']);
+  await detail.getByText('조회 SQL', { exact: true }).click();
+  assert.match(await detail.locator('.table-query-sql code').textContent(), /WHERE.+CAST\(\?/);
+  await detail.getByRole('button', { name: '초기화', exact: true }).click();
+  await grid.getByRole('cell', { name: '0', exact: true }).waitFor();
+
+  await list.getByRole('button', { name: /grid_filter/ }).click();
+  await detail.getByRole('button', { name: '데이터 미리보기' }).click();
+  await detail.getByText('필터 및 정렬', { exact: true }).click();
+  await detail.getByRole('button', { name: '저장된 조건' }).click();
+  const preset = page.getByRole('dialog', { name: '저장된 조회 조건', exact: true });
+  const selected = preset.getByRole('combobox');
+  await selected.selectOption({ label: 'Filtered grid' });
+  await preset.getByRole('button', { name: '적용', exact: true }).click();
+  await preset.waitFor({ state: 'detached' });
+  await detail.getByText('1–2행', { exact: true }).waitFor();
+  assert.equal(await grid.getByRole('row').count(), 3);
 }
 
 async function verifySql(command, id, port) {
@@ -268,7 +372,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (TLS, catalog, typed previews, read-only SQL, binding, limits and client cancellation).`);
+    console.log(`${engine} Windows E2E passed (TLS, catalog, grid paging, typed filters, sorting, presets and read-only SQL).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

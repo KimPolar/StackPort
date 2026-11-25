@@ -1,3 +1,4 @@
+mod grid;
 mod profiles;
 mod sql;
 
@@ -5,11 +6,11 @@ pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};
 
-use crate::{Result, Store};
+use crate::{table_query::TableQueryDialect, Result, Store, TableQueryClauses};
 use mysql_async::{
     from_row_opt,
     prelude::{FromRow, Queryable},
-    Conn, Error, IoError, Opts, OptsBuilder, Row, SslOpts, Value,
+    Conn, Error, IoError, Opts, OptsBuilder, Params, Row, SslOpts, Value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -98,6 +99,17 @@ pub struct MysqlTable {
     rows: Vec<Vec<Option<MysqlCell>>>,
     more_columns: bool,
     more_rows: bool,
+    stable_order: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    filter_columns: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    query_sql: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct MysqlGridQuery {
+    page: u32,
+    clauses: TableQueryClauses,
 }
 
 struct Session {
@@ -118,6 +130,7 @@ enum ReadError {
     Server(Error),
     Shape,
     Missing,
+    InvalidQuery(String),
 }
 
 impl From<Error> for ReadError {
@@ -190,7 +203,7 @@ impl MysqlManager {
         })
         .await
         .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
-        .map_err(|error| read_message(&error))?;
+        .map_err(|error| read_message(&error).to_owned())?;
         let engine = if version.to_ascii_lowercase().contains("mariadb") {
             "MariaDB"
         } else {
@@ -267,11 +280,20 @@ impl MysqlManager {
         database: String,
         name: String,
         include_rows: bool,
+        grid: Option<MysqlGridQuery>,
     ) -> Result<MysqlTable> {
         require_identifier(&database)?;
         require_identifier(&name)?;
         self.read(id, |connection| {
-            Box::pin(async move { read_table(connection, &database, &name, include_rows).await })
+            Box::pin(async move {
+                read_table(
+                    connection,
+                    &database,
+                    &name,
+                    include_rows.then(|| grid.unwrap_or_default()),
+                )
+                .await
+            })
         })
         .await
     }
@@ -338,23 +360,30 @@ fn ssl_options(settings: &MysqlSettings) -> Result<SslOpts> {
     Ok(default.with_root_certs(vec![ca.into()]))
 }
 
-fn read_message(error: &ReadError) -> &'static str {
+fn read_message(error: &ReadError) -> &str {
     match error {
         ReadError::Shape => "MySQL 서버의 응답 형식을 읽을 수 없습니다.",
         ReadError::Missing => "테이블 또는 뷰가 사라졌거나 현재 계정에 읽기 권한이 없습니다.",
-        ReadError::Server(Error::Io(IoError::Tls(_))) => {
-            "MySQL TLS 인증서의 호스트 이름과 신뢰 체인을 확인하세요."
-        }
-        ReadError::Server(Error::Server(error)) => match error.code {
-            1045 | 1698 => "MySQL 사용자 이름과 암호를 확인하세요.",
-            1049 => "시작 데이터베이스를 찾을 수 없습니다.",
-            1044 | 1142 | 1143 | 1227 => "현재 MySQL 계정에 조회 권한이 없습니다.",
-            1146 => "테이블 또는 뷰가 사라졌습니다.",
-            _ => "MySQL 서버가 요청을 거부했습니다. 연결 설정과 계정 권한을 확인하세요.",
-        },
-        ReadError::Server(_) => {
-            "MySQL 서버와 통신할 수 없습니다. 주소, 포트와 TLS 설정을 확인하세요."
-        }
+        ReadError::InvalidQuery(message) => message,
+        ReadError::Server(error) => server_message(error),
+    }
+}
+
+fn server_message(error: &Error) -> &'static str {
+    match error {
+        Error::Io(IoError::Tls(_)) => "MySQL TLS 인증서의 호스트 이름과 신뢰 체인을 확인하세요.",
+        Error::Server(error) => server_code_message(error.code),
+        _ => "MySQL 서버와 통신할 수 없습니다. 주소, 포트와 TLS 설정을 확인하세요.",
+    }
+}
+
+fn server_code_message(code: u16) -> &'static str {
+    match code {
+        1045 | 1698 => "MySQL 사용자 이름과 암호를 확인하세요.",
+        1049 => "시작 데이터베이스를 찾을 수 없습니다.",
+        1044 | 1142 | 1143 | 1227 => "현재 MySQL 계정에 조회 권한이 없습니다.",
+        1146 => "테이블 또는 뷰가 사라졌습니다.",
+        _ => "MySQL 서버가 요청을 거부했습니다. 연결 설정과 계정 권한을 확인하세요.",
     }
 }
 
@@ -376,7 +405,7 @@ fn require_identifier(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn quoted(name: &str) -> String {
+pub(crate) fn quoted(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
@@ -395,14 +424,14 @@ async fn read_table(
     connection: &mut Conn,
     database: &str,
     name: &str,
-    with_rows: bool,
+    grid: Option<MysqlGridQuery>,
 ) -> ReadResult<MysqlTable> {
     type ColumnRow = (String, String, String, String, String);
-    let mut columns: Vec<ColumnRow> = query(
+    let columns: Vec<ColumnRow> = query(
         connection,
-        "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY
+        "SELECT COLUMN_NAME, DATA_TYPE, IF(ORDINAL_POSITION <= 128, COLUMN_TYPE, ''), IS_NULLABLE, COLUMN_KEY
         FROM information_schema.COLUMNS WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
-          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY) ORDER BY ORDINAL_POSITION LIMIT 129",
+          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY) ORDER BY ORDINAL_POSITION",
         (database, name),
     )
     .await?;
@@ -410,8 +439,7 @@ async fn read_table(
         return Err(ReadError::Missing);
     }
     let more_columns = columns.len() > COLUMN_LIMIT;
-    columns.truncate(COLUMN_LIMIT);
-    let columns = columns
+    let mut columns = columns
         .into_iter()
         .map(
             |(name, data_type, column_type, nullable, key)| MysqlColumn {
@@ -423,11 +451,19 @@ async fn read_table(
             },
         )
         .collect::<Vec<_>>();
-    let mut rows = if with_rows {
-        sample_rows(connection, database, name, &columns).await?
+    let (mut rows, query_sql, stable_order, filter_columns) = if let Some(grid) = grid {
+        let (rows, sql, stable_order) =
+            sample_rows(connection, database, name, &columns, grid).await?;
+        (rows, Some(sql), stable_order, Vec::new())
     } else {
-        Vec::new()
+        (
+            Vec::new(),
+            None,
+            false,
+            columns.iter().map(|column| column.name.clone()).collect(),
+        )
     };
+    columns.truncate(COLUMN_LIMIT);
     let more_rows = rows.len() > ROW_LIMIT;
     rows.truncate(ROW_LIMIT);
     Ok(MysqlTable {
@@ -435,6 +471,9 @@ async fn read_table(
         rows,
         more_columns,
         more_rows,
+        stable_order,
+        filter_columns,
+        query_sql,
     })
 }
 
@@ -464,11 +503,46 @@ async fn sample_rows(
     database: &str,
     name: &str,
     columns: &[MysqlColumn],
-) -> ReadResult<Vec<Vec<Option<MysqlCell>>>> {
+    grid: MysqlGridQuery,
+) -> ReadResult<(Vec<Vec<Option<MysqlCell>>>, String, bool)> {
+    let keys: Vec<(String,)> = query(
+        connection,
+        "SELECT COLUMN_NAME FROM information_schema.STATISTICS
+        WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
+          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY)
+          AND INDEX_NAME = 'PRIMARY' ORDER BY SEQ_IN_INDEX",
+        (database, name),
+    )
+    .await?;
+    // Some server settings hide generated primary keys from column metadata.
+    let stable_order = !keys.is_empty()
+        && keys
+            .iter()
+            .all(|(key,)| columns.iter().any(|column| &column.name == key));
+    let by_name: HashMap<_, _> = columns
+        .iter()
+        .map(|column| (column.name.as_str(), column))
+        .collect();
+    let mut parameters = Vec::new();
+    let suffix = grid
+        .clauses
+        .suffix(
+            TableQueryDialect::Mysql,
+            "sp_source",
+            by_name.keys().copied(),
+            keys.iter()
+                .filter(|_| stable_order)
+                .map(|(name,)| name.as_str()),
+            |name, value, operand| {
+                grid::filter_binding(by_name[name], value, operand, &mut parameters)
+            },
+        )
+        .map_err(ReadError::InvalidQuery)?;
+    let columns = &columns[..columns.len().min(COLUMN_LIMIT)];
     let expressions = columns
         .iter()
         .map(|column| {
-            let identifier = quoted(&column.name);
+            let identifier = format!("sp_source.{}", quoted(&column.name));
             let bytes = if is_binary(&column.data_type) {
                 format!("CAST({identifier} AS BINARY)")
             } else {
@@ -477,14 +551,18 @@ async fn sample_rows(
             format!("LEFT({bytes}, {CELL_BYTES}), OCTET_LENGTH({bytes})")
         })
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(",\n       ");
     let sql = format!(
-        "SELECT {expressions} FROM {}.{} LIMIT 51",
+        "SELECT {expressions}\nFROM {}.{} AS sp_source{suffix}\nLIMIT 51 OFFSET ?",
         quoted(database),
         quoted(name)
     );
-    let rows = connection.exec::<Row, _, _>(sql, ()).await?;
-    rows.into_iter()
+    parameters.push(Value::UInt(u64::from(grid.page) * ROW_LIMIT as u64));
+    let rows = connection
+        .exec::<Row, _, _>(&sql, Params::Positional(parameters))
+        .await?;
+    let rows = rows
+        .into_iter()
         .map(|row| {
             let values = row.unwrap();
             if values.len() != columns.len() * 2 {
@@ -505,7 +583,8 @@ async fn sample_rows(
                 })
                 .collect()
         })
-        .collect()
+        .collect::<ReadResult<_>>()?;
+    Ok((rows, sql, stable_order))
 }
 
 fn cell(data: &[u8], bytes: u64, binary: bool) -> MysqlCell {

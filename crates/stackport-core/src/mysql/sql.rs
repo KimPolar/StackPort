@@ -331,11 +331,11 @@ fn sql_error(error: Error) -> String {
             1146 => "테이블 또는 뷰를 찾을 수 없습니다.",
             1046 => "데이터베이스를 선택하세요.",
             1317 | 3024 => "서버에서 실행이 중단되었습니다.",
-            _ => super::read_message(&super::ReadError::Server(Error::Server(error.clone()))),
+            _ => super::server_code_message(error.code),
         };
         return format!("MySQL 오류 {} · {message}", error.code);
     }
-    super::read_message(&super::ReadError::Server(error)).into()
+    super::server_message(&error).into()
 }
 
 fn analyze(sql: &str, mode: SqlMode) -> Result<usize> {

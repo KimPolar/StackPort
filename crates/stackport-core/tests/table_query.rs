@@ -179,6 +179,32 @@ fn saved_conditions_round_trip_by_object_and_reject_stale_replacement() {
         .write_table_query_preset(&target, create("november"))
         .unwrap_err()
         .contains("같은 이름"));
+    drop(store);
+    let db = Connection::open(&metadata).unwrap();
+    db.execute_batch(
+        "ALTER TABLE table_query_presets RENAME TO test_v16_presets;
+         CREATE TABLE table_query_presets (
+             id TEXT PRIMARY KEY,
+             sqlite_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
+             postgres_id TEXT REFERENCES postgres_profiles(id) ON DELETE CASCADE,
+             target_key TEXT NOT NULL,
+             schema_name TEXT NOT NULL,
+             object_name TEXT NOT NULL,
+             name TEXT NOT NULL COLLATE NOCASE,
+             clauses TEXT NOT NULL,
+             revision INTEGER NOT NULL CHECK(revision > 0),
+             CHECK ((sqlite_id IS NOT NULL) <> (postgres_id IS NOT NULL)),
+             UNIQUE (sqlite_id, target_key, schema_name, object_name, name),
+             UNIQUE (postgres_id, target_key, schema_name, object_name, name)
+         );
+         INSERT INTO table_query_presets
+             SELECT id, sqlite_id, postgres_id, target_key, schema_name, object_name, name, clauses, revision
+             FROM test_v16_presets;
+         DROP TABLE test_v16_presets;
+         PRAGMA user_version=15;",
+    )
+    .unwrap();
+    drop(db);
     store = Store::open(&metadata).unwrap();
     let saved = store
         .list_table_query_presets(&target)

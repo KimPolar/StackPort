@@ -80,6 +80,48 @@ enum NullOrder {
     Last,
 }
 
+pub(crate) enum TableQueryDialect {
+    Sqlite,
+    Postgres,
+    Mysql,
+}
+
+pub(crate) enum FilterOperand {
+    Comparison,
+    Contains,
+}
+
+impl TableQueryDialect {
+    fn identifier(&self, name: &str) -> String {
+        match self {
+            Self::Mysql => crate::mysql::quoted(name),
+            Self::Sqlite | Self::Postgres => quote_identifier(name),
+        }
+    }
+
+    fn contains(&self, column: &str, parameter: &str) -> String {
+        match self {
+            Self::Sqlite => format!("instr({column}, {parameter}) > 0"),
+            Self::Postgres => {
+                format!("pg_catalog.strpos({column}::pg_catalog.text, {parameter}) > 0")
+            }
+            Self::Mysql => format!("LOCATE({parameter}, {column}) > 0"),
+        }
+    }
+
+    fn order(&self, column: &str, direction: &str, nulls: &NullOrder) -> String {
+        match (self, nulls) {
+            (_, NullOrder::Default) => format!("{column} {direction}"),
+            (Self::Mysql, NullOrder::First) => {
+                format!("{column} IS NULL DESC, {column} {direction}")
+            }
+            (Self::Mysql, NullOrder::Last) => format!("{column} IS NULL ASC, {column} {direction}"),
+            (_, NullOrder::First) => format!("{column} {direction} NULLS FIRST"),
+            (_, NullOrder::Last) => format!("{column} {direction} NULLS LAST"),
+        }
+    }
+}
+
 impl TableQuery {
     pub(crate) fn sql(&self, db: &Connection) -> Result<(String, Vec<Value>)> {
         let object = Store::read_object(db, &self.object)?;
@@ -95,14 +137,14 @@ impl TableQuery {
         keys.sort_by_key(|column| column.primary_key_position);
         let mut params = Vec::new();
         let suffix = self.clauses.suffix(
+            TableQueryDialect::Sqlite,
             "sp_source",
             names,
             keys.into_iter().map(|column| column.name.as_str()),
-            |value| {
+            |_, value, _| {
                 params.push(value.sqlite_value()?);
                 Ok("?".into())
             },
-            |column, parameter| format!("instr({column}, {parameter}) > 0"),
         )?;
         Ok((
             format!(
@@ -166,11 +208,11 @@ impl TableQueryClauses {
 
     pub(crate) fn suffix<'a>(
         &self,
+        dialect: TableQueryDialect,
         qualifier: &str,
         columns: impl IntoIterator<Item = &'a str>,
         primary_keys: impl IntoIterator<Item = &'a str>,
-        mut bind: impl FnMut(&FilterValue) -> Result<String>,
-        contains: impl Fn(&str, &str) -> String,
+        mut bind: impl FnMut(&str, &FilterValue, FilterOperand) -> Result<String>,
     ) -> Result<String> {
         self.validate_count()?;
         let columns: HashSet<_> = columns.into_iter().collect();
@@ -180,13 +222,15 @@ impl TableQueryClauses {
                     "테이블 또는 뷰에 표시되는 열만 필터와 정렬에 사용할 수 있습니다.".into(),
                 );
             }
-            Ok::<_, String>(format!("{qualifier}.{}", quote_identifier(name)))
+            Ok::<_, String>(format!("{qualifier}.{}", dialect.identifier(name)))
         };
         let mut sql = String::new();
         let mut conditions = Vec::new();
         for filter in &self.filters {
             let column = source_column(&filter.column)?;
-            conditions.push(filter.condition.sql(&column, &mut bind, &contains)?);
+            conditions.push(filter.condition.sql(&column, &dialect, |value, operand| {
+                bind(&filter.column, value, operand)
+            })?);
         }
         if !conditions.is_empty() {
             let separator = match self.conjunction {
@@ -208,18 +252,13 @@ impl TableQueryClauses {
                 SortDirection::Asc => "ASC",
                 SortDirection::Desc => "DESC",
             };
-            let nulls = match sort.nulls {
-                NullOrder::Default => "",
-                NullOrder::First => " NULLS FIRST",
-                NullOrder::Last => " NULLS LAST",
-            };
-            order.push(format!("{column} {direction}{nulls}"));
+            order.push(dialect.order(&column, direction, &sort.nulls));
         }
         // An available primary key resolves ties in the requested sort and
         // also gives plain table browsing a predictable default order.
         for key in primary_keys {
             if !seen.contains(key) {
-                order.push(format!("{qualifier}.{} ASC", quote_identifier(key)));
+                order.push(format!("{qualifier}.{} ASC", dialect.identifier(key)));
             }
         }
         if !order.is_empty() {
@@ -234,8 +273,8 @@ impl Condition {
     fn sql(
         &self,
         column: &str,
-        bind: &mut impl FnMut(&FilterValue) -> Result<String>,
-        contains: &impl Fn(&str, &str) -> String,
+        dialect: &TableQueryDialect,
+        mut bind: impl FnMut(&FilterValue, FilterOperand) -> Result<String>,
     ) -> Result<String> {
         let (operator, value) = match self {
             Self::Eq { value } => ("=", value),
@@ -248,17 +287,21 @@ impl Condition {
                 matching_range(from, to)?;
                 return Ok(format!(
                     "{column} BETWEEN {} AND {}",
-                    bind(from)?,
-                    bind(to)?
+                    bind(from, FilterOperand::Comparison)?,
+                    bind(to, FilterOperand::Comparison)?
                 ));
             }
             Self::Contains { value } => {
-                return Ok(contains(column, &bind(&FilterValue::Text(value.clone()))?));
+                let parameter = bind(&FilterValue::Text(value.clone()), FilterOperand::Contains)?;
+                return Ok(dialect.contains(column, &parameter));
             }
             Self::IsNull => return Ok(format!("{column} IS NULL")),
             Self::IsNotNull => return Ok(format!("{column} IS NOT NULL")),
         };
-        Ok(format!("{column} {operator} {}", bind(value)?))
+        Ok(format!(
+            "{column} {operator} {}",
+            bind(value, FilterOperand::Comparison)?
+        ))
     }
 }
 

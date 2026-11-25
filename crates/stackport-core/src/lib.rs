@@ -24,7 +24,7 @@ mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 mod mysql;
-pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
+pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlSqlParameter, MysqlSqlResult};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
@@ -132,7 +132,7 @@ pub type Result<T> = std::result::Result<T, String>;
 mod redis;
 mod tls;
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -409,10 +409,10 @@ impl Store {
                 tx.execute_batch(sql_templates::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(ssh_tunnel::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
-                tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(redis::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mysql::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -455,9 +455,6 @@ impl Store {
                 if current < 10 {
                     tx.execute_batch(postgres::SCHEMA).map_err(db_error)?;
                 }
-                if current < 11 {
-                    tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
-                }
                 if current < 12 {
                     tx.execute_batch(workspace_favorites::SCHEMA).map_err(db_error)?;
                 } else if current < 13 {
@@ -468,6 +465,11 @@ impl Store {
                 }
                 if current < 15 {
                     tx.execute_batch(mysql::SCHEMA).map_err(db_error)?;
+                }
+                if current < 11 {
+                    tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                } else if current < 16 {
+                    table_query_presets::migrate_v15(&tx)?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;

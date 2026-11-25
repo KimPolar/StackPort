@@ -949,8 +949,8 @@ async fn mysql_objects(mysql: State<'_, stackport_core::MysqlManager>, id: Strin
     -> Result<stackport_core::MysqlCatalogPage<stackport_core::MysqlObject>, String> { mysql.objects(&id, database, search, page).await }
 
 #[tauri::command]
-async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String, include_rows: bool)
-    -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows).await }
+async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String, include_rows: bool, grid: Option<stackport_core::MysqlGridQuery>)
+    -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows, grid).await }
 
 #[tauri::command]
 fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String) -> Result<usize, String> {

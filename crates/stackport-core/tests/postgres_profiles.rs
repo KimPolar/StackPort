@@ -198,7 +198,7 @@ fn version_ten_backup_preserves_existing_profiles_after_success_or_failure() {
                     .contains(".v10-")
             })
             .unwrap();
-        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 15 })] {
+        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 16 })] {
             let db = Connection::open(file).unwrap();
             assert_eq!(
                 db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

@@ -6,6 +6,7 @@ import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
+import { emptyTableQueryClauses, TableQueryControls } from "./TableQueryControls";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
@@ -13,7 +14,15 @@ type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; datab
 type Page<T> = { items: T[]; has_next: boolean };
 type ObjectInfo = { name: string; kind: string; engine: string | null };
 type Column = { name: string; data_type: string; column_type: string; nullable: boolean; key: string };
-type Sample = { columns: Column[]; rows: (MysqlValue | null)[][]; more_columns: boolean; more_rows: boolean };
+type Sample = {
+  columns: Column[];
+  rows: (MysqlValue | null)[][];
+  more_columns: boolean;
+  more_rows: boolean;
+  stable_order: boolean;
+  filter_columns?: string[];
+  query_sql?: string;
+};
 
 export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const settings = profile.settings;
@@ -31,6 +40,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [objectSearch, setObjectSearch] = useState("");
   const [schemaPage, setSchemaPage] = useState(0);
   const [objectPage, setObjectPage] = useState(0);
+  const [rowPage, setRowPage] = useState(0);
+  const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [revision, setRevision] = useState(0);
   const active = useRef<string | null>(null);
   const mounted = useRef(false);
@@ -40,11 +51,15 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const schemaArgs = useMemo(() => session ? { id: session.id, search: schemaSearch, page: schemaPage } : null, [session, schemaSearch, schemaPage]);
   const objectArgs = useMemo(() => session && database ? { id: session.id, database, search: objectSearch, page: objectPage } : null,
     [session, database, objectSearch, objectPage]);
-  const detailArgs = useMemo(() => session && database && object ? { id: session.id, database, table: object.name, includeRows: view === "rows" } : null,
-    [session, database, object, view]);
+  const structureArgs = useMemo(() => session && database && object ? { id: session.id, database, table: object.name, includeRows: false } : null,
+    [session, database, object]);
+  const rowArgs = useMemo(() => structureArgs && view === "rows" ? {
+    ...structureArgs, includeRows: true, grid: { page: rowPage, clauses: tableQuery },
+  } : null, [structureArgs, view, rowPage, tableQuery]);
   const schemas = useNativeRead<Page<string>>("mysql_databases", schemaArgs, revision);
   const objects = useNativeRead<Page<ObjectInfo>>("mysql_objects", objectArgs, revision);
-  const detail = useNativeRead<Sample>("mysql_table", detailArgs, revision);
+  const structure = useNativeRead<Sample>("mysql_table", structureArgs, revision, true);
+  const rows = useNativeRead<Sample>("mysql_table", rowArgs, revision);
 
   useEffect(() => {
     mounted.current = true;
@@ -55,15 +70,25 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   }, []);
 
   useEffect(() => {
-    const lost = [schemas.error, objects.error, detail.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
+    const lost = [schemas.error, objects.error, structure.error, rows.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
     if (!lost || !active.current) return;
     const id = active.current;
     active.current = null; setSession(null); setError(lost);
     void invoke("close_mysql", { id }).catch(() => {});
-  }, [schemas.error, objects.error, detail.error]);
+  }, [schemas.error, objects.error, structure.error, rows.error]);
 
   function chooseDatabase(name: string | null) {
-    setDatabase(name); setObject(null); setObjectSearch(""); setObjectPage(0); setView("columns");
+    setDatabase(name);
+    chooseObject(null);
+    setObjectSearch("");
+    setObjectPage(0);
+  }
+
+  function chooseObject(next: ObjectInfo | null) {
+    setObject(next);
+    setView("columns");
+    setTableQuery(emptyTableQueryClauses);
+    setRowPage(0);
   }
 
   async function connect(event: FormEvent) {
@@ -118,7 +143,11 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           <Search key={database} label="테이블 및 뷰 검색" onSearch={value => { setObjectSearch(value); setObjectPage(0); }} />
           <ReadNotice loading={objects.loading} error={objects.error} empty={objects.data?.items.length === 0} />
           <ul className="mysql-catalog-items">{objects.data?.items.map(item => <li key={item.name}>
-            <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => { setObject(item); setView("columns"); setSqlOpen(false); }}>
+            <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => {
+              if (object?.name !== item.name) chooseObject(item);
+              else setView("columns");
+              setSqlOpen(false);
+            }}>
               <Table2 size={14} aria-hidden /><span>{item.name}</span><small>{item.kind.endsWith("VIEW") ? "뷰" : "테이블"}</small>
             </button>
           </li>)}</ul>
@@ -134,8 +163,19 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
             <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
             <button type="button" className="secondary small" aria-pressed={view === "rows"} onClick={() => setView("rows")}>데이터 미리보기</button>
           </div>
-          <ReadNotice loading={detail.loading} error={detail.error} />
-          {detail.data && <TablePreview data={detail.data} rows={view === "rows"} />}
+          {view === "columns" && <>
+            <ReadNotice loading={structure.loading} error={structure.error} />
+            {structure.data && <TableStructure data={structure.data} />}
+          </>}
+          <div hidden={view !== "rows"}>
+            {database && structure.data?.filter_columns && <TableQueryControls
+              key={JSON.stringify([session.id, database, object.name])} columns={structure.data.filter_columns} busy={rows.loading}
+              target={{ engine: "mysql", profile_id: profile.id, revision: profile.revision, schema: database, object: object.name }}
+              apply={clauses => { setTableQuery(clauses); setRowPage(0); }} />}
+            <ReadNotice loading={rows.loading} error={rows.error} />
+            {rows.data && <RowPage data={rows.data} page={rowPage} />}
+            <Pager page={rowPage} loading={rows.loading} hasNext={rows.data?.more_rows === true} onPage={setRowPage} rowNavigation />
+          </div>
         </>}
       </section>
       <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} /></div>
@@ -170,26 +210,43 @@ function ReadNotice({ loading, error, empty = false }: { loading: boolean; error
   return empty ? <p className="result-empty">조회할 항목이 없습니다.</p> : null;
 }
 
-function Pager({ page, loading, hasNext, onPage }: { page: number; loading: boolean; hasNext: boolean; onPage: (page: number) => void }) {
+function Pager({ page, loading, hasNext, onPage, rowNavigation = false }: {
+  page: number; loading: boolean; hasNext: boolean; onPage: (page: number) => void; rowNavigation?: boolean;
+}) {
   if (!page && !hasNext) return null;
-  return <div className="mysql-pager">
+  return <div className="mysql-pager" role={rowNavigation ? "group" : undefined} aria-label={rowNavigation ? "데이터 페이지" : undefined}>
+    {rowNavigation && <button type="button" className="secondary small" disabled={loading || !page} onClick={() => onPage(0)}>처음</button>}
     <button type="button" className="secondary small" disabled={loading || !page} onClick={() => onPage(page - 1)}>이전</button>
     <span>{page + 1} 페이지</span>
     <button type="button" className="secondary small" disabled={loading || !hasNext} onClick={() => onPage(page + 1)}>다음</button>
   </div>;
 }
 
-function TablePreview({ data, rows }: { data: Sample; rows: boolean }) {
+function TableStructure({ data }: { data: Sample }) {
   return <>
     {data.more_columns && <p className="form-note mysql-table-note">앞 128개 열을 표시합니다.</p>}
-    {rows ? <>
-      <p className="form-note mysql-table-note">{data.more_rows ? "처음 50개 행을 표시합니다." : `${data.rows.length}개 행`}</p>
-      <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기" />
-    </> : <div className="mysql-table" tabIndex={0} role="region" aria-label="MySQL 열 구조 스크롤">
+    <div className="mysql-table" tabIndex={0} role="region" aria-label="MySQL 열 구조 스크롤">
       <table aria-label="MySQL 열 구조"><thead><tr><th scope="col">열</th><th scope="col">타입</th><th scope="col">NULL 허용</th><th scope="col">키</th></tr></thead>
         <tbody>{data.columns.map(column => <tr key={column.name}><th scope="row">{column.name}</th><td><code>{column.column_type}</code></td>
           <td>{column.nullable ? "예" : "아니요"}</td><td>{column.key || "—"}</td></tr>)}</tbody>
       </table>
-    </div>}
+    </div>
+  </>;
+}
+
+function RowPage({ data, page }: { data: Sample; page: number }) {
+  const offset = page * 50;
+  return <>
+    <p className="form-note mysql-table-note" role="status">
+      {data.rows.length ? `${offset + 1}–${offset + data.rows.length}행` : "조건에 맞는 행이 없습니다."}
+      {data.more_columns && " · 앞 128개 열"}
+    </p>
+    {!data.stable_order && <p className="form-note mysql-table-note">기본 키가 없는 결과는 페이지를 이동할 때 행 순서가 달라질 수 있습니다.</p>}
+    {data.rows.length > 0 && <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기" />}
+    {data.query_sql && <details className="table-query-sql">
+      <summary>조회 SQL</summary>
+      <p className="form-note">조건 값과 행 위치는 매개변수(?)로 전달합니다.</p>
+      <pre><code>{data.query_sql}</code></pre>
+    </details>}
   </>;
 }

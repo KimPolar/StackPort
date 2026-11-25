@@ -97,7 +97,7 @@ PARTIAL = {
     "SP-DB-026": "두 SQLite 연결에서 객체·열·외래 키·인덱스·트리거·정의 SQL 비교, 생성·삭제·뷰 재정의 초안",
     "SP-DB-028": "SQLite·PostgreSQL의 읽기 전용 SQL 연결, PostgreSQL 그리드의 SELECT·INSERT·UPDATE·DELETE 권한 확인과 편집 제한 안내",
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
-    "SP-DT-001": "SQLite·PostgreSQL의 100행 단위 결과 페이지, PostgreSQL 열 페이지",
+    "SP-DT-001": "SQLite·PostgreSQL의 100행, MySQL·MariaDB의 50행 단위 결과 페이지, PostgreSQL 열 페이지",
     "SP-DT-002": "PostgreSQL 일반 힙 테이블 그리드에서 원문 텍스트·bytea HEX 페이지와 JSON·JSONB 들여쓰기·XML 트리·정적 PNG 보기",
     "SP-DT-003": "SQLite·PostgreSQL의 행 추가·삭제 및 다중 셀 수정, 탭 구분 복사·붙여넣기, 현재 페이지의 여러 행 수정 및 같은 열 채우기",
     "SP-DT-004": "SQLite·PostgreSQL의 그리드 변경 미리보기·적용·취소와 초안 닫기 확인, 여러 행의 개별 변경 표시 및 전후 비교",
@@ -105,9 +105,10 @@ PARTIAL = {
     "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자·기본값 구분과 자동 생성 키, 탭 구분 복사·붙여넣기의 NULL·빈 문자열 구분, SQLite의 열별 입력 형식과 PostgreSQL의 서버 타입 검증",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집, PostgreSQL의 숫자·날짜·UUID·JSON 등 지원 타입 바인딩",
     "SP-DT-008": "PostgreSQL 일반 힙 테이블의 긴 텍스트·JSON·XML·bytea 부분 조회, 범위 내 구조·PNG 미리보기와 원본 새 파일 저장",
-    "SP-DT-010": "SQLite·PostgreSQL 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
-    "SP-DT-011": "SQLite·PostgreSQL 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
+    "SP-DT-010": "SQLite·PostgreSQL·MySQL·MariaDB 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
+    "SP-DT-011": "SQLite·PostgreSQL·MySQL·MariaDB 전체 결과를 대상으로 다중 열·방향·NULL 순서 정렬 및 초기화, 저장한 순서 복원",
     "SP-DT-013": "SQLite·PostgreSQL 연결·객체별 열 표시·왼쪽 고정·순서·폭·타입별 색상·숫자 자릿수·ISO 날짜 형식과 보기 프로필 저장, PostgreSQL 열 페이지에 고정 열 반복",
+    "SP-DT-017": "MySQL·MariaDB 테이블·뷰 데이터의 처음·이전·다음 페이지 이동",
     "SP-DT-018": "SQLite 편집 셀의 문자열·정수·실수·NULL 형식별 입력",
     "SP-DT-020": "SQLite·PostgreSQL의 셀 변경과 PostgreSQL 다중 셀 행 변경의 시작·성공·실패 감사 기록",
     "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지",
@@ -416,6 +417,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-DT-010", "SP-DT-011"}:
                 evidence += "; crates/stackport-core/src/table_query.rs; crates/stackport-core/src/postgres/session.rs; src/PostgresWorkspace.tsx; tests/postgres-smoke.cjs"
                 evidence += "; crates/stackport-core/src/table_query_presets.rs; src/TableQueryPresetsDialog.tsx"
+            if requirement_id in {"SP-DT-001", "SP-DT-010", "SP-DT-011", "SP-DT-017"}:
+                evidence += "; crates/stackport-core/src/mysql.rs; crates/stackport-core/src/mysql/grid.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {
                 "SP-DB-001", "SP-DB-028", "SP-DT-003", "SP-DT-004", "SP-DT-005", "SP-DT-006", "SP-DT-007",
                 "SP-DT-020", "SP-DT-021", "SP-DT-022", "SP-DT-024", "SP-SEC-015", "SP-AT-010",

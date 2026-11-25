@@ -12,7 +12,11 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 탐색기의 **MySQL 계열 연결 추가**에서 MySQL·MariaDB의 호스트, 포트, 사용자, 시작 데이터베이스와 환경을 저장합니다. TLS를 기본으로 사용하고, 시스템 신뢰 저장소와 선택한 CA로 호스트 이름과 인증서를 검증합니다. 암호는 연결할 때만 입력하며 운영 연결에는 `PROD` 확인이 필요합니다. 접속 직후 서버 종류·버전을 읽고 세션의 기본 트랜잭션을 읽기 전용으로 설정합니다. 메타데이터 v15에서 연결을 프로젝트에 저장하고 복제할 때 연결 설정을 함께 복사합니다. [mysql_async TLS 옵션](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html)
 
-MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블·뷰를 각각 검색하고 100개씩 표시합니다. 선택한 객체의 열 이름, 타입, NULL 허용 여부와 키 표시를 읽습니다. 데이터 미리보기는 최대 128개 열, 50개 행, 값당 512바이트를 표시합니다. 큰 정수와 소수는 문자열로 보존하고 바이너리 값은 HEX로 표시합니다. 긴 UTF-8 값은 문자 경계를 지켜 자릅니다. [MySQL 열 메타데이터](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html)
+MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블·뷰를 각각 검색하고 100개씩 표시합니다. 선택한 객체의 열 이름, 타입, NULL 허용 여부와 키 표시를 읽습니다. 데이터 미리보기는 50행씩 읽으며 처음·이전·다음 페이지로 이동합니다. 한 화면에 앞 128개 열과 값당 512바이트를 표시합니다. 큰 정수와 소수는 문자열로 보존하고 바이너리 값은 HEX로 표시합니다. 긴 UTF-8 값은 문자 경계를 지켜 자릅니다. [MySQL 열 메타데이터](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html)
+
+**필터 및 정렬**은 화면에 표시되지 않는 열에도 적용합니다. 비교·범위·포함·NULL 조건을 최대 16개까지 AND 또는 OR로 결합하고, 정렬은 최대 8개 열의 방향과 NULL 순서를 지정합니다. 서버가 필터와 정렬을 적용한 뒤 페이지를 반환합니다. 기본 키가 있으면 정렬에 포함되지 않은 키 열을 마지막에 적용합니다. 기본 키가 없는 결과는 동률 행의 순서가 달라질 수 있으며, 조회 사이에 데이터가 변경되면 페이지 구성이 달라질 수 있습니다. 날짜만 입력해 DATETIME 또는 TIMESTAMP와 비교하면 해당 날짜의 자정을 사용합니다. 큰 정수와 고정 소수 비교는 정밀도를 유지합니다. [MySQL 비교 시 자료형 변환](https://dev.mysql.com/doc/refman/8.4/en/type-conversion.html) · [MariaDB 비교 시 자료형 변환](https://mariadb.com/docs/server/reference/sql-functions/string-functions/type-conversion)
+
+**조회 SQL**에는 입력값 대신 실제 바인딩에 사용한 매개변수를 표시합니다. **저장된 조건**에서 현재 필터 값과 정렬을 로컬 작업 공간에 보관하고 다시 적용할 수 있습니다. 메타데이터 v16은 기존 SQLite·PostgreSQL 조건의 이름, 범위와 개정 번호를 유지하면서 MySQL 계열 연결을 지원합니다.
 
 **MySQL SQL 편집기**는 현재 데이터베이스에서 문서 또는 선택 영역의 조회 문장 하나를 실행합니다. 줄 번호, MySQL 구문 강조와 찾기·바꾸기를 사용합니다. `SELECT`, `WITH` 조회, `SHOW`, `DESCRIBE`, `EXPLAIN`을 허용하며 파일 입출력, 잠금 변경과 실행 주석은 차단합니다. 문자열·식별자·주석 밖의 `?`에는 문자열, 64비트 정수, 실수 또는 NULL을 바인딩합니다. 입력값을 숨길 수 있으며 실행 전 매개변수는 메모리에만 보관합니다. 서버 SQL 모드로 문장을 다시 확인하고 읽기 전용 트랜잭션에서 준비된 문장으로 실행합니다. [MySQL 준비된 문장](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) · [MySQL 주석 규칙](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
 
@@ -391,7 +395,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13.1과 MariaDB 11.8.10에서 인증서 호스트 이름과 CA 검증, 계정 권한, 테이블·뷰 탐색, 큰 정수·소수·바이너리 및 긴 UTF-8 값의 미리보기를 확인했습니다. SQL 선택 영역 실행, 매개변수 바인딩, 결과 한도, 중단과 시간 초과 후 재조회도 두 엔진에서 확인했습니다.
+MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, 테이블·뷰 탐색, 미리보기, 큰 정수·정밀 소수·날짜 범위·NULL 필터, 페이지 순서, 숨겨진 열의 조건, 저장 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회를 확인했습니다.
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 
