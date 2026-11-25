@@ -1024,6 +1024,22 @@ async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, ob
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn export_sql_server(manager: State<'_, sql_server::Manager>, id: String, request_id: String,
+    object: i32, clauses: TableQueryClauses, options: sql_server::ExportOptions) -> Result<sql_server::ExportOutcome, String> {
+    manager.export(&id, request_id, object, clauses, options).await
+}
+
+#[tauri::command]
+fn sql_server_export_progress(manager: State<'_, sql_server::Manager>, id: String, request_id: String) -> Result<Option<u64>, String> {
+    manager.export_progress(&id, &request_id)
+}
+
+#[tauri::command]
+fn cancel_sql_server_export(manager: State<'_, sql_server::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_export(&id, &request_id)
+}
+
+#[tauri::command]
 async fn list_oracle_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<oracle::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_oracle_profiles(&project_id)).await
@@ -2447,6 +2463,9 @@ fn main() {
             sql_server_structure,
             sql_server_definition,
             sql_server_data,
+            export_sql_server,
+            sql_server_export_progress,
+            cancel_sql_server_export,
             list_oracle_profiles,
             create_oracle_profile,
             update_oracle_profile,

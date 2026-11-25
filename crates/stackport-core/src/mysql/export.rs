@@ -8,13 +8,13 @@ use super::{
 };
 use crate::{
     insert_audit,
-    result_export::{ExportFile, ExportFormat, ReadyExport, TypedExportColumn, TypedExportValue},
-    AuditRecord, ExportReport, Result, TableQueryClauses,
+    result_export::{ExportFile, ReadyExport, TypedExportColumn, TypedExportValue},
+    AuditRecord, Result, TableQueryClauses,
 };
 use mysql_async::{
     consts::ColumnType, prelude::Queryable, Conn, OptsBuilder, Params, Row, Statement, Value,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -43,41 +43,7 @@ pub enum MysqlExportSource {
     },
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MysqlExportOptions {
-    destination: String,
-    format: Format,
-    include_header: bool,
-    spreadsheet_safe: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Format {
-    Csv,
-    Json,
-}
-
-impl MysqlExportOptions {
-    fn format(&self) -> ExportFormat {
-        match self.format {
-            Format::Csv => ExportFormat::Csv {
-                include_header: self.include_header,
-                spreadsheet_safe: self.spreadsheet_safe,
-            },
-            Format::Json => ExportFormat::Json,
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum MysqlExportOutcome {
-    Exported { report: ExportReport },
-    Cancelled,
-    TimedOut,
-}
+pub use crate::result_export::{ResultFileOptions as MysqlExportOptions, ResultFileOutcome as MysqlExportOutcome};
 
 enum Source {
     Table {

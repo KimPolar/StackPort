@@ -90,7 +90,7 @@ PARTIAL = {
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기, MySQL·MariaDB 인덱스 열·식·순서·접두 길이·가시성·고유값 추정치, SQL Server 인덱스 키·순서·포함 열·필터·상태·파티션·추정 행 수 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색. SQL Server·Oracle·Snowflake의 데이터베이스·스키마별 객체명·열명·종류 검색과 결과 이동. Snowflake 실제 계정 검증 대기",
-    "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL, MySQL·MariaDB·SQL Server 참조 객체 구조 열기, SQL Server 일반 테이블·뷰와 Oracle·Snowflake 테이블·뷰 정의 열기·저장",
+    "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL, MySQL·MariaDB·SQL Server 참조 객체 구조 열기, SQL Server 일반 테이블·뷰와 Oracle·Snowflake 테이블·뷰 정의 열기·저장",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계, MySQL·MariaDB 버전·문자셋·시간대·기본 스토리지와 연결·문장·트래픽·잠금 지표",
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계, MySQL·MariaDB 세션·느린 실행·InnoDB 잠금 대기와 차단 세션",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션과 MySQL·MariaDB 서버 세션의 권한 범위 실행 SQL·잠금 대기 조회",
@@ -142,12 +142,12 @@ PARTIAL = {
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
     "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON, 경로를 선택한 XML 레코드 가져오기",
-    "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
+    "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server 필터·정렬된 테이블·뷰 결과와 SQLite·PostgreSQL·MySQL·MariaDB SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-004": "두 엔진에서 파일·형식·인코딩·구분자·헤더와 XML 레코드 경로 선택, JSON·XML 원본 열과 대상 열 매핑, 검증 미리보기",
-    "SP-MG-005": "JSON 숫자 토큰과 중첩 값, XML 중첩 셀, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환",
+    "SP-MG-005": "JSON 숫자 토큰과 중첩 값, XML 중첩 셀, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환, SQL Server 내보내기에서 큰 수·날짜·유니코드·바이너리·NULL 보존",
     "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
     "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, XML DTD·처리 지시문·반복 필드, DB 타입·제약 위반 메시지 표시",
-    "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
+    "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
     "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
@@ -466,6 +466,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-DB-022", "SP-SQ-008", "SP-MG-002", "SP-MG-008", "SP-MG-028", "SP-SEC-011"}:
                 evidence += "; crates/stackport-core/src/mysql/export.rs; src/MysqlResultExport.tsx; tests/mysql-smoke.cjs"
+            if requirement_id in {"SP-DB-022", "SP-MG-002", "SP-MG-005", "SP-MG-008", "SP-SEC-011"}:
+                evidence += "; crates/stackport-core/src/sql_server/export.rs; src/ResultExportDialog.tsx"
+                if "tests/sql-server-smoke.cjs" not in evidence:
+                    evidence += "; tests/sql-server-smoke.cjs"
             if requirement_id in {"SP-MG-001", "SP-MG-004", "SP-MG-005", "SP-MG-006", "SP-MG-007", "SP-MG-026", "SP-MG-028"}:
                 evidence += "; src/GridPasteDialog.tsx; src/structuredFilePreview.ts; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row/paste.rs; crates/stackport-core/tests/edit.rs; tests/structured-preview.test.mjs"
                 if requirement_id not in {"SP-MG-005", "SP-MG-028"}:

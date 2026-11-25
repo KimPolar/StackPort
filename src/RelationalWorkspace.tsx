@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { Database, Download, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 import { PostgresPager } from "./PostgresPager";
+import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
@@ -267,6 +268,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
 } & Adapter) {
   const [page, setPage] = useState(0);
   const [clauses, setClauses] = useState<TableQueryClauses>(emptyTableQueryClauses);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const dataErrorId = useId();
   const target = useMemo(() => ({ id, object: object.id }), [id, object.id]);
   const presetTarget = useMemo(() => ({
@@ -277,6 +280,14 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
   const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", target, revision);
   const definitionTitle = prefix === "sql_server" && object.kind === "table" ? "생성 SQL" : "정의 SQL";
   const definition = useNativeRead<string>(prefix + "_definition", view === "definition" ? target : null, revision);
+  const exportDriver: ExportDriver = {
+    prepare: async () => crypto.randomUUID(),
+    run: (requestId, options) => invoke<ExportOutcome>("export_sql_server", {
+      ...target, requestId, clauses, options: { ...options, format: options.format.toLowerCase() },
+    }),
+    progress: requestId => invoke<number | null>("sql_server_export_progress", { id, requestId }),
+    cancel: requestId => invoke<boolean>("cancel_sql_server_export", { id, requestId }),
+  };
   return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"}
     aria-busy={data.loading || columns.loading || definition.loading}>
     <div className="panel-heading"><h2 ref={headingRef} tabIndex={-1}>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
@@ -289,7 +300,12 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
         onClick={() => setView("structure")}>키와 인덱스</button>}
       <button type="button" className="secondary small" aria-pressed={view === "definition"}
         onClick={() => setView("definition")}>{definitionTitle}</button>
+      {prefix === "sql_server" && view === "data" && <button type="button" className="secondary small"
+        disabled={!data.data} onClick={() => { setExportReport(null); setExportOpen(true); }}>
+        <Download size={14} aria-hidden /> 결과 내보내기
+      </button>}
     </div>
+    {exportReport && <ResultFileReport report={exportReport} onDismiss={() => setExportReport(null)} />}
     <div hidden={view !== "data"}>
       <TableQueryControls columns={columns.data?.items.map(column => column.name) ?? []}
         busy={data.loading || columns.loading} target={presetTarget} errorId={data.error ? dataErrorId : undefined}
@@ -329,6 +345,9 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
       {definition.data && <ObjectDefinitionPanel text={definition.data} target={object.schema + "." + object.name}
         engine={engine} title={definitionTitle} />}
     </>}
+    {exportOpen && <ResultFileDialog profile={profile.settings} source={`${object.schema}.${object.name}의 적용된 필터와 정렬`}
+      driver={exportDriver} onClose={() => setExportOpen(false)}
+      onExported={report => { setExportOpen(false); setExportReport(report); }} />}
   </section>;
 }
 

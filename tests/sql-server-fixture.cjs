@@ -136,6 +136,33 @@ ALTER INDEX [ix_fixture_disabled] ON [catalog].[order]]daily] DISABLE;
 `);
     await execute('CREATE VIEW [catalog].[recent] AS\r\nSELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2\r\n-- 한글 정의');
     await execute('CREATE VIEW [archive].[sealed_report] WITH ENCRYPTION AS SELECT 1 AS id');
+    const extraColumns = Array.from({ length: 66 }, (_, i) => `[extra_${i + 1}] int NULL`);
+    await execute(`
+CREATE TABLE [archive].[export_fixture] (
+    id int NOT NULL PRIMARY KEY,
+    note nvarchar(max) NULL,
+    amount decimal(38,6) NOT NULL,
+    raw varbinary(max) NULL,
+    enabled bit NOT NULL,
+    recorded datetimeoffset(7) NOT NULL,
+    ${extraColumns.join(',\n    ')}
+);
+DECLARE @i int = 1;
+WHILE @i <= 121
+BEGIN
+    INSERT [archive].[export_fixture] (id, note, amount, raw, enabled, recorded, extra_66)
+    VALUES (@i, CASE @i WHEN 1 THEN N'=SUM(1,2)' WHEN 2 THEN N'' WHEN 3 THEN NULL
+        ELSE REPLICATE(CONVERT(nvarchar(max), N'한'), 300) + CONVERT(nvarchar(2), 0x3dd880de) + N'끝' END,
+        -12345678901234567890123456789012.345678,
+        CASE @i WHEN 1 THEN 0x00FF11 WHEN 2 THEN 0x ELSE NULL END,
+        1, '2026-09-18T04:12:33.1234567+09:00', @i * 2);
+    SET @i += 1;
+END;
+`);
+    await execute(`CREATE VIEW [archive].[oversized_export] AS
+        SELECT REPLICATE(CONVERT(nvarchar(max), N'ab'), 9000000) AS large_value;`);
+    await execute(`CREATE VIEW [archive].[variant_export] AS
+        SELECT CONVERT(sql_variant, 1) AS variant_value;`);
     await execute(`
 DECLARE @i int = 1;
 WHILE @i <= 51
@@ -181,4 +208,14 @@ async function recreateSqlServerTable({ port, ca, database, account, script }) {
   });
 }
 
-module.exports = { seedSqlServer, recreateSqlServerTable };
+async function withLockedExportRow({ port, ca, database }, action) {
+  assert.match(database, /^StackPortFixture_[a-f0-9]{12}$/);
+  return withAdmin({ port, ca }, async execute => {
+    await execute(`USE [${database}]; BEGIN TRAN;
+        UPDATE [archive].[export_fixture] WITH (ROWLOCK) SET extra_66 = -1 WHERE id = 120;`);
+    try { return await action(); }
+    finally { await execute('ROLLBACK'); }
+  });
+}
+
+module.exports = { seedSqlServer, recreateSqlServerTable, withLockedExportRow };

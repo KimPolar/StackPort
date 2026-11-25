@@ -1,9 +1,11 @@
 const assert = require('node:assert/strict');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
-const { seedSqlServer, recreateSqlServerTable } = require('./sql-server-fixture.cjs');
+const { seedSqlServer, recreateSqlServerTable, withLockedExportRow } = require('./sql-server-fixture.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
 const { verifyDefinitionPanel } = require('./relational-definition.cjs');
@@ -16,7 +18,7 @@ const database = `StackPortFixture_${testRun}`;
 const account = `stackport_catalog_${testRun}`;
 const secret = 'StackPort-reader-Q8!f2';
 
-async function verify(page, hiddenObject) {
+async function verify(page, hiddenObject, exportFolder) {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   page.setDefaultTimeout(15_000);
@@ -154,6 +156,12 @@ async function verify(page, hiddenObject) {
       conjunction: 'any', sort: [],
     });
     assert.equal(matched.rows.length, 3);
+    await verifyExportCommands(command, id, profile, exportFolder, {
+      table: table.id, view: view.id, hidden: hiddenObject, metadataOnly: objects.items[0].id,
+      wide: await archiveObject('export_fixture'),
+      oversized: (await search({ schema: 'archive', term: 'oversized_export' })).items[0].id,
+      variant: (await search({ schema: 'archive', term: 'variant_export' })).items[0].id,
+    });
   } finally { await command('close_sql_server', { id }); }
   await assert.rejects(command('sql_server_schemas', { id, search: '', page: 0 }), /닫혔습니다/);
 
@@ -182,6 +190,17 @@ async function verify(page, hiddenObject) {
   await detail.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
   await grid.getByText('9223372036854775757', { exact: true }).waitFor();
   await verifyGridFilter(page, detail, grid, 'id', '9223372036854775807');
+  const exportedFile = path.join(exportFolder, 'filtered-ui.json');
+  await detail.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(exportedFile);
+  await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+  await detail.getByRole('status').getByText(/JSON 저장 완료 · 1행/).waitFor();
+  const [exportedRow] = JSON.parse(fs.readFileSync(exportedFile, 'utf8')).rows;
+  assert.equal(exportedRow[0], '9223372036854775807');
+  assert.equal(exportedRow[4], '한'.repeat(255) + '🚀next');
   await detail.getByRole('button', { name: '열 구조', exact: true }).click();
   await detail.getByRole('table', { name: 'SQL Server 열 구조', exact: true }).getByText('decimal(30,6)', { exact: true }).waitFor();
   await verifyStructurePanel(workspace, detail);
@@ -204,6 +223,97 @@ async function verify(page, hiddenObject) {
     assert.equal(rebuilt, script);
   } finally { await command('close_sql_server', { id: replay.id }); }
   assert.deepEqual(errors, []);
+}
+
+async function verifyExportCommands(command, id, profile, folder, { table, view, hidden, metadataOnly, wide, oversized, variant }) {
+  const read = file => JSON.parse(fs.readFileSync(path.join(folder, file), 'utf8'));
+  const emptyClauses = { filters: [], conjunction: 'all', sort: [] };
+  const exportFile = (object, name, { format = 'json', clauses = emptyClauses, requestId = randomUUID() } = {}) =>
+    command('export_sql_server', { id, requestId, object, clauses, options: {
+      destination: path.join(folder, name), format, include_header: true, spreadsheet_safe: true,
+    } });
+  const requestId = randomUUID();
+  const clauses = { filters: [comparison('id', 'ge', '2')], conjunction: 'all', sort: [sort('id', 'desc')] };
+  const result = await exportFile(wide, 'all-columns.json', { clauses, requestId });
+  assert.equal(result.status, 'exported');
+  assert.equal(result.report.rows, 120);
+  assert.equal(result.report.size_bytes, fs.statSync(path.join(folder, 'all-columns.json')).size);
+  const output = read('all-columns.json');
+  assert.equal(output.format, 'stackport.sqlserver-results');
+  assert.equal(output.version, 1);
+  assert.equal(output.columns.length, 72);
+  assert.deepEqual(output.columns[2], { name: 'amount', data_type: 'decimal(38,6)' });
+  assert.equal(output.columns[3].encoding, 'hex');
+  assert.equal(output.columns.at(-1).name, 'extra_66');
+  assert.deepEqual(output.rows.map(row => row[0]), Array.from({ length: 120 }, (_, index) => String(121 - index)));
+  assert.deepEqual(output.rows[0].slice(0, 6), ['121', '한'.repeat(300) + '🚀끝',
+    '-12345678901234567890123456789012.345678', null, '1', '2026-09-18T04:12:33.1234567+09:00']);
+  assert.equal(output.rows[0].at(-1), '242');
+  assert.equal(output.rows.at(-2)[1], null);
+  assert.equal(output.rows.at(-1)[1], '');
+  assert.equal(output.rows.at(-1)[3], '');
+  const event = (await command('list_audit_events', {})).events.find(item => item.correlation_id === requestId);
+  assert.deepEqual([event.operation, event.profile_id, event.environment, event.object_name, event.affected_count],
+    ['sql_server.export.json', profile.id, 'PROD', '[archive].[export_fixture]', 120]);
+
+  const csv = await exportFile(wide, 'protected.csv', { format: 'csv', clauses: {
+    filters: [comparison('id', 'le', '3')], conjunction: 'all', sort: [],
+  } });
+  assert.equal(csv.report.rows, 3);
+  assert.equal(csv.report.protected_fields, 1);
+  const csvText = fs.readFileSync(path.join(folder, 'protected.csv'), 'utf8');
+  assert.match(csvText, /1,"'=SUM\(1,2\)",-12345678901234567890123456789012\.345678,"X'00FF11'",1,/);
+  assert.match(csvText, /2,"",-12345678901234567890123456789012\.345678,"X''",1,/);
+  assert.match(csvText, /3,\\N,-12345678901234567890123456789012\.345678,\\N,1,/);
+  await assert.rejects(exportFile(wide, 'protected.csv', { format: 'csv' }), /같은 이름의 파일이 이미 있습니다/);
+  assert.equal(fs.readFileSync(path.join(folder, 'protected.csv'), 'utf8'), csvText);
+
+  assert.equal((await exportFile(view, 'view.json')).report.rows, 2);
+  assert.equal((await exportFile(view, 'empty.json', { clauses: {
+    filters: [comparison('seq', 'gt', '9')], conjunction: 'all', sort: [],
+  } })).report.rows, 0);
+  assert.deepEqual(read('empty.json').rows, []);
+  assert.deepEqual(read('empty.json').columns.map(column => column.name), ['id', 'seq', 'exact_value']);
+  assert.equal((await exportFile(table, 'table.json')).report.rows, 61);
+  assert.equal(read('table.json').rows[0][0], '9223372036854775807');
+  for (const [object, name, error] of [
+    [hidden, 'hidden.json', /공개되지/],
+    [metadataOnly, 'denied.json', /조회 권한/],
+    [oversized, 'oversized.json', /32 MiB/],
+    [variant, 'variant.json', /sql_variant/],
+  ]) {
+    await assert.rejects(exportFile(object, name), error);
+    assert.equal(fs.existsSync(path.join(folder, name)), false);
+  }
+
+  const cancelled = randomUUID();
+  await withLockedExportRow({ port, ca, database }, async () => {
+    const progress = () => command('sql_server_export_progress', { id, requestId: cancelled });
+    const run = exportFile(wide, 'cancelled.json', { requestId: cancelled });
+    const result = run.then(value => ({ value }), error => ({ error }));
+    try {
+      const until = Date.now() + 8000;
+      while (!(await progress() > 0) && Date.now() < until) {
+        const exited = await Promise.race([result, new Promise(resolve => setTimeout(resolve, 40))]);
+        if (exited) assert.fail(`Export finished before the fixture released its row: ${JSON.stringify(exited)}`);
+      }
+      assert.ok(await progress() > 0, 'A partial result should reach the temporary file before the row lock.');
+      assert.ok((await command('sql_server_schemas', { id, search: '', page: 0 })).items.includes('archive'));
+      await assert.rejects(exportFile(wide, 'concurrent.json'), /이미 실행 중/);
+      assert.equal(await command('cancel_sql_server_export', { id, requestId: randomUUID() }), false);
+      assert.equal(await command('cancel_sql_server_export', { id, requestId: cancelled }), true);
+      assert.deepEqual(await run, { status: 'cancelled' });
+      assert.equal(await progress(), null);
+      const schemas = await command('sql_server_schemas', { id, search: '', page: 0 });
+      assert.ok(schemas.items.includes('archive'));
+    } finally {
+      await command('cancel_sql_server_export', { id, requestId: cancelled }).catch(() => {});
+    }
+  });
+  const events = (await command('list_audit_events', {})).events;
+  assert.equal(events.some(event => event.correlation_id === cancelled), false);
+  assert.deepEqual(fs.readdirSync(folder).sort(), ['all-columns.json', 'empty.json', 'protected.csv', 'table.json', 'view.json']);
+  assert.equal((await exportFile(wide, 'after-cancel.json')).report.rows, 121);
 }
 
 async function verifyStructureCommands(command, id, table, metadataOnly, hiddenObject) {
@@ -311,9 +421,14 @@ async function main() {
   const hidden = await seedSqlServer({ port, ca, database, account, password: secret });
   assert.ok(Number.isInteger(hidden) && hidden !== 0);
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
-  try { await verify(browser.contexts()[0].pages()[0], hidden); }
-  finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging).`);
+  const exportFolder = fs.mkdtempSync(path.join(process.env.STACKPORT_TEST_ROOT || os.tmpdir(), 'stackport-sql-export-'));
+  try { await verify(browser.contexts()[0].pages()[0], hidden, exportFolder); }
+  finally {
+    await browser.close();
+    for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
+    fs.rmdirSync(exportFolder);
+  }
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

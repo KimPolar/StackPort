@@ -19,6 +19,17 @@ export type ExportDriver = {
 };
 const number = new Intl.NumberFormat("ko-KR");
 
+export function ResultFileReport({ report, onDismiss }: { report: ExportReport; onDismiss: () => void }) {
+  return <div className="mysql-export-report" role="status">
+    <div>{report.format} 저장 완료 · {number.format(report.rows)}행 · {number.format(report.size_bytes)} B
+      {report.protected_fields > 0 && ` · 수식 보호 ${number.format(report.protected_fields)}개`}
+      <code>{report.path}</code>
+      {report.audit_warning && <span>{report.audit_warning}</span>}
+    </div>
+    <button type="button" className="secondary small" onClick={onDismiss}>확인</button>
+  </div>;
+}
+
 export function ResultExportDialog({ profile, query, onClose, onExported }: {
   profile: { id: string; name: string; environment: string };
   query: ExportSource;

@@ -10,7 +10,7 @@ import { MysqlResultExport, type MysqlExportTarget } from "./MysqlResultExport";
 import { MysqlServerMonitor } from "./MysqlServerMonitor";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
-import type { ExportReport } from "./ResultExportDialog";
+import { ResultFileReport, type ExportReport } from "./ResultExportDialog";
 import { emptyTableQueryClauses, TableQueryControls } from "./TableQueryControls";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
@@ -231,14 +231,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
       </div>
       <button type="button" className="secondary small" onClick={() => setEditReport(null)}>확인</button>
     </div>}
-    {exportReport && <div className="mysql-export-report" role="status">
-      <div>{exportReport.format} 저장 완료 · {exportReport.rows.toLocaleString("ko-KR")}행 · {exportReport.size_bytes.toLocaleString("ko-KR")} B
-        {exportReport.protected_fields > 0 && ` · 수식 보호 ${exportReport.protected_fields.toLocaleString("ko-KR")}개`}
-        <code>{exportReport.path}</code>
-        {exportReport.audit_warning && <span>{exportReport.audit_warning}</span>}
-      </div>
-      <button type="button" className="secondary small" onClick={() => setExportReport(null)}>확인</button>
-    </div>}
+    {exportReport && <ResultFileReport report={exportReport} onDismiss={() => setExportReport(null)} />}
     {session && <div hidden={monitorOpen}><div className="mysql-layout">
       <div className="mysql-catalog">
         <section className="results-card" aria-label="MySQL 데이터베이스 목록">

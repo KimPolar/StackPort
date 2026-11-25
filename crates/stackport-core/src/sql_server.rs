@@ -1,8 +1,12 @@
 mod catalog;
 mod definition;
+mod export;
 mod profiles;
 mod structure;
 
+pub use crate::result_export::{
+    ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
+};
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
 pub use structure::{Structure, StructureSection};
@@ -52,6 +56,8 @@ pub struct SessionInfo {
 struct Session {
     connection: AsyncMutex<SqlClient>,
     closed: AtomicBool,
+    profile: Profile,
+    export: Mutex<export::State>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -82,7 +88,7 @@ impl Manager {
             tokio::task::spawn_blocking(move || store.sql_server_profile(&profile_id, revision))
                 .await
                 .map_err(|_| "SQL Server 연결 설정을 읽을 수 없습니다.")??;
-        let settings = profile.settings;
+        let settings = &profile.settings;
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
@@ -93,61 +99,7 @@ impl Manager {
             .try_acquire_owned()
             .map_err(|_| "열린 SQL Server 연결이 너무 많습니다.")?;
         let (client, version, database) = timeout(TIMEOUT, async {
-            let auth = match settings.authentication {
-                Authentication::SqlLogin => {
-                    let username = settings
-                        .username
-                        .as_deref()
-                        .ok_or("SQL Server 로그인 이름을 입력하세요.")?;
-                    AuthMethod::sql_server(username, password.0.as_str())
-                }
-                Authentication::Windows if !password.0.is_empty() => {
-                    return Err("Windows 통합 인증에는 암호를 입력하지 않습니다.".into());
-                }
-                Authentication::Windows => {
-                    #[cfg(windows)]
-                    {
-                        AuthMethod::Integrated
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        return Err("이 플랫폼에서 Windows 통합 인증을 사용할 수 없습니다.".into());
-                    }
-                }
-            };
-            drop(password);
-            let mut config = Config::new();
-            config.host(&settings.host);
-            config.port(settings.port);
-            config.database(&settings.database);
-            config.application_name("StackPort");
-            config.authentication(auth);
-            config.encryption(match settings.encryption {
-                Encryption::Required => EncryptionLevel::Required,
-                Encryption::Strict => EncryptionLevel::Strict,
-            });
-            if let Some(path) = settings.ca_path {
-                let mut bundle = Vec::new();
-                let file = tokio::fs::File::open(path)
-                    .await
-                    .map_err(|_| "SQL Server CA 인증서 파일을 읽을 수 없습니다.")?;
-                file.take(CA_LIMIT + 1)
-                    .read_to_end(&mut bundle)
-                    .await
-                    .map_err(|_| "SQL Server CA 인증서 파일을 읽을 수 없습니다.")?;
-                if bundle.is_empty() || bundle.len() as u64 > CA_LIMIT {
-                    return Err(
-                        "SQL Server CA 인증서는 256 KiB 이하의 PEM 파일을 지정하세요.".into(),
-                    );
-                }
-                config.trust_cert_ca_bundle(bundle);
-            }
-            let tcp = TcpStream::connect((settings.host.as_str(), settings.port))
-                .await
-                .map_err(|_| "SQL Server에 연결할 수 없습니다. 호스트와 포트를 확인하세요.")?;
-            let mut client = Client::connect(config, tcp.compat_write())
-                .await
-                .map_err(connection_error)?;
+            let mut client = connect(settings, authentication(settings, &password)?).await?;
             let row = client
                 .simple_query(
                     "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion')), DB_NAME()",
@@ -175,6 +127,8 @@ impl Manager {
                 Arc::new(Session {
                     connection: AsyncMutex::new(client),
                     closed: AtomicBool::new(false),
+                    profile,
+                    export: Mutex::new(export::State::new(password)),
                     _permit: permit,
                 }),
             );
@@ -193,18 +147,22 @@ impl Manager {
             .remove(id);
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
+            session.stop_export()?;
         }
         Ok(())
     }
 
-    async fn rows(&self, id: &str, sql: &str, params: &[&dyn ToSql]) -> Result<Vec<Row>> {
-        let session = self
-            .sessions
+    fn session(&self, id: &str) -> Result<Arc<Session>> {
+        self.sessions
             .lock()
             .map_err(|_| "SQL Server 연결 목록을 읽을 수 없습니다.")?
             .get(id)
             .cloned()
-            .ok_or("SQL Server 연결이 닫혔습니다. 다시 연결하세요.")?;
+            .ok_or_else(|| "SQL Server 연결이 닫혔습니다. 다시 연결하세요.".into())
+    }
+
+    async fn rows(&self, id: &str, sql: &str, params: &[&dyn ToSql]) -> Result<Vec<Row>> {
+        let session = self.session(id)?;
         let mut client = timeout(TIMEOUT, session.connection.lock())
             .await
             .map_err(|_| "앞선 SQL Server 조회가 아직 끝나지 않았습니다.")?;
@@ -229,6 +187,64 @@ impl Manager {
             }
         }
     }
+}
+
+fn authentication(settings: &ProfileSettings, password: &Password) -> Result<AuthMethod> {
+    match settings.authentication {
+        Authentication::SqlLogin => {
+            let username = settings
+                .username
+                .as_deref()
+                .ok_or("SQL Server 로그인 이름을 입력하세요.")?;
+            Ok(AuthMethod::sql_server(username, password.0.as_str()))
+        }
+        Authentication::Windows if !password.0.is_empty() => {
+            Err("Windows 통합 인증에는 암호를 입력하지 않습니다.".into())
+        }
+        Authentication::Windows => {
+            #[cfg(windows)]
+            {
+                Ok(AuthMethod::Integrated)
+            }
+            #[cfg(not(windows))]
+            {
+                Err("이 플랫폼에서 Windows 통합 인증을 사용할 수 없습니다.".into())
+            }
+        }
+    }
+}
+
+async fn connect(settings: &ProfileSettings, auth: AuthMethod) -> Result<SqlClient> {
+    let mut config = Config::new();
+    config.host(&settings.host);
+    config.port(settings.port);
+    config.database(&settings.database);
+    config.application_name("StackPort");
+    config.authentication(auth);
+    config.encryption(match settings.encryption {
+        Encryption::Required => EncryptionLevel::Required,
+        Encryption::Strict => EncryptionLevel::Strict,
+    });
+    if let Some(path) = &settings.ca_path {
+        let mut bundle = Vec::new();
+        let file = tokio::fs::File::open(path)
+            .await
+            .map_err(|_| "SQL Server CA 인증서 파일을 읽을 수 없습니다.")?;
+        file.take(CA_LIMIT + 1)
+            .read_to_end(&mut bundle)
+            .await
+            .map_err(|_| "SQL Server CA 인증서 파일을 읽을 수 없습니다.")?;
+        if bundle.is_empty() || bundle.len() as u64 > CA_LIMIT {
+            return Err("SQL Server CA 인증서는 256 KiB 이하의 PEM 파일을 지정하세요.".into());
+        }
+        config.trust_cert_ca_bundle(bundle);
+    }
+    let tcp = TcpStream::connect((settings.host.as_str(), settings.port))
+        .await
+        .map_err(|_| "SQL Server에 연결할 수 없습니다. 호스트와 포트를 확인하세요.")?;
+    Client::connect(config, tcp.compat_write())
+        .await
+        .map_err(connection_error)
 }
 
 fn required_text(row: &Row, index: usize) -> Result<&str> {

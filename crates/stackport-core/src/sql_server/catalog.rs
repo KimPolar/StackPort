@@ -16,6 +16,11 @@ const ROW_LIMIT: usize = 50;
 const COLUMN_LIMIT: usize = 64;
 const VALUE_LIMIT: usize = 256;
 const USER_OBJECT: &str = "o.is_ms_shipped = 0 AND o.type IN ('U', 'V')";
+pub(super) const KEYS_SQL: &str = "SELECT c.name, ic.is_descending_key FROM sys.indexes AS i
+    INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
+    INNER JOIN sys.columns AS c ON c.object_id = i.object_id AND c.column_id = ic.column_id
+    WHERE i.object_id = @P1 AND i.is_primary_key = 1 AND ic.key_ordinal > 0
+    ORDER BY ic.key_ordinal";
 
 #[derive(Serialize)]
 pub struct CatalogPage<T> {
@@ -26,19 +31,21 @@ pub struct CatalogPage<T> {
 #[derive(Serialize)]
 pub struct Object {
     id: i32,
-    schema: String,
-    name: String,
+    pub(super) schema: String,
+    pub(super) name: String,
     kind: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct Column {
-    name: String,
-    data_type: String,
+    pub(super) name: String,
+    pub(super) data_type: String,
     nullable: bool,
     identity: bool,
     #[serde(skip)]
-    native_type: String,
+    pub(super) native_type: String,
+    #[serde(skip)]
+    pub(super) max_length: i16,
 }
 
 #[derive(Serialize)]
@@ -136,16 +143,7 @@ impl Manager {
     }
 
     pub(super) async fn object(&self, id: &str, object: i32) -> Result<Object> {
-        let sql = format!(
-            "SELECT o.object_id, s.name, o.name, RTRIM(o.type)
-            FROM sys.objects AS o INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
-            WHERE {USER_OBJECT} AND o.object_id = @P1"
-        );
-        let rows = self.rows(id, &sql, &[&object]).await?;
-        decode_object(
-            rows.first()
-                .ok_or("SQL Server 객체가 없거나 현재 계정에 공개되지 않았습니다.")?,
-        )
+        lookup_object(&self.rows(id, &object_sql(), &[&object]).await?)
     }
 
     pub async fn columns(&self, id: &str, object: i32) -> Result<CatalogPage<Column>> {
@@ -179,13 +177,7 @@ impl Manager {
     }
 
     async fn column_page(&self, id: &str, object: i32) -> Result<CatalogPage<Column>> {
-        let sql = format!("SELECT TOP ({})
-            c.name, t.name, COALESCE(bt.name, t.name), c.is_nullable, c.is_identity,
-            c.max_length, c.precision, c.scale
-            FROM sys.columns AS c INNER JOIN sys.types AS t ON t.user_type_id = c.user_type_id
-            LEFT JOIN sys.types AS bt ON bt.user_type_id = c.system_type_id AND bt.user_type_id = bt.system_type_id
-            WHERE c.object_id = @P1 AND c.is_hidden = 0 ORDER BY c.column_id", COLUMN_LIMIT + 1);
-        let rows = self.rows(id, &sql, &[&object]).await?;
+        let rows = self.rows(id, &columns_sql(COLUMN_LIMIT + 1), &[&object]).await?;
         let mut items = rows.iter().map(decode_column).collect::<Result<Vec<_>>>()?;
         let has_next = items.len() > COLUMN_LIMIT;
         items.truncate(COLUMN_LIMIT);
@@ -207,42 +199,9 @@ impl Manager {
         if columns.is_empty() {
             return Err("SQL Server 계정에 공개된 열이 없습니다.".into());
         }
-        let keys = self.rows(id, "SELECT c.name, ic.is_descending_key FROM sys.indexes AS i
-            INNER JOIN sys.index_columns AS ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-            INNER JOIN sys.columns AS c ON c.object_id = i.object_id AND c.column_id = ic.column_id
-            WHERE i.object_id = @P1 AND i.is_primary_key = 1 AND ic.key_ordinal > 0
-            ORDER BY ic.key_ordinal", &[&object]).await?;
-        let keys = keys
-            .iter()
-            .map(|row| {
-                let direction = if get::<bool>(row, 1)? {
-                    SortDirection::Desc
-                } else {
-                    SortDirection::Asc
-                };
-                Ok((required_text(row, 0)?, direction))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let keys = self.rows(id, KEYS_SQL, &[&object]).await?;
         let stable_order = !keys.is_empty();
-        let mut parameters = Vec::new();
-        clauses.validate_sort(|name| {
-            columns
-                .iter()
-                .any(|column| column.name == name && sortable(&column.native_type))
-        })?;
-        let suffix = clauses.suffix_with_key_order(
-            TableQueryDialect::SqlServer,
-            "sp_source",
-            columns.iter().map(|column| column.name.as_str()),
-            keys,
-            |name, value, operation| {
-                let column = columns
-                    .iter()
-                    .find(|column| column.name == name)
-                    .ok_or(input::UNSUPPORTED)?;
-                filter_binding(&column.native_type, value, operation, &mut parameters)
-            },
-        )?;
+        let (suffix, parameters) = data_suffix(&columns, &keys, &clauses)?;
         let select = columns
             .iter()
             .map(value_expression)
@@ -284,6 +243,46 @@ impl Manager {
             query_sql,
         })
     }
+}
+
+pub(super) fn object_sql() -> String {
+    format!("SELECT o.object_id, s.name, o.name, RTRIM(o.type)
+        FROM sys.objects AS o INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
+        WHERE {USER_OBJECT} AND o.object_id = @P1")
+}
+
+pub(super) fn lookup_object(rows: &[Row]) -> Result<Object> {
+    decode_object(rows.first().ok_or("SQL Server 객체가 없거나 현재 계정에 공개되지 않았습니다.")?)
+}
+
+pub(super) fn columns_sql(limit: usize) -> String {
+    format!("SELECT TOP ({limit})
+        c.name, t.name, COALESCE(bt.name, t.name), c.is_nullable, c.is_identity,
+        c.max_length, c.precision, c.scale
+        FROM sys.columns AS c INNER JOIN sys.types AS t ON t.user_type_id = c.user_type_id
+        LEFT JOIN sys.types AS bt ON bt.user_type_id = c.system_type_id AND bt.user_type_id = bt.system_type_id
+        WHERE c.object_id = @P1 AND c.is_hidden = 0 ORDER BY c.column_id")
+}
+
+pub(super) fn data_suffix(
+    columns: &[Column],
+    keys: &[Row],
+    clauses: &TableQueryClauses,
+) -> Result<(String, Vec<String>)> {
+    let keys = keys.iter().map(|row| {
+        let direction = if get::<bool>(row, 1)? { SortDirection::Desc } else { SortDirection::Asc };
+        Ok((required_text(row, 0)?, direction))
+    }).collect::<Result<Vec<_>>>()?;
+    let mut parameters = Vec::new();
+    clauses.validate_sort(|name| columns.iter().any(|column| column.name == name && sortable(&column.native_type)))?;
+    let suffix = clauses.suffix_with_key_order(
+        TableQueryDialect::SqlServer, "sp_source", columns.iter().map(|column| column.name.as_str()), keys,
+        |name, value, operation| {
+            let column = columns.iter().find(|column| column.name == name).ok_or(input::UNSUPPORTED)?;
+            filter_binding(&column.native_type, value, operation, &mut parameters)
+        },
+    )?;
+    Ok((suffix, parameters))
 }
 
 fn sortable(native: &str) -> bool {
@@ -433,11 +432,12 @@ fn decode_object(row: &Row) -> Result<Object> {
     })
 }
 
-fn decode_column(row: &Row) -> Result<Column> {
+pub(super) fn decode_column(row: &Row) -> Result<Column> {
     let declared = required_text(row, 1)?;
     let native_type = required_text(row, 2)?.to_owned();
+    let max_length = get(row, 5)?;
     let data_type = if declared == native_type {
-        type_display(declared, get(row, 5)?, get(row, 6)?, get(row, 7)?)
+        type_display(declared, max_length, get(row, 6)?, get(row, 7)?)
     } else {
         declared.into()
     };
@@ -447,6 +447,7 @@ fn decode_column(row: &Row) -> Result<Column> {
         nullable: get(row, 3)?,
         identity: get(row, 4)?,
         native_type,
+        max_length,
     })
 }
 
@@ -475,7 +476,7 @@ pub(super) fn ident(name: &str) -> String {
     format!("[{}]", name.replace(']', "]]"))
 }
 
-fn is_binary(column: &Column) -> bool {
+pub(super) fn is_binary(column: &Column) -> bool {
     matches!(
         column.native_type.as_str(),
         "binary" | "varbinary" | "image" | "timestamp" | "rowversion"
@@ -488,7 +489,13 @@ fn value_expression(column: &Column) -> String {
         return format!("CONVERT(nvarchar({}), SUBSTRING(CONVERT(varbinary(max), {name}), 1, {VALUE_LIMIT}), 2),
             CONVERT(bigint, DATALENGTH({name}))", VALUE_LIMIT * 2);
     }
-    let raw = match column.native_type.as_str() {
+    let raw = text_expression(&column.native_type, &name)
+        .unwrap_or_else(|| format!("CASE WHEN {name} IS NULL THEN NULL ELSE N'[미리보기 미지원]' END"));
+    format!("LEFT(({raw}) COLLATE Latin1_General_100_CI_AS_SC, {VALUE_LIMIT}), CONVERT(bigint, DATALENGTH({raw}))")
+}
+
+pub(super) fn text_expression(native: &str, name: &str) -> Option<String> {
+    Some(match native {
         "float" | "real" => format!("CONVERT(nvarchar(max), {name}, 3)"),
         "money" | "smallmoney" => format!("CONVERT(nvarchar(max), {name}, 2)"),
         "date" | "datetime" | "datetime2" | "datetimeoffset" | "smalldatetime" | "time" => {
@@ -499,9 +506,8 @@ fn value_expression(column: &Column) -> String {
         "bit" | "tinyint" | "smallint" | "int" | "bigint" | "decimal" | "numeric" | "char"
         | "varchar" | "nchar" | "nvarchar" | "text" | "ntext" | "xml" | "uniqueidentifier"
         | "json" => format!("CONVERT(nvarchar(max), {name})"),
-        _ => format!("CASE WHEN {name} IS NULL THEN NULL ELSE N'[미리보기 미지원]' END"),
-    };
-    format!("LEFT(({raw}) COLLATE Latin1_General_100_CI_AS_SC, {VALUE_LIMIT}), CONVERT(bigint, DATALENGTH({raw}))")
+        _ => return None,
+    })
 }
 
 fn decode_value(row: &Row, index: usize, column: &Column) -> Result<Option<Value>> {

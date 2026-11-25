@@ -1,4 +1,4 @@
-//! Streaming SQLite result files that are only published after completion.
+//! Streaming result files that are only published after completion.
 
 use super::{Result, SqlParameterValue, TableQuery};
 use rusqlite::{types::ValueRef, Row};
@@ -27,6 +27,42 @@ pub struct CsvOptions {
     pub destination: String,
     pub include_header: bool,
     pub spreadsheet_safe: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResultFileOptions {
+    pub(crate) destination: String,
+    format: ResultFileFormat,
+    include_header: bool,
+    spreadsheet_safe: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ResultFileFormat {
+    Csv,
+    Json,
+}
+
+impl ResultFileOptions {
+    pub(crate) fn format(&self) -> ExportFormat {
+        match self.format {
+            ResultFileFormat::Csv => ExportFormat::Csv {
+                include_header: self.include_header,
+                spreadsheet_safe: self.spreadsheet_safe,
+            },
+            ResultFileFormat::Json => ExportFormat::Json,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ResultFileOutcome {
+    Exported { report: ExportReport },
+    Cancelled,
+    TimedOut,
 }
 
 #[derive(Debug, Serialize)]
