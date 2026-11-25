@@ -1223,6 +1223,55 @@ async function verifyDatabaseExplorer(page) {
   assert.equal(await tokenDialog.getByLabel('Snowflake OAuth 액세스 토큰').inputValue(), '');
   await tokenDialog.getByRole('button', { name: '취소', exact: true }).click();
   await tokenDialog.waitFor({ state: 'detached' });
+
+  await verifyDatabaseExchange(page, explorer);
+}
+
+async function verifyDatabaseExchange(page, explorer) {
+  const jsonPath = path.join(path.dirname(database), 'selected-database-connections.json');
+  await explorer.getByRole('button', { name: '데이터베이스 연결 내보내기', exact: true }).click();
+  const exportDialog = page.getByRole('dialog', { name: '데이터베이스 연결 내보내기', exact: true });
+  await exportDialog.getByRole('textbox', { name: '새 JSON 파일 경로', exact: true }).fill(jsonPath);
+  for (const name of ['연결 4', '연결 7', '연결 20']) {
+    await exportDialog.getByRole('checkbox', { name: new RegExp(name) }).check();
+  }
+  await exportDialog.getByRole('button', { name: '선택한 연결 내보내기', exact: true }).click();
+  await exportDialog.getByRole('status').getByText('데이터베이스 연결 3개를 내보냈습니다.').waitFor();
+  const document = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+  assert.equal(document.format, 'stackport.database-profiles');
+  assert.equal(document.version, 1);
+  assert.deepEqual(document.profiles.map(item => item.connection.engine).sort(), ['postgres', 'snowflake', 'sqlite']);
+  const sqlite = document.profiles.find(item => item.connection.engine === 'sqlite');
+  assert.equal(sqlite.connection.settings.file_name, path.basename(database));
+  assert.equal(sqlite.connection.settings.path, undefined);
+  const snowflake = document.profiles.find(item => item.connection.engine === 'snowflake');
+  assert.equal(snowflake.connection.settings.auth, 'oauth');
+  assert.equal(snowflake.connection.settings.token, undefined);
+  await exportDialog.getByRole('button', { name: '완료', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+
+  await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
+  await page.getByLabel('이름', { exact: true }).fill('DB 연결 가져오기 검증');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await explorer.getByText('저장된 데이터베이스 연결이 없습니다.', { exact: true }).waitFor();
+  await explorer.getByRole('button', { name: '데이터베이스 연결 가져오기', exact: true }).click();
+  const importDialog = page.getByRole('dialog', { name: '데이터베이스 연결 가져오기', exact: true });
+  await importDialog.getByRole('textbox', { name: '가져올 JSON 파일 경로', exact: true }).fill(jsonPath);
+  await importDialog.getByRole('button', { name: '파일 확인', exact: true }).click();
+  await importDialog.getByRole('checkbox', { name: /연결 7/ }).check();
+  await importDialog.getByRole('checkbox', { name: /연결 20/ }).check();
+  const fileSettings = importDialog.getByRole('group', { name: '연결 20 가져오기 설정', exact: true });
+  const sqlitePath = fileSettings.getByRole('textbox', { name: 'SQLite 파일 경로', exact: true });
+  assert.equal(await sqlitePath.inputValue(), '');
+  await fileSettings.getByLabel('연결 이름', { exact: true }).fill('옮긴 SQLite');
+  await sqlitePath.fill(database);
+  await importDialog.getByRole('button', { name: '선택한 연결 가져오기', exact: true }).click();
+  await importDialog.getByRole('status').getByText('데이터베이스 연결 2개를 가져왔습니다.').waitFor();
+  await importDialog.getByRole('button', { name: '완료', exact: true }).click();
+  const profiles = explorer.locator('#explorer-databases .profile-row');
+  await profiles.nth(1).waitFor();
+  assert.deepEqual((await profiles.locator('strong').allTextContents()).sort(), ['연결 7', '옮긴 SQLite']);
+  assert.equal(await explorer.getByRole('button', { name: '데이터베이스 연결 목록', exact: true }).getAttribute('aria-description'), '연결 2개');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

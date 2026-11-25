@@ -50,12 +50,7 @@ impl Store {
         project_id: &str,
         input: MysqlSettings,
     ) -> Result<MysqlProfile> {
-        let profile = MysqlProfile {
-            id: Uuid::new_v4().to_string(),
-            project_id: project_id.into(),
-            revision: 1,
-            settings: normalize(input)?,
-        };
+        let input = normalize(input)?;
         let mut db = self.connect()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -70,8 +65,7 @@ impl Store {
         if !project_exists {
             return Err("프로젝트를 찾을 수 없습니다.".into());
         }
-        insert(&tx, &profile)?;
-        audit(&tx, &profile, "mysql_profile.create")?;
+        let profile = create_on(&tx, project_id, input)?;
         tx.commit().map_err(db_error)?;
         Ok(profile)
     }
@@ -134,7 +128,7 @@ const COLUMNS: &str = "id, project_id, revision, name, settings_json";
 const INVALID_PROFILE: &str = "저장된 MySQL 계열 연결 설정을 읽을 수 없습니다.";
 type StoredProfile = (String, String, i64, String, String);
 
-fn list(db: &Connection, project_id: &str) -> Result<Vec<MysqlProfile>> {
+pub(crate) fn list(db: &Connection, project_id: &str) -> Result<Vec<MysqlProfile>> {
     let mut query = db
         .prepare(&format!(
             "SELECT {COLUMNS} FROM mysql_profiles WHERE project_id=?1 ORDER BY name, id"
@@ -146,7 +140,7 @@ fn list(db: &Connection, project_id: &str) -> Result<Vec<MysqlProfile>> {
     rows.map(|row| decode(row.map_err(db_error)?)).collect()
 }
 
-fn current(db: &Connection, id: &str, revision: i64) -> Result<MysqlProfile> {
+pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<MysqlProfile> {
     let stored = db
         .query_row(
             &format!("SELECT {COLUMNS} FROM mysql_profiles WHERE id=?1"),
@@ -189,6 +183,22 @@ fn encode(settings: &MysqlSettings) -> Result<String> {
     serde_json::to_string(settings).map_err(|_| "MySQL 계열 연결 설정을 저장할 수 없습니다.".into())
 }
 
+pub(crate) fn create_on(
+    db: &Connection,
+    project_id: &str,
+    settings: MysqlSettings,
+) -> Result<MysqlProfile> {
+    let profile = MysqlProfile {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.into(),
+        revision: 1,
+        settings,
+    };
+    insert(db, &profile)?;
+    audit(db, &profile, "mysql_profile.create")?;
+    Ok(profile)
+}
+
 fn insert(db: &Connection, profile: &MysqlProfile) -> Result<()> {
     let changed = db.execute("INSERT INTO mysql_profiles (id, project_id, revision, name, settings_json) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(project_id,name) DO NOTHING",
         params![profile.id, profile.project_id, profile.revision, profile.settings.name, encode(&profile.settings)?],
@@ -199,7 +209,7 @@ fn insert(db: &Connection, profile: &MysqlProfile) -> Result<()> {
     )
 }
 
-fn normalize(mut settings: MysqlSettings) -> Result<MysqlSettings> {
+pub(crate) fn normalize(mut settings: MysqlSettings) -> Result<MysqlSettings> {
     settings.name = valid_name(&settings.name)?.into();
     settings.host = ssh::normalize_host(&settings.host)?;
     ssh::validate_port(settings.port)?;

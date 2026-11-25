@@ -659,6 +659,11 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .exchange-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; font-size: 12px; color: var(--text-subtle); cursor: pointer; }
 .exchange-item > span { display: grid; min-width: 0; gap: 4px; overflow-wrap: anywhere; }
 .exchange-item > span > span { color: var(--text-muted); }
+.database-exchange-dialog { width: min(640px, calc(100vw - 32px)); }
+.database-exchange-dialog .exchange-list { max-height: min(360px, 42vh); }
+.database-exchange-entry + .database-exchange-entry { border-top: 1px solid var(--border); }
+.database-exchange-fields { min-width: 0; margin: 0 0 10px 22px; padding: 10px 12px 0; border: 1px solid var(--border); border-radius: 5px; }
+.database-exchange-fields .field { margin-bottom: 10px; }
 .exchange-result { display: grid; gap: 8px; padding: 12px 0; font-size: 13px; color: var(--text-subtle); overflow-wrap: anywhere; }
 .success-banner { margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--border); background: var(--surface-inset); color: var(--success-text); border-radius: 6px; font-size: 12px; display: grid; gap: 5px; overflow-wrap: anywhere; }
 .audit-warning { color: var(--warning-text); }

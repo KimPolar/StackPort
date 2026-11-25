@@ -13,6 +13,7 @@ import { mongoAddress, type MongoProfile, type MongoProfileAction } from "./Mong
 import type { SqlServerProfile, SqlServerProfileAction } from "./SqlServerProfileDialog";
 import type { OracleProfile, OracleProfileAction } from "./OracleProfileDialog";
 import type { SnowflakeProfile, SnowflakeProfileAction } from "./SnowflakeProfileDialog";
+import type { DatabaseExchangeMode } from "./DatabaseProfileExchange";
 import { PostgresPager } from "./PostgresPager";
 import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
@@ -54,6 +55,7 @@ type ExplorerProps = {
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
   onAddDatabase: () => void;
+  onDatabaseExchange: (mode: DatabaseExchangeMode) => void;
 };
 
 const projectActions = [
@@ -129,7 +131,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, redis, mysql, mongo, sqlServer, oracle, snowflake, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
+  sqlite, postgres, redis, mysql, mongo, sqlServer, oracle, snowflake, ssh, onProjectSelect, onProjectAction, onAddDatabase, onDatabaseExchange }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -191,6 +193,8 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   ].sort((left, right) => left.name.localeCompare(right.name, "ko", { numeric: true }));
   const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length
     + mongoMatches.length + sqlServerMatches.length + oracleMatches.length + snowflakeMatches.length + sshMatches.length;
+  const hasSavedDatabase = [sqlite.profiles, postgres.profiles, redis.profiles, mysql.profiles, mongo.profiles,
+    sqlServer.profiles, oracle.profiles, snowflake.profiles].some(items => items.some(item => item.project_id === projectId));
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
   function favoriteEntry(target: FavoriteTarget) {
@@ -426,6 +430,10 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
           </ExplorerProfile>)}
         </ExplorerGroup>}
         <ExplorerGroup id="explorer-databases" name="데이터베이스" label="데이터베이스 연결 목록" Icon={Database} count={databaseItems.length} filtering={filtering} actions={<>
+          {desktop && <>
+            <ExplorerButton label="데이터베이스 연결 가져오기" Icon={FileUp} onClick={() => onDatabaseExchange("import")} />
+            <ExplorerButton label="데이터베이스 연결 내보내기" Icon={FileDown} disabled={!hasSavedDatabase} onClick={() => onDatabaseExchange("export")} />
+          </>}
           <ExplorerButton label="SQLite 백업 복원" Icon={RotateCcw} onClick={sqlite.restore} />
           <ExplorerButton label="데이터베이스 연결 추가" Icon={Plus} onClick={onAddDatabase} />
         </>}>

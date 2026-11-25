@@ -406,6 +406,46 @@ GitHub Actions의 Windows 릴리즈 작업은 `main` 푸시와 수동 실행마�
 
 자격 증명, 프로젝트 ID, 연결 ID, 호스트 키 신뢰 정보는 교환하지 않습니다. 가져온 서버의 키가 이 장치에 신뢰되어 있지 않으면 처음 접속할 때 별도로 확인해야 합니다. 파일은 암호화되지 않으며 호스트와 사용자 이름이 포함됩니다.
 
+## 데이터베이스 연결 교환 형식
+
+탐색기의 데이터베이스 그룹에서 여러 엔진의 연결을 골라 JSON으로 내보낼 수 있습니다. 가져오기에서 파일을 미리 확인하고 필요한 연결만 선택합니다. 가져올 이름을 바꿀 수 있으며, 중복 이름으로 인해 하나라도 저장에 실패하면 선택한 연결을 모두 되돌립니다. 저장을 마치면 현재 프로젝트의 연결 목록을 새로 읽습니다.
+
+UTF-8 JSON 형식 이름은 `stackport.database-profiles`이며 `version`은 숫자 `1`입니다. 파일 하나에 연결을 1~200개, 최대 1 MiB까지 담습니다. `connection.engine`의 값은 `sqlite`, `postgres`, `mysql`, `redis`, `mongodb`, `sql_server`, `oracle`, `snowflake`입니다. `mysql`은 MySQL과 MariaDB에 공통으로 쓰입니다. `connection.settings`에는 엔진별 이름, 환경과 접속 설정을 넣습니다. 다음 예시는 사용자 지정 CA를 쓰는 PostgreSQL 연결과 SQLite 정의를 함께 내보낸 파일입니다.
+
+~~~json
+{
+  "format": "stackport.database-profiles",
+  "version": 1,
+  "profiles": [
+    {
+      "connection": {
+        "engine": "postgres",
+        "settings": {
+          "name": "보고서",
+          "host": "db.example.com",
+          "port": 5432,
+          "database": "reports",
+          "username": "reader",
+          "environment": "STAGING"
+        }
+      },
+      "local_requirements": { "ca_certificate": true, "client_identity": false }
+    },
+    {
+      "connection": {
+        "engine": "sqlite",
+        "settings": { "name": "분석 자료", "file_name": "reports.sqlite", "environment": "DEV" }
+      },
+      "local_requirements": { "ca_certificate": false, "client_identity": false }
+    }
+  ]
+}
+~~~
+
+`local_requirements`의 각 플래그 기본값은 `false`입니다. 사용자 지정 CA나 MySQL 클라이언트 인증이 필요한 연결은 가져오는 장치에서 인증서와 키 파일을 선택해야 합니다. SQLite 정의에는 원래 파일 이름만 들어가며, 가져올 때 실제 DB 파일을 선택합니다. 암호와 토큰은 접속할 때 입력합니다. 앱은 내보낸 JSON에 로컬 인증서 경로와 연결 ID를 기록하지 않으며, JSON에 포함된 인증서 경로를 거부합니다.
+
+내보내기는 현재 연결 버전을 확인한 뒤 새 파일을 만들고, 가져오기는 미리보기 당시의 SHA-256과 파일을 비교한 뒤 선택 항목을 하나의 트랜잭션으로 등록합니다. 작업 기록에는 가져오기·내보내기 건수와 결과를 남깁니다. `crates/stackport-core/tests/database_exchange.rs`에서 엔진별 설정 왕복과 선택·충돌·파일 검증을, `tests/desktop-smoke.cjs`에서 Windows 탐색기의 선택과 가져온 연결 표시를 검사합니다.
+
 ### Windows 데스크톱 E2E 실행
 
 테스트는 디버깅 포트를 열고 테스트 DB와 로컬 셸을 사용하므로 테스트용 앱 데이터, WebView 및 사용자 프로필만 사용해야 합니다. 기존 사용자의 앱이나 데이터를 대상으로 실행하지 마세요. 아래 환경 변수는 테스트 전용 PowerShell 창에서 설정하고, 테스트 후 그 창을 닫으세요. Playwright Node 패키지와 Python이 별도로 필요합니다(예: `npm install --no-save playwright`). Node 모듈 경로는 `STACKPORT_PLAYWRIGHT_PATH`, Python 실행 파일은 `STACKPORT_TEST_PYTHON`으로 지정할 수 있습니다.

@@ -26,14 +26,14 @@ PARTIAL = {
     "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL·Redis 호스트·포트·사용자·이름·환경 저장과 Redis DB 번호·TLS 설정",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기",
-    "SP-CN-005": "선택한 SSH 연결을 자격 증명 없이 버전형 JSON으로 내보내고 미리보기 후 가져오기",
+    "SP-CN-005": "선택한 SSH·데이터베이스 연결의 버전형 JSON 내보내기, 검토한 파일에서 선택한 연결만 가져오기, DB 이름 변경·로컬 파일 연결과 일괄 등록",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
     "SP-CN-008": "Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력",
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-011": "PostgreSQL·MySQL 계열 TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 서버 인증서 체인·호스트 이름·유효기간 검증, MySQL 계열 PEM 클라이언트 인증",
     "SP-CN-012": "PostgreSQL 사용자 이름과 세션별 암호 인증",
-    "SP-CN-014": "SSH 연결 JSON에 암호·개인 키·호스트 키 신뢰 정보 제외",
+    "SP-CN-014": "SSH 연결 JSON에서 암호·개인 키·호스트 키 신뢰 정보 제외, DB 연결 JSON에서 암호·토큰·인증서·개인 키 경로 제외 및 가져오는 장치에서 필요한 파일 재선택",
     "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",
     "SP-CN-017": "프로젝트별 로컬(-L)·동적 SOCKS5(-D)·원격(-R) TCP 전달 등록·수정·삭제·시작·중단과 선택적 SSH 경유",
     "SP-CN-018": "로컬 포트 충돌·예약, 원격 수신 거부·대상 연결 오류·SSH 단절, 실행 상태·접속 수·송수신량 표시",
@@ -289,7 +289,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-UI-003":
                 evidence = "src/SqlTabs.tsx; tests/sql-file-smoke.cjs; src/WorkspaceNavigation.tsx; src/TerminalWorkspace.tsx; src/TerminalTabDialog.tsx; tests/terminal-smoke.cjs; tests/ssh-smoke.cjs; tests/ssh-key-smoke.cjs; tests/rdp-smoke.cjs"
             elif requirement_id in {"SP-CN-005", "SP-CN-014"}:
-                evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; src-tauri/"
+                evidence = "crates/stackport-core/tests/ssh_exchange.rs; tests/ssh-profile-exchange-smoke.cjs; src/SshProfileExchange.tsx; crates/stackport-core/src/database_exchange.rs; crates/stackport-core/tests/database_exchange.rs; src/DatabaseProfileExchange.tsx; tests/desktop-smoke.cjs; src-tauri/"
             elif requirement_id == "SP-NW-001":
                 evidence = "crates/stackport-core/tests/ports.rs; tests/ports-smoke.cjs; src/NetworkWorkspace.tsx; src-tauri/"
             elif requirement_id == "SP-NW-002":

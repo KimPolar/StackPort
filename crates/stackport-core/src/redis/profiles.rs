@@ -56,12 +56,7 @@ impl Store {
         project_id: &str,
         input: RedisSettings,
     ) -> Result<RedisProfile> {
-        let profile = RedisProfile {
-            id: Uuid::new_v4().to_string(),
-            project_id: project_id.to_owned(),
-            revision: 1,
-            settings: normalize(input)?,
-        };
+        let input = normalize(input)?;
         let mut db = self.connect()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -76,8 +71,7 @@ impl Store {
         if !exists {
             return Err("프로젝트를 찾을 수 없습니다.".into());
         }
-        insert(&tx, &profile)?;
-        audit(&tx, &profile, "redis_profile.create")?;
+        let profile = create_on(&tx, project_id, input)?;
         tx.commit().map_err(db_error)?;
         Ok(profile)
     }
@@ -135,7 +129,7 @@ pub(crate) fn copy_profiles(db: &Connection, source: &str, destination: &str) ->
     Ok(count)
 }
 
-fn list(db: &Connection, project_id: &str) -> Result<Vec<RedisProfile>> {
+pub(crate) fn list(db: &Connection, project_id: &str) -> Result<Vec<RedisProfile>> {
     let mut statement = db
         .prepare(&format!(
             "SELECT {COLUMNS} FROM redis_profiles WHERE project_id=?1 ORDER BY name, id"
@@ -147,7 +141,7 @@ fn list(db: &Connection, project_id: &str) -> Result<Vec<RedisProfile>> {
     rows.map(|row| validate(row.map_err(db_error)?)).collect()
 }
 
-fn current(db: &Connection, id: &str, revision: i64) -> Result<RedisProfile> {
+pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<RedisProfile> {
     let profile = db
         .query_row(
             &format!("SELECT {COLUMNS} FROM redis_profiles WHERE id=?1"),
@@ -181,6 +175,22 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RedisProfile> {
     })
 }
 
+pub(crate) fn create_on(
+    db: &Connection,
+    project_id: &str,
+    settings: RedisSettings,
+) -> Result<RedisProfile> {
+    let profile = RedisProfile {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.to_owned(),
+        revision: 1,
+        settings,
+    };
+    insert(db, &profile)?;
+    audit(db, &profile, "redis_profile.create")?;
+    Ok(profile)
+}
+
 fn insert(db: &Connection, profile: &RedisProfile) -> Result<()> {
     let input = &profile.settings;
     let changed = db.execute(
@@ -192,7 +202,7 @@ fn insert(db: &Connection, profile: &RedisProfile) -> Result<()> {
     require_changed(changed, "이 프로젝트에 같은 이름의 Redis 연결이 있습니다.")
 }
 
-fn normalize(mut settings: RedisSettings) -> Result<RedisSettings> {
+pub(crate) fn normalize(mut settings: RedisSettings) -> Result<RedisSettings> {
     settings.name = valid_name(&settings.name)?.into();
     if settings.name.encode_utf16().count() > 80 || settings.name.chars().any(char::is_control) {
         return Err("연결 이름은 제어 문자 없이 80자 이하로 입력하세요.".into());

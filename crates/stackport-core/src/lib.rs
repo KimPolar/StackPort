@@ -74,6 +74,8 @@ mod ssh_profiles;
 pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;
 pub use ssh_exchange::{SshProfileExportReport, SshProfileImportPreview};
+mod profile_exchange_file;
+pub mod database_exchange;
 mod sftp;
 mod png_preview;
 mod ssh_transport;
@@ -640,43 +642,10 @@ impl Store {
         path: &str,
         environment: &str,
     ) -> Result<Profile> {
-        let name = valid_name(name)?;
-        if !matches!(environment, "DEV" | "STAGING" | "PROD") {
-            return Err("유효한 환경을 선택하세요.".into());
-        }
-        let path = std::fs::canonicalize(path.trim())
-            .map_err(|e| format!("파일을 찾을 수 없습니다: {e}"))?;
-        if !path.is_file() {
-            return Err("데이터베이스 파일을 선택하세요.".into());
-        }
-        // Check that this is a readable SQLite file before persisting its definition.
-        let db = open_user_db(&path)?;
-        db.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(()))
-            .map_err(db_error)?;
-        let profile = Profile {
-            id: Uuid::new_v4().to_string(),
-            project_id: project_id.into(),
-            name: name.into(),
-            path: path.to_string_lossy().into_owned(),
-            environment: environment.into(),
-        };
+        let profile = prepare_sqlite_profile(project_id, name, path, environment)?;
         let mut metadata = self.connect()?;
         let tx = metadata.transaction().map_err(db_error)?;
-        tx.execute("INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![profile.id, profile.project_id, profile.name, profile.path, profile.environment]).map_err(db_error)?;
-        insert_audit(
-            &tx,
-            AuditRecord {
-                correlation_id: &Uuid::new_v4().to_string(),
-                operation: "sqlite_profile.create",
-                project_id: Some(&profile.project_id),
-                profile_id: Some(&profile.id),
-                environment: Some(&profile.environment),
-                object_name: None,
-                outcome: "succeeded",
-                affected_count: Some(1),
-            },
-        )?;
+        insert_sqlite_profile(&tx, &profile)?;
         tx.commit().map_err(db_error)?;
         Ok(profile)
     }
@@ -1108,6 +1077,45 @@ fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {
         path: r.get(3)?,
         environment: r.get(4)?,
     })
+}
+
+fn prepare_sqlite_profile(project_id: &str, name: &str, path: &str, environment: &str) -> Result<Profile> {
+    let name = valid_name(name)?;
+    if !matches!(environment, "DEV" | "STAGING" | "PROD") {
+        return Err("유효한 환경을 선택하세요.".into());
+    }
+    let path = std::fs::canonicalize(path.trim())
+        .map_err(|e| format!("파일을 찾을 수 없습니다: {e}"))?;
+    if !path.is_file() {
+        return Err("데이터베이스 파일을 선택하세요.".into());
+    }
+    let db = open_user_db(&path)?;
+    db.query_row("SELECT count(*) FROM sqlite_schema", [], |_| Ok(())).map_err(db_error)?;
+    Ok(Profile {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.into(),
+        name: name.into(),
+        path: path.to_string_lossy().into_owned(),
+        environment: environment.into(),
+    })
+}
+
+fn insert_sqlite_profile(db: &Connection, profile: &Profile) -> Result<()> {
+    db.execute("INSERT INTO profiles (id, project_id, name, path, environment) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![profile.id, profile.project_id, profile.name, profile.path, profile.environment]).map_err(db_error)?;
+    insert_audit(
+        db,
+        AuditRecord {
+            correlation_id: &Uuid::new_v4().to_string(),
+            operation: "sqlite_profile.create",
+            project_id: Some(&profile.project_id),
+            profile_id: Some(&profile.id),
+            environment: Some(&profile.environment),
+            object_name: None,
+            outcome: "succeeded",
+            affected_count: Some(1),
+        },
+    )
 }
 
 fn valid_name(name: &str) -> Result<&str> {

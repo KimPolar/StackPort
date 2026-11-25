@@ -7,7 +7,7 @@ mod grid_layout;
 mod monitor;
 mod parameters;
 mod plan;
-mod profiles;
+pub(crate) mod profiles;
 mod restore;
 mod search;
 mod session;

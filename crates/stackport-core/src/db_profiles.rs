@@ -38,18 +38,7 @@ impl Store {
         &self,
         project: &str,
     ) -> Result<Vec<DatabaseProfile<T>>> {
-        let db = self.connect()?;
-        let mut statement = db
-            .prepare(&format!(
-                "SELECT {COLUMNS} FROM native_db_profiles WHERE project_id=?1 AND engine=?2
-             AND NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id=?1)
-             ORDER BY name, id"
-            ))
-            .map_err(db_error)?;
-        let rows = statement
-            .query_map(params![project, T::ENGINE], row)
-            .map_err(db_error)?;
-        rows.map(|item| decode(item.map_err(db_error)?)).collect()
+        list(&self.connect()?, project)
     }
 
     pub(crate) fn native_db_profile<T: Settings>(
@@ -65,12 +54,7 @@ impl Store {
         project: &str,
         input: T,
     ) -> Result<DatabaseProfile<T>> {
-        let profile = DatabaseProfile {
-            id: Uuid::new_v4().to_string(),
-            project_id: project.into(),
-            revision: 1,
-            settings: input.normalize()?,
-        };
+        let settings = input.normalize()?;
         let mut db = self.connect()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -86,15 +70,7 @@ impl Store {
         if !exists {
             return Err("활성 프로젝트를 찾을 수 없습니다.".into());
         }
-        insert(
-            &tx,
-            &profile.id,
-            project,
-            T::ENGINE,
-            profile.settings.name(),
-            &encode(&profile.settings)?,
-        )?;
-        audit(&tx, &profile, T::AUDIT_OPERATIONS[0])?;
+        let profile = create_on(&tx, project, settings)?;
         tx.commit().map_err(db_error)?;
         Ok(profile)
     }
@@ -171,7 +147,48 @@ pub(crate) fn copy_profiles(db: &Connection, source: &str, destination: &str) ->
     Ok(profiles.len())
 }
 
-fn current<T: Settings>(db: &Connection, id: &str, revision: i64) -> Result<DatabaseProfile<T>> {
+pub(crate) fn list<T: Settings>(db: &Connection, project: &str) -> Result<Vec<DatabaseProfile<T>>> {
+    let mut statement = db
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM native_db_profiles WHERE project_id=?1 AND engine=?2
+             AND NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id=?1)
+             ORDER BY name, id"
+        ))
+        .map_err(db_error)?;
+    let rows = statement
+        .query_map(params![project, T::ENGINE], row)
+        .map_err(db_error)?;
+    rows.map(|item| decode(item.map_err(db_error)?)).collect()
+}
+
+pub(crate) fn create_on<T: Settings>(
+    db: &Connection,
+    project: &str,
+    settings: T,
+) -> Result<DatabaseProfile<T>> {
+    let profile = DatabaseProfile {
+        id: Uuid::new_v4().to_string(),
+        project_id: project.into(),
+        revision: 1,
+        settings,
+    };
+    insert(
+        db,
+        &profile.id,
+        project,
+        T::ENGINE,
+        profile.settings.name(),
+        &encode(&profile.settings)?,
+    )?;
+    audit(db, &profile, T::AUDIT_OPERATIONS[0])?;
+    Ok(profile)
+}
+
+pub(crate) fn current<T: Settings>(
+    db: &Connection,
+    id: &str,
+    revision: i64,
+) -> Result<DatabaseProfile<T>> {
     let stored = db.query_row(&format!(
         "SELECT {COLUMNS} FROM native_db_profiles WHERE id=?1 AND engine=?2
          AND NOT EXISTS (SELECT 1 FROM project_archives WHERE project_id=native_db_profiles.project_id)"

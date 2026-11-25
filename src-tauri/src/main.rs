@@ -3,7 +3,7 @@
 mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
-use stackport_core::{oracle, snowflake, sql_server};
+use stackport_core::{database_exchange, oracle, snowflake, sql_server};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -2104,6 +2104,48 @@ async fn choose_sqlite_file() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn list_database_exchange_candidates(store: State<'_, Store>, project_id: String)
+    -> Result<Vec<database_exchange::Candidate>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_database_exchange_candidates(&project_id)).await
+}
+
+#[tauri::command]
+async fn export_database_profiles(store: State<'_, Store>, project_id: String, selected: Vec<database_exchange::Source>, destination: String)
+    -> Result<database_exchange::ProfileExportReport, String> {
+    let store = store.inner().clone();
+    worker(move || store.export_database_profiles(&project_id, selected, &destination)).await
+}
+
+#[tauri::command]
+async fn preview_database_profile_import(store: State<'_, Store>, path: String)
+    -> Result<database_exchange::ProfileImportPreview, String> {
+    let store = store.inner().clone();
+    worker(move || store.preview_database_profile_import(&path)).await
+}
+
+#[tauri::command]
+async fn import_database_profiles(store: State<'_, Store>, project_id: String, path: String, digest: String,
+    selected: Vec<database_exchange::ImportSelection>) -> Result<usize, String> {
+    let store = store.inner().clone();
+    worker(move || store.import_database_profiles(&project_id, &path, &digest, selected)).await
+}
+
+#[tauri::command]
+async fn choose_database_profile_path(import: bool) -> Result<Option<String>, String> {
+    worker(move || {
+        let dialog = rfd::FileDialog::new().add_filter("JSON", &["json"]);
+        let path = if import {
+            dialog.set_title("데이터베이스 연결 파일 선택").pick_file()
+        } else {
+            dialog.set_title("데이터베이스 연결 파일 저장")
+                .set_file_name("stackport-database-profiles.json").save_file()
+        };
+        Ok(path.map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
 async fn choose_postgres_ca() -> Result<Option<String>, String> {
     worker(|| Ok(rfd::FileDialog::new().set_title("TLS CA 인증서 선택")
         .add_filter("PEM 인증서", &["pem", "crt", "cer"]).pick_file()
@@ -2530,6 +2572,11 @@ fn main() {
             save_sql_template,
             delete_sql_template,
             choose_sqlite_file,
+            list_database_exchange_candidates,
+            export_database_profiles,
+            preview_database_profile_import,
+            import_database_profiles,
+            choose_database_profile_path,
             choose_postgres_ca,
             choose_mysql_client_tls_file,
             choose_ssh_profile_import_file,

@@ -3,7 +3,7 @@ mod export;
 mod grid;
 mod monitor;
 mod plan;
-mod profiles;
+pub(crate) mod profiles;
 mod sql;
 mod structure;
 mod tls;

@@ -2,7 +2,7 @@ mod console;
 mod edit;
 mod keys;
 mod monitor;
-mod profiles;
+pub(crate) mod profiles;
 mod pubsub;
 mod resp;
 

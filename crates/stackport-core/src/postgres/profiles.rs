@@ -56,12 +56,7 @@ impl Store {
         project_id: &str,
         input: PostgresProfileInput,
     ) -> Result<PostgresProfile> {
-        let profile = PostgresProfile {
-            id: Uuid::new_v4().to_string(),
-            project_id: project_id.into(),
-            revision: 1,
-            settings: normalize(input)?,
-        };
+        let input = normalize(input)?;
         let mut db = self.connect()?;
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -76,8 +71,7 @@ impl Store {
         if !exists {
             return Err("프로젝트를 찾을 수 없습니다.".into());
         }
-        insert(&tx, &profile)?;
-        audit(&tx, &profile, "postgres_profile.create")?;
+        let profile = create_on(&tx, project_id, input)?;
         tx.commit().map_err(db_error)?;
         Ok(profile)
     }
@@ -138,12 +132,18 @@ pub(crate) fn copy_profiles(db: &Connection, source: &str, destination: &str) ->
         profile.project_id = destination.into();
         profile.revision = 1;
         insert(db, &profile)?;
-        count += crate::workspace_favorites::copy_project_favorites(db, source, destination, &source_id, &profile.id)?;
+        count += crate::workspace_favorites::copy_project_favorites(
+            db,
+            source,
+            destination,
+            &source_id,
+            &profile.id,
+        )?;
     }
     Ok(count)
 }
 
-fn list(db: &Connection, project: &str) -> Result<Vec<PostgresProfile>> {
+pub(crate) fn list(db: &Connection, project: &str) -> Result<Vec<PostgresProfile>> {
     let mut statement = db
         .prepare(&format!(
             "SELECT {COLUMNS} FROM postgres_profiles WHERE project_id=?1 ORDER BY name, id"
@@ -153,7 +153,7 @@ fn list(db: &Connection, project: &str) -> Result<Vec<PostgresProfile>> {
     rows.map(|row| validate(row.map_err(db_error)?)).collect()
 }
 
-fn find(db: &Connection, id: &str) -> Result<PostgresProfile> {
+pub(crate) fn find(db: &Connection, id: &str) -> Result<PostgresProfile> {
     let profile = db
         .query_row(
             &format!("SELECT {COLUMNS} FROM postgres_profiles WHERE id=?1"),
@@ -183,6 +183,22 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PostgresProfile> {
     })
 }
 
+pub(crate) fn create_on(
+    db: &Connection,
+    project_id: &str,
+    settings: PostgresProfileInput,
+) -> Result<PostgresProfile> {
+    let profile = PostgresProfile {
+        id: Uuid::new_v4().to_string(),
+        project_id: project_id.into(),
+        revision: 1,
+        settings,
+    };
+    insert(db, &profile)?;
+    audit(db, &profile, "postgres_profile.create")?;
+    Ok(profile)
+}
+
 fn insert(db: &Connection, profile: &PostgresProfile) -> Result<()> {
     let input = &profile.settings;
     let changed = db.execute(
@@ -195,7 +211,7 @@ fn insert(db: &Connection, profile: &PostgresProfile) -> Result<()> {
     )
 }
 
-fn normalize(mut input: PostgresProfileInput) -> Result<PostgresProfileInput> {
+pub(crate) fn normalize(mut input: PostgresProfileInput) -> Result<PostgresProfileInput> {
     input.name = valid_name(&input.name)?.into();
     if input.name.encode_utf16().count() > 80 || input.name.chars().any(char::is_control) {
         return Err("연결 이름은 제어 문자 없이 80자 이하로 입력하세요.".into());

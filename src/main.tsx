@@ -4,11 +4,12 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
-  Database, FileCode2, FileDown, Focus, FolderOpen, HardDrive, History, KeyRound, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
+  Database, FileCode2, FileDown, FileUp, Focus, FolderOpen, HardDrive, History, KeyRound, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
   Plug, Plus, RefreshCw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
+import { DatabaseProfileExchange, type DatabaseExchangeMode } from "./DatabaseProfileExchange";
 import { Dialog, type GridEditExitGuard } from "./Dialog";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout";
@@ -201,6 +202,7 @@ function App() {
   const mysqlId = networkProfile?.engine === "mysql" ? networkProfile.id : "";
   const [mysqlAction, setMysqlAction] = useState<MysqlProfileAction | null>(null);
   const [databasePicker, setDatabasePicker] = useState(false);
+  const [databaseExchange, setDatabaseExchange] = useState<DatabaseExchangeMode | null>(null);
   const mysqlProfile = mysqlProfiles.find(item => item.id === mysqlId && item.project_id === projectId);
   const [mongoProfiles, setMongoProfiles] = useState<MongoProfile[]>([]);
   const [mongoAction, setMongoAction] = useState<MongoProfileAction | null>(null);
@@ -376,6 +378,34 @@ function App() {
     if (selectedProject.current === id) setSshProfiles(next);
   }, []);
 
+  const reloadDatabaseProfiles = useCallback(async (id: string, live: () => boolean) => {
+    const load = <T,>(command: string, accept: (items: T[]) => void) => {
+      return call<T[]>(command, { projectId: id }).then(items => {
+        if (live()) accept(items);
+      }).catch(e => { if (live()) setError(errorText(e)); });
+    };
+    const sqlite = load<Profile>("list_profiles", items => {
+      if (startupProfile.current?.projectId === id) {
+        const restoredProfile = startupProfile.current.profileId;
+        startupProfile.current = null;
+        if (items.some(item => item.id === restoredProfile)) setProfileId(restoredProfile);
+      }
+      setProfiles(items);
+    });
+    const loads = [sqlite, load<PostgresProfile>("list_postgres_profiles", setPostgresProfiles)];
+    if (desktop) {
+      loads.push(
+        load<RedisProfile>("list_redis_profiles", setRedisProfiles),
+        load<MysqlProfile>("list_mysql_profiles", setMysqlProfiles),
+        load<MongoProfile>("list_mongo_profiles", setMongoProfiles),
+        load<SqlServerProfile>("list_sql_server_profiles", setSqlServerProfiles),
+        load<OracleProfile>("list_oracle_profiles", setOracleProfiles),
+        load<SnowflakeProfile>("list_snowflake_profiles", setSnowflakeProfiles),
+      );
+    }
+    await Promise.all(loads);
+  }, []);
+
   useEffect(() => {
     if (!desktop) return;
     let live = true;
@@ -441,7 +471,7 @@ function App() {
     objectGeneration.current++;
     setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresAction(null); setPostgresObjectRequest(null);
     setRedisProfiles([]); setRedisAction(null);
-    setMysqlProfiles([]); setMysqlAction(null); setDatabasePicker(false);
+    setMysqlProfiles([]); setMysqlAction(null); setDatabasePicker(false); setDatabaseExchange(null);
     setMongoProfiles([]); setMongoAction(null); setNetworkProfile(null);
     setSqlServerProfiles([]); setSqlServerAction(null);
     setOracleProfiles([]); setOracleAction(null);
@@ -449,26 +479,11 @@ function App() {
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
-      call<Profile[]>("list_profiles", { projectId }).then(items => {
-        if (!live) return;
-        if (startupProfile.current?.projectId === projectId) {
-          const restoredProfile = startupProfile.current.profileId;
-          startupProfile.current = null;
-          if (items.some(item => item.id === restoredProfile)) setProfileId(restoredProfile);
-        }
-        setProfiles(items);
-      }).catch(e => { if (live) setError(errorText(e)); });
+      void reloadDatabaseProfiles(projectId, () => live);
       call<SshProfile[]>("list_ssh_profiles", { projectId }).then(items => { if (live) setSshProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      call<PostgresProfile[]>("list_postgres_profiles", { projectId }).then(items => { if (live) setPostgresProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<RedisProfile[]>("list_redis_profiles", { projectId }).then(items => { if (live) setRedisProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<MysqlProfile[]>("list_mysql_profiles", { projectId }).then(items => { if (live) setMysqlProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<MongoProfile[]>("list_mongo_profiles", { projectId }).then(items => { if (live) setMongoProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<SqlServerProfile[]>("list_sql_server_profiles", { projectId }).then(items => { if (live) setSqlServerProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<OracleProfile[]>("list_oracle_profiles", { projectId }).then(items => { if (live) setOracleProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
-      if (desktop) call<SnowflakeProfile[]>("list_snowflake_profiles", { projectId }).then(items => { if (live) setSnowflakeProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, reloadDatabaseProfiles]);
 
   useEffect(() => {
     let live = true;
@@ -1320,6 +1335,10 @@ function App() {
       if (desktop) commands.push({ id: "create:sql-server", title: "SQL Server 연결 추가", group: "작업", Icon: Database, run: () => setSqlServerAction({ kind: "create" }) });
       if (desktop) commands.push({ id: "create:oracle", title: "Oracle Database 연결 추가", group: "작업", Icon: Database, run: () => setOracleAction({ kind: "create" }) });
       if (desktop) commands.push({ id: "create:snowflake", title: "Snowflake 연결 추가", group: "작업", Icon: Database, run: () => setSnowflakeAction({ kind: "create" }) });
+      if (desktop) commands.push(
+        { id: "import:database-connections", title: "데이터베이스 연결 가져오기", group: "작업", Icon: FileUp, run: () => setDatabaseExchange("import") },
+        { id: "export:database-connections", title: "데이터베이스 연결 내보내기", group: "작업", Icon: FileDown, run: () => setDatabaseExchange("export") },
+      );
       if (desktop && sqliteWorkspace) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
@@ -1914,6 +1933,7 @@ function App() {
         <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects} favorites={favorites}
           favoriteScope={favoriteScope} onFavoriteScope={setFavoriteScope}
           onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction} onAddDatabase={() => setDatabasePicker(true)}
+          onDatabaseExchange={setDatabaseExchange}
           sqlite={{ profiles, loadedId: profileId, active: sqliteWorkspace, objects, selected: sqliteWorkspace ? selectedObject?.name : undefined,
             loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
             restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
@@ -2103,6 +2123,9 @@ function App() {
     {oracleAction && project && <OracleProfileDialog action={oracleAction} projectId={project.id} onClose={() => setOracleAction(null)} onSaved={saveOracleProfile} />}
     {snowflakeAction && project && <SnowflakeProfileDialog action={snowflakeAction} projectId={project.id} onClose={() => setSnowflakeAction(null)} onSaved={saveSnowflakeProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
+    {databaseExchange && project && <DatabaseProfileExchange mode={databaseExchange} projectId={project.id}
+      onClose={() => setDatabaseExchange(null)}
+      onImported={() => reloadDatabaseProfiles(project.id, () => selectedProject.current === project.id)} />}
   </div>;
 }
 
@@ -2188,6 +2211,7 @@ const auditOperationNames: Record<string, string> = {
   "postgres.backup": "PostgreSQL 백업",
   "postgres.restore": "PostgreSQL 백업 복원",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
+  "database_profile.import": "데이터베이스 연결 가져오기", "database_profile.export": "데이터베이스 연결 내보내기",
   "sftp.download": "SFTP 다운로드", "sftp.download.cancel": "SFTP 다운로드",
   "sftp.upload": "SFTP 업로드", "sftp.upload.cancel": "SFTP 업로드",
   "sftp.mkdir": "SFTP 폴더 생성",
