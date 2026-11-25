@@ -1,7 +1,8 @@
 use crate::postgres::session::VALUE_LENGTH;
+use crate::result_export::JsonResultCell;
 use chrono::{NaiveDate, NaiveTime, TimeDelta};
 use serde::Serialize;
-use std::{error::Error, fmt::Write, str};
+use std::{borrow::Cow, error::Error, fmt::Write, str};
 use tokio_postgres::types::{FromSql, Kind, Type};
 use uuid::Uuid;
 
@@ -52,8 +53,19 @@ impl<'a> FromSql<'a> for WireValue<'a> {
     }
 }
 
-impl WireValue<'_> {
+impl<'a> WireValue<'a> {
     pub(super) fn preview(&self, ty: &Type) -> PreviewCell {
+        match self.decode(ty, VALUE_LENGTH) {
+            JsonResultCell::Text(value) => PreviewCell::text(Some(&value)),
+            JsonResultCell::Binary(value) => PreviewCell::binary(value),
+        }
+    }
+
+    pub(super) fn export(&self, ty: &Type) -> JsonResultCell<'a> {
+        self.decode(ty, usize::MAX)
+    }
+
+    fn decode(&self, ty: &Type, text_limit: usize) -> JsonResultCell<'a> {
         let mut ty = ty;
         while let Kind::Domain(base) = ty.kind() {
             ty = base;
@@ -71,21 +83,21 @@ impl WireValue<'_> {
             _ if matches!(ty.kind(), Kind::Enum(_)) => return utf8(raw, raw),
             _ => {}
         }
-        render(raw, ty).map_or_else(
-            || PreviewCell::binary(raw),
-            |value| PreviewCell::text(Some(&value)),
+        render(raw, ty, text_limit).map_or_else(
+            || JsonResultCell::Binary(raw),
+            |value| JsonResultCell::Text(Cow::Owned(value)),
         )
     }
 }
 
-fn utf8(bytes: &[u8], raw: &[u8]) -> PreviewCell {
+fn utf8<'a>(bytes: &'a [u8], raw: &'a [u8]) -> JsonResultCell<'a> {
     str::from_utf8(bytes).ok().map_or_else(
-        || PreviewCell::binary(raw),
-        |value| PreviewCell::text(Some(value)),
+        || JsonResultCell::Binary(raw),
+        |value| JsonResultCell::Text(Cow::Borrowed(value)),
     )
 }
 
-fn render(raw: &[u8], ty: &Type) -> Option<String> {
+fn render(raw: &[u8], ty: &Type, text_limit: usize) -> Option<String> {
     Some(match *ty {
         Type::BOOL => match raw {
             [0] => "false".into(),
@@ -104,7 +116,7 @@ fn render(raw: &[u8], ty: &Type) -> Option<String> {
             let value = f64::from_be_bytes(raw.try_into().ok()?);
             infinity(value).map_or_else(|| value.to_string(), str::to_owned)
         }
-        Type::NUMERIC => numeric(raw)?,
+        Type::NUMERIC => numeric(raw, text_limit)?,
         Type::UUID => Uuid::from_slice(raw).ok()?.to_string(),
         Type::DATE => match i32::from_be_bytes(raw.try_into().ok()?) {
             i32::MAX => "infinity".into(),
@@ -153,7 +165,7 @@ fn pg_epoch() -> NaiveDate {
     NaiveDate::from_ymd_opt(2000, 1, 1).expect("PostgreSQL epoch")
 }
 
-fn numeric(raw: &[u8]) -> Option<String> {
+fn numeric(raw: &[u8], text_limit: usize) -> Option<String> {
     let [n1, n0, w1, w0, s1, s0, d1, d0, digits @ ..] = raw else {
         return None;
     };
@@ -183,7 +195,7 @@ fn numeric(raw: &[u8]) -> Option<String> {
     let lead = weight.max(0);
     write!(result, "{}", digit(lead)).ok()?;
     for place in (0..lead).rev() {
-        if result.len() > VALUE_LENGTH {
+        if result.len() > text_limit {
             return Some(result);
         }
         write!(result, "{:04}", digit(place)).ok()?;
@@ -192,7 +204,7 @@ fn numeric(raw: &[u8]) -> Option<String> {
         result.push('.');
         let whole = result.len();
         for group in 1..=i32::from(scale.div_ceil(4)) {
-            if result.len() > VALUE_LENGTH {
+            if result.len() > text_limit {
                 break;
             }
             write!(result, "{:04}", digit(-group)).ok()?;

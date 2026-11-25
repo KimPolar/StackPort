@@ -121,7 +121,7 @@ PARTIAL = {
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
     "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회와 스크립트의 문서·선택·현재 문장 및 SQL 루틴의 BEGIN ATOMIC 경계, MySQL 계열 스크립트 전체·현재·선택 실행과 DELIMITER 프로시저, SQL Server 전체·현재 배치·선택 실행과 GO 경계·반복 처리, Oracle SQL·PL/SQL 경계와 Snowflake 스크립팅 인용 경계를 처리하는 전체·현재·선택 실행",
-    "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 조회·계획과 스크립트 문장별 결과·영향 행·알림·시간·SQLSTATE·오류 위치, MySQL 계열 문장·복수 결과 집합·시간·SQLSTATE·영향 행과 읽기 전용 결과 내보내기, SQL Server 복수 결과 집합·시간·오류 위치, Oracle 문장별 결과·오류·경고·DML 영향 행 수, Snowflake 문장별 결과·쿼리 ID·SQLSTATE와 DML 통계",
+    "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 조회·계획과 스크립트 문장별 결과·영향 행·알림·시간·SQLSTATE·오류 위치와 전체 JSON 저장, MySQL 계열 문장·복수 결과 집합·시간·SQLSTATE·영향 행과 읽기 전용 결과 내보내기, SQL Server 복수 결과 집합·시간·오류 위치, Oracle 문장별 결과·오류·경고·DML 영향 행 수, Snowflake 문장별 결과·쿼리 ID·SQLSTATE와 DML 통계",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL 조회·스크립트의 검증 TLS 서버 취소·중단 확인·시간 제한과 스크립트 트랜잭션 정리, MySQL 계열 스크립트 서버 취소 확인·시간 제한·롤백 확인 및 읽기 전용 조회 중단, SQL Server 타임아웃·중단 응답 확인, Oracle 호출 사이 중단·소켓 시간 제한과 별도 실행 연결 종료로 트랜잭션 정리, Snowflake 비동기 실행 핸들 취소와 결과 수신 중단 구분",
     "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 읽기 전용 조회·스크립트의 서버 타입 추론과 값·NULL 바인딩, 읽기 전용 값 수정, 스크립트 실행 전 번호 검증·정밀 소수·입력 오류 상세 숨기기, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, SQL Server 번호별 타입 바인딩, Oracle 범위별 이름 감지와 타입 바인딩, Snowflake 단일 문장 위치별 타입 바인딩, SQL Server·Oracle·Snowflake 38자리 소수와 값·오류 상세 숨기기. Snowflake 실제 계정 검증 대기",
     "SP-SQ-011": "PostgreSQL·MySQL 계열 스크립트의 자동 커밋 선택·저장점·롤백 확인, SQL Server·Oracle 스크립트에서 COMMIT·ROLLBACK 실행과 종료 시 트랜잭션 정리, Snowflake 스크립트의 단일 SQL API 요청에서 명시적 트랜잭션 실행",
@@ -143,12 +143,12 @@ PARTIAL = {
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
     "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON, 경로를 선택한 XML 레코드 가져오기",
-    "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake 필터·정렬된 테이블·뷰 결과와 SQLite·PostgreSQL·MySQL·MariaDB SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기. Snowflake 실제 계정 검증 대기",
+    "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake 필터·정렬된 테이블·뷰 결과와 SQLite·PostgreSQL·MySQL·MariaDB SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기, PostgreSQL 스크립트의 문장별 전체 결과 JSON 저장. Snowflake 실제 계정 검증 대기",
     "SP-MG-004": "두 엔진에서 파일·형식·인코딩·구분자·헤더와 XML 레코드 경로 선택, JSON·XML 원본 열과 대상 열 매핑, 검증 미리보기",
     "SP-MG-005": "JSON 숫자 토큰과 중첩 값, XML 중첩 셀, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환, SQL Server·Oracle·Snowflake 내보내기에서 큰 수·날짜·유니코드·바이너리·NULL 보존. Snowflake 실제 계정 검증 대기",
     "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
     "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, XML DTD·처리 지시문·반복 필드, DB 타입·제약 위반 메시지 표시",
-    "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장. Snowflake 실제 계정 검증 대기",
+    "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장, PostgreSQL 스크립트 실행 중 JSON으로 행 기록 및 취소 시 임시 파일 정리. Snowflake 실제 계정 검증 대기",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
     "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
@@ -182,7 +182,7 @@ PARTIAL = {
     "SP-SEC-003": "SFTP 원격 삭제 시 연결·경로·영향과 PROD 확인, SQLite 운영 환경 셀 변경의 미리보기와 확인",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
-    "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과, Redis 키 편집·삭제와 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
+    "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키 편집·삭제와 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
     "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경과 PostgreSQL PROD 스크립트 실행, Redis PROD 키 편집·삭제, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인, MySQL 계열 PROD 그리드 적용 및 스크립트 실행 전 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
@@ -465,6 +465,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/export.rs; src/PostgresResultExport.tsx"
                 if requirement_id != "SP-DB-022":
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-SQ-008", "SP-MG-002", "SP-MG-008", "SP-SEC-011"}:
+                evidence += "; crates/stackport-core/src/postgres/sql/script/export_io.rs; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-DB-022", "SP-SQ-008", "SP-MG-002", "SP-MG-008", "SP-MG-028", "SP-SEC-011"}:
                 evidence += "; crates/stackport-core/src/mysql/export.rs; src/MysqlResultExport.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-DB-022", "SP-MG-002", "SP-MG-005", "SP-MG-008", "SP-SEC-011"}:

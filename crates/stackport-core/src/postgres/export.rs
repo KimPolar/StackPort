@@ -22,7 +22,7 @@ use tokio_postgres::{
 };
 
 pub(super) const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_ROW_BYTES: usize = 32 * 1024 * 1024;
+pub(super) const MAX_ROW_BYTES: usize = 32 * 1024 * 1024;
 const INVALID_ROW: &str = "PostgreSQL 결과 행을 UTF-8로 읽을 수 없습니다.";
 
 #[derive(Deserialize)]

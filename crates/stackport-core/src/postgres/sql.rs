@@ -174,7 +174,7 @@ pub(super) struct RunningSql {
 pub(super) struct RunningSqlGuard<'a>(&'a Mutex<Option<RunningSql>>);
 
 impl RunningSqlGuard<'_> {
-    fn begin_publication(&self) -> bool {
+    pub(super) fn begin_publication(&self) -> bool {
         if let Ok(mut running) = self.0.lock() {
             if let Some(run) = running.as_mut().filter(|run| !*run.cancel.borrow()) {
                 run.publishing = true;

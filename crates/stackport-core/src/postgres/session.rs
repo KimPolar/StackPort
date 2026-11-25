@@ -893,7 +893,15 @@ impl PostgresManager {
             return Ok(outcome);
         }
         let (cancel, signal) = watch::channel(false);
-        let running = sql::RunningSql::register(&session.running_sql, request, cancel, None)?;
+        let export_requested = input.export_destination.is_some();
+        let progress = export_requested.then(|| Arc::new(AtomicU64::new(0)));
+        let running = sql::RunningSql::register(&session.running_sql, request, cancel, progress.clone())?;
+        let writer = match input.export_destination.clone().zip(progress) {
+            Some((destination, progress)) => Some(timeout(
+                QUERY_TIMEOUT, sql::script::export_io::Writer::open(destination, progress),
+            ).await.map_err(|_| "스크립트 결과 파일을 여는 시간이 초과되었습니다.")??),
+            None => None,
+        };
         let mut queued = signal.clone();
         let locked = tokio::select! {
             biased;
@@ -905,13 +913,16 @@ impl PostgresManager {
             Ok(client) => {
                 let mut guard = ScriptConnection { connection: &session.connection, reusable: false };
                 let outcome = sql::script::run(
-                    &client, &input, &plan, signal, session.tls.clone(), &session.script_notices,
+                    &client, &input, &plan, signal, session.tls.clone(), &session.script_notices, writer.as_ref(),
                 ).await;
                 guard.reusable = !outcome.connection_closed;
                 outcome
             }
             Err(outcome) => outcome,
         };
+        if let Some(writer) = writer {
+            outcome.finish_export(writer, &running).await;
+        }
         drop(running);
         let operation = match outcome.status {
             Status::ParametersRequired | Status::Succeeded | Status::Failed => "postgres.sql.script",
@@ -924,19 +935,30 @@ impl PostgresManager {
         };
         let store = self.store.clone();
         let audited_session = Arc::clone(&session);
+        let exported_rows = outcome.export_report.as_ref().map(|report| report.rows);
         outcome.audit_warning = !tokio::task::spawn_blocking(move || {
             let correlation = request.to_string();
-            let audit = AuditRecord {
+            let audit = |operation, outcome, affected_count| AuditRecord {
                 correlation_id: &correlation,
                 operation,
                 project_id: Some(&audited_session.profile.project_id),
                 profile_id: Some(&audited_session.profile.id),
                 environment: Some(&audited_session.profile.settings.environment),
                 object_name: None,
-                outcome: result,
-                affected_count: None,
+                outcome,
+                affected_count,
             };
-            store.connect().and_then(|db| insert_audit(&db, audit)).is_ok()
+            store.connect().and_then(|db| {
+                insert_audit(&db, audit(operation, result, None))?;
+                if export_requested {
+                    insert_audit(&db, audit(
+                        "postgres.sql.script.export.json",
+                        if exported_rows.is_some() { "succeeded" } else { "failed" },
+                        exported_rows.and_then(|rows| i64::try_from(rows).ok()),
+                    ))?;
+                }
+                Ok(())
+            }).is_ok()
         }).await.unwrap_or(false);
         Ok(outcome)
     }

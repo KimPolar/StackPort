@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { DatabasePreviewGrid } from "./DatabasePreviewGrid";
 import type { PostgresCell } from "./PostgresSqlWorkspace";
+import type { ExportReport } from "./ResultExportDialog";
 
 type Statement = {
   line: number;
@@ -22,6 +23,8 @@ export type PostgresScriptOutcome = {
   transaction: "not_started" | "cleanup_confirmed" | "unknown";
   connection_closed: boolean;
   audit_warning: boolean;
+  export_report?: ExportReport;
+  export_error?: string;
 };
 
 const statusLabels = { succeeded: "실행 완료", failed: "실행 실패", cancelled: "실행 중단", timed_out: "시간 초과" };
@@ -58,7 +61,12 @@ export function PostgresScriptResults({ outcome, jump }: {
       {position != null && jump && <button type="button" className="secondary small"
         onClick={() => jump(position)}>오류 위치로 이동</button>}
     </div>}
-    {outcome.audit_warning && <p className="form-note postgres-page-note">스크립트 실행을 감사 로그에 저장하지 못했습니다.</p>}
+    {outcome.export_report && <p className="form-note postgres-page-note" role="status">
+      JSON 저장 완료 · {number.format(outcome.export_report.rows)}행 · {number.format(outcome.export_report.size_bytes)} B{" "}
+      <code>{outcome.export_report.path}</code>
+    </p>}
+    {outcome.export_error && <p className="error-banner" role="alert">{outcome.export_error}</p>}
+    {outcome.audit_warning && <p className="form-note postgres-page-note">이 작업의 감사 기록을 완료하지 못했습니다.</p>}
     {statement && <>
       {outcome.statements.length > 1 && <div className="postgres-script-toolbar">
         <label className="field">문장 결과<select value={index} aria-label="문장 결과" onChange={event => setIndex(Number(event.target.value))}>

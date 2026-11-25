@@ -2249,6 +2249,7 @@ const auditOperationNames: Record<string, string> = {
   "mysql.sql.script.timeout": "MySQL 스크립트 실행 시간 초과",
   "postgres.sql.script": "PostgreSQL 스크립트 실행", "postgres.sql.script.cancel": "PostgreSQL 스크립트 실행 중단",
   "postgres.sql.script.timeout": "PostgreSQL 스크립트 실행 시간 초과",
+  "postgres.sql.script.export.json": "PostgreSQL 스크립트 결과 JSON 저장",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
   "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",

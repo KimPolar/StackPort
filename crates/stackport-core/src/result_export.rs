@@ -4,6 +4,7 @@ use super::{Result, SqlParameterValue, TableQuery};
 use rusqlite::{types::ValueRef, Row};
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     fs::{self, File},
     io::{self, BufWriter, Write},
     path::{Path, PathBuf},
@@ -399,6 +400,11 @@ impl ExportFile {
                 .write_all(b"\n]}\n")
                 .map_err(|error| format.io(error))?;
         }
+        self.into_ready()
+    }
+
+    fn into_ready(self) -> Result<ReadyExport> {
+        let format = self.format;
         let file = self
             .file
             .into_inner()
@@ -413,6 +419,107 @@ impl ExportFile {
             size_bytes,
             protected_fields: self.protected_fields,
         })
+    }
+}
+
+pub(crate) enum JsonResultCell<'a> {
+    Text(Cow<'a, str>),
+    Binary(&'a [u8]),
+}
+
+pub(crate) struct JsonResultBatch {
+    file: ExportFile,
+    statements: u64,
+    current_rows: u64,
+    rows: u64,
+}
+
+impl JsonResultBatch {
+    pub(crate) fn open(destination: &str, format: &str) -> Result<Self> {
+        let mut batch = Self {
+            file: ExportFile::open(destination, ExportFormat::Json)?,
+            statements: 0,
+            current_rows: 0,
+            rows: 0,
+        };
+        batch.write(b"{\"format\":")?;
+        batch.json(format)?;
+        batch.write(b",\"version\":1,\"statements\":[")?;
+        batch
+            .file
+            .file
+            .flush()
+            .map_err(|error| ExportFormat::Json.io(error))?;
+        Ok(batch)
+    }
+
+    pub(crate) fn start(&mut self, line: u32, columns: &(impl Serialize + ?Sized)) -> Result<()> {
+        if self.statements > 0 {
+            self.write(b",")?;
+        }
+        self.write(b"\n{\"line\":")?;
+        self.json(&line)?;
+        self.write(b",\"columns\":")?;
+        self.json(columns)?;
+        self.write(b",\"rows\":[")?;
+        self.current_rows = 0;
+        Ok(())
+    }
+
+    pub(crate) fn row<'a>(
+        &mut self,
+        values: impl IntoIterator<Item = Result<Option<JsonResultCell<'a>>>>,
+    ) -> Result<u64> {
+        if self.current_rows > 0 {
+            self.write(b",")?;
+        }
+        self.write(b"\n[")?;
+        for (index, cell) in values.into_iter().enumerate() {
+            self.file
+                .delimiter(index)
+                .map_err(|error| ExportFormat::Json.io(error))?;
+            match cell? {
+                None => self.write(b"null")?,
+                Some(JsonResultCell::Text(text)) => self.json(text.as_ref())?,
+                Some(JsonResultCell::Binary(bytes)) => self
+                    .file
+                    .write_blob(bytes, b"{\"binary_hex\":\"", b"\"}")
+                    .map_err(|error| ExportFormat::Json.io(error))?,
+            }
+        }
+        self.write(b"]")?;
+        self.current_rows += 1;
+        self.rows += 1;
+        Ok(self.rows)
+    }
+
+    pub(crate) fn end(&mut self, affected_rows: Option<u64>) -> Result<()> {
+        self.write(b"\n],\"affected_rows\":")?;
+        self.json(&affected_rows)?;
+        self.write(b"}")?;
+        self.file
+            .file
+            .flush()
+            .map_err(|error| ExportFormat::Json.io(error))?;
+        self.statements += 1;
+        Ok(())
+    }
+
+    pub(crate) fn finish(mut self) -> Result<(ReadyExport, u64)> {
+        self.write(b"\n]}\n")?;
+        Ok((self.file.into_ready()?, self.rows))
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.file
+            .file
+            .write_all(bytes)
+            .map_err(|error| ExportFormat::Json.io(error))
+    }
+
+    fn json(&mut self, value: &(impl Serialize + ?Sized)) -> Result<()> {
+        serde_json::to_writer(&mut self.file.file, value)
+            .map_err(|error| ExportFormat::Json.io(error))
     }
 }
 

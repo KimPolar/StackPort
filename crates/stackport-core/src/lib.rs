@@ -995,6 +995,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "postgres.sql.script" | "postgres.sql.script.cancel" | "postgres.sql.script.timeout"
             if record.environment == Some("PROD") => "postgres-script-prod-confirmed",
         "postgres.sql.script" | "postgres.sql.script.cancel" | "postgres.sql.script.timeout" => "postgres-script-login-permissions",
+        "postgres.sql.script.export.json" => "postgres-script-result-json-no-overwrite",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

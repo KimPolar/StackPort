@@ -1,10 +1,11 @@
-use super::{await_query, Column};
+use super::{await_query, Column, RunningSqlGuard};
 use crate::postgres::{
-    parameters::{Value, MAX_PARAMETERS},
+    export::EXPORT_TIMEOUT,
+    parameters::{type_label, Value, MAX_PARAMETERS},
     session::{COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH},
     sql_range, PostgresSqlScope,
 };
-use crate::Result;
+use crate::{result_export::ExportReport, Result};
 use futures_util::TryStreamExt;
 use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
@@ -21,7 +22,9 @@ use tokio_postgres::{
     Client, Error, SimpleQueryMessage,
 };
 
+pub(in crate::postgres) mod export_io;
 mod wire;
+use export_io::{Message, Writer};
 use wire::{PreviewCell, WireValue};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(45);
@@ -34,6 +37,7 @@ pub struct PostgresScriptInput {
     pub(in crate::postgres) scope: PostgresSqlScope,
     pub(in crate::postgres) autocommit: bool,
     pub(in crate::postgres) confirmation: String,
+    pub(in crate::postgres) export_destination: Option<String>,
     bindings: Option<Vec<Binding>>,
 }
 
@@ -105,6 +109,10 @@ pub struct PostgresScriptOutcome {
     transaction: Transaction,
     pub(in crate::postgres) connection_closed: bool,
     pub(in crate::postgres) audit_warning: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::postgres) export_report: Option<ExportReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    export_error: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     parameter_indexes: Vec<usize>,
 }
@@ -224,6 +232,8 @@ impl PostgresScriptOutcome {
             transaction: Transaction::NotStarted,
             connection_closed: false,
             audit_warning: false,
+            export_report: None,
+            export_error: None,
             parameter_indexes: Vec::new(),
         }
     }
@@ -241,6 +251,41 @@ impl PostgresScriptOutcome {
             ..Self::new()
         }
     }
+
+    pub(in crate::postgres) async fn finish_export(
+        &mut self,
+        writer: Writer,
+        running: &RunningSqlGuard<'_>,
+    ) {
+        let complete = matches!(self.status, Status::Succeeded) && !self.connection_closed;
+        let staged = timeout(Duration::from_secs(12), writer.finish(complete)).await;
+        match staged {
+            Ok(Ok(Some((file, rows)))) => {
+                if !running.begin_publication() {
+                    self.export_error = Some("결과 파일 저장을 중단했습니다.".into());
+                    return;
+                }
+                match tokio::task::spawn_blocking(move || file.publish(rows)).await {
+                    Ok(Ok(report)) => self.export_report = Some(report),
+                    Ok(Err(error)) => self.export_error = Some(error),
+                    Err(_) => {
+                        self.export_error = Some("스크립트 결과 파일을 게시할 수 없습니다.".into())
+                    }
+                }
+            }
+            Ok(Ok(None)) if matches!(self.status, Status::Succeeded) => {
+                self.export_error = Some(
+                    "스크립트 연결의 정리를 확인할 수 없어 결과 파일을 게시하지 못했습니다.".into(),
+                );
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(error)) => self.export_error = Some(error),
+            Err(_) => {
+                self.export_error =
+                    Some("스크립트 결과 파일을 마무리하는 시간이 초과되었습니다.".into())
+            }
+        }
+    }
 }
 
 pub(in crate::postgres) async fn run(
@@ -250,6 +295,7 @@ pub(in crate::postgres) async fn run(
     mut signal: watch::Receiver<bool>,
     tls: TlsConnector,
     notices: &Notices,
+    writer: Option<&Writer>,
 ) -> PostgresScriptOutcome {
     let started = Instant::now();
     let mut outcome = PostgresScriptOutcome::new();
@@ -266,8 +312,14 @@ pub(in crate::postgres) async fn run(
         tls,
         capture.as_ref(),
         &mut outcome.statements,
+        writer,
     );
-    let reusable = match timeout(RUN_TIMEOUT, run).await {
+    let limit = if writer.is_some() {
+        EXPORT_TIMEOUT
+    } else {
+        RUN_TIMEOUT
+    };
+    let reusable = match timeout(limit, run).await {
         Ok(Ok(())) => true,
         Ok(Err(failure)) => {
             outcome.status = failure.status;
@@ -385,11 +437,23 @@ async fn execute(
     tls: TlsConnector,
     capture: Option<&Capture<'_>>,
     results: &mut Vec<PartResult>,
+    writer: Option<&Writer>,
 ) -> std::result::Result<(), Halt> {
     if *signal.borrow() {
         return Err(halt(Failure::NotSent, None, false));
     }
-    let (ready, cancelled) = await_query(client.batch_execute("SET SESSION default_transaction_read_only = off; SET SESSION idle_in_transaction_session_timeout = 15000"), signal, client.cancel_token(), tls.clone()).await;
+    let settings = if writer.is_some() {
+        "SET SESSION default_transaction_read_only = off; SET SESSION idle_in_transaction_session_timeout = 15000; SET SESSION statement_timeout = 300000"
+    } else {
+        "SET SESSION default_transaction_read_only = off; SET SESSION idle_in_transaction_session_timeout = 15000"
+    };
+    let (ready, cancelled) = await_query(
+        client.batch_execute(settings),
+        signal,
+        client.cancel_token(),
+        tls.clone(),
+    )
+    .await;
     ready.map_err(|error| halt(error.into(), None, cancelled))?;
     if cancelled {
         return Err(halt(Failure::NotSent, None, true));
@@ -426,6 +490,7 @@ async fn execute(
             &stop,
             &mut part,
             &mut budget,
+            writer,
         );
         let (result, cancelled) =
             await_query(work, signal, client.cancel_token(), tls.clone()).await;
@@ -462,6 +527,7 @@ async fn execute_part(
     stop: &watch::Receiver<bool>,
     part: &mut PartResult,
     budget: &mut usize,
+    writer: Option<&Writer>,
 ) -> std::result::Result<(), Failure> {
     if begin {
         client.batch_execute("BEGIN").await?;
@@ -497,6 +563,17 @@ async fn execute_part(
                 .map_or(&Value::Null, |offset| &bindings[offset].value)
         });
         let stream = client.query_raw(&prepared, values).await?;
+        if let Some(writer) = writer {
+            let columns = prepared
+                .columns()
+                .iter()
+                .map(|column| Column {
+                    name: column.name().into(),
+                    data_type: type_label(column.type_()),
+                })
+                .collect();
+            writer.send(Message::Start(part.line, columns)).await;
+        }
         part.describe(
             prepared
                 .columns()
@@ -513,31 +590,63 @@ async fn execute_part(
                     |value| value.preview(prepared.columns()[index].type_()),
                 ))
             })?;
+            if let Some(writer) = writer {
+                writer.send(Message::Bound(row)).await;
+            }
         }
         part.affected_rows = stream.rows_affected();
-        return Ok(());
+    } else {
+        let stream = client.simple_query_raw(sql).await?;
+        tokio::pin!(stream);
+        let mut described = false;
+        while let Some(message) = stream.try_next().await? {
+            match message {
+                SimpleQueryMessage::RowDescription(columns) => {
+                    if let Some(writer) = writer {
+                        let output = columns
+                            .iter()
+                            .enumerate()
+                            .map(|(index, column)| Column {
+                                name: column.name().into(),
+                                data_type: prepared.columns().get(index).map_or_else(
+                                    || "text".into(),
+                                    |column| type_label(column.type_()),
+                                ),
+                            })
+                            .collect();
+                        writer.send(Message::Start(part.line, output)).await;
+                        described = true;
+                    }
+                    part.describe(
+                        columns.iter().enumerate().map(|(index, column)| {
+                            let data_type = prepared
+                                .columns()
+                                .get(index)
+                                .map_or("text", |column| column.type_().name());
+                            (column.name(), data_type)
+                        }),
+                        budget,
+                    );
+                }
+                SimpleQueryMessage::Row(row) => {
+                    part.preview_row(budget, |index| row.try_get(index).map(PreviewCell::text))?;
+                    if let Some(writer) = writer {
+                        writer.send(Message::Text(row)).await;
+                    }
+                }
+                SimpleQueryMessage::CommandComplete(rows) => part.affected_rows = Some(rows),
+                _ => {}
+            }
+        }
+        if let Some(writer) = writer.filter(|_| !described) {
+            writer.send(Message::Start(part.line, Vec::new())).await;
+        }
     }
-    let stream = client.simple_query_raw(sql).await?;
-    tokio::pin!(stream);
-    while let Some(message) = stream.try_next().await? {
-        match message {
-            SimpleQueryMessage::RowDescription(columns) => {
-                part.describe(
-                    columns.iter().enumerate().map(|(index, column)| {
-                        let data_type = prepared
-                            .columns()
-                            .get(index)
-                            .map_or("text", |column| column.type_().name());
-                        (column.name(), data_type)
-                    }),
-                    budget,
-                );
-            }
-            SimpleQueryMessage::Row(row) => {
-                part.preview_row(budget, |index| row.try_get(index).map(PreviewCell::text))?;
-            }
-            SimpleQueryMessage::CommandComplete(rows) => part.affected_rows = Some(rows),
-            _ => {}
+    if let Some(writer) = writer {
+        if !writer.end(part.affected_rows).await {
+            return Err(Failure::Input(
+                "결과 파일을 기록하는 중 오류가 발생해 이후 문장의 실행을 중단했습니다.",
+            ));
         }
     }
     Ok(())

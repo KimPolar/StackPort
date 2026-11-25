@@ -1189,9 +1189,12 @@ async function verify(browser, fixture, gateway, jump) {
   assert.equal(await autocommit.isChecked(), true);
   await autocommit.uncheck();
   await sql.fill("SELECT '첫 결과' AS marker;\nSELECT $2::text AS marker;");
-  await page.getByRole('button', { name: '전체 실행', exact: true }).click();
-  const scriptConfirmation = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
-  const confirmScript = scriptConfirmation.getByRole('button', { name: '스크립트 실행', exact: true });
+  await page.getByRole('button', { name: '실행 및 저장', exact: true }).click();
+  const scriptConfirmation = page.getByRole('dialog', { name: '스크립트 실행 및 저장', exact: true });
+  const confirmScript = scriptConfirmation.getByRole('button', { name: '실행 및 JSON 저장', exact: true });
+  const scriptFile = path.join(root, 'postgres-script-editor.json');
+  assert.equal(await confirmScript.isEnabled(), false);
+  await scriptConfirmation.getByLabel('새 JSON 파일 경로', { exact: true }).fill(scriptFile);
   assert.equal(await confirmScript.isEnabled(), false);
   await scriptConfirmation.getByLabel('운영 확인', { exact: true }).fill('PROD');
   await confirmScript.click();
@@ -1203,6 +1206,8 @@ async function verify(browser, fixture, gateway, jump) {
   await scriptParameters.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   const scriptResults = page.getByRole('region', { name: 'PostgreSQL 스크립트 결과', exact: true });
   await scriptResults.getByRole('cell', { name: '첫 결과', exact: true }).waitFor();
+  await scriptResults.getByRole('status').filter({ hasText: /JSON 저장 완료 · 2행/ }).waitFor();
+  assert.deepEqual(JSON.parse(fs.readFileSync(scriptFile, 'utf8')).statements.map(item => item.rows), [[['첫 결과']], [['둘째 결과']]]);
   await scriptResults.getByRole('combobox', { name: '문장 결과', exact: true }).selectOption('1');
   await scriptResults.getByRole('cell', { name: '둘째 결과', exact: true }).waitFor();
   await page.getByRole('button', { name: '읽기 전용 조회', exact: true }).click();
@@ -1803,8 +1808,11 @@ function backupList(destination) {
 
 async function verifyScripts({ command, query, open, close, session }) {
   const document = { kind: 'document' };
-  const execute = (source, { autocommit = true, scope = document, confirmation = 'PROD', request = randomUUID(), bindings } = {}) =>
-    command('execute_postgres_script', { id: session.id, request, input: { source, scope, autocommit, confirmation, bindings } });
+  const execute = (source, {
+    autocommit = true, scope = document, confirmation = 'PROD', request = randomUUID(), bindings, exportDestination,
+  } = {}) => command('execute_postgres_script', {
+    id: session.id, request, input: { source, scope, autocommit, confirmation, bindings, export_destination: exportDestination },
+  });
   const probe = id => `INSERT INTO report.write_probe VALUES (${id}) RETURNING id`;
   const ids = async () => (await query('SELECT id FROM report.write_probe ORDER BY id')).rows.map(row => row[0].value);
   await assert.rejects(execute(probe(900), { confirmation: '' }), /PROD/);
@@ -1885,7 +1893,91 @@ async function verifyScripts({ command, query, open, close, session }) {
   assert.equal(timed.transaction, 'cleanup_confirmed');
   assert.deepEqual(await ids(), ['901', '904']);
   await verifyScriptParameters({ command, execute, ids, probe });
+  await verifyScriptExport({ command, execute, ids, probe, id: session.id });
   console.log('PostgreSQL scripts passed (routine bodies, autocommit, savepoints, rollback, Unicode diagnostics and server cancellation).');
+}
+
+async function verifyScriptExport({ command, execute, ids, probe, id }) {
+  const existing = path.join(root, 'script-existing.json');
+  const destination = path.join(root, 'script-results.json');
+  const baseline = await ids();
+  fs.writeFileSync(existing, 'existing-script-export');
+  await assert.rejects(execute(probe(920), { exportDestination: existing }), /같은 이름/);
+  assert.equal(fs.readFileSync(existing, 'utf8'), 'existing-script-export');
+  assert.deepEqual(await ids(), baseline);
+
+  const source = [
+    probe(920),
+    "SELECT n AS duplicate, repeat('한', 513) AS duplicate, NULL::text, ''::text FROM generate_series(1, 130) AS n",
+    "SELECT $1::numeric AS precise, repeat('9', 600)::numeric AS large, $2::bytea AS bytes",
+    "SELECT id FROM report.write_probe WHERE false",
+    "UPDATE report.write_probe SET id=920 WHERE id=920",
+  ].join(";\n");
+  assert.equal((await execute(source, { exportDestination: destination })).status, 'parameters_required');
+  assert.equal(fs.existsSync(destination), false);
+  assert.deepEqual(await ids(), baseline);
+  const request = randomUUID();
+  const precise = '900719925474099312345678901.012300';
+  const exported = await execute(source, { exportDestination: destination, request, bindings: [
+    { index: 1, value: { kind: 'text', value: precise } },
+    { index: 2, value: { kind: 'text', value: '\\x00ab' } },
+  ] });
+  assert.equal(exported.status, 'succeeded', JSON.stringify(exported).slice(0, 500));
+  assert.equal(exported.export_report.rows, 132);
+  assert.equal(exported.export_report.size_bytes, fs.statSync(destination).size);
+  assert.equal(exported.statements[1].rows.length, 100);
+  const result = JSON.parse(fs.readFileSync(destination, 'utf8'));
+  assert.equal(result.format, 'stackport.postgres-script-results');
+  assert.equal(result.version, 1);
+  assert.deepEqual(result.statements.map(item => item.line), [1, 2, 3, 4, 5]);
+  assert.deepEqual(result.statements[1].columns.slice(0, 2), [
+    { name: 'duplicate', data_type: 'int4' }, { name: 'duplicate', data_type: 'text' },
+  ]);
+  assert.equal(result.statements[1].rows.length, 130);
+  assert.deepEqual(result.statements[1].rows[129], ['130', '한'.repeat(513), null, '']);
+  assert.deepEqual(result.statements[2].rows[0], [precise, '9'.repeat(600), { binary_hex: '00AB' }]);
+  assert.deepEqual(result.statements[3].rows, []);
+  assert.deepEqual(result.statements[4], { line: 5, columns: [], rows: [], affected_rows: 1 });
+  assert.deepEqual(await ids(), [...baseline, '920']);
+  const audits = (await command('list_audit_events', { before: null })).events.filter(item => item.correlation_id === request);
+  const saved = audits.find(item => item.operation === 'postgres.sql.script.export.json');
+  assert.equal(saved?.affected_count, 132);
+  assert.equal(saved.policy, 'postgres-script-result-json-no-overwrite');
+  assert.ok(audits.some(item => item.operation === 'postgres.sql.script'));
+  assert.doesNotMatch(JSON.stringify(audits), /script-results\.json/);
+
+  const failedPath = path.join(root, 'script-export-failed.json');
+  const failed = await execute(`${probe(921)}; SELECT missing_script_export; ${probe(922)}`, { exportDestination: failedPath });
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.sql_state, '42703');
+  assert.equal(fs.existsSync(failedPath), false);
+  assert.deepEqual(await ids(), [...baseline, '920', '921']);
+
+  const rowTooLarge = path.join(root, 'script-large-row.json');
+  const writeFailed = await execute("SELECT repeat('x', 33554433); INSERT INTO report.write_probe VALUES (922)",
+    { exportDestination: rowTooLarge });
+  assert.equal(writeFailed.status, 'failed', JSON.stringify(writeFailed).slice(0, 500));
+  assert.match(writeFailed.export_error, /32 MiB/);
+  assert.equal(writeFailed.transaction, 'cleanup_confirmed');
+  assert.equal(fs.existsSync(rowTooLarge), false);
+  assert.deepEqual(await ids(), [...baseline, '920', '921']);
+
+  const canceledPath = path.join(root, 'script-export-canceled.json');
+  const cancelRequest = randomUUID();
+  const running = execute(`BEGIN; ${probe(923)}; SELECT pg_sleep(6); COMMIT`,
+    { exportDestination: canceledPath, request: cancelRequest });
+  let recorded = 0;
+  for (let attempt = 0; attempt < 40 && !recorded; attempt++) {
+    recorded = await command('postgres_export_progress', { id, request: cancelRequest });
+    if (!recorded) await new Promise(resolve => setTimeout(resolve, 40));
+  }
+  assert.equal(recorded, 1);
+  assert.equal(await command('cancel_postgres_sql', { id, request: cancelRequest }), true);
+  assert.equal((await running).status, 'cancelled');
+  assert.equal(fs.existsSync(canceledPath), false);
+  assert.deepEqual(await ids(), [...baseline, '920', '921']);
+  assert.ok(!fs.readdirSync(root).some(name => name.startsWith('.stackport-json-')));
+  console.log('PostgreSQL script export passed (full JSON results, progress, no replay, failure cleanup and cancellation).');
 }
 
 async function verifyScriptParameters({ command, execute, ids, probe }) {
