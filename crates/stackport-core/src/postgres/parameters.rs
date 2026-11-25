@@ -62,20 +62,26 @@ impl PostgresSqlBindings {
             return Err("PostgreSQL 매개변수의 개수와 형식을 확인하세요.".into());
         }
         for (index, value) in self.values.iter().enumerate() {
-            if let Value::Text { value } = value {
-                if value.len() > MAX_VALUE_BYTES || value.contains('\0') {
-                    return Err(format!(
-                        "매개변수 {}의 값은 NUL 문자 없이 16 KiB 이하여야 합니다.",
-                        index + 1
-                    ));
-                }
-            }
+            value.validate(index + 1)?;
         }
         Ok(())
     }
 
     pub(super) fn matches(&self, types: &[Type]) -> bool {
         self.types.iter().copied().eq(types.iter().map(Type::oid))
+    }
+}
+
+impl Value {
+    pub(super) fn validate(&self, index: usize) -> Result<()> {
+        if let Self::Text { value } = self {
+            if value.len() > MAX_VALUE_BYTES || value.contains('\0') {
+                return Err(format!(
+                    "매개변수 {index}의 값은 NUL 문자 없이 16 KiB 이하여야 합니다."
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

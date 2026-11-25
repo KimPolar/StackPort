@@ -1,5 +1,6 @@
 use crate::Result;
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 pub(super) const MAX_SQL_BYTES: usize = 256 * 1024;
@@ -79,6 +80,30 @@ fn byte_at_utf16(source: &str, target: usize) -> Result<usize> {
 }
 
 fn ranges(source: &str, cursor: Option<usize>) -> Result<Vec<Range<usize>>> {
+    scan(source, cursor, |_| Ok(()))
+}
+
+pub(super) fn script_slots(source: &str, limit: usize) -> Result<BTreeSet<usize>> {
+    let mut slots = BTreeSet::new();
+    scan(source, None, |digits| {
+        let slot = std::str::from_utf8(digits)
+            .ok()
+            .and_then(|text| text.parse::<usize>().ok())
+            .filter(|slot| (1..=limit).contains(slot))
+            .ok_or_else(|| {
+                format!("PostgreSQL 스크립트 매개변수 번호는 1~{limit}이어야 합니다.")
+            })?;
+        slots.insert(slot);
+        Ok(())
+    })?;
+    Ok(slots)
+}
+
+fn scan(
+    source: &str,
+    cursor: Option<usize>,
+    mut parameter: impl FnMut(&[u8]) -> Result<()>,
+) -> Result<Vec<Range<usize>>> {
     let bytes = source.as_bytes();
     let mut spans = Vec::new();
     let mut start = None;
@@ -116,6 +141,17 @@ fn ranges(source: &str, cursor: Option<usize>) -> Result<Vec<Range<usize>>> {
             }
             b'e' | b'E' if tail.get(1) == Some(&b'\'') => 1 + quoted(&tail[1..], b'\'', true)?,
             quote @ (b'\'' | b'"') => quoted(tail, quote, false)?,
+            b'$' if tail.get(1).is_some_and(u8::is_ascii_digit) => {
+                let width = tail[1..]
+                    .iter()
+                    .take_while(|byte| byte.is_ascii_digit())
+                    .count()
+                    + 1;
+                if !routine.declares_parameters() {
+                    parameter(&tail[1..width])?;
+                }
+                width
+            }
             b'$' => dollar_quote(source, index)?.unwrap_or(1),
             byte if identifier_start(byte) => {
                 let width = tail
@@ -154,17 +190,7 @@ impl<'a> Routine<'a> {
         if self.head.len() < 4 {
             self.head.push(word);
         }
-        let is = |index: usize, word: &[u8]| {
-            self.head
-                .get(index)
-                .is_some_and(|token| token.eq_ignore_ascii_case(word))
-        };
-        let kind = if is(1, b"OR") && is(2, b"REPLACE") {
-            3
-        } else {
-            1
-        };
-        if !is(0, b"CREATE") || !(is(kind, b"FUNCTION") || is(kind, b"PROCEDURE")) {
+        if !self.is_routine() {
             return;
         }
         if self.begin && word.eq_ignore_ascii_case(b"ATOMIC") {
@@ -179,6 +205,25 @@ impl<'a> Routine<'a> {
             }
         }
         self.begin = word.eq_ignore_ascii_case(b"BEGIN");
+    }
+
+    fn is(&self, index: usize, word: &[u8]) -> bool {
+        self.head
+            .get(index)
+            .is_some_and(|token| token.eq_ignore_ascii_case(word))
+    }
+
+    fn is_routine(&self) -> bool {
+        let kind = if self.is(1, b"OR") && self.is(2, b"REPLACE") {
+            3
+        } else {
+            1
+        };
+        self.is(0, b"CREATE") && (self.is(kind, b"FUNCTION") || self.is(kind, b"PROCEDURE"))
+    }
+
+    fn declares_parameters(&self) -> bool {
+        self.is_routine() || self.is(0, b"PREPARE")
     }
 }
 
@@ -332,5 +377,15 @@ mod tests {
             script(source, PostgresSqlScope::Current { cursor }).unwrap(),
             [spans[0].clone()]
         );
+    }
+
+    #[test]
+    fn finds_bound_slots_without_treating_text_or_routine_arguments_as_bindings() {
+        let source = r#"SELECT $4, $1, '$9', "$8", $$ $7 $$, id$6, E'it\'s $5', $4; -- $10
+            /* $11 */ CREATE FUNCTION f(int) RETURNS int LANGUAGE SQL BEGIN ATOMIC SELECT $1; END;
+            PREPARE server_plan(int) AS SELECT $1;"#;
+        assert_eq!(script_slots(source, 32).unwrap(), BTreeSet::from([1, 4]));
+        assert!(script_slots("SELECT $33", 32).is_err());
+        assert!(script_slots("SELECT $0", 32).is_err());
     }
 }

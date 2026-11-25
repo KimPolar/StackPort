@@ -1188,13 +1188,19 @@ async function verify(browser, fixture, gateway, jump) {
   const autocommit = page.getByRole('checkbox', { name: '자동 커밋', exact: true });
   assert.equal(await autocommit.isChecked(), true);
   await autocommit.uncheck();
-  await sql.fill("SELECT '첫 결과' AS marker;\nSELECT '둘째 결과' AS marker;");
+  await sql.fill("SELECT '첫 결과' AS marker;\nSELECT $2::text AS marker;");
   await page.getByRole('button', { name: '전체 실행', exact: true }).click();
   const scriptConfirmation = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
   const confirmScript = scriptConfirmation.getByRole('button', { name: '스크립트 실행', exact: true });
   assert.equal(await confirmScript.isEnabled(), false);
   await scriptConfirmation.getByLabel('운영 확인', { exact: true }).fill('PROD');
   await confirmScript.click();
+  const scriptParameters = page.getByRole('dialog', { name: 'PostgreSQL 매개변수', exact: true });
+  await scriptParameters.getByLabel('$2 값 숨기기', { exact: true }).check();
+  const scriptValue = scriptParameters.getByLabel('$2 값', { exact: true });
+  assert.equal(await scriptValue.getAttribute('type'), 'password');
+  await scriptValue.fill('둘째 결과');
+  await scriptParameters.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   const scriptResults = page.getByRole('region', { name: 'PostgreSQL 스크립트 결과', exact: true });
   await scriptResults.getByRole('cell', { name: '첫 결과', exact: true }).waitFor();
   await scriptResults.getByRole('combobox', { name: '문장 결과', exact: true }).selectOption('1');
@@ -1797,8 +1803,8 @@ function backupList(destination) {
 
 async function verifyScripts({ command, query, open, close, session }) {
   const document = { kind: 'document' };
-  const execute = (source, { autocommit = true, scope = document, confirmation = 'PROD', request = randomUUID() } = {}) =>
-    command('execute_postgres_script', { id: session.id, request, input: { source, scope, autocommit, confirmation } });
+  const execute = (source, { autocommit = true, scope = document, confirmation = 'PROD', request = randomUUID(), bindings } = {}) =>
+    command('execute_postgres_script', { id: session.id, request, input: { source, scope, autocommit, confirmation, bindings } });
   const probe = id => `INSERT INTO report.write_probe VALUES (${id}) RETURNING id`;
   const ids = async () => (await query('SELECT id FROM report.write_probe ORDER BY id')).rows.map(row => row[0].value);
   await assert.rejects(execute(probe(900), { confirmation: '' }), /PROD/);
@@ -1878,7 +1884,63 @@ async function verifyScripts({ command, query, open, close, session }) {
   assert.equal(timed.server_confirmed, true);
   assert.equal(timed.transaction, 'cleanup_confirmed');
   assert.deepEqual(await ids(), ['901', '904']);
+  await verifyScriptParameters({ command, execute, ids, probe });
   console.log('PostgreSQL scripts passed (routine bodies, autocommit, savepoints, rollback, Unicode diagnostics and server cancellation).');
+}
+
+async function verifyScriptParameters({ command, execute, ids, probe }) {
+  const text = (index, value) => ({ index, value: { kind: 'text', value } });
+  const source = [
+    probe(910),
+    "CREATE TEMP TABLE stackport_bound (id int, amount numeric, note text, optional text)",
+    "INSERT INTO stackport_bound VALUES ($4, $1, $8, $2) RETURNING id, amount, note, optional",
+    "UPDATE report.write_probe SET id = $4 WHERE id = 910 RETURNING id",
+    "SELECT $1::numeric, $4::int, $8::text, $2::text, ARRAY[1, 2], $5::timestamptz, $6::bytea, '$33'::text",
+    "SELECT $8::text; -- $40 remains a comment",
+  ].join(";\n");
+  const detail = "-9007199254740993123456789012345678.0012300";
+  const note = "O'Reilly; 👋";
+  const bindings = [text(1, detail), { index: 2, value: { kind: 'null' } }, text(4, '911'),
+    text(5, '2026-01-02 03:04:05+09'), text(6, '\\x00ab'), text(8, note)];
+  const request = randomUUID();
+  const needed = await execute(source, { request });
+  assert.equal(needed.status, 'parameters_required');
+  assert.deepEqual(needed.parameter_indexes, [1, 2, 4, 5, 6, 8]);
+  assert.equal(needed.transaction, 'not_started');
+  assert.deepEqual(await ids(), ['901', '904']);
+  await assert.rejects(execute(source, { bindings: bindings.slice(0, -1) }), /번호와 값을 확인/);
+  await assert.rejects(execute(source, { bindings: [...bindings.slice(0, -1), text(8, '\0')] }), /16 KiB/);
+  assert.deepEqual(await ids(), ['901', '904']);
+  assert.ok(!(await command('list_audit_events', { before: null })).events.some(event => event.correlation_id === request));
+
+  const complete = await execute(source, { bindings, autocommit: true });
+  assert.equal(complete.status, 'succeeded', JSON.stringify(complete));
+  assert.deepEqual(complete.statements[2].rows[0].map(cell => cell.value), ['911', detail, note, null]);
+  assert.equal(complete.statements[3].affected_rows, 1);
+  const row = complete.statements[4].rows[0];
+  assert.deepEqual(row.slice(0, 4).map(cell => cell.value), [detail, '911', note, null]);
+  assert.equal(row[4].hex, true);
+  assert.equal(row[5].value, '2026-01-01 18:04:05+00');
+  assert.deepEqual(row[6], { value: '00ab', truncated: false, hex: true });
+  assert.equal(row[7].value, '$33');
+  assert.equal(complete.statements[5].rows[0][0].value, note);
+  assert.deepEqual(await ids(), ['901', '904', '911']);
+
+  const masked = await execute(`${probe(912)}; SELECT $2::int; ${probe(913)}`, {
+    bindings: [text(2, 'private-fixture-bound-value')],
+  });
+  assert.equal(masked.status, 'failed', JSON.stringify(masked));
+  assert.equal(masked.error.sql_state, '22P02');
+  assert.equal(masked.error.line, 1);
+  assert.doesNotMatch(JSON.stringify(masked), /private-fixture-bound-value/);
+  assert.deepEqual(await ids(), ['901', '904', '911', '912']);
+
+  const precision = await execute("SELECT $1::numeric, $1::numeric + 0.0001, 'Infinity'::numeric, 'NaN'::numeric, repeat('9', 600)::numeric",
+    { bindings: [text(1, '0.000012300')] });
+  const numbers = precision.statements[0].rows[0];
+  assert.deepEqual(numbers.slice(0, 4).map(cell => cell.value), ['0.000012300', '0.000112300', 'Infinity', 'NaN']);
+  assert.deepEqual(numbers[4], { value: '9'.repeat(512), truncated: true });
+  console.log('PostgreSQL script bindings passed (preflight without writes, sparse slots, DML RETURNING, exact numeric and masked errors).');
 }
 
 async function verifyBackups({ command, open, close, alternate, session, findObject, archive }) {

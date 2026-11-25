@@ -7,7 +7,7 @@ type Statement = {
   elapsed_ms: number;
   columns: { name: string; data_type: string }[];
   total_columns: number;
-  rows: PostgresCell[][];
+  rows: (PostgresCell & { hex?: boolean })[][];
   more_rows: boolean;
   affected_rows: number | null;
   notices: { severity: string; sql_state: string; message: string }[];
@@ -76,7 +76,7 @@ export function PostgresScriptResults({ outcome, jump }: {
       </ul>}
       {statement.columns.length > 0 && <DatabasePreviewGrid columns={statement.columns} label="PostgreSQL 스크립트 데이터"
         rows={statement.rows.map(row => row.map(cell => cell.value === null ? null : {
-          text: cell.value, truncated: cell.truncated, encoding: "utf8", bytes: null,
+          text: cell.value, truncated: cell.truncated, encoding: cell.hex ? "hex" : "utf8", bytes: null,
         }))} />}
     </>}
   </section>;

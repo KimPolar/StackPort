@@ -78,7 +78,7 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
     return () => onQueryActivity(null);
   }, [activity, onQueryActivity]);
 
-  async function run(target: QueryTarget, bindings?: PostgresBindings) {
+  async function run(target: QueryTarget, bindings?: PostgresBindings, parameters?: PostgresParameter[]) {
     if (session !== target.session || active.current || !target.source.trim()) return;
     const operation: Running = { ...target, request: crypto.randomUUID() };
     active.current = operation;
@@ -89,10 +89,15 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
       const request = { id: target.session, request: operation.request };
       const sql = { source: target.source, scope: target.scope };
       if (target.mode === "script") {
-        const script = await invoke<PostgresScriptOutcome>("execute_postgres_script", {
-          ...request, input: { ...sql, autocommit: target.autocommit, confirmation: target.confirmation },
+        const script = await invoke<PostgresScriptOutcome | { status: "parameters_required"; parameter_indexes: number[] }>("execute_postgres_script", {
+          ...request, input: { ...sql, autocommit: target.autocommit, confirmation: target.confirmation,
+            bindings: bindings && parameters?.map(({ index }, offset) => ({ index, value: bindings.values[offset] })),
+          },
         });
-        outcome = { status: "script", script };
+        outcome = script.status === "parameters_required"
+          ? { status: "parameters_required", error: null,
+            parameters: script.parameter_indexes.map(index => ({ index, oid: 0, data_type: "서버에서 타입 추론" })) }
+          : { status: "script", script };
       } else {
         outcome = await invoke<Outcome>("execute_postgres_sql", { ...request, ...sql, bindings, mode: target.mode });
       }
@@ -255,7 +260,7 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
     </Dialog>}
     {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
       parameters={parameterRequest.parameters} title={`${parameterRequest.target.title} · ${modeNames[parameterRequest.target.mode]}`} error={parameterRequest.error}
-      running={busy} cancelStatus={cancelStatus} onSubmit={bindings => void run(parameterRequest.target, bindings)}
+      running={busy} cancelStatus={cancelStatus} onSubmit={bindings => void run(parameterRequest.target, bindings, parameterRequest.parameters)}
       onClose={() => { setParameterRequest(null); requestAnimationFrame(() => input.current?.focus()); }}
       onCancelQuery={() => void stop()} />}
   </div>;

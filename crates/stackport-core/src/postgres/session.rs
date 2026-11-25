@@ -884,10 +884,13 @@ impl PostgresManager {
         use sql::script::Status;
 
         let request = Uuid::parse_str(request).map_err(|_| "SQL 실행 요청 ID를 확인하세요.")?;
-        let spans = sql_range::script(&input.source, input.scope)?;
+        let plan = sql::script::Plan::new(&input)?;
         let session = self.session(id)?;
         if session.profile.settings.environment == "PROD" && input.confirmation != "PROD" {
             return Err("운영 PostgreSQL 스크립트를 실행하려면 PROD를 입력하세요.".into());
+        }
+        if let Some(outcome) = plan.request_bindings(&input)? {
+            return Ok(outcome);
         }
         let (cancel, signal) = watch::channel(false);
         let running = sql::RunningSql::register(&session.running_sql, request, cancel, None)?;
@@ -902,7 +905,7 @@ impl PostgresManager {
             Ok(client) => {
                 let mut guard = ScriptConnection { connection: &session.connection, reusable: false };
                 let outcome = sql::script::run(
-                    &client, &input, &spans, signal, session.tls.clone(), &session.script_notices,
+                    &client, &input, &plan, signal, session.tls.clone(), &session.script_notices,
                 ).await;
                 guard.reusable = !outcome.connection_closed;
                 outcome
@@ -911,13 +914,13 @@ impl PostgresManager {
         };
         drop(running);
         let operation = match outcome.status {
-            Status::Succeeded | Status::Failed => "postgres.sql.script",
+            Status::ParametersRequired | Status::Succeeded | Status::Failed => "postgres.sql.script",
             Status::Cancelled => "postgres.sql.script.cancel",
             Status::TimedOut => "postgres.sql.script.timeout",
         };
         let result = match outcome.status {
             Status::Succeeded => "succeeded",
-            Status::Failed | Status::Cancelled | Status::TimedOut => "failed",
+            Status::ParametersRequired | Status::Failed | Status::Cancelled | Status::TimedOut => "failed",
         };
         let store = self.store.clone();
         let audited_session = Arc::clone(&session);

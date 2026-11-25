@@ -1,12 +1,15 @@
 use super::{await_query, Column};
 use crate::postgres::{
-    session::{Cell, COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH},
+    parameters::{Value, MAX_PARAMETERS},
+    session::{COLUMN_SIZE, ROW_SIZE, VALUE_LENGTH},
     sql_range, PostgresSqlScope,
 };
+use crate::Result;
 use futures_util::TryStreamExt;
 use native_tls::TlsConnector;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeSet,
     ops::Range,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -14,8 +17,12 @@ use std::{
 use tokio::{sync::watch, time::timeout};
 use tokio_postgres::{
     error::{DbError, ErrorPosition},
+    types::Type,
     Client, Error, SimpleQueryMessage,
 };
+
+mod wire;
+use wire::{PreviewCell, WireValue};
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(45);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(4);
@@ -27,6 +34,65 @@ pub struct PostgresScriptInput {
     pub(in crate::postgres) scope: PostgresSqlScope,
     pub(in crate::postgres) autocommit: bool,
     pub(in crate::postgres) confirmation: String,
+    bindings: Option<Vec<Binding>>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Binding {
+    index: usize,
+    value: Value,
+}
+
+pub(in crate::postgres) struct Plan {
+    statements: Vec<ScriptStatement>,
+    slots: BTreeSet<usize>,
+}
+
+struct ScriptStatement {
+    span: Range<usize>,
+    slots: BTreeSet<usize>,
+}
+
+impl Plan {
+    pub(in crate::postgres) fn new(input: &PostgresScriptInput) -> Result<Self> {
+        let mut slots = BTreeSet::new();
+        let mut statements = Vec::new();
+        for span in sql_range::script(&input.source, input.scope)? {
+            let statement_slots =
+                sql_range::script_slots(&input.source[span.clone()], MAX_PARAMETERS)?;
+            slots.extend(statement_slots.iter().copied());
+            statements.push(ScriptStatement {
+                span,
+                slots: statement_slots,
+            });
+        }
+        Ok(Self { statements, slots })
+    }
+
+    pub(in crate::postgres) fn request_bindings(
+        &self,
+        input: &PostgresScriptInput,
+    ) -> Result<Option<PostgresScriptOutcome>> {
+        let Some(bindings) = &input.bindings else {
+            return Ok((!self.slots.is_empty()).then(|| PostgresScriptOutcome {
+                status: Status::ParametersRequired,
+                parameter_indexes: self.slots.iter().copied().collect(),
+                ..PostgresScriptOutcome::new()
+            }));
+        };
+        if !bindings
+            .iter()
+            .map(|binding| binding.index)
+            .eq(self.slots.iter().copied())
+        {
+            return Err("PostgreSQL 스크립트 매개변수의 번호와 값을 확인하세요.".into());
+        }
+        for binding in bindings {
+            binding.value.validate(binding.index)?;
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Serialize)]
@@ -39,11 +105,14 @@ pub struct PostgresScriptOutcome {
     transaction: Transaction,
     pub(in crate::postgres) connection_closed: bool,
     pub(in crate::postgres) audit_warning: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    parameter_indexes: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(in crate::postgres) enum Status {
+    ParametersRequired,
     Succeeded,
     Failed,
     Cancelled,
@@ -72,7 +141,7 @@ struct PartResult {
     elapsed_ms: u64,
     columns: Vec<Column>,
     total_columns: usize,
-    rows: Vec<Vec<Cell>>,
+    rows: Vec<Vec<PreviewCell>>,
     more_rows: bool,
     affected_rows: Option<u64>,
     notices: Vec<Notice>,
@@ -155,6 +224,7 @@ impl PostgresScriptOutcome {
             transaction: Transaction::NotStarted,
             connection_closed: false,
             audit_warning: false,
+            parameter_indexes: Vec::new(),
         }
     }
 
@@ -176,7 +246,7 @@ impl PostgresScriptOutcome {
 pub(in crate::postgres) async fn run(
     client: &Client,
     input: &PostgresScriptInput,
-    spans: &[Range<usize>],
+    plan: &Plan,
     mut signal: watch::Receiver<bool>,
     tls: TlsConnector,
     notices: &Notices,
@@ -187,14 +257,14 @@ pub(in crate::postgres) async fn run(
         outcome.status = Status::Cancelled;
         return outcome;
     }
-    let capture = notices.capture();
+    let capture = plan.slots.is_empty().then(|| notices.capture());
     let run = execute(
         client,
         input,
-        spans,
+        plan,
         &mut signal,
         tls,
-        &capture,
+        capture.as_ref(),
         &mut outcome.statements,
     );
     let reusable = match timeout(RUN_TIMEOUT, run).await {
@@ -202,6 +272,13 @@ pub(in crate::postgres) async fn run(
         Ok(Err(failure)) => {
             outcome.status = failure.status;
             outcome.error = failure.error;
+            if let Some(error) = outcome
+                .error
+                .as_mut()
+                .filter(|error| !plan.slots.is_empty() && error.sql_state.is_some())
+            {
+                error.message = "PostgreSQL이 매개변수가 있는 스크립트에서 오류를 반환했습니다. 문장과 값의 형식을 확인하세요.".into();
+            }
             outcome.server_confirmed = failure.server_confirmed;
             failure.reusable
         }
@@ -303,10 +380,10 @@ fn halt(failure: Failure, scope: Option<(&str, Range<usize>)>, sent_cancel: bool
 async fn execute(
     client: &Client,
     input: &PostgresScriptInput,
-    spans: &[Range<usize>],
+    plan: &Plan,
     signal: &mut watch::Receiver<bool>,
     tls: TlsConnector,
-    capture: &Capture<'_>,
+    capture: Option<&Capture<'_>>,
     results: &mut Vec<PartResult>,
 ) -> std::result::Result<(), Halt> {
     if *signal.borrow() {
@@ -319,10 +396,11 @@ async fn execute(
     }
     let mut in_transaction = false;
     let mut budget = PREVIEW_BUDGET;
-    for span in spans {
+    for statement in &plan.statements {
         if *signal.borrow() {
             return Err(halt(Failure::NotSent, None, false));
         }
+        let span = &statement.span;
         let sql = &input.source[span.clone()];
         let action = transaction_action(sql);
         let begin = !input.autocommit && !in_transaction && action == Action::Other;
@@ -337,13 +415,22 @@ async fn execute(
             affected_rows: None,
             notices: Vec::new(),
         };
-        let _ = capture.take();
+        let _ = capture.map(Capture::take);
         let stop = signal.clone();
-        let work = execute_part(client, sql, begin, &stop, &mut part, &mut budget);
+        let work = execute_part(
+            client,
+            sql,
+            statement,
+            input.bindings.as_deref().unwrap_or_default(),
+            begin,
+            &stop,
+            &mut part,
+            &mut budget,
+        );
         let (result, cancelled) =
             await_query(work, signal, client.cancel_token(), tls.clone()).await;
         part.elapsed_ms = started.elapsed().as_millis() as u64;
-        part.notices = capture.take();
+        part.notices = capture.map(Capture::take).unwrap_or_default();
         if result.is_ok()
             || part.affected_rows.is_some()
             || !part.columns.is_empty()
@@ -369,6 +456,8 @@ async fn execute(
 async fn execute_part(
     client: &Client,
     sql: &str,
+    statement: &ScriptStatement,
+    bindings: &[Binding],
     begin: bool,
     stop: &watch::Receiver<bool>,
     part: &mut PartResult,
@@ -380,68 +469,124 @@ async fn execute_part(
     if *stop.borrow() {
         return Err(Failure::NotSent);
     }
-    // The backend enforces a single statement before the same SQL is sent in text format.
-    let prepared = client.prepare(sql).await?;
-    if !prepared.params().is_empty() {
-        return Err(Failure::Input("이 스크립트 문장에는 값이 필요한 매개변수가 있습니다. 매개변수 조회는 읽기 전용 모드에서 실행하세요."));
+    // Parse enforces a single statement and infers types using the live schema.
+    let last = statement.slots.last().copied().unwrap_or(0);
+    let types: Vec<_> = (1..=last)
+        .map(|index| {
+            if statement.slots.contains(&index) {
+                Type::UNKNOWN
+            } else {
+                Type::TEXT
+            }
+        })
+        .collect();
+    let prepared = client.prepare_typed(sql, &types).await?;
+    if prepared.params().len() != last {
+        return Err(Failure::Input("PostgreSQL 서버가 실행 전에 확인한 것과 다른 매개변수를 인식했습니다. 문장과 문자열 인용을 확인하세요."));
     }
     if *stop.borrow() {
         return Err(Failure::NotSent);
+    }
+    if last != 0 {
+        let values = (0..last).map(|offset| {
+            let index = offset + 1;
+            statement
+                .slots
+                .get(&index)
+                .and_then(|index| bindings.binary_search_by_key(index, |item| item.index).ok())
+                .map_or(&Value::Null, |offset| &bindings[offset].value)
+        });
+        let stream = client.query_raw(&prepared, values).await?;
+        part.describe(
+            prepared
+                .columns()
+                .iter()
+                .map(|column| (column.name(), column.type_().name())),
+            budget,
+        );
+        tokio::pin!(stream);
+        while let Some(row) = stream.try_next().await? {
+            part.preview_row(budget, |index| {
+                let value: Option<WireValue<'_>> = row.try_get(index)?;
+                Ok(value.map_or_else(
+                    || PreviewCell::text(None),
+                    |value| value.preview(prepared.columns()[index].type_()),
+                ))
+            })?;
+        }
+        part.affected_rows = stream.rows_affected();
+        return Ok(());
     }
     let stream = client.simple_query_raw(sql).await?;
     tokio::pin!(stream);
     while let Some(message) = stream.try_next().await? {
         match message {
             SimpleQueryMessage::RowDescription(columns) => {
-                part.total_columns = columns.len();
-                for (index, column) in columns.iter().take(COLUMN_SIZE).enumerate() {
-                    let data_type = prepared
-                        .columns()
-                        .get(index)
-                        .map_or("text", |column| column.type_().name());
-                    let size = column.name().len() + data_type.len() + 64;
-                    if size > *budget {
-                        break;
-                    }
-                    *budget -= size;
-                    part.columns.push(Column {
-                        name: column.name().into(),
-                        data_type: data_type.into(),
-                    });
-                }
+                part.describe(
+                    columns.iter().enumerate().map(|(index, column)| {
+                        let data_type = prepared
+                            .columns()
+                            .get(index)
+                            .map_or("text", |column| column.type_().name());
+                        (column.name(), data_type)
+                    }),
+                    budget,
+                );
             }
             SimpleQueryMessage::Row(row) => {
-                if part.rows.len() == ROW_SIZE || part.more_rows || part.columns.is_empty() {
-                    part.more_rows = true;
-                    continue;
-                }
-                let mut cells = Vec::with_capacity(part.columns.len());
-                let mut size = 0;
-                for index in 0..part.columns.len() {
-                    let value = row.try_get(index)?;
-                    let text = value.map(short_text);
-                    let truncated = text
-                        .as_deref()
-                        .zip(value)
-                        .is_some_and(|(text, value)| text.len() != value.len());
-                    size += 32 + text.as_ref().map_or(0, String::len);
-                    cells.push(Cell {
-                        value: text,
-                        truncated,
-                    });
-                }
-                if size > *budget {
-                    part.more_rows = true;
-                } else {
-                    *budget -= size;
-                    part.rows.push(cells);
-                }
+                part.preview_row(budget, |index| row.try_get(index).map(PreviewCell::text))?;
             }
             SimpleQueryMessage::CommandComplete(rows) => part.affected_rows = Some(rows),
             _ => {}
         }
     }
     Ok(())
+}
+
+impl PartResult {
+    fn describe<'a>(
+        &mut self,
+        columns: impl ExactSizeIterator<Item = (&'a str, &'a str)>,
+        budget: &mut usize,
+    ) {
+        self.total_columns = columns.len();
+        for (name, data_type) in columns.take(COLUMN_SIZE) {
+            let size = name.len() + data_type.len() + 64;
+            if size > *budget {
+                break;
+            }
+            *budget -= size;
+            self.columns.push(Column {
+                name: name.into(),
+                data_type: data_type.into(),
+            });
+        }
+    }
+
+    fn preview_row(
+        &mut self,
+        budget: &mut usize,
+        mut cell: impl FnMut(usize) -> std::result::Result<PreviewCell, Error>,
+    ) -> std::result::Result<(), Error> {
+        if self.rows.len() == ROW_SIZE || self.more_rows || self.columns.is_empty() {
+            self.more_rows = true;
+            return Ok(());
+        }
+        let cells: Vec<_> = (0..self.columns.len())
+            .map(&mut cell)
+            .collect::<std::result::Result<_, _>>()?;
+        let size = cells
+            .iter()
+            .map(|cell| 32 + cell.value.as_ref().map_or(0, String::len))
+            .sum::<usize>();
+        if size > *budget {
+            self.more_rows = true;
+        } else {
+            *budget -= size;
+            self.rows.push(cells);
+        }
+        Ok(())
+    }
 }
 
 fn short_text(value: &str) -> String {
