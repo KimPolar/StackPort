@@ -1,4 +1,7 @@
-use super::{document_snapshot::canonical_id, message, validate_namespace, MongoManager, READ_TIMEOUT, SERVER_TIME};
+use super::{
+    document_snapshot::canonical_id, message, validate_namespace, MongoManager, READ_TIMEOUT,
+    SERVER_TIME,
+};
 use crate::Result;
 use bson::{doc, raw::RawDocumentBuf, Bson, Document};
 use futures_util::TryStreamExt;
@@ -7,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
 pub(super) const PAGE_SIZE: usize = 20;
+pub(super) const QUERY_JSON_LIMIT: usize = 32 * 1024;
 const DOCUMENT_LIMIT: usize = 64 * 1024;
 const PAGE_BYTES: usize = 384 * 1024;
 
@@ -49,9 +53,7 @@ impl MongoManager {
             descending,
             page,
         } = query;
-        let filter = read_document(&filter, "필터")?;
-        let mut nodes = 0;
-        validate_filter(&Bson::Document(filter.clone()), 0, &mut nodes)?;
+        let filter = read_filter(&filter)?;
         let projection = read_document(&projection, "표시 필드")?;
         if projection.len() > 64
             || projection.iter().any(|(name, value)| {
@@ -97,6 +99,29 @@ impl MongoManager {
         .await
         .map_err(|_| "MongoDB 문서 조회 시간이 초과되었습니다.")?
     }
+
+    pub async fn count_documents(
+        &self,
+        id: &str,
+        database: &str,
+        collection: &str,
+        filter: &str,
+    ) -> Result<String> {
+        validate_namespace(database, collection)?;
+        let filter = read_filter(filter)?;
+        let client = self.client(id)?;
+        let collection = client.database(database).collection::<Document>(collection);
+        let count = timeout(READ_TIMEOUT, async {
+            collection
+                .count_documents(filter)
+                .max_time(SERVER_TIME)
+                .await
+        })
+        .await
+        .map_err(|_| "MongoDB 문서 건수 조회 시간이 초과되었습니다.")?
+        .map_err(message)?;
+        Ok(count.to_string())
+    }
 }
 
 pub(super) async fn read_document_page(
@@ -134,7 +159,7 @@ pub(super) async fn read_document_page(
 }
 
 fn read_document(text: &str, label: &str) -> Result<Document> {
-    if text.len() > 32 * 1024 {
+    if text.len() > QUERY_JSON_LIMIT {
         return Err(format!("MongoDB {label} JSON은 32 KiB 이하여야 합니다."));
     }
     if text.trim().is_empty() {
@@ -143,7 +168,13 @@ fn read_document(text: &str, label: &str) -> Result<Document> {
     serde_json::from_str(text).map_err(|_| format!("MongoDB {label}에 JSON 객체를 입력하세요."))
 }
 
-fn valid_field(name: &str) -> bool {
+pub(super) fn read_filter(text: &str) -> Result<Document> {
+    let filter = read_document(text, "필터")?;
+    validate_filter(&Bson::Document(filter.clone()), 0, &mut 0)?;
+    Ok(filter)
+}
+
+pub(super) fn valid_field(name: &str) -> bool {
     name.len() <= 256
         && !name.contains('\0')
         && name

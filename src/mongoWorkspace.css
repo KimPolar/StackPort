@@ -19,6 +19,21 @@
 .mongo-query .mongo-actions { padding-inline: 0; }
 .mongo-sort { display: flex; flex-wrap: wrap; gap: 12px; }
 .mongo-sort > label:first-child { min-width: 100px; flex: 1; }
+.mongo-count { font-size: 12px; font-variant-numeric: tabular-nums; }
+.dialog.mongo-find-dialog { width: min(760px, calc(100vw - 32px)); }
+.mongo-find-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.mongo-find-group { border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 9px; min-width: 0; }
+.mongo-find-group legend { padding-inline: 5px; font-size: 13px; }
+.mongo-find-children { list-style: none; margin: 0 0 8px; padding: 0; }
+.mongo-find-children > li { padding-block: 8px; border-top: 1px solid var(--divider); }
+.mongo-find-children > li > button { margin-top: 6px; }
+.mongo-find-fields .field { margin: 0; min-width: 0; }
+.mongo-find-mode { max-width: 230px; padding-bottom: 8px; }
+.mongo-find-condition, .mongo-find-operand, .mongo-find-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.mongo-find-condition, .mongo-find-operand { margin-bottom: 7px; }
+.mongo-find-condition > .field, .mongo-find-operand > .field { flex: 1 1 140px; }
+.mongo-find-operand textarea { resize: vertical; }
+.mongo-find-combine { display: flex; align-items: center; gap: 6px; margin-top: 9px; font-size: 13px; }
 .mongo-document-list details { border-bottom: 1px solid var(--divider); }
 .mongo-document-list summary { padding: 9px 12px; overflow-wrap: anywhere; }
 .mongo-document-list summary code { margin: 0 8px; font-size: 11px; }

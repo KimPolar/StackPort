@@ -1,6 +1,7 @@
 mod document_edit;
 mod document_snapshot;
 mod document_structure;
+mod find_builder;
 mod pipeline;
 mod pipeline_store;
 mod profiles;
@@ -9,6 +10,7 @@ mod schema;
 
 pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
+pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};

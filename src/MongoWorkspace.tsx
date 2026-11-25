@@ -6,6 +6,7 @@ import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
+import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
@@ -147,14 +148,24 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline">("documents");
   const [draft, setDraft] = useState(defaultQuery);
   const [query, setQuery] = useState(defaultQuery);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findState, setFindState] = useState<MongoFindState>();
+  const [countRequest, setCountRequest] = useState<{ filter: string } | null>(null);
   const [documentEdit, setDocumentEdit] = useState<MongoDocumentChange | null>(null);
   const [documentNotice, setDocumentNotice] = useState("");
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
+  const countArgs = useMemo(() => view === "documents" && countRequest?.filter === query.filter
+    ? { ...args, filter: query.filter } : null, [args, countRequest, query.filter, view]);
   const documents = useNativeRead<MongoDocumentPage>("mongo_documents", docArgs, revision);
+  const count = useNativeRead<string>("count_mongo_documents", countArgs, revision);
   const indexes = useNativeRead<Page<Index>>("mongo_indexes", view === "indexes" ? args : null, revision);
   const update = (change: Partial<Query>) => setDraft(value => ({ ...value, ...change }));
   const narrowDocument = () => { update({ projection: '{"_id": 1}' }); setQuery({ ...query, projection: '{"_id": 1}', page: 0 }); };
+  function applyQuery(next: Query) {
+    if (next.filter !== query.filter) setCountRequest(null);
+    setQuery({ ...next, page: 0 });
+  }
 
   return <section className="results-card mongo-content" aria-label="MongoDB 컬렉션 상세">
     <div className="panel-heading"><h2>{collection.name}</h2><span>{database}</span>
@@ -178,13 +189,19 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       {indexes.data?.has_next && <p className="form-note mongo-note">앞 50개 인덱스를 표시합니다.</p>}
     </>}
     {view === "documents" && <>
-      {allowEdits && <div className="mongo-actions">
-        <button type="button" className="secondary small" onClick={() => setDocumentEdit({ kind: "insert" })}>문서 삽입</button>
-      </div>}
+      <div className="mongo-actions" role="group" aria-label="문서 작업">
+        {allowEdits && <button type="button" className="secondary small" onClick={() => setDocumentEdit({ kind: "insert" })}>문서 삽입</button>}
+        <button type="button" className="secondary small" onClick={() => setFindOpen(true)}>찾기 빌더</button>
+        <button type="button" className="secondary small" disabled={documents.loading || count.loading}
+          onClick={() => setCountRequest({ filter: query.filter })}>일치 건수 조회</button>
+        {count.loading && <span className="mongo-count" role="status">건수 조회 중…</span>}
+        {count.data !== null && <span className="mongo-count" role="status">일치 문서 {displayNumber.format(BigInt(count.data))}개</span>}
+      </div>
+      {count.error && <p className="error-banner" role="alert">{count.error}</p>}
       {documentNotice && <p className="form-note mongo-note" role="status">{documentNotice}</p>}
       <details className="mongo-query">
         <summary>필터 및 정렬</summary>
-        <form onSubmit={event => { event.preventDefault(); setQuery({ ...draft, page: 0 }); }}>
+        <form onSubmit={event => { event.preventDefault(); applyQuery(draft); }}>
           <label className="field">필터 JSON<textarea className="edit-value" placeholder='{"active": true}'
             value={draft.filter} onChange={event => update({ filter: event.target.value })} maxLength={32768} /></label>
           <label className="field">표시 필드 JSON<textarea className="edit-value" placeholder='{"name": 1}'
@@ -197,7 +214,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
           </div>
           <div className="mongo-actions">
             <button type="submit" className="primary small" disabled={documents.loading}>조회 적용</button>
-            <button type="button" className="secondary small" onClick={() => { setDraft(defaultQuery); setQuery(defaultQuery); }}>초기화</button>
+            <button type="button" className="secondary small" onClick={() => { setDraft(defaultQuery); setFindState(undefined); applyQuery(defaultQuery); }}>초기화</button>
           </div>
         </form>
       </details>
@@ -215,6 +232,10 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       <Pager label="MongoDB 문서 페이지" page={query.page} next={documents.data?.has_next === true} loading={documents.loading}
         change={page => setQuery(value => ({ ...value, page }))} />
     </>}
+    {findOpen && <MongoFindBuilder filter={draft.filter} saved={findState} onClose={() => setFindOpen(false)} onApply={built => {
+      const next = { ...draft, filter: built.compiled };
+      setFindState(built); setDraft(next); applyQuery(next); setFindOpen(false);
+    }} />}
     {documentEdit && <MongoDocumentEditDialog id={id} database={database} collection={collection.name} change={documentEdit}
       environment={environment} onBusy={onBusy} onClose={() => setDocumentEdit(null)} onApplied={report => {
         setDocumentEdit(null);

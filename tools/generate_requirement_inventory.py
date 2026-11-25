@@ -192,7 +192,7 @@ PARTIAL = {
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
-    "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬, 페이지 단위 문서 조회와 BSON Canonical Extended JSON 표시",
+    "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
     "SP-NS-006": "MongoDB 컬렉션의 인덱스 키·고유 여부·TTL 조회",
@@ -230,6 +230,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         if subset:
             if requirement_id in {"SP-NS-001", "SP-NS-003", "SP-NS-006"}:
                 evidence = "crates/stackport-core/src/mongo.rs; crates/stackport-core/src/mongo/query.rs; src/MongoWorkspace.tsx; tests/mongo-smoke.cjs"
+                if requirement_id == "SP-NS-003":
+                    evidence += "; crates/stackport-core/src/mongo/find_builder.rs; src/MongoFindBuilder.tsx"
             elif requirement_id == "SP-NS-002":
                 evidence = "crates/stackport-core/src/mongo/document_edit.rs; crates/stackport-core/src/mongo/document_snapshot.rs; crates/stackport-core/src/mongo/document_structure.rs; src/MongoDocumentEditDialog.tsx; src/MongoDocumentStructure.tsx; tests/mongo-smoke.cjs"
             elif requirement_id == "SP-NS-004":

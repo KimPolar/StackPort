@@ -117,6 +117,14 @@ async function verify(page, port, ca) {
     assert.equal(last.items[2].json, null);
     const filtered = await list({ filter: '{"rank":{"$gte":20}}', projection: '{"rank":1,"_id":0}', sort_field: 'rank', descending: true });
     assert.deepEqual(filtered.items.map(item => JSON.parse(item.json).rank.$numberInt), ['22', '21', '20']);
+    const count = (filter, target = database, collection = 'records') =>
+      command('count_mongo_documents', { id, database: target, collection, filter });
+    assert.equal(await count(''), '23');
+    assert.equal(await count('{"rank":{"$gte":20}}'), '3');
+    assert.equal(await count('{"rank":{"$gte":21}}', database, 'recent_records'), '2');
+    assert.equal(await count('{"rank":{"$gt":22}}'), '0');
+    await assert.rejects(count('{"$where":"return true"}'), /필터/);
+    await assert.rejects(count('', 'private', 'data'), /권한/);
     await assert.rejects(list({ filter: '{"$where":"return true"}' }), /필터/);
     await assert.rejects(list({}, 'private'), /권한/);
     const indexes = await command('mongo_indexes', { id, database, collection: 'records' });
@@ -192,6 +200,7 @@ async function verify(page, port, ca) {
   await detail.getByLabel('정렬 방향').selectOption('desc');
   await detail.getByRole('button', { name: '조회 적용' }).click();
   await detail.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '"22"' }).waitFor();
+  await verifyFindBuilder(page, detail);
   await detail.getByRole('button', { name: '인덱스', exact: true }).click();
   await detail.getByRole('rowheader', { name: 'expiry', exact: true }).waitFor();
   await verifyPipeline(page, detail);
@@ -232,6 +241,53 @@ async function verify(page, port, ca) {
   assert.ok(edits.some(event => event.operation === 'mongo.document.delete' && event.outcome === 'failed'));
   assert.doesNotMatch(JSON.stringify(edits), /9223372036854775807|write-fixture|편집한 문서/u);
   assert.deepEqual(errors, []);
+}
+
+async function verifyFindBuilder(page, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  const count = button(detail, '일치 건수 조회');
+  const countText = value => detail.getByText(`일치 문서 ${value}개`, { exact: true });
+  await detail.getByLabel('필터 JSON', { exact: true }).fill('{"rank":{"$lt":20}}');
+  await count.click();
+  await countText(3).waitFor();
+  await detail.getByLabel('필터 JSON', { exact: true }).fill('{"rank":{"$gte":20}}');
+
+  await button(detail, '찾기 빌더').click();
+  const builder = page.getByRole('dialog', { name: 'MongoDB 찾기 빌더', exact: true });
+  const condition = builder.getByRole('group', { name: '검색 조건', exact: true });
+  const combine = builder.getByRole('checkbox', { name: '기존 필터도 함께 적용', exact: true });
+  assert.equal(await combine.isChecked(), true);
+  await condition.getByLabel('일치 방식', { exact: true }).selectOption('any');
+  await condition.getByLabel('필드', { exact: true }).fill('title');
+  await condition.getByLabel('값', { exact: true }).fill('문서 22');
+  await button(condition, '하위 그룹 추가').click();
+  const group = builder.getByRole('group', { name: '하위 그룹', exact: true });
+  await group.getByLabel('필드', { exact: true }).fill('rank');
+  await group.getByLabel('연산자', { exact: true }).selectOption('in');
+  await group.getByLabel('목록 (Extended JSON)', { exact: true }).fill('[21]');
+  await button(group, '조건 추가').click();
+  await group.getByLabel('필드', { exact: true }).nth(1).fill('exact');
+  await group.getByLabel('값 형식', { exact: true }).selectOption('json');
+  await group.getByLabel('값', { exact: true }).fill('{"$numberLong":"9223372036854775807"}');
+  await button(builder, '조회 적용').click();
+  await builder.waitFor({ state: 'detached' });
+  const compiled = JSON.parse(await detail.getByLabel('필터 JSON', { exact: true }).inputValue());
+  assert.equal(compiled.$and[1].$or[1].$and[1].exact.$eq.$numberLong, '9223372036854775807');
+  assert.equal(await countText(3).count(), 0);
+  await count.click();
+  await countText(2).waitFor();
+  const documents = detail.getByRole('list', { name: 'MongoDB 문서', exact: true });
+  assert.equal(await documents.getByRole('listitem').count(), 2);
+  const shown = await documents.getByLabel('Canonical Extended JSON', { exact: true }).first().textContent();
+  assert.deepEqual(JSON.parse(shown), { rank: { $numberInt: '22' } });
+
+  await button(detail, '찾기 빌더').click();
+  assert.equal(await group.getByLabel('목록 (Extended JSON)', { exact: true }).inputValue(), '[21]');
+  await group.getByLabel('목록 (Extended JSON)', { exact: true }).fill('21');
+  await button(builder, '조회 적용').click();
+  await builder.getByRole('alert').filter({ hasText: 'Extended JSON 배열' }).waitFor();
+  await button(builder, '취소').click();
+  await countText(2).waitFor();
 }
 
 async function verifyDocumentCommands(command, open, reader, writer, port, ca) {

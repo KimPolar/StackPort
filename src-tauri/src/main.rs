@@ -959,6 +959,15 @@ async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: Str
     -> Result<stackport_core::MongoDocumentPage, String> { mongo.documents(&id, &database, &collection, query).await }
 
 #[tauri::command]
+async fn count_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, filter: String)
+    -> Result<String, String> { mongo.count_documents(&id, &database, &collection, &filter).await }
+
+#[tauri::command]
+async fn build_mongo_find_filter(node: stackport_core::MongoFindNode, base: String) -> Result<String, String> {
+    worker(move || stackport_core::build_mongo_find_filter(node, &base)).await
+}
+
+#[tauri::command]
 async fn begin_mongo_document_edit(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, change: stackport_core::MongoDocumentChange)
     -> Result<stackport_core::MongoEditDraft, String> { mongo.begin_document_edit(&id, database, collection, change).await }
 
@@ -2686,6 +2695,8 @@ fn main() {
             mongo_collections,
             mongo_indexes,
             mongo_documents,
+            count_mongo_documents,
+            build_mongo_find_filter,
             begin_mongo_document_edit,
             edit_mongo_document_draft,
             review_mongo_document_edit,
