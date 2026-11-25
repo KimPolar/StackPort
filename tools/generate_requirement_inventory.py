@@ -90,7 +90,7 @@ PARTIAL = {
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
     "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
-    "SP-DB-022": "SQLite·PostgreSQL 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기, MySQL 계열 열 구조와 데이터 미리보기",
+    "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계 표시",
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계",
     "SP-DB-025": "PostgreSQL 현재 DB 작업 세션·권한 범위의 실행 SQL·잠금 대기 조회",
@@ -121,7 +121,7 @@ PARTIAL = {
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
     "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회의 문서·선택·현재 문장 및 MySQL 계열 문서·선택 단일 실행, 방언별 문자열·주석·SQLite 트리거 경계 처리",
-    "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회 결과·시간·오류 위치, MySQL 계열 결과 타입·시간·미리보기 한도",
+    "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회 결과·시간·오류 위치, MySQL 계열 결과 타입·시간·미리보기 한도와 마지막 SQL 내보내기",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL 검증 TLS 경로의 서버 취소·중단 확인·시간 제한, MySQL 계열 실행 연결 중단·시간 한도·서버 상태 미확인 표시",
     "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, 입력 숨기기",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
@@ -142,18 +142,18 @@ PARTIAL = {
     "SP-SQ-025": "SQL 파일 UTF-8과 BOM·LF/CRLF 처리, 지원하지 않는 입력의 오류 표시",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
     "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON, 경로를 선택한 XML 레코드 가져오기",
-    "SP-MG-002": "SQLite·PostgreSQL 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
+    "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB 테이블의 필터·정렬된 전체 결과와 SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기",
     "SP-MG-004": "두 엔진에서 파일·형식·인코딩·구분자·헤더와 XML 레코드 경로 선택, JSON·XML 원본 열과 대상 열 매핑, 검증 미리보기",
     "SP-MG-005": "JSON 숫자 토큰과 중첩 값, XML 중첩 셀, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환",
     "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
     "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, XML DTD·처리 지시문·반복 필드, DB 타입·제약 위반 메시지 표시",
-    "SP-MG-008": "SQLite·PostgreSQL CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
+    "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB CSV·JSON 내보내기 행 스트리밍과 진행 행 수, 중단·시간 제한, 완료 파일만 저장",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
     "SP-MG-018": "SQLite 스키마 적용 후 선택 객체 정의·뷰 열·외래 키 검증, 적용 개수 및 백업 확인",
     "SP-MG-024": "SQLite 선택 객체 또는 전체 스키마의 열·키·관계·규칙과 생성 SQL 주석을 Markdown·HTML로 내보내기",
     "SP-MG-026": "SQLite·PostgreSQL 파일 가져오기에서 대상과 환경, 추가 예정 건수와 값 미리보기, 운영 확인 및 실패 시 전체 롤백",
-    "SP-MG-028": "SQLite CSV·JSON 내보내기의 행 수·파일 크기·보호 필드 보고, SQLite·PostgreSQL 파일 가져오기의 예상·저장 행 수와 대상 작업 기록",
+    "SP-MG-028": "SQLite·MySQL·MariaDB CSV·JSON 내보내기의 행 수·파일 크기·보호 필드 보고, SQLite·PostgreSQL 파일 가져오기의 예상·저장 행 수와 대상 작업 기록",
     "SP-BK-001": "SQLite 전체 DB, PostgreSQL 전체 DB·스키마·일반 테이블의 구조와 데이터·구조만·데이터만 선택",
     "SP-BK-002": "SQLite 온라인 백업 API와 PostgreSQL pg_dump",
     "SP-BK-003": "SQLite 바이너리 파일과 PostgreSQL pg_dump 압축 아카이브",
@@ -443,6 +443,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/export.rs; src/PostgresResultExport.tsx"
                 if requirement_id != "SP-DB-022":
                     evidence += "; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-DB-022", "SP-SQ-008", "SP-MG-002", "SP-MG-008", "SP-MG-028", "SP-SEC-011"}:
+                evidence += "; crates/stackport-core/src/mysql/export.rs; src/MysqlResultExport.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-MG-001", "SP-MG-004", "SP-MG-005", "SP-MG-006", "SP-MG-007", "SP-MG-026", "SP-MG-028"}:
                 evidence += "; src/GridPasteDialog.tsx; src/structuredFilePreview.ts; crates/stackport-core/src/edit/row.rs; crates/stackport-core/src/postgres/edit/row/paste.rs; crates/stackport-core/tests/edit.rs; tests/structured-preview.test.mjs"
                 if requirement_id not in {"SP-MG-005", "SP-MG-028"}:

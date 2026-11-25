@@ -90,21 +90,30 @@ impl ExportFile {
         Ok(output)
     }
 
-    pub(crate) fn create_postgres(
+    pub(crate) fn create_typed(
         destination: &str,
         format: ExportFormat,
-        columns: &[PostgresExportColumn],
+        format_name: &str,
+        columns: &[TypedExportColumn],
     ) -> Result<Self> {
         let mut output = Self::open(destination, format)?;
-        output.write_header(
-            "stackport.postgres-results",
-            columns,
-            columns.iter().map(|column| column.name.as_str()),
-        )?;
+        output.typed_header(format_name, columns)?;
         Ok(output)
     }
 
-    fn open(destination: &str, format: ExportFormat) -> Result<Self> {
+    pub(crate) fn typed_header(
+        &mut self,
+        format_name: &str,
+        columns: &[TypedExportColumn],
+    ) -> Result<()> {
+        self.write_header(
+            format_name,
+            columns,
+            columns.iter().map(|column| column.name.as_str()),
+        )
+    }
+
+    pub(crate) fn open(destination: &str, format: ExportFormat) -> Result<Self> {
         let label = format.label();
         let target = Path::new(destination.trim());
         let name = target
@@ -225,10 +234,10 @@ impl ExportFile {
         self.file.write_all(b",\"rows\":[").map_err(io)
     }
 
-    pub(crate) fn write_postgres_row(
+    pub(crate) fn write_typed_row<'a>(
         &mut self,
-        row: &[Option<&str>],
-        columns: &[PostgresExportColumn],
+        row: impl IntoIterator<Item = TypedExportValue<'a>>,
+        columns: &[TypedExportColumn],
         previous_rows: u64,
     ) -> Result<()> {
         let format = self.format;
@@ -238,15 +247,28 @@ impl ExportFile {
                 if previous_rows > 0 {
                     self.file.write_all(b",").map_err(io)?;
                 }
-                self.file.write_all(b"\n").map_err(io)?;
-                serde_json::to_writer(&mut self.file, row).map_err(|error| format.io(error))
-            }
-            ExportFormat::Csv { .. } => {
-                for (index, (value, column)) in row.iter().zip(columns).enumerate() {
+                self.file.write_all(b"\n[").map_err(io)?;
+                for (index, value) in row.into_iter().enumerate() {
                     self.delimiter(index).map_err(io)?;
                     match value {
-                        None => self.file.write_all(b"\\N"),
-                        Some(value)
+                        TypedExportValue::Null => self.file.write_all(b"null").map_err(io)?,
+                        TypedExportValue::Text(value) => {
+                            serde_json::to_writer(&mut self.file, value)
+                                .map_err(|error| format.io(error))?
+                        }
+                        TypedExportValue::Binary(value) => {
+                            self.write_blob(value, b"\"", b"\"").map_err(io)?
+                        }
+                    }
+                }
+                self.file.write_all(b"]").map_err(io)
+            }
+            ExportFormat::Csv { .. } => {
+                for (index, (value, column)) in row.into_iter().zip(columns).enumerate() {
+                    self.delimiter(index).map_err(io)?;
+                    match value {
+                        TypedExportValue::Null => self.file.write_all(b"\\N"),
+                        TypedExportValue::Text(value)
                             if column.numeric
                                 && value.parse::<f64>().is_ok()
                                 && value.bytes().all(|byte| {
@@ -255,7 +277,8 @@ impl ExportFile {
                         {
                             self.file.write_all(value.as_bytes())
                         }
-                        Some(value) => self.write_csv_text(value),
+                        TypedExportValue::Text(value) => self.write_csv_text(value),
+                        TypedExportValue::Binary(value) => self.write_blob(value, b"\"X'", b"'\""),
                     }
                     .map_err(io)?;
                 }
@@ -366,11 +389,19 @@ pub(crate) struct ReadyExport {
 }
 
 #[derive(Serialize)]
-pub(crate) struct PostgresExportColumn {
+pub(crate) struct TypedExportColumn {
     pub(crate) name: String,
     pub(crate) data_type: String,
     #[serde(skip)]
     pub(crate) numeric: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) encoding: Option<&'static str>,
+}
+
+pub(crate) enum TypedExportValue<'a> {
+    Null,
+    Text(&'a str),
+    Binary(&'a [u8]),
 }
 
 impl ReadyExport {

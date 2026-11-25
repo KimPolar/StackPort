@@ -3,9 +3,12 @@ use super::{
     Session, Value, CELL_BYTES, COLUMN_LIMIT, CONNECT, ROW_LIMIT,
 };
 use crate::Result;
-use mysql_async::{consts::ColumnType, from_row_opt, Column, Params, Row};
+use mysql_async::{consts::ColumnType, from_row_opt, Column, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
+use std::{
+    sync::{atomic::AtomicU64, Arc},
+    time::{Duration, Instant},
+};
 use tokio::{sync::oneshot, time::timeout};
 use uuid::Uuid;
 
@@ -61,13 +64,51 @@ struct SqlColumn {
 }
 
 pub(super) struct RunningSql {
-    id: Uuid,
+    pub(super) id: Uuid,
     stop: Option<oneshot::Sender<()>>,
+    pub(super) exported_rows: Option<Arc<AtomicU64>>,
 }
 
-struct Request<'a> {
+pub(super) struct Request<'a> {
     session: &'a Session,
     id: Uuid,
+}
+
+impl<'a> Request<'a> {
+    pub(super) fn claim(
+        session: &'a Session,
+        id: &str,
+        exported_rows: Option<Arc<AtomicU64>>,
+    ) -> Result<(Self, oneshot::Receiver<()>)> {
+        let id = id.parse().map_err(|_| "MySQL 실행 ID를 확인하세요.")?;
+        let (stop, stopped) = oneshot::channel();
+        let mut slot = session
+            .running_sql
+            .lock()
+            .map_err(|_| "MySQL 실행 상태를 읽을 수 없습니다.")?;
+        if slot.is_some() {
+            return Err("실행 중인 MySQL 요청이 있습니다.".into());
+        }
+        *slot = Some(RunningSql {
+            id,
+            stop: Some(stop),
+            exported_rows,
+        });
+        Ok((Self { session, id }, stopped))
+    }
+
+    pub(super) fn begin_publication(&self) -> Result<bool> {
+        let mut slot = self
+            .session
+            .running_sql
+            .lock()
+            .map_err(|_| "MySQL 실행 상태를 읽을 수 없습니다.")?;
+        Ok(slot
+            .as_mut()
+            .filter(|active| active.id == self.id)
+            .and_then(|active| active.stop.take())
+            .is_some())
+    }
 }
 
 impl Drop for Request<'_> {
@@ -113,43 +154,14 @@ impl MysqlManager {
         parameters: Vec<MysqlSqlParameter>,
     ) -> Result<MysqlSqlResult> {
         let session = self.session(id)?;
-        let count = analyze(&sql, session.sql_mode)?;
-        if let Some(database) = &database {
-            require_identifier(database)?;
-        }
-        if parameters.len() != count {
-            return Err("MySQL 매개변수 개수가 문장과 일치하지 않습니다.".into());
-        }
-        let values = bind(parameters)?;
-        let request_id: Uuid = request_id
-            .parse()
-            .map_err(|_| "MySQL 실행 ID를 확인하세요.")?;
-        let (stop, mut stopped) = oneshot::channel();
-        {
-            let mut slot = session
-                .running_sql
-                .lock()
-                .map_err(|_| "MySQL 실행 상태를 읽을 수 없습니다.")?;
-            if slot.is_some() {
-                return Err("실행 중인 MySQL 요청이 있습니다.".into());
-            }
-            *slot = Some(RunningSql {
-                id: request_id,
-                stop: Some(stop),
-            });
-        }
-        let _request = Request {
-            session: &session,
-            id: request_id,
-        };
+        let values = validate_input(&session, database.as_deref(), &sql, parameters)?;
+        let (_request, mut stopped) = Request::claim(&session, &request_id, None)?;
         self.session(id)?;
         let options = OptsBuilder::from_opts(session.options.clone()).db_name(database);
         let mut connection = tokio::select! {
             biased;
             _ = &mut stopped => return Err(STOPPED.into()),
-            opened = timeout(CONNECT, Conn::new(options)) => {
-                opened.map_err(|_| "SQL 실행용 MySQL 연결 시간이 초과되었습니다.")?.map_err(sql_error)?
-            }
+            opened = open_request_connection(options) => opened?,
         };
         let outcome = tokio::select! {
             biased;
@@ -161,6 +173,29 @@ impl MysqlManager {
         let _ = timeout(Duration::from_millis(500), connection.disconnect()).await;
         outcome
     }
+}
+
+pub(super) async fn open_request_connection(options: OptsBuilder) -> Result<Conn> {
+    timeout(CONNECT, Conn::new(options))
+        .await
+        .map_err(|_| "SQL 실행용 MySQL 연결 시간이 초과되었습니다.")?
+        .map_err(sql_error)
+}
+
+pub(super) fn validate_input(
+    session: &Session,
+    database: Option<&str>,
+    sql: &str,
+    parameters: Vec<MysqlSqlParameter>,
+) -> Result<Vec<Value>> {
+    let count = analyze(sql, session.sql_mode)?;
+    if let Some(database) = database {
+        require_identifier(database)?;
+    }
+    if parameters.len() != count {
+        return Err("MySQL 매개변수 개수가 문장과 일치하지 않습니다.".into());
+    }
+    bind(parameters)
 }
 
 fn bind(parameters: Vec<MysqlSqlParameter>) -> Result<Vec<Value>> {
@@ -196,14 +231,18 @@ fn bind(parameters: Vec<MysqlSqlParameter>) -> Result<Vec<Value>> {
         .collect()
 }
 
-async fn execute(connection: &mut Conn, sql: &str, values: Vec<Value>) -> Result<MysqlSqlResult> {
+pub(super) async fn prepare_read_sql(
+    connection: &mut Conn,
+    sql: &str,
+    count: usize,
+) -> Result<Statement> {
     let row = connection
         .query_first::<Row, _>("SELECT @@SESSION.sql_mode")
         .await
         .map_err(sql_error)?
         .ok_or("MySQL SQL 모드를 읽을 수 없습니다.")?;
     let (mode,): (String,) = from_row_opt(row).map_err(|_| "MySQL SQL 모드를 읽을 수 없습니다.")?;
-    if analyze(sql, SqlMode::parse(&mode))? != values.len() {
+    if analyze(sql, SqlMode::parse(&mode))? != count {
         return Err("MySQL SQL 모드가 달라졌습니다. 문장과 매개변수를 다시 확인하세요.".into());
     }
     connection
@@ -211,9 +250,14 @@ async fn execute(connection: &mut Conn, sql: &str, values: Vec<Value>) -> Result
         .await
         .map_err(sql_error)?;
     let statement = connection.prep(sql).await.map_err(sql_error)?;
-    if usize::from(statement.num_params()) != values.len() {
+    if usize::from(statement.num_params()) != count {
         return Err("MySQL 서버가 확인한 매개변수 개수와 일치하지 않습니다.".into());
     }
+    Ok(statement)
+}
+
+async fn execute(connection: &mut Conn, sql: &str, values: Vec<Value>) -> Result<MysqlSqlResult> {
+    let statement = prepare_read_sql(connection, sql, values.len()).await?;
     let started = Instant::now();
     let mut result = connection
         .exec_iter(statement, Params::Positional(values))
@@ -227,9 +271,7 @@ async fn execute(connection: &mut Conn, sql: &str, values: Vec<Value>) -> Result
         .take(COLUMN_LIMIT)
         .map(|column| SqlColumn {
             name: column.name_str().chars().take(512).collect(),
-            data_type: format!("{:?}", column.column_type())
-                .trim_start_matches("MYSQL_TYPE_")
-                .into(),
+            data_type: type_name(column),
         })
         .collect();
     let mut rows = Vec::new();
@@ -263,28 +305,58 @@ async fn execute(connection: &mut Conn, sql: &str, values: Vec<Value>) -> Result
 }
 
 fn sql_cell(value: Value, column: &Column) -> Option<MysqlCell> {
-    let text = match value {
-        Value::NULL => return None,
-        Value::Bytes(bytes) => {
-            let binary = column.character_set() == 63
-                && matches!(
-                    column.column_type(),
-                    ColumnType::MYSQL_TYPE_STRING
-                        | ColumnType::MYSQL_TYPE_VAR_STRING
-                        | ColumnType::MYSQL_TYPE_VARCHAR
-                        | ColumnType::MYSQL_TYPE_BLOB
-                        | ColumnType::MYSQL_TYPE_TINY_BLOB
-                        | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
-                        | ColumnType::MYSQL_TYPE_LONG_BLOB
-                        | ColumnType::MYSQL_TYPE_BIT
-                        | ColumnType::MYSQL_TYPE_GEOMETRY
-                );
+    let text = match result_value(value, column) {
+        ResultValue::Null => return None,
+        ResultValue::Bytes(bytes) => {
             return Some(cell(
                 &bytes[..bytes.len().min(CELL_BYTES)],
                 bytes.len() as u64,
-                binary,
+                binary_column(column),
             ));
         }
+        ResultValue::Text(text) => text,
+    };
+    let bytes = text.len() as u64;
+    Some(MysqlCell {
+        text,
+        bytes,
+        encoding: "utf8",
+        truncated: false,
+    })
+}
+
+pub(super) enum ResultValue {
+    Null,
+    Bytes(Vec<u8>),
+    Text(String),
+}
+
+pub(super) fn type_name(column: &Column) -> String {
+    format!("{:?}", column.column_type())
+        .trim_start_matches("MYSQL_TYPE_")
+        .into()
+}
+
+pub(super) fn binary_column(column: &Column) -> bool {
+    column.character_set() == 63
+        && matches!(
+            column.column_type(),
+            ColumnType::MYSQL_TYPE_STRING
+                | ColumnType::MYSQL_TYPE_VAR_STRING
+                | ColumnType::MYSQL_TYPE_VARCHAR
+                | ColumnType::MYSQL_TYPE_BLOB
+                | ColumnType::MYSQL_TYPE_TINY_BLOB
+                | ColumnType::MYSQL_TYPE_MEDIUM_BLOB
+                | ColumnType::MYSQL_TYPE_LONG_BLOB
+                | ColumnType::MYSQL_TYPE_BIT
+                | ColumnType::MYSQL_TYPE_GEOMETRY
+        )
+}
+
+pub(super) fn result_value(value: Value, column: &Column) -> ResultValue {
+    let text = match value {
+        Value::NULL => return ResultValue::Null,
+        Value::Bytes(bytes) => return ResultValue::Bytes(bytes),
         Value::Int(value) => value.to_string(),
         Value::UInt(value) => value.to_string(),
         Value::Float(value) => value.to_string(),
@@ -306,13 +378,7 @@ fn sql_cell(value: Value, column: &Column) -> Option<MysqlCell> {
             format!("{sign}{hours:02}:{minute:02}:{second:02}{}", micros(micro))
         }
     };
-    let bytes = text.len() as u64;
-    Some(MysqlCell {
-        text,
-        bytes,
-        encoding: "utf8",
-        truncated: false,
-    })
+    ResultValue::Text(text)
 }
 
 fn micros(value: u32) -> String {
@@ -323,7 +389,7 @@ fn micros(value: u32) -> String {
     }
 }
 
-fn sql_error(error: Error) -> String {
+pub(super) fn sql_error(error: Error) -> String {
     if let Error::Server(error) = &error {
         let message = match error.code {
             1064 => "SQL 구문을 확인하세요.",

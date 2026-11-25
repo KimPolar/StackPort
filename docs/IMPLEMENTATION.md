@@ -22,6 +22,10 @@ MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블�
 
 SQL 결과는 타입과 값, 조회 시간, 행·열 표시 한도를 보여줍니다. 실행에는 탐색과 별도의 연결을 사용합니다. 중단하거나 20초가 지나면 실행용 연결을 닫고, 서버에서 중단됐는지는 미확인으로 표시합니다. 결과는 최대 50행과 128열을 표시하며, 화면을 전환해도 같은 연결 안에서는 SQL 초안과 마지막 결과를 다시 볼 수 있습니다.
 
+테이블·뷰 또는 SQL 실행 결과의 **결과 내보내기**는 전체를 UTF-8 CSV·JSON으로 저장합니다. 그리드에서는 적용된 필터와 정렬로 모든 열과 행을 다시 조회합니다. SQL 편집기에서는 마지막으로 실행한 문장 또는 선택 영역을 조회하고, 매개변수는 다시 입력합니다. JSON은 `stackport.mysql-results` 형식 버전 1로 열과 값을 순서대로 기록합니다. 수치는 정밀도를 유지하는 문자열로 저장하고, NULL은 JSON `null`, 바이너리는 `encoding: "hex"`로 표시한 열의 대문자 HEX 문자열로 보존합니다. CSV에서 NULL은 인용되지 않은 `\N`, 바이너리는 인용된 `X'…'` 형식을 사용합니다. 열 이름과 스프레드시트 수식 보호는 선택할 수 있습니다.
+
+파일은 별도의 읽기 전용 연결에서 행 단위로 기록하며 진행 행 수를 표시합니다. 한 행의 최대 크기는 32 MiB이며 서버 설정에 따라 더 낮을 수 있습니다. 조회와 임시 파일 쓰기는 5분 이내에 완료해야 합니다. 중단 또는 오류 시 임시 파일을 정리하고, 완료한 파일만 새 경로에 저장합니다. 화면에서 행 수와 파일 크기를 확인할 수 있습니다. 성공 작업 기록에는 연결·환경·형식·행 수를 남깁니다. [MySQL 비동기 결과 읽기](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.QueryResult.html)
+
 탐색기의 **Redis 연결 추가**에서 Redis 6.2 이상과 호환되는 단독 서버의 호스트·포트, DB 번호, ACL 사용자와 환경을 프로젝트에 저장합니다. TLS는 시스템 신뢰 저장소와 선택한 PEM CA를 사용해 TLS 1.2 이상에서 호스트 이름과 인증서를 검증합니다. 일반 TCP도 연결 설정에서 명시적으로 선택할 수 있습니다. 연결마다 암호를 입력하며 `PROD` 연결에는 운영 환경 확인이 필요합니다. `INFO server`와 `INFO cluster`로 접속한 서버의 버전과 단독 구성을 확인합니다. DB 0 이외의 번호는 `SELECT` 권한이 필요합니다. 메타데이터 v14에서 Redis 프로필을 보관하며 프로젝트 복제 시 연결 설정을 복사합니다. [Redis 프로토콜](https://redis.io/docs/latest/develop/reference/protocol-spec/)
 
 **키 탐색**은 `SCAN`으로 서버 패턴과 타입 필터를 실행합니다. `COUNT 100`은 서버에 전달하는 탐색 힌트입니다. 비어 있는 페이지에도 다음 커서가 있을 수 있고, 조회 중 키가 바뀌면 결과에 반영될 수 있습니다. 역할에 해당 권한이 있으면 `DBSIZE`, `PTTL`, `MEMORY USAGE`로 DB 전체 키 수와 선택한 키의 만료 시간 및 메모리를 표시합니다. String은 512바이트 구간, List와 Sorted Set은 순서 범위, Hash와 Set은 커서, Stream은 메시지 ID로 값을 탐색합니다. 바이너리 키와 값은 HEX로 표시합니다. 응답 하나가 4 MiB 또는 8,192개 항목을 초과하면 연결을 닫습니다. Windows 통합 테스트는 실제 Redis 서버와 로컬 TLS 연결로 인증·DB 번호·타입별 읽기 및 단절 감지를 확인합니다. [Redis SCAN](https://redis.io/docs/latest/commands/scan/)
@@ -395,7 +399,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, 테이블·뷰 탐색, 미리보기, 큰 정수·정밀 소수·날짜 범위·NULL 필터, 페이지 순서, 숨겨진 열의 조건, 저장 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회를 확인했습니다.
+MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인했습니다.
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 

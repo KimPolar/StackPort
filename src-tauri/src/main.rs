@@ -953,6 +953,15 @@ async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String,
     -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows, grid).await }
 
 #[tauri::command]
+async fn export_mysql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
+    source: stackport_core::MysqlExportSource, options: stackport_core::MysqlExportOptions)
+    -> Result<stackport_core::MysqlExportOutcome, String> { mysql.export(&id, request_id, source, options).await }
+
+#[tauri::command]
+fn mysql_export_progress(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String)
+    -> Result<Option<u64>, String> { mysql.export_progress(&id, &request_id) }
+
+#[tauri::command]
 fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String) -> Result<usize, String> {
     mysql.sql_parameters(&id, &sql)
 }
@@ -2062,6 +2071,8 @@ fn main() {
             mysql_databases,
             mysql_objects,
             mysql_table,
+            export_mysql,
+            mysql_export_progress,
             mysql_sql_parameters,
             run_mysql_sql,
             cancel_mysql_sql,

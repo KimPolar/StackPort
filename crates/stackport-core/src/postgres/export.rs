@@ -1,6 +1,6 @@
 use super::parameters::{type_label, Value};
 use crate::{
-    result_export::{ExportFile, ExportFormat, PostgresExportColumn, ReadyExport},
+    result_export::{ExportFile, ExportFormat, ReadyExport, TypedExportColumn, TypedExportValue},
     Result,
 };
 use futures_util::TryStreamExt;
@@ -53,14 +53,15 @@ impl PostgresExportOptions {
     }
 }
 
-pub(super) fn columns(statement: &Statement) -> Vec<PostgresExportColumn> {
+pub(super) fn columns(statement: &Statement) -> Vec<TypedExportColumn> {
     statement
         .columns()
         .iter()
-        .map(|column| PostgresExportColumn {
+        .map(|column| TypedExportColumn {
             name: column.name().into(),
             data_type: type_label(column.type_()),
             numeric: numeric(column.type_()),
+            encoding: None,
         })
         .collect()
 }
@@ -94,13 +95,18 @@ enum Message {
 impl Writer {
     pub(super) async fn open(
         options: &PostgresExportOptions,
-        columns: Vec<PostgresExportColumn>,
+        columns: Vec<TypedExportColumn>,
         progress: Arc<AtomicU64>,
     ) -> Result<Self> {
         let destination = options.destination.clone();
         let format = options.format();
         let (file, columns) = spawn_blocking(move || {
-            let file = ExportFile::create_postgres(&destination, format, &columns)?;
+            let file = ExportFile::create_typed(
+                &destination,
+                format,
+                "stackport.postgres-results",
+                &columns,
+            )?;
             Ok::<_, String>((file, columns))
         })
         .await
@@ -128,7 +134,13 @@ impl Writer {
                 if bytes > MAX_ROW_BYTES {
                     return Err("PostgreSQL 결과에 32 MiB를 초과하는 행이 있습니다.".into());
                 }
-                file.write_postgres_row(&values, &columns, rows)?;
+                file.write_typed_row(
+                    values
+                        .into_iter()
+                        .map(|value| value.map_or(TypedExportValue::Null, TypedExportValue::Text)),
+                    &columns,
+                    rows,
+                )?;
                 rows += 1;
                 progress.store(rows, Ordering::Relaxed);
             }

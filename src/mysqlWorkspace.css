@@ -16,6 +16,8 @@
 .mysql-pager, .mysql-views { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; }
 .mysql-pager span { color: var(--text-muted); font-size: 12px; }
 .mysql-table-note { margin: 0; padding: 4px 10px; }
+.mysql-export-report { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.mysql-export-report :is(code, span) { display: block; margin-top: 4px; overflow-wrap: anywhere; }
 .mysql-detail .table-query-sql pre { max-height: 15rem; }
 .mysql-pager, .mysql-table-note, .mysql-table { font-variant-numeric: tabular-nums; }
 .mysql-table { max-height: 55dvh; overflow: auto; }

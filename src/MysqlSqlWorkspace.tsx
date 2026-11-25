@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Play, Square } from "lucide-react";
+import { Download, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
+import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
 type Parameter = { kind: ParameterKind; value: string; masked: boolean };
@@ -13,14 +14,18 @@ type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValu
 const number = new Intl.NumberFormat("ko-KR");
 const byteLimit = 128 * 1024;
 
-export function MysqlSqlWorkspace({ id, database }: { id: string; database: string | null }) {
+export function MysqlSqlWorkspace({ id, database, onExport }: {
+  id: string;
+  database: string | null;
+  onExport: (source: MysqlExportTarget) => void;
+}) {
   const [text, setText] = useState("");
   const [hasSelection, setHasSelection] = useState(false);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
   const [cancelPending, setCancelPending] = useState(false);
-  const [draft, setDraft] = useState<{ statement: Statement; parameters: Parameter[] } | null>(null);
-  const [result, setResult] = useState<{ data: Result; statement: Statement } | null>(null);
+  const [draft, setDraft] = useState<{ statement: Statement; parameters: Parameter[]; action: "execute" | "export" } | null>(null);
+  const [result, setResult] = useState<{ data: Result; statement: Statement; parameterFields: Pick<Parameter, "kind" | "masked">[] } | null>(null);
   const [error, setError] = useState("");
   const mounted = useRef(false);
   const pending = useRef(false);
@@ -45,7 +50,7 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
     try {
       const count = await invoke<number>("mysql_sql_parameters", { id, sql });
       if (!mounted.current) return;
-      if (count) setDraft({ statement, parameters: Array.from({ length: count }, () => ({ kind: "text", value: "", masked: false })) });
+      if (count) setDraft({ statement, action: "execute", parameters: Array.from({ length: count }, () => ({ kind: "text", value: "", masked: false })) });
       else await execute(statement, []);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
@@ -54,10 +59,12 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
   async function execute(statement: Statement, values: Parameter[]) {
     const requestId = crypto.randomUUID();
     active.current = requestId; setRunning(requestId); setResult(null);
-    const parameters = values.map(({ kind, value }) => kind === "null" ? { kind } : { kind, value });
+    const parameters = bindings(values);
     try {
       const data = await invoke<Result>("run_mysql_sql", { id, requestId, database: statement.database, sql: statement.sql, parameters });
-      if (mounted.current) setResult({ data, statement });
+      if (mounted.current) setResult({
+        data, statement, parameterFields: values.map(({ kind, masked }) => ({ kind, masked })),
+      });
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally {
       active.current = null;
@@ -68,9 +75,18 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!draft || pending.current) return;
+    if (draft.action === "export") {
+      exportResult(draft.statement, bindings(draft.parameters));
+      setDraft(null);
+      return;
+    }
     pending.current = true; setBusy(true); setError(""); setDraft(null);
     try { await execute(draft.statement, draft.parameters); }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
+  }
+
+  function exportResult(statement: Statement, parameters: MysqlSqlBinding[]) {
+    onExport({ kind: "sql", database: statement.database, sql: statement.sql, parameters });
   }
 
   async function cancel(requestId: string) {
@@ -106,7 +122,7 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
         }
       }} footer={<span>Ctrl + Enter · 한 번에 한 문장</span>} />
     {draft && <form className="mysql-sql-parameters" onSubmit={event => void submit(event)}>
-      <h3>SQL 매개변수</h3>
+      <h3>{draft.action === "export" ? "내보내기 매개변수 다시 입력" : "SQL 매개변수"}</h3>
       <p className="form-note">{draft.statement.scope} · {draft.statement.database ?? "기본 DB 선택 안 됨"}</p>
       {draft.parameters.map((parameter, index) => <fieldset className="mysql-parameter" key={index}>
         <legend>매개변수 {index + 1}</legend>
@@ -121,7 +137,7 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
       </fieldset>)}
       <div className="mysql-sql-actions">
         <button type="button" className="secondary small" onClick={() => setDraft(null)}>취소</button>
-        <button type="submit" className="primary small">바인딩하고 실행</button>
+        <button type="submit" className="primary small">{draft.action === "export" ? "파일 설정" : "바인딩하고 실행"}</button>
       </div>
     </form>}
     {error && <p className="error-banner" role="alert">{error}</p>}
@@ -129,7 +145,15 @@ export function MysqlSqlWorkspace({ id, database }: { id: string; database: stri
       <div className="panel-heading"><h3>실행 결과</h3><span>{result.statement.scope} · {result.statement.database ?? "기본 DB 선택 안 됨"}</span></div>
       <p className="form-note mysql-table-note" role="status">{number.format(result.data.rows.length)}행{result.data.more_rows && " 표시 · 추가 행 있음"}
         {result.data.more_columns && " · 앞 128개 열"} · {number.format(result.data.elapsed_ms)} ms</p>
+      <div className="mysql-sql-actions"><button type="button" className="secondary small" disabled={busy || !!draft} onClick={() => {
+        if (!result.parameterFields.length) exportResult(result.statement, []);
+        else setDraft({ statement: result.statement, action: "export", parameters: result.parameterFields.map(field => ({ ...field, value: "" })) });
+      }}><Download size={14} aria-hidden /> 결과 내보내기</button></div>
       <MysqlDataGrid columns={result.data.columns} rows={result.data.rows} label="MySQL SQL 결과 표" />
     </section>}
   </section>;
+}
+
+function bindings(values: Parameter[]): MysqlSqlBinding[] {
+  return values.map(({ kind, value }) => kind === "null" ? { kind } : { kind, value });
 }

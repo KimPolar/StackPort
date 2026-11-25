@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Code2, Database, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
+import { Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
 import type { MysqlProfile } from "./MysqlProfileDialog";
+import { MysqlResultExport, type MysqlExportTarget } from "./MysqlResultExport";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
+import type { ExportReport } from "./ResultExportDialog";
 import { emptyTableQueryClauses, TableQueryControls } from "./TableQueryControls";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
@@ -42,6 +44,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [objectPage, setObjectPage] = useState(0);
   const [rowPage, setRowPage] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
+  const [exportTarget, setExportTarget] = useState<MysqlExportTarget | null>(null);
+  const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [revision, setRevision] = useState(0);
   const active = useRef<string | null>(null);
   const mounted = useRef(false);
@@ -73,7 +77,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
     const lost = [schemas.error, objects.error, structure.error, rows.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
     if (!lost || !active.current) return;
     const id = active.current;
-    active.current = null; setSession(null); setError(lost);
+    active.current = null; setSession(null); setExportTarget(null); setError(lost);
     void invoke("close_mysql", { id }).catch(() => {});
   }, [schemas.error, objects.error, structure.error, rows.error]);
 
@@ -99,7 +103,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       const next = await invoke<Session>("open_mysql", { profileId: profile.id, revision: profile.revision, password, confirmation });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
-      setSession(next); setSqlOpen(false); setLogin(false);
+      setSession(next); setSqlOpen(false); setLogin(false); setExportReport(null);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { connecting.current = false; if (mounted.current) setBusy(false); }
   }
@@ -107,9 +111,14 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   async function disconnect() {
     const id = active.current;
     if (!id) return;
-    active.current = null; setSession(null); chooseDatabase(null); setError("");
+    active.current = null; setSession(null); setExportTarget(null); chooseDatabase(null); setError("");
     try { await invoke("close_mysql", { id }); }
     catch (cause) { if (mounted.current) setError(String(cause)); }
+  }
+
+  function beginExport(target: MysqlExportTarget) {
+    setExportReport(null);
+    setExportTarget(target);
   }
 
   return <section className="mysql-workspace" aria-label="MySQL 작업 공간">
@@ -127,6 +136,14 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
+    {exportReport && <div className="mysql-export-report" role="status">
+      <div>{exportReport.format} 저장 완료 · {exportReport.rows.toLocaleString("ko-KR")}행 · {exportReport.size_bytes.toLocaleString("ko-KR")} B
+        {exportReport.protected_fields > 0 && ` · 수식 보호 ${exportReport.protected_fields.toLocaleString("ko-KR")}개`}
+        <code>{exportReport.path}</code>
+        {exportReport.audit_warning && <span>{exportReport.audit_warning}</span>}
+      </div>
+      <button type="button" className="secondary small" onClick={() => setExportReport(null)}>확인</button>
+    </div>}
     {session && <div className="mysql-layout">
       <div className="mysql-catalog">
         <section className="results-card" aria-label="MySQL 데이터베이스 목록">
@@ -162,6 +179,9 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           <div className="mysql-views" aria-label="객체 보기" role="group">
             <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
             <button type="button" className="secondary small" aria-pressed={view === "rows"} onClick={() => setView("rows")}>데이터 미리보기</button>
+            {view === "rows" && database && <button type="button" className="secondary small" disabled={!rows.data}
+              onClick={() => beginExport({ kind: "table", database, table: object.name, clauses: tableQuery })}>
+              <Download size={14} aria-hidden /> 결과 내보내기</button>}
           </div>
           {view === "columns" && <>
             <ReadNotice loading={structure.loading} error={structure.error} />
@@ -178,9 +198,11 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           </div>
         </>}
       </section>
-      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} /></div>
+      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} onExport={beginExport} /></div>
       </div>
     </div>}
+    {session && exportTarget && <MysqlResultExport id={session.id} profile={settings} target={exportTarget}
+      onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} · {settings.username}</p>

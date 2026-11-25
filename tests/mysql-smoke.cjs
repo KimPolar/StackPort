@@ -167,6 +167,7 @@ async function verify(page, server) {
   assert.equal(capped.more_rows, true);
   await assert.rejects(read('hidden_db', 'hidden_table', true), /권한/);
   await verifyDataGrid(command, id, profile);
+  await verifyExports(command, id, profile);
   await verifySql(command, id, server.port);
   await command('close_mysql', { id });
   await assert.rejects(command('mysql_databases', { id, search: '', page: 0 }), /연결이 닫혔습니다/);
@@ -187,11 +188,82 @@ async function verify(page, server) {
   await grid.getByText('한글', { exact: true }).waitFor();
   await grid.getByText('00ff21', { exact: true }).waitFor();
   await grid.getByText('NULL', { exact: true }).waitFor();
-  await verifySqlEditor(workspace);
+  await verifySqlEditor(page, workspace);
   await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifyExports(command, id, profile) {
+  const run = (source, file, format = 'json', requestId = randomUUID()) => command('export_mysql', {
+    id, requestId, source,
+    options: { destination: path.join(root, file), format, include_header: true, spreadsheet_safe: true },
+  });
+  const output = name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+  const table = (name, clauses = { filters: [], sort: [], conjunction: 'all' }) => ({
+    kind: 'table', database: 'visible_db', table: name, clauses,
+  });
+  const sql = (text, parameters = []) => ({ kind: 'sql', database: 'visible_db', sql: text, parameters });
+  const trackedExport = randomUUID();
+  const result = await run(table('sample_limit', {
+    filters: [{ column: 'number', condition: { kind: 'ge', value: { kind: 'text', value: '5' } } }],
+    sort: [{ column: 'number', direction: 'desc', nulls: 'default' }],
+    conjunction: 'all',
+  }), 'full-filtered.json', 'json', trackedExport);
+  assert.equal(result.status, 'exported');
+  assert.equal(result.report.rows, 60);
+  assert.equal(result.report.audit_warning, null);
+  assert.equal(result.report.size_bytes, fs.statSync(path.join(root, 'full-filtered.json')).size);
+  assert.deepEqual(output('full-filtered.json').rows, Array.from({ length: 60 }, (_, i) => [String(64 - i)]));
+  const event = (await command('list_audit_events', {})).events.find(item => item.correlation_id === trackedExport);
+  assert.deepEqual([event.operation, event.profile_id, event.environment, event.object_name, event.affected_count],
+    ['mysql.export.json', profile.id, 'PROD', null, 60]);
+
+  await run(table('orders`daily'), 'typed-values.json');
+  const typed = output('typed-values.json');
+  assert.equal(typed.format, 'stackport.mysql-results');
+  assert.equal(typed.version, 1);
+  assert.equal(typed.columns[3].encoding, 'hex');
+  assert.deepEqual(typed.rows[0], ['18446744073709551615', '한글', '123456789012345678901234.567890', '00FF21', null, '글'.repeat(190)]);
+
+  await run(table('wide_filter'), 'wide.json');
+  assert.equal(output('wide.json').columns.length, 129);
+  assert.equal(output('wide.json').rows[1][128], '200');
+  await run(sql("SELECT ? AS repeated, '' AS repeated", [{ kind: 'text', value: '내보낼 값' }]), 'duplicates.json');
+  assert.deepEqual(output('duplicates.json').columns.map(column => column.name), ['repeated', 'repeated']);
+  assert.deepEqual(output('duplicates.json').rows, [['내보낼 값', '']]);
+  assert.equal((await run(sql('SELECT 1 AS empty_result WHERE 0'), 'empty.json')).report.rows, 0);
+  assert.deepEqual(output('empty.json').columns.map(column => column.name), ['empty_result']);
+  assert.deepEqual(output('empty.json').rows, []);
+
+  const csv = await run(sql("SELECT ? AS formula, CAST('-1.250' AS DECIMAL(10,3)) AS exact_value, CAST(NULL AS CHAR) AS missing_value, '' AS empty_value, 0x00ff AS raw",
+    [{ kind: 'text', value: '=1+1' }]), 'typed-values.csv', 'csv');
+  assert.equal(csv.report.protected_fields, 1);
+  assert.equal(fs.readFileSync(path.join(root, 'typed-values.csv'), 'utf8'),
+    '"formula","exact_value","missing_value","empty_value","raw"\r\n' + `"'=1+1",-1.250,\\N,"","X'00FF'"\r\n`);
+  await assert.rejects(run(sql('SELECT 1'), 'typed-values.csv', 'csv'), /같은 이름의 파일/);
+  assert.ok(fs.readFileSync(path.join(root, 'typed-values.csv'), 'utf8').includes("-1.250"));
+  await assert.rejects(run(sql('DELETE FROM sample_limit'), 'rejected.json'), /읽기 전용 SQL/);
+  assert.equal(fs.existsSync(path.join(root, 'rejected.json')), false);
+
+  const readProgress = requestId => command('mysql_export_progress', { id, requestId });
+  const requestId = randomUUID();
+  const pending = run(sql("SELECT number, REPEAT('x', 32768), SLEEP(0.15) FROM sample_limit"), 'cancelled.json', 'json', requestId);
+  void pending.catch(() => {});
+  let progress = null;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    progress = await readProgress(requestId);
+    if (progress > 0) break;
+    await delay(100);
+  }
+  assert.ok(progress > 0 && progress < 65, 'export must write at least one row before cancellation');
+  assert.equal(await command('cancel_mysql_sql', { id, requestId }), true);
+  assert.deepEqual(await pending, { status: 'cancelled' });
+  assert.equal(await readProgress(requestId), null);
+  for (let attempt = 0; attempt < 25 && fs.readdirSync(root).some(name => name.startsWith('.stackport-json-')); attempt++) await delay(100);
+  assert.ok(!fs.readdirSync(root).some(name => name.startsWith('.stackport-json-')));
+  assert.equal(fs.existsSync(path.join(root, 'cancelled.json')), false);
 }
 
 async function verifyDataGrid(command, id, profile) {
@@ -268,6 +340,9 @@ async function verifyGridControls(page, workspace, list) {
   assert.deepEqual(await grid.getByRole('cell').allTextContents(), ['64', '63']);
   await detail.getByText('조회 SQL', { exact: true }).click();
   assert.match(await detail.locator('.table-query-sql code').textContent(), /WHERE.+CAST\(\?/);
+  await detail.getByRole('button', { name: '결과 내보내기' }).click();
+  await saveJsonFromDialog(page, 'filtered-ui.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'filtered-ui.json'), 'utf8')).rows, [['64'], ['63']]);
   await detail.getByRole('button', { name: '초기화', exact: true }).click();
   await grid.getByRole('cell', { name: '0', exact: true }).waitFor();
 
@@ -337,7 +412,15 @@ async function verifySql(command, id, port) {
   assert.ok((await command('mysql_databases', { id, search: 'visible', page: 0 })).items.includes('visible_db'));
 }
 
-async function verifySqlEditor(workspace) {
+async function saveJsonFromDialog(page, output) {
+  const dialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  await dialog.getByRole('combobox').selectOption('JSON');
+  await dialog.getByRole('textbox', { name: '새 JSON 파일 경로' }).fill(path.join(root, output));
+  await dialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+}
+
+async function verifySqlEditor(page, workspace) {
   const toggle = workspace.getByRole('button', { name: 'SQL 편집기', exact: true });
   await toggle.click();
   const editor = workspace.getByRole('region', { name: 'MySQL SQL 편집기', exact: true });
@@ -352,6 +435,17 @@ async function verifySqlEditor(workspace) {
   assert.equal(await parameter.getAttribute('type'), 'password');
   await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
   await result.getByText('bound-ui-fixture', { exact: true }).waitFor();
+  await input.fill('SELECT 404 AS unsaved_query;');
+  await editor.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  await editor.getByRole('heading', { name: '내보내기 매개변수 다시 입력' }).waitFor();
+  assert.equal(await parameter.inputValue(), '');
+  assert.equal(await parameter.getAttribute('type'), 'password');
+  await parameter.fill('exported-ui-fixture');
+  await editor.getByRole('button', { name: '파일 설정', exact: true }).click();
+  await saveJsonFromDialog(page, 'sql-ui.json');
+  const exported = JSON.parse(fs.readFileSync(path.join(root, 'sql-ui.json'), 'utf8'));
+  assert.equal(exported.columns[0].name, 'bound_value');
+  assert.deepEqual(exported.rows, [['exported-ui-fixture']]);
   const selectedSql = "SELECT 'not-selected';\nSELECT 'selected-query' AS selection_value;";
   await input.fill(selectedSql);
   await input.press('Control+End');
@@ -372,7 +466,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (TLS, catalog, grid paging, typed filters, sorting, presets and read-only SQL).`);
+    console.log(`${engine} Windows E2E passed (catalog, data grid, read-only SQL, full CSV/JSON export and cancellation).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

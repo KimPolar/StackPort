@@ -1,7 +1,9 @@
+mod export;
 mod grid;
 mod profiles;
 mod sql;
 
+pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};
@@ -117,6 +119,9 @@ struct Session {
     options: Opts,
     sql_mode: sql::SqlMode,
     running_sql: Mutex<Option<sql::RunningSql>>,
+    profile_id: String,
+    project_id: String,
+    environment: String,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -163,16 +168,18 @@ impl MysqlManager {
         }
         let store = self.store.clone();
         let production_confirmed = confirmation == "PROD";
-        let (settings, tls) = tokio::task::spawn_blocking(move || {
-            let settings = store.mysql_profile(&id, revision)?.settings;
+        let (profile, tls) = tokio::task::spawn_blocking(move || {
+            let profile = store.mysql_profile(&id, revision)?;
+            let settings = &profile.settings;
             if settings.environment == "PROD" && !production_confirmed {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
-            let tls = settings.tls.then(|| ssl_options(&settings)).transpose()?;
-            Ok::<_, String>((settings, tls))
+            let tls = settings.tls.then(|| ssl_options(settings)).transpose()?;
+            Ok::<_, String>((profile, tls))
         })
         .await
         .map_err(|_| "MySQL 연결 설정을 읽을 수 없습니다.")??;
+        let settings = profile.settings;
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 MySQL 계열 연결이 너무 많습니다.")?;
@@ -220,6 +227,9 @@ impl MysqlManager {
                     sql_mode: mode,
                     running_sql: Mutex::default(),
                     connection: AsyncMutex::new(Some(connection)),
+                    profile_id: profile.id,
+                    project_id: profile.project_id,
+                    environment: settings.environment,
                     _permit: permit,
                 }),
             );
@@ -426,31 +436,8 @@ async fn read_table(
     name: &str,
     grid: Option<MysqlGridQuery>,
 ) -> ReadResult<MysqlTable> {
-    type ColumnRow = (String, String, String, String, String);
-    let columns: Vec<ColumnRow> = query(
-        connection,
-        "SELECT COLUMN_NAME, DATA_TYPE, IF(ORDINAL_POSITION <= 128, COLUMN_TYPE, ''), IS_NULLABLE, COLUMN_KEY
-        FROM information_schema.COLUMNS WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
-          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY) ORDER BY ORDINAL_POSITION",
-        (database, name),
-    )
-    .await?;
-    if columns.is_empty() {
-        return Err(ReadError::Missing);
-    }
+    let mut columns = read_columns(connection, database, name).await?;
     let more_columns = columns.len() > COLUMN_LIMIT;
-    let mut columns = columns
-        .into_iter()
-        .map(
-            |(name, data_type, column_type, nullable, key)| MysqlColumn {
-                name,
-                data_type,
-                column_type,
-                nullable: nullable == "YES",
-                key,
-            },
-        )
-        .collect::<Vec<_>>();
     let (mut rows, query_sql, stable_order, filter_columns) = if let Some(grid) = grid {
         let (rows, sql, stable_order) =
             sample_rows(connection, database, name, &columns, grid).await?;
@@ -477,6 +464,37 @@ async fn read_table(
     })
 }
 
+async fn read_columns(
+    connection: &mut Conn,
+    database: &str,
+    name: &str,
+) -> ReadResult<Vec<MysqlColumn>> {
+    type ColumnRow = (String, String, String, String, String);
+    let columns: Vec<ColumnRow> = query(
+        connection,
+        "SELECT COLUMN_NAME, DATA_TYPE, IF(ORDINAL_POSITION <= 128, COLUMN_TYPE, ''), IS_NULLABLE, COLUMN_KEY
+        FROM information_schema.COLUMNS WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
+          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY) ORDER BY ORDINAL_POSITION",
+        (database, name),
+    )
+    .await?;
+    if columns.is_empty() {
+        return Err(ReadError::Missing);
+    }
+    Ok(columns
+        .into_iter()
+        .map(
+            |(name, data_type, column_type, nullable, key)| MysqlColumn {
+                name,
+                data_type,
+                column_type,
+                nullable: nullable == "YES",
+                key,
+            },
+        )
+        .collect())
+}
+
 fn is_binary(data_type: &str) -> bool {
     matches!(
         data_type,
@@ -498,13 +516,13 @@ fn is_binary(data_type: &str) -> bool {
     )
 }
 
-async fn sample_rows(
+async fn table_source(
     connection: &mut Conn,
     database: &str,
     name: &str,
     columns: &[MysqlColumn],
-    grid: MysqlGridQuery,
-) -> ReadResult<(Vec<Vec<Option<MysqlCell>>>, String, bool)> {
+    clauses: &TableQueryClauses,
+) -> ReadResult<(String, Vec<Value>, bool)> {
     let keys: Vec<(String,)> = query(
         connection,
         "SELECT COLUMN_NAME FROM information_schema.STATISTICS
@@ -524,8 +542,7 @@ async fn sample_rows(
         .map(|column| (column.name.as_str(), column))
         .collect();
     let mut parameters = Vec::new();
-    let suffix = grid
-        .clauses
+    let suffix = clauses
         .suffix(
             TableQueryDialect::Mysql,
             "sp_source",
@@ -538,6 +555,23 @@ async fn sample_rows(
             },
         )
         .map_err(ReadError::InvalidQuery)?;
+    let source = format!(
+        "FROM {}.{} AS sp_source{suffix}",
+        quoted(database),
+        quoted(name)
+    );
+    Ok((source, parameters, stable_order))
+}
+
+async fn sample_rows(
+    connection: &mut Conn,
+    database: &str,
+    name: &str,
+    columns: &[MysqlColumn],
+    grid: MysqlGridQuery,
+) -> ReadResult<(Vec<Vec<Option<MysqlCell>>>, String, bool)> {
+    let (source, mut parameters, stable_order) =
+        table_source(connection, database, name, columns, &grid.clauses).await?;
     let columns = &columns[..columns.len().min(COLUMN_LIMIT)];
     let expressions = columns
         .iter()
@@ -552,11 +586,7 @@ async fn sample_rows(
         })
         .collect::<Vec<_>>()
         .join(",\n       ");
-    let sql = format!(
-        "SELECT {expressions}\nFROM {}.{} AS sp_source{suffix}\nLIMIT 51 OFFSET ?",
-        quoted(database),
-        quoted(name)
-    );
+    let sql = format!("SELECT {expressions}\n{source}\nLIMIT 51 OFFSET ?");
     parameters.push(Value::UInt(u64::from(grid.page) * ROW_LIMIT as u64));
     let rows = connection
         .exec::<Row, _, _>(&sql, Params::Positional(parameters))
