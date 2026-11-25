@@ -34,6 +34,8 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **MySQL SQL 편집기**는 현재 데이터베이스에서 문서 또는 선택 영역의 조회 문장 하나를 실행합니다. 줄 번호, MySQL 구문 강조와 찾기·바꾸기를 사용합니다. `SELECT`, `WITH` 조회, `SHOW`, `DESCRIBE`, `EXPLAIN`을 허용하며 파일 입출력, 잠금 변경과 실행 주석은 차단합니다. 문자열·식별자·주석 밖의 `?`에는 문자열, 64비트 정수, 실수 또는 NULL을 바인딩합니다. 입력값을 숨길 수 있으며 실행 전 매개변수는 메모리에만 보관합니다. 서버 SQL 모드로 문장을 다시 확인하고 읽기 전용 트랜잭션에서 준비된 문장으로 실행합니다. [MySQL 준비된 문장](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) · [MySQL 주석 규칙](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
 
+**실행 계획**은 선택 영역이나 전체 편집기의 단일 SELECT 또는 WITH 조회에 대한 예상 계획을 표시합니다. **실행 분석**은 확인을 받은 뒤 읽기 전용 트랜잭션에서 문장을 실제 실행합니다. MySQL의 TREE와 MariaDB의 JSON 결과에서 단계, 테이블·인덱스, 서버가 제공하는 비용과 예상 행, 실제 행·루프·시간을 읽어 단계 트리와 텍스트로 표시합니다. MySQL은 회당 시간, MariaDB는 누적 시간을 표시하며 가장 오래 걸린 리프 단계에 표시를 붙입니다. 계획 결과와 데이터 결과를 오갈 수 있습니다. 서버 식은 바인딩 값 노출을 막기 위해 계획 표시에서 제외합니다. 요청을 중단해도 서버 실행이 끝났는지는 확인되지 않을 수 있습니다. [MySQL EXPLAIN](https://dev.mysql.com/doc/refman/8.4/en/explain.html) · [MariaDB ANALYZE FORMAT=JSON](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-format-json)
+
 SQL 결과는 타입과 값, 조회 시간, 행·열 표시 한도를 보여줍니다. 실행에는 탐색과 별도의 연결을 사용합니다. 중단하거나 20초가 지나면 실행용 연결을 닫고, 서버에서 중단됐는지는 미확인으로 표시합니다. 결과는 최대 50행과 128열을 표시하며, 화면을 전환해도 같은 연결 안에서는 SQL 초안과 마지막 결과를 다시 볼 수 있습니다.
 
 테이블·뷰 또는 SQL 실행 결과의 **결과 내보내기**는 전체를 UTF-8 CSV·JSON으로 저장합니다. 그리드에서는 적용된 필터와 정렬로 모든 열과 행을 다시 조회합니다. SQL 편집기에서는 마지막으로 실행한 문장 또는 선택 영역을 조회하고, 매개변수는 다시 입력합니다. JSON은 `stackport.mysql-results` 형식 버전 1로 열과 값을 순서대로 기록합니다. 수치는 정밀도를 유지하는 문자열로 저장하고, NULL은 JSON `null`, 바이너리는 `encoding: "hex"`로 표시한 열의 대문자 HEX 문자열로 보존합니다. CSV에서 NULL은 인용되지 않은 `\N`, 바이너리는 인용된 `X'…'` 형식을 사용합니다. 열 이름과 스프레드시트 수식 보호는 선택할 수 있습니다.
@@ -413,7 +415,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
+MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 
 구조 검사는 인덱스 순서·접두 길이·가시성, 권한별 제약조건 조회, 전체 101개 제약조건의 두 페이지, 교차 데이터베이스 복합 외래 키와 자기 참조, 공개되지 않은 참조 대상, 뷰 정의 권한과 SQL 파일 저장을 다룹니다.
 

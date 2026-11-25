@@ -998,14 +998,21 @@ fn mysql_export_progress(mysql: State<'_, stackport_core::MysqlManager>, id: Str
     -> Result<Option<u64>, String> { mysql.export_progress(&id, &request_id) }
 
 #[tauri::command]
-fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String) -> Result<usize, String> {
-    mysql.sql_parameters(&id, &sql)
+fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String, select_only: Option<bool>) -> Result<usize, String> {
+    mysql.sql_parameters(&id, &sql, select_only.unwrap_or_default())
 }
 
 #[tauri::command]
 async fn run_mysql_sql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
     database: Option<String>, sql: String, parameters: Vec<stackport_core::MysqlSqlParameter>) -> Result<stackport_core::MysqlSqlResult, String> {
     mysql.run_sql(&id, request_id, database, sql, parameters).await
+}
+
+#[tauri::command]
+async fn mysql_sql_plan(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
+    database: Option<String>, sql: String, parameters: Vec<stackport_core::MysqlSqlParameter>, analyzed: bool,
+) -> Result<stackport_core::MysqlPlan, String> {
+    mysql.sql_plan(&id, request_id, database, sql, parameters, analyzed).await
 }
 
 #[tauri::command]
@@ -2129,6 +2136,7 @@ fn main() {
             mysql_export_progress,
             mysql_sql_parameters,
             run_mysql_sql,
+            mysql_sql_plan,
             cancel_mysql_sql,
             create_redis_profile,
             update_redis_profile,

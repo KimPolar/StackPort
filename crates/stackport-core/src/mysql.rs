@@ -1,6 +1,7 @@
 mod export;
 mod grid;
 mod monitor;
+mod plan;
 mod profiles;
 mod sql;
 mod structure;
@@ -8,6 +9,7 @@ mod tls;
 
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
+pub use plan::MysqlPlan;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};

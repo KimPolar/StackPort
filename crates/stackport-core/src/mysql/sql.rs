@@ -1,5 +1,5 @@
 use super::{
-    cell, require_identifier, Conn, Error, MysqlCell, MysqlManager, OptsBuilder, Queryable,
+    cell, plan, require_identifier, Conn, Error, MysqlCell, MysqlManager, OptsBuilder, Queryable,
     Session, Value, CELL_BYTES, COLUMN_LIMIT, CONNECT, ROW_LIMIT,
 };
 use crate::Result;
@@ -134,8 +134,8 @@ pub(super) fn stop_active(session: &Session, id: Option<Uuid>) -> Result<bool> {
 }
 
 impl MysqlManager {
-    pub fn sql_parameters(&self, id: &str, sql: &str) -> Result<usize> {
-        analyze(sql, self.session(id)?.sql_mode)
+    pub fn sql_parameters(&self, id: &str, sql: &str, select_only: bool) -> Result<usize> {
+        inspect_sql(sql, self.session(id)?.sql_mode, select_only)
     }
 
     pub fn cancel_sql(&self, id: &str, request_id: &str) -> Result<bool> {
@@ -155,18 +155,53 @@ impl MysqlManager {
     ) -> Result<MysqlSqlResult> {
         let session = self.session(id)?;
         let values = validate_input(&session, database.as_deref(), &sql, parameters)?;
-        let (_request, mut stopped) = Request::claim(&session, &request_id, None)?;
+        self.run_read_request(id, &session, &request_id, database, async |connection| {
+            execute(connection, &sql, values).await
+        })
+        .await
+    }
+
+    pub async fn sql_plan(
+        &self,
+        id: &str,
+        request_id: String,
+        database: Option<String>,
+        sql: String,
+        parameters: Vec<MysqlSqlParameter>,
+        analyzed: bool,
+    ) -> Result<plan::MysqlPlan> {
+        let session = self.session(id)?;
+        let values = validate_parameters(
+            inspect_sql(&sql, session.sql_mode, true)?,
+            database.as_deref(),
+            parameters,
+        )?;
+        self.run_read_request(id, &session, &request_id, database, async |connection| {
+            plan::execute(connection, &sql, values, session.engine, analyzed).await
+        })
+        .await
+    }
+
+    async fn run_read_request<T>(
+        &self,
+        id: &str,
+        session: &Session,
+        request_id: &str,
+        database: Option<String>,
+        read: impl AsyncFnOnce(&mut Conn) -> Result<T>,
+    ) -> Result<T> {
+        let (_request, mut stopped) = Request::claim(session, request_id, None)?;
         self.session(id)?;
         let options = OptsBuilder::from_opts(session.options.clone()).db_name(database);
         let mut connection = tokio::select! {
             biased;
             _ = &mut stopped => return Err(STOPPED.into()),
-            opened = open_request_connection(&session, options) => opened?,
+            opened = open_request_connection(session, options) => opened?,
         };
         let outcome = tokio::select! {
             biased;
             _ = &mut stopped => Err(STOPPED.into()),
-            read = timeout(QUERY_TIMEOUT, execute(&mut connection, &sql, values)) => {
+            read = timeout(QUERY_TIMEOUT, read(&mut connection)) => {
                 read.unwrap_or_else(|_| Err(TIMED_OUT.into()))
             }
         };
@@ -194,7 +229,14 @@ pub(super) fn validate_input(
     sql: &str,
     parameters: Vec<MysqlSqlParameter>,
 ) -> Result<Vec<Value>> {
-    let count = analyze(sql, session.sql_mode)?;
+    validate_parameters(analyze(sql, session.sql_mode)?, database, parameters)
+}
+
+fn validate_parameters(
+    count: usize,
+    database: Option<&str>,
+    parameters: Vec<MysqlSqlParameter>,
+) -> Result<Vec<Value>> {
     if let Some(database) = database {
         require_identifier(database)?;
     }
@@ -242,20 +284,33 @@ pub(super) async fn prepare_read_sql(
     sql: &str,
     count: usize,
 ) -> Result<Statement> {
+    prepare_query(connection, sql, count, None).await
+}
+
+pub(super) async fn prepare_query(
+    connection: &mut Conn,
+    sql: &str,
+    count: usize,
+    plan_prefix: Option<&str>,
+) -> Result<Statement> {
     let row = connection
         .query_first::<Row, _>("SELECT @@SESSION.sql_mode")
         .await
         .map_err(sql_error)?
         .ok_or("MySQL SQL 모드를 읽을 수 없습니다.")?;
     let (mode,): (String,) = from_row_opt(row).map_err(|_| "MySQL SQL 모드를 읽을 수 없습니다.")?;
-    if analyze(sql, SqlMode::parse(&mode))? != count {
+    if inspect_sql(sql, SqlMode::parse(&mode), plan_prefix.is_some())? != count {
         return Err("MySQL SQL 모드가 달라졌습니다. 문장과 매개변수를 다시 확인하세요.".into());
     }
     connection
         .query_drop("START TRANSACTION READ ONLY")
         .await
         .map_err(sql_error)?;
-    let statement = connection.prep(sql).await.map_err(sql_error)?;
+    let statement = match plan_prefix {
+        Some(prefix) => connection.prep(format!("{prefix}\n{sql}")).await,
+        None => connection.prep(sql).await,
+    }
+    .map_err(sql_error)?;
     if usize::from(statement.num_params()) != count {
         return Err("MySQL 서버가 확인한 매개변수 개수와 일치하지 않습니다.".into());
     }
@@ -411,6 +466,10 @@ pub(super) fn sql_error(error: Error) -> String {
 }
 
 fn analyze(sql: &str, mode: SqlMode) -> Result<usize> {
+    inspect_sql(sql, mode, false)
+}
+
+fn inspect_sql(sql: &str, mode: SqlMode, select_only: bool) -> Result<usize> {
     const READ_ONLY: &str =
         "MySQL 읽기 전용 SQL은 SELECT, WITH의 SELECT, SHOW, DESCRIBE 또는 EXPLAIN으로 실행하세요.";
     if sql.len() > MAX_SQL || sql.contains('\0') {
@@ -492,6 +551,11 @@ fn analyze(sql: &str, mode: SqlMode) -> Result<usize> {
                 let word = &input[..end];
                 let is = |other: &[u8]| word.eq_ignore_ascii_case(other);
                 if first.is_none() {
+                    if select_only && !is(b"SELECT") && !is(b"WITH") {
+                        return Err(
+                            "실행 계획은 SELECT 또는 WITH의 SELECT만 확인할 수 있습니다.".into(),
+                        );
+                    }
                     if ![
                         b"SELECT".as_slice(),
                         b"WITH",

@@ -190,6 +190,7 @@ async function verify(page, server) {
   assert.equal(session.engine, engine);
   assert.equal(session.database, 'visible_db');
   const id = session.id;
+  await verifyPlans(command, id);
   const schemas = await command('mysql_databases', { id, search: '', page: 0 });
   assert.ok(schemas.items.includes('visible_db'));
   assert.ok(!schemas.items.includes('hidden_db'));
@@ -883,6 +884,42 @@ async function verifySql(command, id, port) {
   assert.ok((await command('mysql_databases', { id, search: 'visible', page: 0 })).items.includes('visible_db'));
 }
 
+async function verifyPlans(command, id) {
+  const plan = (sql, analyzed, parameters = [], requestId = randomUUID()) => command('mysql_sql_plan', {
+    id, requestId, database: 'visible_db', sql, analyzed, parameters,
+  });
+  const source = '-- 계획 대상\nSELECT number FROM sample_limit WHERE number BETWEEN ? AND 31 ORDER BY number DESC LIMIT 7;';
+  const params = [{ kind: 'integer', value: '3' }];
+  const estimated = await plan(source, false, params);
+  assert.equal(estimated.analyzed, false);
+  assert.equal(estimated.time_per_loop, !maria);
+  assert.ok(estimated.steps.some(step => step.relation === 'sample_limit' && step.index === 'PRIMARY'));
+  assert.ok(estimated.steps.some(step => step.depth > 0 && step.estimated_rows !== null));
+  assert.equal(estimated.steps.some(step => step.actual_rows !== null), false);
+  const measured = await plan(source, true, params);
+  assert.equal(measured.analyzed, true);
+  assert.ok(measured.steps.some(step => step.actual_rows >= 7 && step.loops > 0 && step.time_ms !== null));
+  const sensitive = await plan("SELECT number FROM sample_limit WHERE CAST(number AS CHAR) = ?", false,
+    [{ kind: 'text', value: 'hidden-plan-fixture' }]);
+  assert.doesNotMatch(JSON.stringify(sensitive), /hidden-plan-fixture|CAST\(number/);
+  await assert.rejects(plan("SHOW TABLES", false), /SELECT/);
+  await assert.rejects(plan("DELETE FROM sample_limit", true), /SELECT/);
+  await assert.rejects(plan("SELECT 1; SELECT 2", true), /한 번에 한 문장/);
+  await assert.rejects(plan("SELECT 1 INTO OUTFILE 'fixture.txt'", true), /파일 입출력/);
+  await assert.rejects(plan(source, false), /매개변수 개수/);
+
+  const requestId = randomUUID();
+  const interrupted = assert.rejects(plan('SELECT number FROM sample_limit WHERE SLEEP(10) = 0 LIMIT 1', true, [], requestId), /요청을 중단했습니다/);
+  let stopped = false;
+  for (let attempt = 0; attempt < 35 && !stopped; attempt++) {
+    await delay(120);
+    stopped = await command('cancel_mysql_sql', { id, requestId });
+  }
+  assert.ok(stopped);
+  await interrupted;
+  assert.ok((await plan(source, false, params)).steps.length > 0);
+}
+
 async function saveJsonFromDialog(page, output) {
   const dialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
   await dialog.getByRole('combobox').selectOption('JSON');
@@ -928,6 +965,31 @@ async function verifySqlEditor(page, workspace) {
   await toggle.click();
   assert.equal(await input.inputValue(), selectedSql);
   await result.getByText('selected-query', { exact: true }).waitFor();
+  await input.fill('SELECT ignored;\nSELECT number FROM sample_limit WHERE number BETWEEN 3 AND 31 LIMIT 7;');
+  await input.press('Control+End');
+  await input.press('Home');
+  await input.press('Shift+End');
+  await editor.getByRole('button', { name: '실행 계획', exact: true }).click();
+  const plan = editor.getByRole('region', { name: 'MySQL 실행 계획', exact: true });
+  await plan.getByText('예상 실행 계획', { exact: true }).waitFor();
+  await plan.getByRole('table', { name: 'MySQL 실행 단계' }).getByText('sample_limit · PRIMARY', { exact: true }).waitFor();
+  await plan.getByRole('button', { name: '텍스트', exact: true }).click();
+  assert.match(await plan.getByLabel('MySQL 계획 텍스트').textContent(), /예상/);
+  await editor.getByRole('button', { name: '데이터 결과', exact: true }).click();
+  await result.getByText('selected-query', { exact: true }).waitFor();
+
+  await input.fill('SELECT number FROM sample_limit WHERE number BETWEEN ? AND 31 LIMIT 7;');
+  await editor.getByRole('button', { name: '실행 분석', exact: true }).click();
+  const confirm = page.getByRole('dialog', { name: 'MySQL 실행 분석', exact: true });
+  await confirm.getByRole('button', { name: '취소', exact: true }).click();
+  await result.getByText('selected-query', { exact: true }).waitFor();
+  await editor.getByRole('button', { name: '실행 분석', exact: true }).click();
+  await confirm.getByRole('button', { name: '분석 실행', exact: true }).click();
+  await editor.getByRole('heading', { name: '실행 분석 매개변수', exact: true }).waitFor();
+  await editor.getByLabel('타입').selectOption('integer');
+  await parameter.fill('3');
+  await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
+  await plan.getByRole('columnheader', { name: '실제 행 / 회' }).waitFor();
   await toggle.click();
 }
 
@@ -937,7 +999,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (mutual TLS, SSH jump and reconnect, catalog, server activity, locks, grid, read-only SQL and export).`);
+    console.log(`${engine} Windows E2E passed (TLS, SSH, catalog, activity, grid, read-only SQL, execution plans and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

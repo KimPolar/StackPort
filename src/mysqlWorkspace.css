@@ -60,5 +60,16 @@
 .mysql-parameter .field { margin: 0; }
 .mysql-mask { display: flex; align-items: center; gap: 5px; padding: 9px 0; font-size: 12px; }
 .mysql-sql-parameters .mysql-sql-actions { padding-inline: 0; }
+.mysql-plan .panel-heading { min-height: 44px; height: auto; flex-wrap: wrap; gap: 8px; padding: 7px 12px; }
+.mysql-plan-views { display: flex; flex-wrap: wrap; gap: 6px; }
+.mysql-plan-views button[aria-pressed="true"], .mysql-sql-actions button[aria-pressed="true"] { color: var(--text-accent); background: var(--surface-selected); }
+.mysql-plan .table-wrap, .mysql-plan pre { max-height: min(58vh, 650px); overflow: auto; }
+.mysql-plan pre { margin: 0; padding: 12px; line-height: 1.65; border-top: 1px solid var(--divider); }
+.mysql-plan :is(th, td) { vertical-align: top; }
+.mysql-plan tbody th { color: var(--text); background: transparent; text-align: start; }
+.mysql-plan th small { display: block; color: var(--text-muted); font-weight: 400; }
+.mysql-plan th .mysql-plan-mark { color: var(--warning-text); }
+.mysql-plan tr[data-highlight="true"] { background: var(--warning-surface); }
+.mysql-plan td meter { display: block; width: 95px; max-width: 100%; }
 @media (max-width: 760px) { .mysql-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 560px) { .mysql-parameter { grid-template-columns: minmax(0, 1fr); } }

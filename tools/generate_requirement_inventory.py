@@ -126,8 +126,8 @@ PARTIAL = {
     "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, 입력 숨기기",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
-    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL EXPLAIN·EXPLAIN ANALYZE의 텍스트·단계 트리, MySQL 계열 EXPLAIN 결과 표",
-    "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL 스캔·조인·정렬·인덱스와 비용·예상/실제 행, 긴 리프와 행 오차 표시",
+    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL·MySQL·MariaDB의 예상 계획 및 실제 분석을 텍스트·단계 트리로 표시",
+    "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL·MySQL·MariaDB 스캔·조인·정렬·인덱스와 엔진별 비용·예상/실제 행 및 긴 리프 표시, PostgreSQL 행 오차 표시",
     "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
@@ -191,7 +191,7 @@ PARTIAL = {
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-AT-018": "실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백",
-    "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소 확인",
+    "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
     "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
@@ -473,6 +473,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mysql.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-CN-011", "SP-DB-005"}:
                 evidence += "; crates/stackport-core/src/mysql/tls.rs; src/MysqlProfileDialog.tsx; tests/mysql-smoke.cjs"
+            if requirement_id in {"SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
+                evidence += "; crates/stackport-core/src/mysql/plan.rs; src/MysqlQueryPlan.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-SQ-001", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009", "SP-SQ-010", "SP-SQ-014"}:
                 evidence += "; crates/stackport-core/src/mysql/sql.rs; src/MysqlSqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
