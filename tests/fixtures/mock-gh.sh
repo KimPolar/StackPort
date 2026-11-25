@@ -17,6 +17,10 @@ case "$action" in
     esac
     ;;
   create)
+    if [[ "${MOCK_FAIL_GENERATED_NOTES:-}" == 1 && " $* " == *" --generate-notes "* ]]; then
+      echo 'HTTP 500 generating release notes' >&2
+      exit 1
+    fi
     mkdir -p "$MOCK_RELEASE_DIR/assets"
     printf '<!-- stackport-actions-run:%s -->\n' "$GITHUB_RUN_ID" > "$MOCK_RELEASE_DIR/body"
     echo true > "$MOCK_RELEASE_DIR/draft"

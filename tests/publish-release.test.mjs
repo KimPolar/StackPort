@@ -7,7 +7,7 @@ import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-test("publishing resumes its own draft without replacing assets and rejects other runs", t => {
+test("publishing falls back on generated-note errors, resumes its own draft and rejects other runs", t => {
   const tempParent = resolve(tmpdir());
   const root = mkdtempSync(join(tempParent, "stackport-publish-test-"));
   t.after(() => {
@@ -49,8 +49,9 @@ test("publishing resumes its own draft without replacing assets and rejects othe
     cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${mockBin}${delimiter}${process.env.PATH}`, RELEASE_TAG: "v0.1.0", GITHUB_SHA: sha, GITHUB_RUN_ID: "101", RUNNER_TEMP: posix(runnerTemp), MOCK_RELEASE_DIR: posix(releaseDir), ...extra },
   });
 
-  let result = execute({ MOCK_FAIL_UPLOAD: "SHA256SUMS.txt" });
+  let result = execute({ MOCK_FAIL_GENERATED_NOTES: "1", MOCK_FAIL_UPLOAD: "SHA256SUMS.txt" });
   assert.notEqual(result.status, 0, "the simulated upload must fail");
+  assert.match(result.stdout, /Retrying draft creation with the bundled release notes/);
   assert.equal(readFileSync(join(releaseDir, "draft"), "utf8").trim(), "true");
   assert.equal(readFileSync(join(releaseDir, "assets", "StackPort-Windows-x64.exe"), "utf8"), "original executable");
   writeFileSync(join(releaseDir, "assets", "StackPort-Windows-x64.exe"), "conflicting asset");

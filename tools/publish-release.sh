@@ -26,9 +26,16 @@ fi
 
 marker="<!-- stackport-actions-run:$GITHUB_RUN_ID -->"
 if ! gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
-  gh release create "$RELEASE_TAG" --draft --verify-tag --generate-notes \
-    --title "StackPort $RELEASE_TAG" \
+  draft_options=(
+    --draft --verify-tag --title "StackPort $RELEASE_TAG"
     --notes "Windows x64 실행 파일입니다. WebView2 Runtime이 필요하며 코드 서명되지 않았습니다. $marker"
+  )
+  if ! gh release create "$RELEASE_TAG" "${draft_options[@]}" --generate-notes; then
+    if ! gh release view "$RELEASE_TAG" --json isDraft > /dev/null 2>&1; then
+      echo 'Retrying draft creation with the bundled release notes.'
+      gh release create "$RELEASE_TAG" "${draft_options[@]}"
+    fi
+  fi
 fi
 body=$(gh release view "$RELEASE_TAG" --json body --jq .body)
 if [[ "$body" != *"$marker"* ]]; then
