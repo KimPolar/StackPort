@@ -300,7 +300,7 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
         onClick={() => setView("structure")}>키와 인덱스</button>}
       <button type="button" className="secondary small" aria-pressed={view === "definition"}
         onClick={() => setView("definition")}>{definitionTitle}</button>
-      {prefix !== "snowflake" && view === "data" && <button type="button" className="secondary small"
+      {view === "data" && <button type="button" className="secondary small"
         disabled={!data.data} onClick={() => { setExportReport(null); setExportOpen(true); }}>
         <Download size={14} aria-hidden /> 결과 내보내기
       </button>}

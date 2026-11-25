@@ -2241,6 +2241,7 @@ const auditOperationNames: Record<string, string> = {
   "redis.key.delete.unconfirmed": "Redis 키 삭제 결과 미확인",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
+  "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.edit.row": "PostgreSQL 행 변경",
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",

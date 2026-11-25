@@ -1176,6 +1176,22 @@ async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, obje
     -> Result<snowflake::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn export_snowflake(manager: State<'_, snowflake::Manager>, id: String, request_id: String, object: String,
+    clauses: TableQueryClauses, options: snowflake::ExportOptions) -> Result<snowflake::ExportOutcome, String> {
+    manager.export(&id, request_id, object, clauses, options).await
+}
+
+#[tauri::command]
+fn snowflake_export_progress(manager: State<'_, snowflake::Manager>, id: String, request_id: String) -> Result<Option<u64>, String> {
+    manager.export_progress(&id, &request_id)
+}
+
+#[tauri::command]
+fn cancel_snowflake_export(manager: State<'_, snowflake::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_export(&id, &request_id)
+}
+
+#[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_mysql_profiles(&project_id)).await
@@ -2509,6 +2525,9 @@ fn main() {
             snowflake_columns,
             snowflake_definition,
             snowflake_data,
+            export_snowflake,
+            snowflake_export_progress,
+            cancel_snowflake_export,
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,

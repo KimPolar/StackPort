@@ -1,7 +1,11 @@
 mod api;
 mod catalog;
+mod export;
 mod profiles;
 
+pub use crate::result_export::{
+    ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
+};
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Auth, Profile, ProfileSettings};
 
@@ -39,7 +43,9 @@ pub struct SessionInfo {
 struct Session {
     api: Api,
     database: String,
+    profile: Profile,
     operations: Semaphore,
+    export: Mutex<Option<export::ActiveExport>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -69,14 +75,12 @@ impl Manager {
             .try_acquire_owned()
             .map_err(|_| "열린 Snowflake 연결이 너무 많습니다.")?;
         let store = self.store.clone();
-        let settings = tokio::task::spawn_blocking(move || {
-            store
-                .snowflake_profile(&profile_id, revision)
-                .map(|profile| profile.settings)
-        })
-        .await
-        .map_err(|_| "Snowflake 연결 설정을 읽을 수 없습니다.")??;
-        if settings.environment == "PROD" && confirmation != "PROD" {
+        let profile =
+            tokio::task::spawn_blocking(move || store.snowflake_profile(&profile_id, revision))
+                .await
+                .map_err(|_| "Snowflake 연결 설정을 읽을 수 없습니다.")??;
+        let expected = &profile.settings;
+        if expected.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
         if token.0.is_empty()
@@ -85,8 +89,7 @@ impl Manager {
         {
             return Err("Snowflake 액세스 토큰을 확인하세요.".into());
         }
-        let expected = settings.clone();
-        let mut api = Api::new(settings, token)?;
+        let mut api = Api::new(expected.clone(), token)?;
         let rows = api
             .query(
                 "SELECT CURRENT_DATABASE(), CURRENT_VERSION(), CURRENT_ROLE(), CURRENT_WAREHOUSE()",
@@ -126,7 +129,9 @@ impl Manager {
                 Arc::new(Session {
                     api,
                     database: database.clone(),
+                    profile,
                     operations: Semaphore::new(3),
+                    export: Mutex::new(None),
                     _permit: permit,
                 }),
             );

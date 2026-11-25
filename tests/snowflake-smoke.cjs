@@ -1,4 +1,7 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
@@ -13,6 +16,7 @@ const role = process.env.STACKPORT_SNOWFLAKE_TEST_ROLE;
 const token = process.env.STACKPORT_SNOWFLAKE_TEST_TOKEN;
 const auth = process.env.STACKPORT_SNOWFLAKE_TEST_AUTH || 'pat';
 const testDefinition = process.env.STACKPORT_SNOWFLAKE_TEST_DEFINITION === '1';
+const testExport = process.env.STACKPORT_SNOWFLAKE_TEST_EXPORT === '1';
 
 async function verify(page) {
   page.setDefaultTimeout(55_000);
@@ -50,11 +54,34 @@ async function verify(page) {
     });
     const preview = detail.getByRole('table', { name: 'Snowflake 데이터 미리보기' });
     await preview.locator('tbody tr').first().waitFor();
+    if (testExport) await verifyExport(page, detail);
     await detail.getByRole('button', { name: '열 구조', exact: true }).click();
     await detail.getByRole('table', { name: 'Snowflake 열 구조' }).getByRole('rowheader').first().waitFor();
     if (testDefinition) await verifyDefinitionPanel(page, detail, 'Snowflake');
   } finally {
     await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
+  }
+}
+
+async function verifyExport(page, detail) {
+  const folder = fs.mkdtempSync(path.join(process.env.STACKPORT_TEST_ROOT || os.tmpdir(), 'stackport-snowflake-export-'));
+  const destination = path.join(folder, 'result.json');
+  try {
+    await detail.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+    await dialog.getByLabel('파일 형식').selectOption('JSON');
+    await dialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(destination);
+    await dialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+    await dialog.waitFor({ state: 'detached', timeout: 305_000 });
+    const report = JSON.parse(fs.readFileSync(destination, 'utf8'));
+    assert.equal(report.format, 'stackport.snowflake-results');
+    assert.equal(report.version, 1);
+    assert.ok(report.columns.length > 0 && report.rows.length > 0);
+    assert.ok(report.rows.every(row => row.length === report.columns.length));
+    await detail.getByRole('status').getByText(/JSON 저장 완료/).waitFor();
+  } finally {
+    if (fs.existsSync(destination)) fs.unlinkSync(destination);
+    fs.rmdirSync(folder);
   }
 }
 
@@ -64,7 +91,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try {
     await verify(browser.contexts()[0].pages()[0]);
-    console.log(`Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns${testDefinition ? ', and object definition' : ''}).`);
+    console.log(`Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns${testDefinition ? ', object definition' : ''}${testExport ? ', and result export' : ''}).`);
   } finally {
     await browser.close();
   }

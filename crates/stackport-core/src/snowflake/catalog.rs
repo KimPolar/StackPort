@@ -7,6 +7,7 @@ use crate::{
     Result, TableQueryClauses,
 };
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 const CATALOG_ROWS: usize = 50;
 const DATA_ROWS: usize = 50;
@@ -38,12 +39,12 @@ pub struct Object {
 
 #[derive(Serialize)]
 pub struct Column {
-    name: String,
-    data_type: String,
+    pub(super) name: String,
+    pub(super) data_type: String,
     nullable: bool,
     identity: bool,
     #[serde(skip)]
-    native_type: String,
+    pub(super) native_type: String,
 }
 
 #[derive(Serialize)]
@@ -260,20 +261,36 @@ async fn visible_columns(
     schema: &str,
     name: &str,
 ) -> Result<CatalogPage<Column>> {
+    let columns = read_columns(
+        session,
+        schema,
+        name,
+        PREVIEW_COLUMNS + 1,
+        &session.api.operation_token(),
+    )
+    .await?;
+    Ok(CatalogPage::new(columns, PREVIEW_COLUMNS))
+}
+
+pub(super) async fn read_columns(
+    session: &Session,
+    schema: &str,
+    name: &str,
+    limit: usize,
+    stop: &CancellationToken,
+) -> Result<Vec<Column>> {
     let information = format!("{}.INFORMATION_SCHEMA", quote(&session.database));
     let sql = format!(
         "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, IS_IDENTITY, \
                        NUMERIC_PRECISION, NUMERIC_SCALE FROM {information}.COLUMNS \
                        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
-                       ORDER BY ORDINAL_POSITION LIMIT {limit}",
-        limit = PREVIEW_COLUMNS + 1
+                       ORDER BY ORDINAL_POSITION LIMIT {limit}"
     );
     let rows = session
         .api
-        .query(&sql, &[schema, name], PREVIEW_COLUMNS + 1)
+        .query_cancellable(&sql, &[schema, name], limit, stop)
         .await?;
-    let columns = rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             let [name, native_type, nullable, identity, precision, scale] = exact(row)?;
             let native_type = native_type.ok_or(INVALID_RESULT)?;
@@ -291,8 +308,7 @@ async fn visible_columns(
                 native_type,
             })
         })
-        .collect::<Result<_>>()?;
-    Ok(CatalogPage::new(columns, PREVIEW_COLUMNS))
+        .collect()
 }
 
 fn page_offset(page: u32) -> Result<usize> {
@@ -323,7 +339,7 @@ fn exact<const N: usize>(row: Row) -> Result<[Option<String>; N]> {
     row.try_into().map_err(|_| INVALID_RESULT.into())
 }
 
-fn object_names(object: &str) -> Result<[String; 2]> {
+pub(super) fn object_names(object: &str) -> Result<[String; 2]> {
     if object.len() <= 4_096 {
         if let Ok(names) = serde_json::from_str::<[String; 2]>(object) {
             if names.iter().all(|name| valid_identifier(name)) {
@@ -334,16 +350,16 @@ fn object_names(object: &str) -> Result<[String; 2]> {
     Err("Snowflake 목록에서 테이블 또는 뷰를 선택하세요.".into())
 }
 
-fn quote(name: &str) -> String {
+pub(super) fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 impl Column {
-    fn binary(&self) -> bool {
+    pub(super) fn binary(&self) -> bool {
         matches!(self.native_type.as_str(), "BINARY" | "VARBINARY")
     }
 
-    fn preview_expression(&self) -> String {
+    pub(super) fn value_expression(&self) -> String {
         let name = format!("sp_source.{}", quote(&self.name));
         match self.native_type.as_str() {
             "BINARY" | "VARBINARY" => name,
@@ -369,7 +385,7 @@ fn preview_query(
     let table = [database, schema, name].map(quote).join(".");
     let mut projection = Vec::with_capacity(columns.len() * 2);
     for column in columns {
-        let expression = column.preview_expression();
+        let expression = column.value_expression();
         projection.push(if column.binary() {
             format!("HEX_ENCODE(SUBSTR({expression}, 1, {CELL_LIMIT}))")
         } else {
@@ -377,6 +393,20 @@ fn preview_query(
         });
         projection.push(format!("OCTET_LENGTH({expression})"));
     }
+    let (suffix, parameters) = data_suffix(columns, clauses)?;
+    Ok((
+        format!(
+            "SELECT {}\nFROM {table} AS sp_source{suffix}\nLIMIT {DATA_ROWS}",
+            projection.join(", ")
+        ),
+        parameters,
+    ))
+}
+
+pub(super) fn data_suffix(
+    columns: &[Column],
+    clauses: &TableQueryClauses,
+) -> Result<(String, Vec<String>)> {
     let mut parameters = Vec::new();
     clauses.validate_sort(|name| {
         columns
@@ -396,16 +426,10 @@ fn preview_query(
             filter_binding(&column.native_type, value, operation, &mut parameters)
         },
     )?;
-    Ok((
-        format!(
-            "SELECT {}\nFROM {table} AS sp_source{suffix}\nLIMIT {DATA_ROWS}",
-            projection.join(", ")
-        ),
-        parameters,
-    ))
+    Ok((suffix, parameters))
 }
 
-fn sortable(native: &str) -> bool {
+pub(super) fn sortable(native: &str) -> bool {
     matches!(
         native,
         "TEXT"
