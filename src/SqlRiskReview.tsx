@@ -73,7 +73,7 @@ export function SqlRiskSummary({ target, review }: { target: SqlReviewTarget; re
         </li>)}
       </ul>
       {review.more_risks && <p className="form-note">표시한 100건 외에도 변경 가능성이 있는 문장이 있습니다.</p>}
-      <p className="form-note">SQL 구문을 바탕으로 확인한 영향입니다. 실제 변경 행 수는 서버 실행 결과에서 확인할 수 있습니다.</p>
+      <p className="form-note">SQL 구문을 바탕으로 확인한 영향입니다. 실제 변경 행 수는 서버에서 실행한 뒤 확정됩니다.</p>
     </>}
     {target.environment === "PROD" && !review.risks.length &&
       <p className="form-note">운영 연결에서 실행하기 전에 선택한 SQL과 대상 연결을 확인하세요.</p>}

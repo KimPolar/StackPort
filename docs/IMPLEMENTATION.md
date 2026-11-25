@@ -380,7 +380,7 @@ MySQL·MariaDB, SQL Server, Oracle, Snowflake도 PostgreSQL과 같은 연결별 
 
 쓰기 가능한 SQL 편집기는 실행 범위에 포함된 문장과 배치의 위험을 서버 실행 전에 검토합니다. 행을 제한하는 `WHERE`가 없는 `UPDATE`·`DELETE`, `WHERE TRUE`·`WHERE 1=1`, `TRUNCATE`, 객체·권한 변경, `INSERT … SELECT`, `MERGE`, 대량 로드와 `CALL`·`EXECUTE` 같은 호출을 구분합니다. PostgreSQL의 변경 CTE도 검사하며 SQL Server의 `GO` 반복 횟수를 경고에 표시합니다. MySQL 계열의 실행 가능한 주석과 Oracle의 PL/SQL 블록은 내부 영향이 달라질 수 있는 작업으로 표시합니다. [PostgreSQL의 변경 CTE](https://www.postgresql.org/docs/18/queries-with.html) · [SQL Server GO](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/sql-server-utilities-statements-go?view=sql-server-ver17) · [MySQL 실행 주석](https://dev.mysql.com/doc/refman/8.4/en/extensions-to-ansi.html)
 
-검토 창에는 연결 이름·환경·기본 데이터베이스, 실행 범위, 문장 줄 번호와 구문에서 확인한 영향을 표시합니다. 실제 행 수는 서버 실행 후 확인합니다. 운영 PostgreSQL과 MySQL 계열 스크립트는 실행마다 `PROD`를 입력하며, SQL Server·Oracle·Snowflake는 변경 가능성이 식별된 운영 요청에서 네이티브 실행 경로도 `PROD`를 확인합니다.
+검토 창에는 연결 이름·환경·기본 데이터베이스, 실행 범위, 문장 줄 번호와 구문에서 확인한 영향을 표시합니다. 실제 변경 행 수는 서버에서 실행한 뒤 확정됩니다. 운영 PostgreSQL과 MySQL 계열 스크립트는 실행마다 `PROD`를 입력하며, SQL Server·Oracle·Snowflake는 변경 가능성이 식별된 운영 요청에서 네이티브 실행 경로도 `PROD`를 확인합니다.
 
 SQL을 선택하면 실행 버튼이 **선택 영역 실행**으로 바뀝니다. `Ctrl+Enter`와 실행 계획도 선택한 부분을 대상으로 합니다. 선택 영역이 없으면 편집기의 전체 입력을 사용합니다. **현재 문장** 또는 `Ctrl+Shift+Enter`는 커서가 속한 문장을 사용합니다. 따옴표나 주석 안의 세미콜론은 문장 끝으로 보지 않으며, SQLite 트리거 본문은 `END;`까지 같은 문장으로 읽습니다. 한 번에 실행 가능한 범위는 SQLite 읽기 전용 문장 하나입니다. [SQLite 문장 경계](https://www.sqlite.org/c3ref/complete.html) · [SQLite 주석 구문](https://www.sqlite.org/lang_comment.html)
 
