@@ -2,6 +2,7 @@ mod document_edit;
 mod document_snapshot;
 mod document_structure;
 mod find_builder;
+mod index_admin;
 mod pipeline;
 mod pipeline_store;
 mod profiles;
@@ -11,6 +12,7 @@ mod schema;
 pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
+pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
@@ -43,6 +45,7 @@ use zeroize::Zeroizing;
 const READ_TIMEOUT: Duration = Duration::from_secs(12);
 const SERVER_TIME: Duration = Duration::from_secs(7);
 const CATALOG_LIMIT: usize = 50;
+const INDEX_LIMIT: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -59,6 +62,7 @@ pub struct MongoSessionInfo {
     id: String,
     database: Option<String>,
     allow_edits: bool,
+    allow_indexes: bool,
 }
 
 #[derive(Serialize)]
@@ -79,11 +83,13 @@ pub struct MongoIndex {
     keys: String,
     unique: bool,
     ttl_seconds: Option<u64>,
+    hidden: bool,
 }
 
 struct Session {
     client: Client,
     editor: Option<Arc<document_edit::DocumentEditor>>,
+    index_admin: Option<Arc<index_admin::IndexAdmin>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -109,6 +115,7 @@ impl MongoManager {
         password: MongoPassword,
         confirmation: &str,
         allow_edits: bool,
+        allow_indexes: bool,
     ) -> Result<MongoSessionInfo> {
         let store = self.store.clone();
         let profile =
@@ -116,6 +123,7 @@ impl MongoManager {
                 .await
                 .map_err(|_| "MongoDB 연결 설정을 읽을 수 없습니다.")??;
         let editor = allow_edits.then(|| Arc::new(document_edit::DocumentEditor::new(profile.clone())));
+        let index_admin = allow_indexes.then(|| Arc::new(index_admin::IndexAdmin::new(profile.clone())));
         let settings = profile.settings;
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
@@ -165,9 +173,9 @@ impl MongoManager {
             options.max_pool_size = Some(4);
             options.retry_reads = Some(false);
             options.retry_writes = Some(false);
-            if allow_edits {
+            if allow_edits || allow_indexes {
                 if options.write_concern.as_ref().is_some_and(|setting| setting.w == Some(Acknowledgment::Nodes(0))) {
-                    return Err("문서 편집에는 서버가 결과를 확인하는 쓰기 설정(w=1 이상)이 필요합니다.".into());
+                    return Err("MongoDB 변경에는 서버가 결과를 확인하는 쓰기 설정(w=1 이상)이 필요합니다.".into());
                 }
                 options.selection_criteria = Some(SelectionCriteria::ReadPreference(ReadPreference::Primary));
             }
@@ -191,10 +199,11 @@ impl MongoManager {
                 Session {
                     client,
                     editor,
+                    index_admin,
                     _permit: permit,
                 },
             );
-        Ok(MongoSessionInfo { id, database, allow_edits })
+        Ok(MongoSessionInfo { id, database, allow_edits, allow_indexes })
     }
 
     pub async fn close(&self, id: &str) -> Result<()> {
@@ -303,7 +312,7 @@ impl MongoManager {
                 .await
                 .map_err(message)?;
             let mut items = Vec::new();
-            while items.len() <= CATALOG_LIMIT {
+            while items.len() <= INDEX_LIMIT {
                 let Some(index) = cursor.try_next().await.map_err(message)? else {
                     break;
                 };
@@ -313,18 +322,27 @@ impl MongoManager {
                     unique: options.unique.unwrap_or(name == "_id_"),
                     name,
                     ttl_seconds: options.expire_after.map(|duration| duration.as_secs()),
-                    keys: Bson::Document(index.keys)
-                        .into_canonical_extjson()
-                        .to_string(),
+                    keys: document_snapshot::canonical_value(&Bson::Document(index.keys))?,
+                    hidden: options.hidden.unwrap_or(false),
                 });
             }
-            let has_next = items.len() > CATALOG_LIMIT;
-            items.truncate(CATALOG_LIMIT);
+            let has_next = items.len() > INDEX_LIMIT;
+            items.truncate(INDEX_LIMIT);
             Ok(MongoCatalogPage { items, has_next })
         })
         .await
         .map_err(|_| "MongoDB 인덱스 조회 시간이 초과되었습니다.")?
     }
+}
+
+fn apply_write_concern(client: &Client, command: &mut Document) -> Result<()> {
+    if let Some(concern) = client.write_concern() {
+        command.insert(
+            "writeConcern",
+            bson::serialize_to_document(concern).map_err(|_| "MongoDB 쓰기 옵션을 읽을 수 없습니다.")?,
+        );
+    }
+    Ok(())
 }
 
 fn page_from<T>(items: Vec<T>, page: u32) -> MongoCatalogPage<T> {

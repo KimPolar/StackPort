@@ -277,7 +277,7 @@ impl MongoManager {
         let review = pending.review.take().ok_or(STALE)?;
         let operation = pending.change.operation();
         let command = write_command(pending, review.after, &client)?;
-        self.audit_document(&editor.profile, token, operation, "started", None)
+        self.audit_mongo_change(&editor.profile, token, operation, "started", None)
             .await?;
         let result = execute_write(&client, &pending.database, command).await;
         let (completed_operation, outcome, count) = match result.as_ref() {
@@ -286,7 +286,7 @@ impl MongoManager {
             Err(_) => (operation, "failed", None),
         };
         let audit_warning = self
-            .audit_document(&editor.profile, token, completed_operation, outcome, count)
+            .audit_mongo_change(&editor.profile, token, completed_operation, outcome, count)
             .await
             .is_err();
         if result.is_ok() {
@@ -304,7 +304,7 @@ impl MongoManager {
         }
     }
 
-    async fn audit_document(
+    pub(super) async fn audit_mongo_change(
         &self,
         profile: &MongoProfile,
         token: &str,
@@ -316,7 +316,7 @@ impl MongoManager {
         let profile = profile.clone();
         let token = token.to_owned();
         tokio::task::spawn_blocking(move || {
-            if outcome == "started" && operation != "mongo.document.unconfirmed" {
+            if outcome == "started" && !operation.ends_with(".unconfirmed") {
                 store.mongo_profile(&profile.id, profile.revision)?;
             }
             insert_audit(
@@ -334,7 +334,7 @@ impl MongoManager {
             )
         })
         .await
-        .map_err(|_| "MongoDB 문서 변경 감사 기록을 저장할 수 없습니다.")?
+        .map_err(|_| "MongoDB 변경 감사 기록을 저장할 수 없습니다.")?
     }
 }
 
@@ -384,13 +384,7 @@ fn write_command(pending: &Pending, after: Option<Document>, client: &Client) ->
     };
     command.insert("collectionUUID", pending.uuid.clone());
     command.insert("maxTimeMS", SERVER_TIME.as_millis() as i32);
-    if let Some(concern) = client.write_concern() {
-        command.insert(
-            "writeConcern",
-            bson::serialize_to_document(concern)
-                .map_err(|_| "MongoDB 쓰기 옵션을 읽을 수 없습니다.")?,
-        );
-    }
+    super::apply_write_concern(client, &mut command)?;
     Ok(command)
 }
 

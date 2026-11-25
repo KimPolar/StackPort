@@ -7,14 +7,15 @@ import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
+import { MongoIndexDialog, type MongoIndexAction } from "./MongoIndexDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
-type Session = { id: string; database: string | null; allow_edits: boolean };
+type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
-type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null };
+type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; hidden: boolean };
 type Query = { filter: string; projection: string; sort_field: string; descending: boolean; page: number };
 
 const defaultQuery: Query = { filter: "", projection: "", sort_field: "_id", descending: false, page: 0 };
@@ -27,12 +28,14 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
+  const [allowIndexes, setAllowIndexes] = useState(false);
   const [error, setError] = useState("");
   const active = useRef<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   const { settings } = profile;
   const production = settings.environment === "PROD";
+  const permission = [session?.allow_edits && "문서 편집", session?.allow_indexes && "인덱스 관리"].filter(Boolean).join("·");
 
   useEffect(() => {
     mounted.current = true;
@@ -47,7 +50,7 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setPassword("");
     try {
-      const next = await invoke<Session>("open_mongo", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits });
+      const next = await invoke<Session>("open_mongo", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowIndexes });
       if (!mounted.current) { await invoke("close_mongo", { id: next.id }); return; }
       active.current = next.id; setSession(next); setLogin(false);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
@@ -68,9 +71,9 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
         <p className="path">MongoDB · {mongoAddress(settings.uri)}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.allow_edits ? "문서 편집 허용" : "읽기 전용"}</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {permission ? `${permission} 허용` : "읽기 전용"}</span>
         {session ? <button type="button" className="secondary" onClick={disconnect}>MongoDB 연결 끊기</button> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setLogin(true); }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
+          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowIndexes(false); setLogin(true); }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
@@ -84,6 +87,8 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
           value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
         <label className="mongo-edit-permission"><input type="checkbox" checked={allowEdits} disabled={busy}
           onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 문서 편집 허용</label>
+        <label className="mongo-edit-permission"><input type="checkbox" checked={allowIndexes} disabled={busy}
+          onChange={event => setAllowIndexes(event.target.checked)} /> 이 연결에서 인덱스 관리 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP는 암호와 데이터를 평문으로 전송합니다.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
@@ -98,6 +103,7 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
   const [revision, setRevision] = useState(0);
   const databaseArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const collectionArgs = useMemo(() => ({ id: session.id, database }), [session.id, database]);
+  const mutableCollection = collection?.kind === "collection" && !collection.name.startsWith("system.");
 
   return <div className="mongo-layout">
     <div className="mongo-catalog">
@@ -110,7 +116,8 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
         projectId={projectId} revision={revision} refresh={() => setRevision(value => value + 1)}
-        allowEdits={session.allow_edits && collection.kind === "collection" && !collection.name.startsWith("system.")} environment={environment} onBusy={onBusy} />
+        allowEdits={session.allow_edits && mutableCollection} allowIndexes={session.allow_indexes && mutableCollection}
+        environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
   </div>;
 }
@@ -141,9 +148,9 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, environment, onBusy }: {
+function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, environment, onBusy }: {
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
-  allowEdits: boolean; environment: string; onBusy: (busy: boolean) => void;
+  allowEdits: boolean; allowIndexes: boolean; environment: string; onBusy: (busy: boolean) => void;
 }) {
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline">("documents");
   const [draft, setDraft] = useState(defaultQuery);
@@ -153,6 +160,8 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const [countRequest, setCountRequest] = useState<{ filter: string } | null>(null);
   const [documentEdit, setDocumentEdit] = useState<MongoDocumentChange | null>(null);
   const [documentNotice, setDocumentNotice] = useState("");
+  const [indexAction, setIndexAction] = useState<MongoIndexAction | null>(null);
+  const [indexNotice, setIndexNotice] = useState("");
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
   const countArgs = useMemo(() => view === "documents" && countRequest?.filter === query.filter
@@ -179,14 +188,20 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
     <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
     <div hidden={view !== "pipeline"}><MongoPipeline target={args} projectId={projectId} /></div>
     {view === "indexes" && <>
+      {allowIndexes && <div className="mongo-actions"><button type="button" className="secondary small"
+        onClick={() => setIndexAction({ kind: "create" })}>인덱스 생성</button></div>}
+      {indexNotice && <p className="form-note mongo-note" role="status">{indexNotice}</p>}
       <ReadStatus {...indexes} />
       {indexes.data && <div className="table-wrap"><table aria-label="MongoDB 인덱스"><thead><tr>
         <th scope="col">이름</th><th scope="col">필드</th><th scope="col">고유</th><th scope="col">TTL</th>
+        {allowIndexes && <th scope="col">작업</th>}
       </tr></thead><tbody>{indexes.data.items.map(index => <tr key={index.name}>
-        <th scope="row">{index.name}</th><td><code>{index.keys}</code></td><td>{index.unique ? "예" : "—"}</td>
+        <th scope="row">{index.name}{index.hidden && <small> · 숨김</small>}</th><td><code>{index.keys}</code></td><td>{index.unique ? "예" : "—"}</td>
         <td>{index.ttl_seconds === null ? "—" : `${displayNumber.format(index.ttl_seconds)}초`}</td>
+        {allowIndexes && <td>{index.name !== "_id_" && index.name !== "*" && <button type="button" className="secondary small"
+          aria-label={`${index.name} 인덱스 삭제`} onClick={() => setIndexAction({ kind: "drop", name: index.name })}>삭제</button>}</td>}
       </tr>)}</tbody></table></div>}
-      {indexes.data?.has_next && <p className="form-note mongo-note">앞 50개 인덱스를 표시합니다.</p>}
+      {indexes.data?.has_next && <p className="form-note mongo-note">앞 64개 인덱스를 표시합니다.</p>}
     </>}
     {view === "documents" && <>
       <div className="mongo-actions" role="group" aria-label="문서 작업">
@@ -236,6 +251,12 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       const next = { ...draft, filter: built.compiled };
       setFindState(built); setDraft(next); applyQuery(next); setFindOpen(false);
     }} />}
+    {indexAction && <MongoIndexDialog target={args} action={indexAction} environment={environment} onBusy={onBusy}
+      onClose={() => setIndexAction(null)} onDone={warning => {
+        setIndexNotice(`인덱스 ${indexAction.kind === "drop" ? "삭제" : "생성"} 완료${warning ? " · 완료 감사 기록 저장 실패" : ""}`);
+        setIndexAction(null);
+        refresh();
+      }} />}
     {documentEdit && <MongoDocumentEditDialog id={id} database={database} collection={collection.name} change={documentEdit}
       environment={environment} onBusy={onBusy} onClose={() => setDocumentEdit(null)} onApplied={report => {
         setDocumentEdit(null);

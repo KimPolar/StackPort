@@ -171,7 +171,7 @@ PARTIAL = {
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, JSON.GET·JSON.SET 확인과 권한으로 명령 정보를 읽을 수 없는 상태 처리, 서버 지원 여부에 따른 JSON 필터·편집 UI",
-    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 전체 이름·연결·DB·건수 미리보기와 동시 변경 시 전체 중단, MongoDB 단일 문서 삭제 전 원본 검토·동시 변경 차단, DELETE 및 PROD 확인",
+    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 미리보기와 동시 변경 차단, MongoDB 단일 문서 삭제 검토, MongoDB 단일 인덱스 정의·고유·TTL·사용 영향 검토와 컬렉션 UUID 및 인덱스 정의 확인, DELETE·DROP 및 PROD 승인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
@@ -195,7 +195,7 @@ PARTIAL = {
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
-    "SP-NS-006": "MongoDB 컬렉션의 인덱스 키·고유 여부·TTL 조회",
+    "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성 및 영향 검토 후 단일 삭제",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -551,6 +551,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/redis-smoke.cjs"
             if requirement_id in {"SP-NS-010", "SP-NS-011", "SP-NS-017", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/json.rs"
+            if requirement_id in {"SP-NS-006", "SP-NS-018"}:
+                evidence += "; crates/stackport-core/src/mongo/index_admin.rs; src/MongoIndexDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id == "SP-NS-012":
