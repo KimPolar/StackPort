@@ -12,7 +12,7 @@ StackPort는 로컬 우선 원격 접속·데이터베이스 작업 공간을 �
 - 하단 상태 표시줄에서 터미널 탭·RDP 창·활성 SSH 터널 수와 DB 작업 상태를 보고 해당 화면으로 이동
 - **화면 설정**에서 라이트·다크·시스템 테마를 선택하고 앱을 다시 열어도 같은 설정 유지
 - 컴팩트 보기로 목록 간격을 줄이고, 집중 모드로 현재 분할 작업을 유지하며 탐색기와 도구 표시줄 숨기기
-- SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake에서 연결마다 여러 SQL 탭을 열고, UTF-8 파일을 새 탭에 불러오거나 새 `.sql` 파일로 저장
+- SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake에서 연결별 SQL 탭을 열고, UTF-8·UTF-16·Windows-949·Windows-1252 SQL 파일을 열거나 새 파일로 저장
 - 미저장 SQL 탭을 닫거나 앱을 종료할 때 필요한 초안만 파일로 저장
 - `Ctrl+Shift+P` 명령 팔레트로 도구·프로젝트·현재 프로젝트의 연결·현재 SQLite 연결의 테이블과 뷰 열기
 - 최대 네 작업 도구를 2×2 또는 영역별 좌우·상하 분할로 배치하고 마우스나 방향키로 크기 조절

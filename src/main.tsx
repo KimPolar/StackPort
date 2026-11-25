@@ -896,7 +896,9 @@ function App() {
     } else {
       editSqlTabs(action.draft, group => ({
         ...group, tabs: group.tabs.map(draft => draft.id === action.draft.id
-          ? { ...draft, savedText: contents.text, savedPath: path } : draft),
+          ? { ...draft, document: { ...draft.document, encoding: contents.encoding, bom: contents.bom },
+            savedText: contents.text, savedPath: path }
+          : draft),
       }));
     }
     setSqlFileAction(null);

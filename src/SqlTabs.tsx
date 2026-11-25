@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { FileCode2, FileDown, FolderOpen, Plus, X } from "lucide-react";
+import { fileEncodings, type FileEncoding } from "./structuredFilePreview";
 
-export type SqlDocument = { text: string; line_ending: "lf" | "crlf"; bom: boolean };
+export type SqlDocument = { text: string; line_ending: "lf" | "crlf"; bom: boolean; encoding: FileEncoding };
 export type SqlTarget = { profileId: string; projectId: string; projectName: string; profileName: string };
 export type SqlDraft = SqlTarget & {
   id: string;
@@ -28,7 +29,7 @@ export type SqlTabEditor = {
   reportBusy: (tabId: string, busy: boolean) => void;
 };
 
-export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom: false };
+export const emptySqlDocument: SqlDocument = { text: "", line_ending: "lf", bom: false, encoding: "utf-8" };
 export const emptySqlTabs: SqlTabSet = { tabs: [], activeId: "", nextNumber: 1 };
 export const sqlTabTextLimit = 1024 * 1024;
 export const sqlTabId = (profileId: string, number: number) => `${profileId}-${number}`;
@@ -81,12 +82,14 @@ export function SqlTabStrip({ group, onSelect, onNew, onClose, closeDisabledFor,
         const selected = draft.id === group.activeId;
         const dirty = isSqlDraftDirty(draft);
         const title = sqlTabTitle(draft);
+        const format = draft.savedPath && [fileEncodings[draft.document.encoding], draft.document.line_ending.toUpperCase(),
+          draft.document.bom && "BOM"].filter(Boolean).join(" · ");
         return <div className="sql-tab" data-active={selected} key={draft.id}>
           <button type="button" role="tab" id={sqlTabButtonId(draft.id)} aria-label={title}
             aria-controls={sqlTabPanelId(draft.id)} aria-selected={selected} tabIndex={selected ? 0 : -1}
             disabled={busy && !selected}
-            aria-description={[dirty && "저장하지 않은 변경", draft.savedPath].filter(Boolean).join(" · ") || undefined}
-            title={draft.savedPath || title} onClick={() => onSelect(draft.id)} onKeyDown={event => onKeyDown(event, index)}>
+            aria-description={[dirty && "저장하지 않은 변경", format, draft.savedPath].filter(Boolean).join(" · ") || undefined}
+            title={format ? [draft.savedPath, format].join("\n") : title} onClick={() => onSelect(draft.id)} onKeyDown={event => onKeyDown(event, index)}>
             <FileCode2 size={14} aria-hidden /><span>{title}</span>{dirty && <span className="sql-tab-dirty" aria-hidden />}
           </button>
           <button type="button" className="sql-tab-close" aria-label={`${title} 탭 닫기`} tabIndex={selected ? 0 : -1} disabled={busy || draft.id === closeDisabledFor}

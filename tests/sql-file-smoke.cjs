@@ -346,11 +346,76 @@ async function main() {
     await verifySqlSchemaDiagram(page, editor, isolatedPath);
     await verifySqlSchemaDocument(page, editor);
     await verifySqlSchemaComparison(page, editor, invoke, isolatedPath);
+    await verifySqlFileEncodings(page, editor, invoke);
     assert.deepEqual(errors, []);
     console.log('SQL tabs, drafts, templates, history, query builder, schema diagram, schema documents, schema comparison and sync, plans, batches, result pins and exact exports passed.');
   } finally {
     await browser.close();
   }
+}
+
+async function verifySqlFileEncodings(page, editor, invoke) {
+  const folder = process.env.STACKPORT_TEST_ROOT;
+  const source = path.join(folder, '한국어 CP949.sql');
+  const legacyCopy = path.join(folder, '한국어 복사본.sql');
+  const unicodeCopy = path.join(folder, '유니코드 변환.sql');
+  const korean = Buffer.concat([Buffer.from("SELECT '"), Buffer.from('c7d1b1dbc652', 'hex'), Buffer.from("';\r\n")]);
+  fs.writeFileSync(source, korean, { flag: 'wx' });
+
+  const open = page.getByRole('dialog', { name: 'SQL 파일 열기', exact: true });
+  const save = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
+  const openAction = page.getByRole('button', { name: 'SQL 파일 열기', exact: true });
+  const openNew = open.getByRole('button', { name: '새 탭에서 열기', exact: true });
+  const encoding = dialog => dialog.getByRole('combobox', { name: '파일 인코딩', exact: true });
+  const saveNew = save.getByRole('button', { name: '새 파일에 저장', exact: true });
+  const savePath = save.getByLabel('새 SQL 파일 경로', { exact: true });
+
+  await openAction.click();
+  assert.equal(await encoding(open).inputValue(), 'auto');
+  await open.getByLabel('SQL 파일 경로', { exact: true }).fill(source);
+  await encoding(open).selectOption('euc-kr');
+  await openNew.click();
+  await open.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), "SELECT '한글힣';\n");
+  await editor.press('Control+s');
+  assert.equal(await encoding(save).inputValue(), 'euc-kr');
+  await savePath.fill(legacyCopy);
+  await saveNew.click();
+  await save.waitFor({ state: 'detached' });
+  assert.deepEqual(fs.readFileSync(legacyCopy), korean);
+
+  const text = "SELECT '한글힣😀';\n";
+  await editor.fill(text);
+  await editor.press('Control+s');
+  assert.equal(await encoding(save).inputValue(), 'euc-kr');
+  await savePath.fill(unicodeCopy);
+  await saveNew.click();
+  await save.getByRole('alert').getByText(/표현할 수 없는 문자/).waitFor();
+  assert.equal(fs.existsSync(unicodeCopy), false);
+  await encoding(save).selectOption('utf-16be');
+  assert.equal(await save.getByRole('checkbox', { name: 'BOM 포함', exact: true }).isChecked(), true);
+  await saveNew.click();
+  await save.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), text);
+  assert.deepEqual(fs.readFileSync(source), korean);
+  assert.deepEqual(fs.readFileSync(unicodeCopy), Buffer.from("\uFEFFSELECT '한글힣😀';\r\n", 'utf16le').swap16());
+
+  const tab = page.getByRole('tab', { name: '유니코드 변환.sql', exact: true });
+  assert.match(await tab.getAttribute('aria-description'), /UTF-16 BE · CRLF · BOM/);
+  await editor.press('Control+s');
+  assert.equal(await encoding(save).inputValue(), 'utf-16be');
+  await save.getByRole('button', { name: '취소', exact: true }).click();
+  await save.waitFor({ state: 'detached' });
+  const reopened = await invoke('read_sql_document', { source: unicodeCopy });
+  assert.deepEqual(reopened, { text, encoding: 'utf-16be', bom: true, line_ending: 'crlf' });
+  await openAction.click();
+  await open.getByLabel('SQL 파일 경로', { exact: true }).fill(unicodeCopy);
+  await openNew.click();
+  await open.waitFor({ state: 'detached' });
+  assert.equal(await editor.inputValue(), text);
+  await page.getByRole('button', { name: '쿼리 실행', exact: true }).click();
+  await page.getByRole('cell', { name: '한글힣😀', exact: true }).waitFor();
+  console.log('SQLite SQL file encodings passed (CP949 round trip, loss prevention, UTF-16 BE conversion, BOM and CRLF preservation).');
 }
 
 async function verifySqlCompletion(page, editor, dev) {

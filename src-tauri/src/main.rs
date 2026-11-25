@@ -17,7 +17,7 @@ use stackport_core::{
     RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
-    open_sql_file, save_sql_definition, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
+    open_sql_file_with_encoding, save_sql_definition, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlFileEncoding, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
@@ -2220,8 +2220,8 @@ async fn choose_sql_document_path(save: bool) -> Result<Option<String>, String> 
 }
 
 #[tauri::command]
-async fn read_sql_document(source: String) -> Result<SqlDocument, String> {
-    worker(move || open_sql_file(&source)).await
+async fn read_sql_document(source: String, encoding: Option<SqlFileEncoding>) -> Result<SqlDocument, String> {
+    worker(move || open_sql_file_with_encoding(&source, encoding)).await
 }
 
 #[tauri::command]

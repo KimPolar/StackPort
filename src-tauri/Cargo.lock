@@ -5904,6 +5904,7 @@ dependencies = [
  "bson",
  "bytes",
  "chrono",
+ "encoding_rs",
  "futures-util",
  "mongodb",
  "mysql_async",

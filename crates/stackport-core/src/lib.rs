@@ -97,7 +97,7 @@ mod terminal_output;
 pub use terminal_output::{save_terminal_output, TerminalOutputFormat};
 mod local_file;
 mod sql_file;
-pub use sql_file::{open_sql_file, save_sql_definition, save_sql_file, SqlDocument};
+pub use sql_file::{open_sql_file, open_sql_file_with_encoding, save_sql_definition, save_sql_file, SqlDocument, SqlFileEncoding};
 mod sql_statement;
 mod sql_completion;
 pub use sql_completion::SqlCompletionCatalog;
