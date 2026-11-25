@@ -959,6 +959,10 @@ async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: Str
     -> Result<stackport_core::MongoDocumentPage, String> { mongo.documents(&id, &database, &collection, query).await }
 
 #[tauri::command]
+async fn mongo_schema_sample(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, sample_size: u32)
+    -> Result<stackport_core::MongoSchemaSample, String> { mongo.schema_sample(&id, &database, &collection, sample_size).await }
+
+#[tauri::command]
 async fn list_sql_server_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<sql_server::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_sql_server_profiles(&project_id)).await
@@ -2632,6 +2636,7 @@ fn main() {
             mongo_collections,
             mongo_indexes,
             mongo_documents,
+            mongo_schema_sample,
             list_sql_server_profiles,
             create_sql_server_profile,
             update_sql_server_profile,

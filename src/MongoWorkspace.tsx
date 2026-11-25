@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
+import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
@@ -136,7 +137,7 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
 function CollectionContent({ id, database, collection, revision, refresh }: {
   id: string; database: string; collection: Collection; revision: number; refresh: () => void;
 }) {
-  const [view, setView] = useState<"documents" | "indexes">("documents");
+  const [view, setView] = useState<"documents" | "indexes" | "schema">("documents");
   const [draft, setDraft] = useState(defaultQuery);
   const [query, setQuery] = useState(defaultQuery);
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
@@ -149,11 +150,13 @@ function CollectionContent({ id, database, collection, revision, refresh }: {
   return <section className="results-card mongo-content" aria-label="MongoDB 컬렉션 상세">
     <div className="panel-heading"><h2>{collection.name}</h2><span>{database}</span>
       <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button></div>
-    {collection.kind !== "view" && <div className="mongo-actions" role="group" aria-label="컬렉션 보기">
+    <div className="mongo-actions" role="group" aria-label="컬렉션 보기">
       <button type="button" className="secondary small" aria-pressed={view === "documents"} onClick={() => setView("documents")}>문서</button>
-      <button type="button" className="secondary small" aria-pressed={view === "indexes"} onClick={() => setView("indexes")}>인덱스</button>
-    </div>}
-    {view === "indexes" ? <>
+      {collection.kind !== "view" && <button type="button" className="secondary small" aria-pressed={view === "indexes"} onClick={() => setView("indexes")}>인덱스</button>}
+      <button type="button" className="secondary small" aria-pressed={view === "schema"} onClick={() => setView("schema")}>스키마 분석</button>
+    </div>
+    <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
+    {view === "indexes" && <>
       <ReadStatus {...indexes} />
       {indexes.data && <div className="table-wrap"><table aria-label="MongoDB 인덱스"><thead><tr>
         <th scope="col">이름</th><th scope="col">필드</th><th scope="col">고유</th><th scope="col">TTL</th>
@@ -162,7 +165,8 @@ function CollectionContent({ id, database, collection, revision, refresh }: {
         <td>{index.ttl_seconds === null ? "—" : `${displayNumber.format(index.ttl_seconds)}초`}</td>
       </tr>)}</tbody></table></div>}
       {indexes.data?.has_next && <p className="form-note mongo-note">앞 50개 인덱스를 표시합니다.</p>}
-    </> : <>
+    </>}
+    {view === "documents" && <>
       <details className="mongo-query">
         <summary>필터 및 정렬</summary>
         <form onSubmit={event => { event.preventDefault(); setQuery({ ...draft, page: 0 }); }}>

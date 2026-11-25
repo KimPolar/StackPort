@@ -116,6 +116,29 @@ async function verify(page, port, ca) {
     const indexes = await command('mongo_indexes', { id, database, collection: 'records' });
     assert.equal(indexes.items.find(index => index.name === 'expiry').ttl_seconds, 600);
     assert.deepEqual(JSON.parse(indexes.items.find(index => index.name === 'rank_desc').keys), { rank: { $numberInt: '-1' } });
+    const analyze = (sampleSize, db = database, collection = 'schema_samples') =>
+      command('mongo_schema_sample', { id, database: db, collection, sampleSize });
+    const schema = await analyze(100);
+    assert.equal(schema.documents, 3);
+    assert.equal(schema.oversized, 1);
+    assert.equal(schema.structure_limited, false);
+    const field = (...path) => schema.fields.find(item => JSON.stringify(item.path) === JSON.stringify(path.map(name =>
+      name === null ? { kind: 'array_item' } : { kind: 'field', name })));
+    assert.deepEqual(field('events').types, { Array: 3 });
+    assert.equal(field('events', null, 'value').documents, 2);
+    assert.deepEqual(field('events', null, 'value').types, { Int32: 1, String: 2 });
+    assert.deepEqual(field('optional').types, { Int64: 1, Null: 1 });
+    assert.deepEqual(field('name.with.dot').types, { Boolean: 1 });
+    assert.deepEqual(field('name', 'with', 'dot').types, { String: 1 });
+    assert.doesNotMatch(JSON.stringify(schema), /mixed-value|nested-value/u);
+    const single = await analyze(1);
+    assert.equal(single.documents + single.oversized, 1);
+    await assert.rejects(analyze(0), /표본 크기/);
+    await assert.rejects(analyze(101), /표본 크기/);
+    await assert.rejects(analyze(20, 'private', 'data'), /권한/);
+    const viewSchema = await analyze(50, database, 'recent_records');
+    assert.equal(viewSchema.documents, 2);
+    assert.equal(viewSchema.oversized, 1);
   } finally {
     await command('close_mongo', { id });
   }
@@ -140,9 +163,26 @@ async function verify(page, port, ca) {
   await detail.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '"22"' }).waitFor();
   await detail.getByRole('button', { name: '인덱스', exact: true }).click();
   await detail.getByRole('rowheader', { name: 'expiry', exact: true }).waitFor();
+  await workspace.getByRole('button', { name: 'schema_samples 컬렉션', exact: true }).click();
+  await detail.getByRole('button', { name: '스키마 분석', exact: true }).click();
+  await detail.getByLabel('표본 크기', { exact: true }).selectOption('100');
+  await detail.getByRole('button', { name: '표본 분석', exact: true }).click();
+  await detail.getByText(/분석 문서 3개.*혼합 유형 2개/u).waitFor();
+  await detail.getByText(/64 KiB를 넘은 문서 1개/u).waitFor();
+  const schemaTable = detail.getByRole('table', { name: 'MongoDB 문서 스키마', exact: true });
+  await schemaTable.getByRole('rowheader', { name: '["name.with.dot"]', exact: true }).waitFor();
+  await schemaTable.getByRole('rowheader', { name: 'name.with.dot', exact: true }).waitFor();
+  await detail.getByRole('checkbox', { name: '혼합 유형만', exact: true }).check();
+  assert.deepEqual(await schemaTable.getByRole('rowheader').allTextContents(), ['events[].value', 'optional']);
+  const searchField = detail.getByRole('searchbox', { name: '필드 경로 검색', exact: true });
+  await searchField.fill('events');
+  assert.deepEqual(await schemaTable.getByRole('rowheader').allTextContents(), ['events[].value']);
+  assert.match(await schemaTable.innerText(), /66\.7%.*Int32.*1개.*String.*2개/su);
   await workspace.getByRole('button', { name: 'recent_records 뷰', exact: true }).click();
   await detail.getByRole('heading', { name: 'recent_records' }).waitFor();
   await detail.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '문서 20' }).waitFor();
+  await detail.getByRole('button', { name: '스키마 분석', exact: true }).click();
+  assert.equal(await detail.getByRole('table', { name: 'MongoDB 문서 스키마', exact: true }).count(), 0);
   await workspace.getByRole('button', { name: 'MongoDB 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);

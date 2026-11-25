@@ -1,8 +1,10 @@
 mod profiles;
 mod query;
+mod schema;
 
 pub use profiles::{MongoProfile, MongoSettings};
 pub use query::{MongoDocumentPage, MongoQuery};
+pub use schema::MongoSchemaSample;
 
 use crate::{Result, Store};
 use bson::{doc, Bson, Document};

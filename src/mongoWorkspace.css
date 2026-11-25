@@ -25,6 +25,15 @@
 .mongo-document-list summary small { color: var(--text-muted); }
 .mongo-document-list pre { max-height: 42dvh; margin: 0 10px 10px; padding: 10px; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 .mongo-document-list p, .mongo-note { margin: 8px 12px; }
+.mongo-schema-controls { font-size: 12px; }
+.mongo-schema-controls :is(select, input[type="search"]) { min-height: 32px; min-width: 0; padding: 0 8px; color: var(--text); background: var(--surface); border: 1px solid var(--control-border); border-radius: 5px; }
+.mongo-schema-controls input[type="search"] { flex: 1 1 150px; }
+.mongo-schema-summary { margin: 10px 12px; color: var(--text-subtle); font-size: 12px; }
+.mongo-schema table { width: 100%; }
+.mongo-schema td, .mongo-schema th { white-space: normal; overflow-wrap: anywhere; }
+.mongo-schema-presence { min-width: 110px; font-variant-numeric: tabular-nums; }
+.mongo-schema-presence meter { display: block; width: 88px; }
+.mongo-schema-types { display: flex; flex-wrap: wrap; gap: 4px 10px; list-style: none; margin: 0; padding: 0; }
 @media (max-width: 850px) {
   .mongo-layout { grid-template-columns: 1fr; }
   .mongo-catalog { grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); }

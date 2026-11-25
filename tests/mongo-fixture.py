@@ -34,5 +34,11 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     records.create_index('expires', name='expiry', expireAfterSeconds=600)
     client.visible.command('create', 'recent_records', viewOn='records',
                            pipeline=[{'$match': {'rank': {'$gte': 20}}}])
+    client.visible.schema_samples.insert_many([
+        {'name.with.dot': True, 'optional': None, 'events': [{'value': 1}, {'value': 2}, {'value': 'mixed-value'}]},
+        {'name': {'with': {'dot': 'nested-value'}}, 'optional': Int64(7), 'events': [{'value': 'text'}]},
+        {'events': []},
+        {'oversized': 'x' * 70_000},
+    ])
     client.admin.command('createUser', 'catalog_reader', pwd='stackport-mongo-catalog-test',
                          roles=[{'role': 'read', 'db': 'visible'}])

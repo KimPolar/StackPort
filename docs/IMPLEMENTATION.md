@@ -10,6 +10,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·뷰를 검색합니다. 문서는 필터·표시 필드·정렬을 서버에 전달해 20개씩 읽고, BSON 타입을 보존하는 Canonical Extended JSON으로 표시합니다. BSON과 표시 문자열 모두 문서당 64 KiB까지 미리 볼 수 있고, 페이지의 표시 문자열 합계는 384 KiB까지입니다. 큰 문서는 표시 필드를 줄여 다시 조회할 수 있습니다. 컬렉션 인덱스는 앞 50개까지 키·고유 여부·TTL을 읽습니다. [MongoDB Rust 드라이버 데이터베이스와 컬렉션](https://www.mongodb.com/docs/drivers/rust/current/database-collection/)
 
+컬렉션과 뷰의 **스키마 분석**은 선택한 대상에서 `$sample`로 최대 20·50·100개의 문서를 읽습니다. 분석에 포함된 문서를 분모로 필드 등장 비율을 계산하고, 각 BSON 유형을 문서당 한 번 집계합니다. 배열 항목은 `[]`로 표시하며, `a.b`처럼 점이 포함된 단일 필드 이름은 `["a.b"]`로 구분합니다. 화면에서 필드 경로를 검색하고 두 가지 이상의 유형이 나온 경로만 볼 수 있습니다. 64 KiB를 넘는 문서, 경로 제한을 넘는 필드는 집계에서 제외하고 화면에 알립니다. 결과에는 필드 경로와 유형별 개수를 표시합니다. 서버 처리 시간은 최대 7초로 설정하고, 디스크를 사용하는 집계는 비활성화합니다. [MongoDB 무작위 표본](https://www.mongodb.com/docs/manual/reference/operator/aggregation/sample/) · [MongoDB 집계 실행 옵션](https://www.mongodb.com/docs/manual/reference/command/aggregate/)
+
 **SQL Server**는 호스트·TCP 포트·시작 데이터베이스·인증 방식·환경을 프로젝트에 저장합니다. SQL Server 로그인 암호는 접속할 때만 입력합니다. Windows 통합 인증을 선택하면 현재 Windows 계정으로 연결합니다. TLS는 필수이며 OS 신뢰 저장소와 선택한 PEM CA로 서버 인증서를 검증합니다. 서버가 TDS 8.0을 제공하면 엄격한 TLS를 선택할 수 있습니다. 운영 연결에는 `PROD` 확인이 필요합니다. [Tiberius](https://github.com/tiberius-rs/tiberius/releases/tag/v0.13.0) · [SQL Server의 엄격한 암호화](https://learn.microsoft.com/en-us/sql/relational-databases/security/networking/connect-with-strict-encryption)
 
 SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개된 스키마, 테이블, 뷰를 검색합니다. 열 이름·타입·NULL·IDENTITY를 표시하며, 미리보기는 앞 64개 열을 읽습니다. 테이블은 기본 키의 열 순서와 정렬 방향으로 50행씩 읽습니다. 기본 키가 없으면 한 번에 최대 50행을 표시합니다. 큰 정수와 소수는 문자열로, 바이너리는 HEX로 보존하며 값은 처음 256문자 또는 256바이트까지 표시합니다. 잘린 문자열의 크기는 UTF-16으로 변환한 전체 값의 바이트 수입니다. [SQL Server 메타데이터 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration)
@@ -563,7 +565,7 @@ node tests/desktop-smoke.cjs
 
 MongoDB 검사는 `tests/mongo-smoke.cjs`를 사용합니다. `STACKPORT_CDP_URL`에 격리 앱의 디버깅 주소, `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MONGO_BIN`에 Windows ZIP에서 꺼낸 `mongod.exe`의 절대 경로를 지정합니다. `STACKPORT_TEST_PYTHON`으로 PyMongo가 설치된 Python을 실행해 임시 서버의 문서와 제한 계정을 만듭니다. `STACKPORT_TEST_OPENSSL`은 테스트용 TLS 인증서 생성에 사용합니다.
 
-Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
+Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 스키마 분석은 같은 계정에서 배열 내부 유형의 문서별 집계, 점이 포함된 필드와 중첩 경로 구분, 크기 초과 문서 제외, 권한 범위와 뷰를 검사합니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
 
 SQL Server 검사는 `tests/sql-server-smoke.cjs`를 사용합니다. `STACKPORT_SQL_SERVER_PORT`에 루프백 테스트 인스턴스의 TCP 포트, `STACKPORT_SQL_SERVER_CA`에 PEM CA 경로, `STACKPORT_SQL_SERVER_SA_PASSWORD`에 테스트 인스턴스의 관리자 암호를 지정합니다. 스크립트는 Node의 `tedious` 패키지로 실행마다 별도 데이터베이스, 테이블·뷰와 제한 계정을 생성합니다. 패키지 경로는 `STACKPORT_TEDIOUS_PATH`로 지정할 수 있습니다. 격리 인스턴스에서 검사하고, 앱의 디버깅 주소는 `STACKPORT_CDP_URL`에 지정합니다.
 

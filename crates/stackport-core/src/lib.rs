@@ -31,7 +31,7 @@ pub use mysql::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowSta
 pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
-pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSessionInfo, MongoSettings};
+pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
