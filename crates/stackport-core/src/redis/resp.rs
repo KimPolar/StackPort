@@ -16,6 +16,7 @@ pub(super) struct Wire(BufReader<Box<dyn Socket>>);
 
 #[derive(Debug)]
 pub(super) enum Reply {
+    Simple(Vec<u8>),
     Bytes(Vec<u8>),
     Integer(i64),
     Array(Vec<Reply>),
@@ -93,7 +94,7 @@ impl Wire {
             }
             let header = &line[1..line.len() - 2];
             match line[0] {
-                b'+' => Ok(Reply::Bytes(header.to_vec())),
+                b'+' => Ok(Reply::Simple(header.to_vec())),
                 b'-' if depth == 0 => Err(server_error(header)),
                 b'-' => Ok(Reply::Error),
                 b':' => Ok(Reply::Integer(number(header)?)),
@@ -175,7 +176,7 @@ fn server_error(message: &[u8]) -> Failure {
 impl Reply {
     pub(super) fn bytes(self) -> Result<Vec<u8>, Failure> {
         match self {
-            Self::Bytes(value) => Ok(value),
+            Self::Simple(value) | Self::Bytes(value) => Ok(value),
             _ => Err(Failure::Protocol),
         }
     }

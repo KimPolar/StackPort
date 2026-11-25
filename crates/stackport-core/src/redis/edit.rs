@@ -464,7 +464,7 @@ impl Mutation {
         match (self, reply) {
             (_, Reply::Error) => Ok((EditStatus::Rejected, None)),
             (Self::String(_) | Self::Stream(_), Reply::Null) => Ok((EditStatus::Conflict, None)),
-            (Self::String(_) | Self::List(..), Reply::Bytes(bytes)) if bytes == b"OK" => {
+            (Self::String(_) | Self::List(..), Reply::Simple(bytes) | Reply::Bytes(bytes)) if bytes == b"OK" => {
                 Ok((EditStatus::Applied, None))
             }
             (Self::Set(_), Reply::Integer(0)) => Ok((EditStatus::Conflict, None)),
@@ -472,7 +472,7 @@ impl Mutation {
             | (Self::Hash(..) | Self::Zset(..), Reply::Integer(0 | 1)) => {
                 Ok((EditStatus::Applied, None))
             }
-            (Self::Stream(_), Reply::Bytes(bytes)) => {
+            (Self::Stream(_), Reply::Simple(bytes) | Reply::Bytes(bytes)) => {
                 let id = String::from_utf8(bytes).map_err(|_| Failure::Protocol)?;
                 if !valid_stream_id(&id) {
                     return Err(Failure::Protocol);

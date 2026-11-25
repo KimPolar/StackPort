@@ -30,6 +30,7 @@ pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
 pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisServerSnapshot, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus};
 pub use redis::{RedisPublishReport, RedisSubscriptionSnapshot};
+pub use redis::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};
 pub use postgres::PostgresDisconnect;

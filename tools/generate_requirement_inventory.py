@@ -165,6 +165,7 @@ PARTIAL = {
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
     "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
     "SP-NS-011": "String 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가와 UTF-8·HEX 미리보기",
+    "SP-NS-012": "읽기 전용 명령 콘솔, Tab 명령 완성, RESP 응답 타입·HEX 표시, 연결별 최근 30건과 방향키 재입력, 변경·삭제·관리 명령 차단 사유",
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, 지원 키 타입의 읽기 명령 선택과 미지원 타입 표시",
@@ -462,6 +463,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/redis-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
+            if requirement_id == "SP-NS-012":
+                evidence += "; crates/stackport-core/src/redis/console.rs; src/RedisConsoleDialog.tsx"
             if requirement_id in {"SP-NS-013", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/pubsub.rs; src/RedisPubSubDialog.tsx"
         writer.writerow([requirement_id, title, detail, "partial" if subset else "not_started", subset, evidence])

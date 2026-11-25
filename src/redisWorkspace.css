@@ -63,3 +63,29 @@
 .redis-pubsub-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .redis-pubsub .redis-values { max-height: 30dvh; font-variant-numeric: tabular-nums; }
 .redis-pubsub .redis-pubsub-retention { margin: 0; padding: 7px 12px; }
+.dialog.redis-console { width: min(880px, calc(100vw - 32px)); }
+.redis-console-body { display: grid; gap: 12px; padding: 0 21px 21px; }
+.redis-console-body > p { margin: 0; overflow-wrap: anywhere; }
+.redis-console-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(200px, 1fr); align-items: start; gap: 12px; }
+.redis-console .results-card { min-width: 0; }
+.redis-console .panel-heading h3 { font-size: 14px; margin: 0; }
+.redis-console-history .redis-key-list { max-height: 32dvh; }
+.redis-console-history > p.form-note { margin: 0; padding: 7px 12px; }
+.redis-console-response { padding: 10px 12px; max-height: 42dvh; overflow: auto; }
+.redis-console-response-title { display: flex; gap: 8px; justify-content: space-between; margin-bottom: 8px; }
+.redis-console-response-title code { overflow-wrap: anywhere; }
+.redis-console-response-title span { color: var(--text-muted); white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.redis-console-reply { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px 8px; }
+.redis-console-reply small { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.redis-console-reply code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.redis-console-reply ol { flex-basis: 100%; margin: 0; padding-inline-start: 22px; }
+.redis-console-reply li { padding-bottom: 4px; }
+.redis-console .redis-console-prompt { padding: 0; }
+.redis-console-command-line { display: flex; align-items: end; gap: 8px; }
+.redis-console-command-line .field { flex: 1; min-width: 0; margin: 0; }
+.redis-console-command-line input { font-family: monospace; }
+.redis-console-command-line button { white-space: nowrap; }
+.redis-console-completions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.redis-console-completions p { margin: 0 0 0 5px; }
+.redis-console-prompt details { margin-top: 8px; color: var(--text-muted); }
+@media (max-width: 600px) { .redis-console-layout { grid-template-columns: minmax(0, 1fr); } }

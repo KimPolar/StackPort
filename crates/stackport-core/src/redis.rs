@@ -1,3 +1,4 @@
+mod console;
 mod edit;
 mod keys;
 mod monitor;
@@ -5,6 +6,7 @@ mod profiles;
 mod pubsub;
 mod resp;
 
+pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub use monitor::RedisServerSnapshot;
 pub(crate) use profiles::{copy_profiles, SCHEMA};

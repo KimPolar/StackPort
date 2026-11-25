@@ -24,6 +24,8 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 **메시지 발행**은 연결할 때 별도로 허용합니다. 채널과 UTF-8 메시지(최대 64 KiB)를 검토하고, 운영 환경에서는 `PROD`를 다시 입력한 뒤 한 번 보냅니다. 작업 기록에는 연결·환경·결과와 서버가 보고한 수신자 수를 남깁니다. 채널·메시지·암호는 기록에 저장하지 않습니다. 발행 응답 전에 연결이 끊기면 결과 미확인 상태를 표시합니다. [Redis PUBLISH](https://redis.io/docs/latest/commands/publish/)
 
+**명령 콘솔**은 현재 논리 DB에서 지원 목록의 읽기 전용 명령을 한 번에 하나씩 실행합니다. Tab이나 제안 버튼으로 명령 이름을 완성하고, 방향키로 이전 입력을 불러옵니다. 공백을 포함한 인수는 따옴표로 감싸고, 큰따옴표 안의 `\xNN`으로 바이너리 바이트를 지정할 수 있습니다. 단순 문자열·바이트 문자열·정수·배열·NULL을 구분해 표시합니다. 바이트 문자열당 512바이트, 중첩 응답 전체 256개 항목으로 화면 미리보기를 제한합니다. 코어의 RESP 응답 한도를 넘으면 연결을 닫습니다. 실행한 명령과 결과는 연결별로 최근 30건까지 메모리에 남고, 기록을 비우거나 연결을 종료하면 삭제됩니다. `FLUSHDB`, `DEL`, 스크립트, 서버 설정 변경 등은 콘솔에서 차단하고 사유를 표시합니다. [Redis CLI](https://redis.io/docs/latest/develop/tools/cli/) · [RESP](https://redis.io/docs/latest/develop/reference/protocol-spec/)
+
 탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.

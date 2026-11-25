@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck, SquareTerminal } from "lucide-react";
 import { Dialog } from "./Dialog";
 import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditKind, type RedisEditReport } from "./RedisEditDialog";
 import { RedisServerMonitor } from "./RedisServerMonitor";
 import { RedisPubSubDialog } from "./RedisPubSubDialog";
+import { RedisConsoleDialog, type RedisConsoleEntry } from "./RedisConsoleDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./redisWorkspace.css";
 
@@ -26,6 +27,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [connectOpen, setConnectOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [pubsubOpen, setPubsubOpen] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const [consoleHistory, setConsoleHistory] = useState<RedisConsoleEntry[]>([]);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
@@ -66,7 +69,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (!(message.includes("연결이 닫혔습니다") || message.includes("연결이 끊겼습니다"))) return false;
     const id = active.current;
     if (id) {
-      active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false); setError(message);
+      active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false);
+      setConsoleOpen(false); setConsoleHistory([]); setError(message);
       void invoke("close_redis", { id }).catch(() => {});
     }
     return true;
@@ -99,7 +103,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     const id = active.current;
     if (!id) return;
     active.current = null;
-    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false); setError("");
+    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false);
+    setConsoleOpen(false); setConsoleHistory([]); setError("");
     try { await invoke("close_redis", { id }); }
     catch (reason) { if (mounted.current) setError(String(reason)); }
   }
@@ -124,6 +129,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
           <Activity size={15} aria-hidden /> 서버 모니터</button>}
         {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setPubsubOpen(true)}>
           <Radio size={15} aria-hidden /> Pub/Sub</button>}
+        {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setConsoleOpen(true)}>
+          <SquareTerminal size={15} aria-hidden /> 명령 콘솔</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
           <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowPublish(false); setConnectOpen(true); }}>
             <Plug size={15} aria-hidden /> Redis 연결</button>}
@@ -204,6 +211,10 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       onFailure={handleFailure} onClose={() => setMonitorOpen(false)} />}
     {pubsubOpen && session && <RedisPubSubDialog id={session.id} allowPublish={session.allow_publish} environment={settings.environment}
       target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
+    {consoleOpen && session && <RedisConsoleDialog id={session.id} history={consoleHistory}
+      target={`${settings.name} · ${settings.environment} · DB ${settings.database}`} onFailure={handleFailure}
+      onRecord={entry => setConsoleHistory(values => [entry, ...values].slice(0, 30))}
+      onClear={() => setConsoleHistory([])} onClose={() => setConsoleOpen(false)} />}
   </section>;
 }
 

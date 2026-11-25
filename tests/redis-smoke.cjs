@@ -170,6 +170,10 @@ async function verify(browser, serverPort, secure) {
   await assert.rejects(open(wrongHost), /TLS 인증서/);
   const plain = await alternate('일반 TCP', { host: '127.0.0.1', port: serverPort, tls: false, ca_path: null, username: '', environment: 'DEV' });
   const plainSession = await open(plain, '', '');
+  await assert.rejects(command('redis_run_console', { id: plainSession.id, line: 'FLUSHALL' }), /데이터를 삭제/);
+  const retained = await command('redis_run_console', { id: plainSession.id, line: 'GET cache:string' });
+  assert.equal(retained.reply.kind, 'bulk');
+  assert.equal(retained.reply.value.text, '문자열 값');
   await command('close_redis', { id: plainSession.id });
 
   const { id } = await open(profile);
@@ -183,6 +187,7 @@ async function verify(browser, serverPort, secure) {
   const selectedDb = monitor.keyspace.find(item => item.database === 3);
   assert.ok(selectedDb.keys > 300 && selectedDb.expiring >= 2);
   assert.deepEqual(monitor.slow_log, { status: 'unavailable', reason: '현재 Redis 역할에 이 명령의 권한이 없습니다.' });
+  await verifyConsole(command, id);
   const scan = (cursor, pattern, kind = null) => command('redis_keys', { id, input: { cursor, pattern, kind } });
   const read = (key, position = null) => command('redis_value', { id, input: { key: keyId(key), position } });
   let cursor = '0';
@@ -258,6 +263,7 @@ async function verify(browser, serverPort, secure) {
   await db0.getByRole('cell', { name: '2', exact: true }).waitFor();
   await monitorDialog.getByRole('button', { name: '닫기', exact: true }).click();
   await monitorDialog.waitFor({ state: 'detached' });
+  await verifyConsoleDialog(page, workspace);
   await findKey(page, workspace, 'cache:list', 'list');
   const detail = workspace.getByRole('region', { name: 'Redis 키 상세', exact: true });
   await detail.getByText('entry-0', { exact: true }).waitFor();
@@ -274,6 +280,72 @@ async function verify(browser, serverPort, secure) {
   await verifyEditDialog(page, workspace);
   await verifyPubSubDialog(page, workspace, secure);
   assert.deepEqual(errors, []);
+}
+
+async function verifyConsole(command, id) {
+  const catalog = await command('redis_console_commands');
+  assert.ok(catalog.some(entry => entry.name === 'TYPE' && entry.warning === null));
+  assert.ok(catalog.some(entry => entry.name === 'FLUSHDB' && entry.warning.includes('삭제')));
+  const run = line => command('redis_run_console', { id, line });
+  const status = await run('ping');
+  assert.equal(status.reply.kind, 'simple');
+  assert.equal(status.reply.value.text, 'PONG');
+  const count = await run('DBSIZE');
+  assert.equal(count.reply.kind, 'integer');
+  assert.ok(Number(count.reply.value) > 300);
+
+  const values = await run(String.raw`MGET "console:space key" "\x00\xff\x2a\x0d\x0a" "cache:missing"`);
+  assert.equal(values.reply.kind, 'array');
+  assert.deepEqual(values.reply.items.map(item => [item.kind, item.value?.encoding, item.value?.text]), [
+    ['bulk', 'utf8', 'quoted-key-value'], ['bulk', 'hex', '00ff61'], ['null', undefined, undefined],
+  ]);
+  const stream = await run('XRANGE cache:stream - + COUNT 2');
+  assert.equal(stream.reply.items.length, 2);
+  assert.equal(stream.reply.items[0].items[0].value.text, '1-0');
+  assert.equal(stream.reply.items[1].items[1].items[0].value.text, 'status');
+  const bounded = await run('LRANGE console:wide 0 -1');
+  assert.equal(bounded.truncated, true);
+  assert.equal(bounded.reply.length, 310);
+  assert.equal(bounded.reply.items.length, 255);
+
+  await assert.rejects(run('FLUSHDB ASYNC'), /데이터를 삭제/);
+  await assert.rejects(run('CONFIG GET requirepass'), /서버 상태/);
+  await assert.rejects(run('GET cache:string\nFLUSHDB'), /한 줄/);
+  await assert.rejects(run('ECHO "no echo permission"'), /권한/);
+  assert.equal((await run('GET cache:string')).reply.value.text, '문자열 값');
+}
+
+async function verifyConsoleDialog(page, workspace) {
+  const open = workspace.getByRole('button', { name: '명령 콘솔', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'Redis 명령 콘솔', exact: true });
+  await open.click();
+  const prompt = dialog.getByRole('textbox', { name: 'Redis 명령', exact: true });
+  const run = dialog.getByRole('button', { name: '실행', exact: true });
+  const output = dialog.getByRole('region', { name: 'Redis 응답 본문', exact: true });
+  const close = dialog.getByRole('button', { name: '닫기', exact: true });
+  await prompt.fill('typ');
+  await dialog.getByRole('group', { name: '명령 자동 완성', exact: true }).getByRole('button', { name: 'TYPE', exact: true }).waitFor();
+  await prompt.press('Tab');
+  assert.equal(await prompt.inputValue(), 'TYPE ');
+  await prompt.fill('TYPE cache:list');
+  await prompt.press('Enter');
+  await output.getByText('단순 문자열 · UTF8', { exact: true }).waitFor();
+  await output.getByText('list', { exact: true }).waitFor();
+  await prompt.press('ArrowUp');
+  assert.equal(await prompt.inputValue(), 'TYPE cache:list');
+  await prompt.press('ArrowDown');
+  assert.equal(await prompt.inputValue(), '');
+  await prompt.fill('FLUSHDB');
+  await dialog.getByText(/데이터를 삭제하는 명령/).waitFor();
+  assert.equal(await run.isDisabled(), true);
+  await close.click();
+  await dialog.waitFor({ state: 'detached' });
+  await open.click();
+  await output.getByText('list', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '기록 비우기', exact: true }).click();
+  await output.waitFor({ state: 'detached' });
+  await close.click();
+  await dialog.waitFor({ state: 'detached' });
 }
 
 async function findKey(page, workspace, key, kind) {
@@ -500,6 +572,8 @@ async function main() {
       ['SELECT', '3'],
       ['SET', binaryKey, Buffer.from([0, 255, 97])],
       ['SET', 'cache:string', '문자열 값'], ['SET', 'cache:ttl', 'temporary', 'PX', '180000'],
+      ['SET', 'console:space key', 'quoted-key-value'],
+      ['RPUSH', 'console:wide', ...Array.from({ length: 310 }, (_, index) => 'console-' + index)],
       ['HSET', 'cache:hash', 'region', '서울'], ['SADD', 'cache:set', 'alpha', 'beta'],
       ['ZADD', 'cache:zset', '1.25', 'alpha', '3.5', 'beta'],
       ['SET', 'edit:string', '처음 값', 'PX', '180000'],
@@ -510,7 +584,7 @@ async function main() {
       ...Array.from({ length: 34 }, (_, index) => ['XADD', 'cache:stream', (index + 1) + '-0', 'status', 'ready']),
       ...Array.from({ length: 330 }, (_, index) => ['SET', 'noise:' + index, 'fixture']),
       ['ACL', 'SETUSER', 'fixture_reader', 'on', '>' + secret, '~*', '+info', '+select', '+scan', '+dbsize', '+type',
-        '+pttl', '+memory|usage', '+strlen', '+getrange', '+llen', '+lrange', '+zcard', '+zrange', '+hlen', '+hscan', '+scard',
+        '+pttl', '+memory|usage', '+get', '+mget', '+ping', '+strlen', '+getrange', '+llen', '+lrange', '+zcard', '+zrange', '+hlen', '+hscan', '+scard',
         '+sscan', '+xlen', '+xrange', '+watch', '+unwatch', '+multi', '+exec', '+discard'],
       ['ACL', 'SETUSER', 'fixture_writer', 'on', '>' + secret, '~*',
         '+@read', '-keys', '+info', '+select', '+dbsize', '+memory|usage', '+watch', '+unwatch', '+multi', '+exec', '+discard',
@@ -522,7 +596,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure);
-    console.log('Windows Redis E2E passed (ACL, TLS, server monitor, Pub/Sub reconnect and review, cursor browsing and six typed edits).');
+    console.log('Windows Redis E2E passed (ACL, TLS, read-only console, server monitor, Pub/Sub and six typed edits).');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
     throw error;

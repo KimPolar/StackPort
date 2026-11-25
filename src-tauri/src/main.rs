@@ -953,6 +953,18 @@ async fn redis_server_snapshot(
 }
 
 #[tauri::command]
+fn redis_console_commands() -> Vec<stackport_core::RedisConsoleCommand> {
+    stackport_core::redis_console_commands()
+}
+
+#[tauri::command]
+async fn redis_run_console(
+    redis: State<'_, stackport_core::RedisManager>, id: String, line: String,
+) -> Result<stackport_core::RedisConsoleResult, String> {
+    redis.run_console(&id, line).await
+}
+
+#[tauri::command]
 async fn redis_start_subscription(
     redis: State<'_, stackport_core::RedisManager>,
     id: String, name: String, pattern: bool, password: stackport_core::RedisPassword, confirmation: String,
@@ -1977,6 +1989,8 @@ fn main() {
             redis_keys,
             redis_value,
             redis_server_snapshot,
+            redis_console_commands,
+            redis_run_console,
             redis_start_subscription,
             redis_subscription_snapshot,
             redis_clear_subscription_history,
