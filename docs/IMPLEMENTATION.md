@@ -132,6 +132,10 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **키 탐색**은 `SCAN`으로 서버 패턴과 타입 필터를 실행합니다. `COUNT 100`은 서버에 전달하는 탐색 힌트입니다. 비어 있는 페이지에도 다음 커서가 있을 수 있고, 조회 중 키가 바뀌면 결과에 반영될 수 있습니다. 역할에 해당 권한이 있으면 `DBSIZE`, `PTTL`, `MEMORY USAGE`로 DB 전체 키 수와 선택한 키의 만료 시간 및 메모리를 표시합니다. String은 512바이트 구간, List와 Sorted Set은 순서 범위, Hash와 Set은 커서, Stream은 메시지 ID로 값을 탐색합니다. 바이너리 키와 값은 HEX로 표시합니다. 응답 하나가 4 MiB 또는 8,192개 항목을 초과하면 연결을 닫습니다. Windows 통합 테스트는 실제 Redis 서버와 로컬 TLS 연결로 인증·DB 번호·타입별 읽기 및 단절 감지를 확인합니다. [Redis SCAN](https://redis.io/docs/latest/commands/scan/)
 
+연결할 때 `COMMAND INFO`로 Redis JSON의 `JSON.GET`과 `JSON.SET` 등록 여부를 확인합니다. 조회 명령이 확인되면 키 탐색의 타입 필터에 **JSON**이 표시됩니다. 서버가 명령 조회를 제한하면 지원 상태는 미확인으로 표시되며, 탐색 중 JSON 키를 열면 현재 권한으로 조회를 시도합니다. [Redis COMMAND INFO](https://redis.io/docs/latest/commands/command-info/)
+
+편집을 허용한 연결에서 64 KiB 이하의 JSON 문서를 열고 **값 편집**을 선택하면 현재 문서에서 수정을 시작합니다. 검토 화면에서 원본과 입력값 전체를 비교합니다. JSON 숫자를 브라우저에서 변환하지 않고 서버에 입력 텍스트 그대로 전달합니다. 검토 시 처음 불러온 문서와 다시 조회한 값을 비교하고, `WATCH` 이후 키가 바뀌면 적용을 중단합니다. `JSON.SET`은 기존 키의 문서 전체에 적용합니다. 64 KiB를 넘는 문서는 앞부분만 표시합니다. [Redis JSON.GET](https://redis.io/docs/latest/commands/json.get/) · [Redis JSON.SET](https://redis.io/docs/latest/commands/json.set/)
+
 연결할 때 **이 연결에서 키 편집 허용**을 켜면 기존 키의 String 값 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가를 할 수 있습니다. 텍스트와 HEX 입력을 지원하며 한 번에 최대 1 MiB의 변경을 검토합니다. List는 0부터 시작하거나 음수로 끝에서 지정합니다. Set과 Sorted Set은 멤버를 선택하고, Stream은 한 메시지에 최대 64개의 필드를 추가합니다. 키의 TTL을 유지합니다. 필드별 만료를 지원하는 Redis에서 `HSET`으로 값을 저장하면 해당 필드의 만료가 해제됩니다. [Redis SET](https://redis.io/docs/latest/commands/set/) · [Redis HEXPIRE](https://redis.io/docs/latest/commands/hexpire/) · [Redis XADD](https://redis.io/docs/latest/commands/xadd/)
 
 **변경 미리보기**는 `WATCH` 후 현재 값과 입력값을 표시합니다. 운영 연결은 적용할 때 `PROD`를 다시 입력하고, 5분 이내의 미리보기를 한 번 사용합니다. 앱은 `MULTI`와 `EXEC` 사이에 타입별 명령 하나만 넣습니다. 다른 클라이언트가 대상 키를 변경하거나 서버가 키를 만료시키면 Redis가 트랜잭션을 중단합니다. 적용 응답을 받기 전에 연결이 끊기면 재접속해 현재 값을 확인하도록 안내합니다. 기록에는 연결과 환경, 결과를 남깁니다. 값과 키 원문은 세션에서 사용합니다. [Redis 트랜잭션](https://redis.io/docs/latest/develop/using-commands/transactions/)

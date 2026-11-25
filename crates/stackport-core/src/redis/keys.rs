@@ -1,4 +1,7 @@
-use super::resp::{Failure, Reply, Wire};
+use super::{
+    json,
+    resp::{Failure, Reply, Wire},
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -15,6 +18,7 @@ pub enum RedisKeyType {
     Set,
     Zset,
     Stream,
+    Json,
 }
 
 impl RedisKeyType {
@@ -26,6 +30,7 @@ impl RedisKeyType {
             Self::Set => "set",
             Self::Zset => "zset",
             Self::Stream => "stream",
+            Self::Json => json::TYPE,
         }
     }
 }
@@ -157,6 +162,19 @@ pub(super) async fn value(
         "string" | "list" | "zset" => read_indexed(wire, &key, input.position, &mut page).await?,
         "hash" | "set" => read_scanned(wire, &key, input.position, &mut page).await?,
         "stream" => read_stream(wire, &key, input.position, &mut page).await?,
+        json::TYPE => {
+            if input.position.is_some() {
+                return Err(position_error());
+            }
+            let Some(document) = json::read(wire, &key).await? else {
+                page.kind = "none".into();
+                return Ok(page);
+            };
+            page.kind = "json".into();
+            page.length = Some(document.len() as u64);
+            page.columns = vec!["JSON 문서"];
+            page.rows = vec![vec![display_json(&document)?]];
+        }
         _ => {}
     }
     Ok(page)
@@ -312,6 +330,19 @@ pub(super) fn display(bytes: &[u8], multiline: bool) -> RedisBytes {
 
 pub(super) fn display_complete(bytes: &[u8]) -> RedisBytes {
     format_bytes(bytes, false, bytes.len())
+}
+
+pub(super) fn display_json(bytes: &[u8]) -> Result<RedisBytes, Failure> {
+    if bytes.len() > json::EDIT_LIMIT {
+        return Ok(display(bytes, true));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| Failure::Protocol)?;
+    Ok(RedisBytes {
+        text: text.into(),
+        encoding: "utf8",
+        bytes: bytes.len(),
+        truncated: false,
+    })
 }
 
 fn format_bytes(bytes: &[u8], multiline: bool, max_bytes: usize) -> RedisBytes {

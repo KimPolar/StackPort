@@ -1,5 +1,9 @@
 use super::{
-    keys::{display, display_complete, key_bytes, valid_stream_id, RedisBytes, DISPLAY_BYTES},
+    json,
+    keys::{
+        display, display_complete, display_json, key_bytes, valid_stream_id, RedisBytes,
+        DISPLAY_BYTES,
+    },
     resp::{Failure, Reply, Wire},
 };
 use serde::{Deserialize, Serialize};
@@ -53,6 +57,10 @@ pub enum RedisEditInput {
     },
     Stream {
         fields: Vec<StreamField>,
+    },
+    Json {
+        original: String,
+        document: String,
     },
     Ttl {
         milliseconds: Option<String>,
@@ -128,6 +136,7 @@ enum Mutation {
     Set(Bytes),
     Zset(Bytes, String),
     Stream(Vec<(Bytes, Bytes)>),
+    Json { original: String, document: String },
     Ttl(Option<String>),
 }
 
@@ -233,7 +242,8 @@ impl State {
     ) -> Result<RedisEditPreview, Failure> {
         let kind = change.kind();
         let actual = self.wire.command(&[b"TYPE", key]).await?.bytes()?;
-        if actual == b"none" || (kind != "ttl" && actual != kind.as_bytes()) {
+        let expected = if kind == "json" { json::TYPE } else { kind };
+        if actual == b"none" || (kind != "ttl" && actual != expected.as_bytes()) {
             return Err(Failure::Server(
                 "Redis 키가 사라졌거나 타입이 바뀌었습니다. 키를 다시 열어 주세요.",
             ));
@@ -493,6 +503,11 @@ impl Mutation {
                 }
                 Self::Stream(pairs)
             }
+            RedisEditInput::Json { original, document } => {
+                json::validate(&original)?;
+                json::validate(&document)?;
+                Self::Json { original, document }
+            }
             RedisEditInput::Ttl { milliseconds } => {
                 let ttl = milliseconds
                     .map(|ms| {
@@ -526,6 +541,7 @@ impl Mutation {
             Self::Set(_) => "set",
             Self::Zset(..) => "zset",
             Self::Stream(_) => "stream",
+            Self::Json { .. } => "json",
             Self::Ttl(_) => "ttl",
         }
     }
@@ -537,6 +553,7 @@ impl Mutation {
             Self::List(index, value) => vec![b"LSET", key, index.as_bytes(), value],
             Self::Set(member) => vec![b"SADD", key, member],
             Self::Zset(member, score) => vec![b"ZADD", key, score.as_bytes(), member],
+            Self::Json { document, .. } => vec![b"JSON.SET", key, b".", document.as_bytes(), b"XX"],
             Self::Ttl(Some(ms)) => vec![b"PEXPIRE", key, ms.as_bytes()],
             Self::Ttl(None) => vec![b"PERSIST", key],
             Self::Stream(fields) => {
@@ -615,6 +632,19 @@ impl Mutation {
                     .collect();
                 return Ok((rows, Some(previous)));
             }
+            Self::Json { original, document } => {
+                let previous = json::read(wire, key).await?;
+                if previous.as_deref() != Some(original.as_bytes()) {
+                    return Err(Failure::Server(
+                        "JSON 문서가 바뀌었습니다. 현재 값을 다시 열어 주세요.",
+                    ));
+                }
+                Change {
+                    selector: None,
+                    before: Some(display_json(original.as_bytes())?),
+                    after: display_json(document.as_bytes())?,
+                }
+            }
             Self::Ttl(_) => return Ok((vec![], None)),
         };
         Ok((vec![row], None))
@@ -623,12 +653,13 @@ impl Mutation {
     fn receipt(&self, reply: Reply) -> Result<(EditStatus, Option<String>), Failure> {
         match (self, reply) {
             (_, Reply::Error) => Ok((EditStatus::Rejected, None)),
-            (Self::String(_) | Self::Stream(_), Reply::Null) => Ok((EditStatus::Conflict, None)),
-            (Self::String(_) | Self::List(..), Reply::Simple(bytes) | Reply::Bytes(bytes))
-                if bytes == b"OK" =>
-            {
-                Ok((EditStatus::Applied, None))
+            (Self::String(_) | Self::Stream(_) | Self::Json { .. }, Reply::Null) => {
+                Ok((EditStatus::Conflict, None))
             }
+            (
+                Self::String(_) | Self::List(..) | Self::Json { .. },
+                Reply::Simple(bytes) | Reply::Bytes(bytes),
+            ) if bytes == b"OK" => Ok((EditStatus::Applied, None)),
             (Self::Set(_), Reply::Integer(0)) => Ok((EditStatus::Conflict, None)),
             (Self::Ttl(_), Reply::Integer(0)) => Ok((EditStatus::Conflict, None)),
             (Self::Set(_) | Self::Ttl(_), Reply::Integer(1))

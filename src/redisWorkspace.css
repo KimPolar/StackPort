@@ -36,6 +36,7 @@
 .redis-edit-fields { min-width: 0; border: 0; padding: 0; margin: 0; }
 .redis-edit-bytes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(85px, auto); gap: 8px; align-items: start; }
 .redis-edit-bytes textarea { resize: vertical; min-width: 0; }
+.redis-json-input { resize: vertical; font-family: monospace; }
 .redis-edit-stream-field { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
 .redis-edit-dialog .redis-values { max-height: 33vh; }
 .redis-edit-dialog .confirm-copy { overflow-wrap: anywhere; }

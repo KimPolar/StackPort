@@ -5,15 +5,17 @@ import { Dialog } from "./Dialog";
 export type RedisBytes = { text: string; encoding: "utf8" | "hex"; bytes: number; truncated: boolean };
 type ValueEditKind = "string" | "hash" | "list" | "set" | "zset" | "stream";
 export type RedisEditTarget = { kind: ValueEditKind | "ttl"; keyId: string; display: RedisBytes }
+  | { kind: "json"; keyId: string; display: RedisBytes; original: string }
   | { kind: "delete"; keyIds: string[] };
 type InputBytes = { encoding: "utf8" | "hex"; text: string };
 type StreamField = { id: number; field: InputBytes; value: InputBytes };
 type EditInput = { kind: "string"; value: InputBytes } | { kind: "hash"; field: InputBytes; value: InputBytes }
   | { kind: "list"; index: string; value: InputBytes } | { kind: "set"; member: InputBytes }
   | { kind: "zset"; member: InputBytes; score: string } | { kind: "stream"; fields: { field: InputBytes; value: InputBytes }[] }
+  | { kind: "json"; original: string; document: string }
   | { kind: "ttl"; milliseconds: string | null };
 type Change = { selector: RedisBytes | null; before: RedisBytes | null; after: RedisBytes };
-type Review = { token: string; key: RedisBytes; kind: ValueEditKind | "ttl"; ttl_ms: number | null; next_ttl_ms: number | null;
+type Review = { token: string; key: RedisBytes; kind: ValueEditKind | "json" | "ttl"; ttl_ms: number | null; next_ttl_ms: number | null;
   changes: Change[]; stream_length: number | null; expires_seconds: number }
   | { token: string; kind: "delete"; keys: RedisBytes[]; expires_seconds: number };
 export type RedisEditReport = { status: "applied" | "conflict" | "rejected"; entry_id: string | null; affected_count: number; audit_warning: boolean };
@@ -22,6 +24,7 @@ const emptyBytes: InputBytes = { encoding: "utf8", text: "" };
 const operation: Record<RedisEditTarget["kind"], string> = {
   string: "String 값 교체", hash: "Hash 필드 저장", list: "List 항목 교체",
   set: "Set 멤버 추가", zset: "Sorted Set 점수 저장", stream: "Stream 메시지 추가",
+  json: "JSON 문서 교체",
   ttl: "키 만료 시간 설정", delete: "선택한 키 삭제",
 };
 const number = new Intl.NumberFormat("ko-KR");
@@ -32,6 +35,7 @@ export function RedisEditDialog({ id, target, location, environment, onBusy, onF
   onClose: () => void; onApplied: (report: RedisEditReport) => void;
 }) {
   const [value, setValue] = useState(emptyBytes);
+  const [document, setDocument] = useState(() => target.kind === "json" ? target.original : "");
   const [selector, setSelector] = useState(emptyBytes);
   const [index, setIndex] = useState("");
   const [score, setScore] = useState("");
@@ -63,7 +67,8 @@ export function RedisEditDialog({ id, target, location, environment, onBusy, onF
     setReview(null); setConfirm(""); setApproval("");
   }
 
-  function input(kind: Exclude<RedisEditTarget["kind"], "delete">): EditInput {
+  function input(target: Exclude<RedisEditTarget, { kind: "delete" }>): EditInput {
+    const kind = target.kind;
     switch (kind) {
       case "string": return { kind, value };
       case "hash": return { kind, field: selector, value };
@@ -71,6 +76,7 @@ export function RedisEditDialog({ id, target, location, environment, onBusy, onF
       case "set": return { kind, member: selector };
       case "zset": return { kind, member: selector, score };
       case "stream": return { kind, fields: fields.map(({ field, value }) => ({ field, value })) };
+      case "json": return { kind, original: target.original, document };
       case "ttl": return { kind, milliseconds: ttlMode === "persist" ? null : (BigInt(seconds) * 1000n).toString() };
     }
   }
@@ -83,7 +89,7 @@ export function RedisEditDialog({ id, target, location, environment, onBusy, onF
       if (!review) {
         const next = target.kind === "delete"
           ? await invoke<Review>("preview_redis_key_delete", { id, keys: target.keyIds })
-          : await invoke<Review>("preview_redis_edit", { id, key: target.keyId, input: input(target.kind) });
+          : await invoke<Review>("preview_redis_edit", { id, key: target.keyId, input: input(target) });
         token.current = next.token;
         setReview(next);
       } else {
@@ -166,6 +172,8 @@ export function RedisEditDialog({ id, target, location, environment, onBusy, onF
         {kind === "zset" && <label className="field">점수<input required inputMode="decimal" value={score}
           onChange={event => setScore(event.target.value)} /></label>}
         {(kind === "string" || kind === "hash" || kind === "list") && <ByteField label="새 값" value={value} setValue={setValue} />}
+        {kind === "json" && <label className="field">JSON 문서<textarea className="redis-json-input" rows={10} value={document}
+          required maxLength={65536} spellCheck={false} onChange={event => setDocument(event.target.value)} /></label>}
         {kind === "stream" && <>
           {fields.map((field, index) => <div key={field.id} className="redis-edit-stream-field">
             <ByteField label={`필드 ${index + 1}`} value={field.field} setValue={value => updateField(field.id, "field", value)} />

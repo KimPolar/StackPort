@@ -1,5 +1,6 @@
 mod console;
 mod edit;
+mod json;
 mod keys;
 mod monitor;
 pub(crate) mod profiles;
@@ -52,6 +53,7 @@ pub struct RedisSessionInfo {
     version: String,
     allow_edits: bool,
     allow_publish: bool,
+    json_support: json::Support,
 }
 
 struct Session {
@@ -59,6 +61,7 @@ struct Session {
     profile: RedisProfile,
     allow_edits: bool,
     allow_publish: bool,
+    json_support: json::Support,
     subscription: AsyncMutex<Option<pubsub::Subscription>>,
     _permit: OwnedSemaphorePermit,
 }
@@ -106,9 +109,15 @@ impl RedisManager {
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| "열린 Redis 연결이 너무 많습니다.")?;
-        let (engine, version, wire) = timeout(CONNECT_TIMEOUT, establish(settings, tls, &password))
-            .await
-            .map_err(|_| "Redis 연결 시간이 초과되었습니다.")??;
+        let (engine, version, wire, json_support) = timeout(CONNECT_TIMEOUT, async {
+            let (engine, version, mut wire) = establish(settings, tls, &password).await?;
+            let json_support = json::support(&mut wire)
+                .await
+                .map_err(|error| error.message())?;
+            Ok::<_, String>((engine, version, wire, json_support))
+        })
+        .await
+        .map_err(|_| "Redis 연결 시간이 초과되었습니다.")??;
         let id = Uuid::new_v4().to_string();
         self.sessions
             .lock()
@@ -120,6 +129,7 @@ impl RedisManager {
                     profile,
                     allow_edits,
                     allow_publish,
+                    json_support,
                     subscription: AsyncMutex::new(None),
                     _permit: permit,
                 }),
@@ -130,6 +140,7 @@ impl RedisManager {
             version,
             allow_edits,
             allow_publish,
+            json_support,
         })
     }
 
@@ -172,6 +183,9 @@ impl RedisManager {
         input: RedisEditInput,
     ) -> Result<RedisEditPreview> {
         let session = self.edit_session(id)?;
+        if matches!(&input, RedisEditInput::Json { .. }) && !session.json_support.may_write() {
+            return Err("현재 Redis 서버에서 JSON 문서 편집을 사용할 수 없습니다.".into());
+        }
         self.run(id, &session, |state| Box::pin(state.preview(key, input)))
             .await
     }

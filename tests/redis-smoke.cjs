@@ -31,6 +31,15 @@ function cli(port, commands) {
   assert.match(output, /errors: 0,/i);
 }
 
+function jsonAvailable(port) {
+  const result = execFileSync(path.join(path.dirname(binary), 'redis-cli.exe'),
+    ['-h', '127.0.0.1', '-p', String(port), '--raw', 'COMMAND', 'INFO', 'JSON.GET', 'JSON.SET'], {
+      cwd: root, windowsHide: true, encoding: 'utf8', timeout: 12_000,
+    });
+  const commands = result.toLowerCase().split(/\r?\n/);
+  return commands.includes('json.get') && commands.includes('json.set');
+}
+
 async function availablePort() {
   const server = net.createServer().listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -136,7 +145,7 @@ async function proxy(port) {
     close: () => { dropClients(); listener.close(); } };
 }
 
-async function verify(browser, serverPort, secure) {
+async function verify(browser, serverPort, secure, hasJson) {
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15_000);
   const errors = [];
@@ -171,13 +180,15 @@ async function verify(browser, serverPort, secure) {
   await assert.rejects(open(wrongHost), /TLS 인증서/);
   const plain = await alternate('일반 TCP', { host: '127.0.0.1', port: serverPort, tls: false, ca_path: null, username: '', environment: 'DEV' });
   const plainSession = await open(plain, '', '');
+  assert.equal(plainSession.json_support, hasJson ? 'read_write' : 'unavailable');
   await assert.rejects(command('redis_run_console', { id: plainSession.id, line: 'FLUSHALL' }), /데이터를 삭제/);
   const retained = await command('redis_run_console', { id: plainSession.id, line: 'GET cache:string' });
   assert.equal(retained.reply.kind, 'bulk');
   assert.equal(retained.reply.value.text, '문자열 값');
   await command('close_redis', { id: plainSession.id });
 
-  const { id } = await open(profile);
+  const { id, json_support: restrictedJsonSupport } = await open(profile);
+  assert.equal(restrictedJsonSupport, 'unknown');
   const monitor = await command('redis_server_snapshot', { id });
   assert.ok(monitor.used_memory > 0 && monitor.peak_memory >= monitor.used_memory);
   assert.ok(monitor.connected_clients >= 1);
@@ -252,7 +263,8 @@ async function verify(browser, serverPort, secure) {
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
-  await workspace.getByText(/Redis 8\.4\.7 · DB 3 · TLS/).waitFor();
+  await workspace.getByText(/Redis .* · DB 3 · TLS · JSON 지원 미확인/).waitFor();
+  assert.equal(await workspace.getByLabel('타입', { exact: true }).getByRole('option', { name: 'JSON', exact: true }).count(), 0);
   await workspace.getByRole('button', { name: '서버 모니터', exact: true }).click();
   const monitorDialog = page.getByRole('dialog', { name: 'Redis 서버 모니터', exact: true });
   await monitorDialog.getByText('사용 메모리', { exact: true }).waitFor();
@@ -286,7 +298,58 @@ async function verify(browser, serverPort, secure) {
   await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
   await page.getByText('Redis 키 삭제', { exact: true }).first().waitFor();
   await page.getByText('Redis 키 삭제 결과 미확인', { exact: true }).waitFor();
+  if (hasJson) await verifyJson({ page, command, open, plain, serverPort });
   assert.deepEqual(errors, []);
+}
+
+async function verifyJson({ page, command, open, plain, serverPort }) {
+  const key = 'json:typed';
+  const original = '{"large":9007199254740993,"nested":[true,null]}';
+  const edited = '{"large":9007199254740995,"nested":[false,null]}';
+  const concurrent = '{"concurrent":true}';
+  const { id } = await open(plain, '', '', true);
+  const read = name => command('redis_value', { id, input: { key: keyId(name), position: null } });
+  const preview = (before, document) => command('preview_redis_edit', {
+    id, key: keyId(key), input: { kind: 'json', original: before, document },
+  });
+  try {
+    assert.equal((await read(key)).rows[0][0].text, original);
+    assert.equal((await read('json:large')).rows[0][0].truncated, true);
+    await assert.rejects(preview(original, '{"incomplete":'), /올바른 Redis JSON/);
+    await assert.rejects(preview('null', edited), /JSON 문서가 바뀌었습니다/);
+    const plan = await preview(original, edited);
+    cli(serverPort, [['SELECT', '3'], ['JSON.SET', key, '.', concurrent]]);
+    const result = await command('apply_redis_edit', { id, token: plan.token, confirmation: '' });
+    assert.equal(result.status, 'conflict');
+    assert.equal((await read(key)).rows[0][0].text, concurrent);
+
+    await page.getByRole('button', { name: 'Redis 일반 TCP 열기', exact: true }).click();
+    const workspace = page.getByRole('region', { name: 'Redis 작업 공간', exact: true });
+    await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
+    const login = page.getByRole('dialog', { name: 'Redis 연결', exact: true });
+    await login.getByRole('checkbox', { name: /키 편집/ }).check();
+    await login.getByRole('button', { name: '연결', exact: true }).click();
+    await workspace.getByText(/JSON 조회·편집 지원/).waitFor();
+    await findKey(page, workspace, key, 'json');
+    const detail = workspace.getByRole('region', { name: 'Redis 키 상세', exact: true });
+    await detail.getByText(concurrent, { exact: true }).waitFor();
+    await detail.getByRole('button', { name: '값 편집', exact: true }).click();
+    const editor = page.getByRole('dialog', { name: 'Redis 키 편집', exact: true });
+    const input = editor.getByLabel('JSON 문서', { exact: true });
+    assert.equal(await input.inputValue(), concurrent);
+    await input.fill(edited);
+    await editor.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+    await editor.getByText(edited, { exact: true }).waitFor();
+    await editor.getByRole('button', { name: '변경 적용', exact: true }).click();
+    await editor.waitFor({ state: 'detached' });
+    await detail.getByText(edited, { exact: true }).waitFor();
+    const stored = await read(key);
+    assert.equal(stored.rows[0][0].text, edited);
+    assert.ok(stored.ttl_ms > 0 && stored.ttl_ms <= 600000);
+    await workspace.getByRole('button', { name: 'Redis 연결 끊기', exact: true }).click();
+  } finally {
+    await command('close_redis', { id });
+  }
 }
 
 async function verifyConsole(command, id) {
@@ -685,6 +748,7 @@ async function main() {
   let secure;
   try {
     await ready(port, server);
+    const hasJson = jsonAvailable(port);
     cli(port, [
       ['SET', 'db0:only', 'other'],
       ['SELECT', '3'],
@@ -715,10 +779,17 @@ async function main() {
       ['SET', 'slowlog:fixture', 'example-private-slowlog-payload'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '-1'],
     ]);
+    if (hasJson) cli(port, [
+      ['SELECT', '3'],
+      ['JSON.SET', 'json:typed', '.', '{"large":9007199254740993,"nested":[true,null]}'],
+      ['PEXPIRE', 'json:typed', '600000'],
+      ['JSON.SET', 'json:large', '.', JSON.stringify('가'.repeat(23000))],
+    ]);
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
-    await verify(browser, port, secure);
+    await verify(browser, port, secure, hasJson);
     console.log('Windows Redis E2E passed (ACL, TLS, console, monitor, Pub/Sub, typed edits, TTL and reviewed key deletion).');
+    console.log(hasJson ? 'Redis JSON module editing and TTL verified.' : 'Redis JSON module unavailable on the fixture server.');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
     throw error;

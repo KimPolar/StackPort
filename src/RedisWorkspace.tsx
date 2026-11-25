@@ -12,14 +12,23 @@ import { useNativeRead } from "./usePostgresRead";
 import "./redisWorkspace.css";
 
 const kinds = ["string", "hash", "list", "set", "zset", "stream"] as const;
-type Kind = (typeof kinds)[number];
+type StandardKind = (typeof kinds)[number];
+type Kind = StandardKind | "json";
+type JsonSupport = "read_write" | "read_only" | "unavailable" | "unknown";
+const jsonSupportText: Record<JsonSupport, string> = {
+  read_write: "JSON 조회·편집 지원", read_only: "JSON 조회 지원", unavailable: "JSON 미지원", unknown: "JSON 지원 미확인",
+};
 type Key = { id: string; display: RedisBytes };
 type KeyPage = { keys: Key[]; cursor: string; total: number | null };
 type Position = { kind: "index"; index: number } | { kind: "scan"; cursor: string } | { kind: "stream"; after: string };
 type Value = { kind: string; ttl_ms: number | null; memory_bytes: number | null; length: number | null;
   columns: string[]; rows: RedisBytes[][]; next: Position | null };
-type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean };
+type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean; json_support: JsonSupport };
 const number = new Intl.NumberFormat("ko-KR");
+
+function hasJsonFilter(support: JsonSupport | undefined) {
+  return support === "read_write" || support === "read_only";
+}
 
 export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onBusy: (busy: boolean) => void }) {
   const settings = profile.settings;
@@ -97,6 +106,10 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowPublish });
       if (!mounted.current) { await invoke("close_redis", { id: opened.id }); return; }
       active.current = opened.id;
+      if (!hasJsonFilter(opened.json_support)) {
+        setKind(current => current === "json" ? "" : current);
+        setFilter(current => current.kind === "json" ? { ...current, kind: null } : current);
+      }
       setSession(opened); setConnectOpen(false); resetKeys();
     } catch (reason) { if (mounted.current) setError(String(reason)); }
     finally { connecting.current = false; if (mounted.current) setPending(false); }
@@ -118,8 +131,16 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   }
 
   const editable = session?.allow_edits && selected && detail.data && detail.data.kind !== "none" ? selected : null;
-  const valueEditor = editable && detail.data && kinds.includes(detail.data.kind as Kind)
-    ? { kind: detail.data.kind as Kind, keyId: editable.id, display: editable.display } : null;
+  const json = detail.data?.kind === "json" ? detail.data.rows[0]?.[0] : null;
+  let valueEditor: RedisEditTarget | null = null;
+  if (editable && detail.data) {
+    const target = { keyId: editable.id, display: editable.display };
+    const kind = detail.data.kind as StandardKind;
+    if (kinds.includes(kind)) valueEditor = { ...target, kind };
+    if (json?.encoding === "utf8" && !json.truncated && (session?.json_support === "read_write" || session?.json_support === "unknown")) {
+      valueEditor = { ...target, kind: "json", original: json.text };
+    }
+  }
 
   return <section className="redis-workspace" aria-label="Redis 작업 공간">
     <div className="content-header">
@@ -141,7 +162,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       </div>
     </div>
     {error && !connectOpen && <p className="error-banner" role="alert">{error}</p>}
-    {session && <p className="redis-server" role="status">{session.engine} {session.version} · DB {settings.database} · {settings.tls ? "TLS" : "일반 TCP"}</p>}
+    {session && <p className="redis-server" role="status">{session.engine} {session.version} · DB {settings.database} · {settings.tls ? "TLS" : "일반 TCP"} · {jsonSupportText[session.json_support]}</p>}
     {session && <div className="redis-layout">
       <section className="results-card redis-keys" aria-label="Redis 키 탐색">
         <div className="panel-heading"><h2>키</h2>
@@ -159,6 +180,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
             value={pattern} onChange={event => setPattern(event.target.value)} /></label>
           <label className="field">타입<select value={kind} onChange={event => setKind(event.target.value as Kind | "")}>
             <option value="">모든 타입</option>{kinds.map(item => <option key={item}>{item}</option>)}
+            {hasJsonFilter(session.json_support) && <option value="json">JSON</option>}
           </select></label>
           <button type="submit" className="secondary small" disabled={page.loading}>검색</button>
         </form>
@@ -254,13 +276,15 @@ function KeyValue({ value, positions, setPositions }: {
   value: Value; positions: (Position | null)[]; setPositions: (positions: (Position | null)[]) => void;
 }) {
   if (value.kind === "none") return <p className="result-empty" role="status">키가 만료되었거나 삭제되었습니다.</p>;
+  const isJson = value.kind === "json";
+  const byteLength = isJson || value.kind === "string";
   return <>
     <dl className="redis-key-meta">
-      <div><dt>타입</dt><dd>{value.kind}</dd></div>
+      <div><dt>타입</dt><dd>{isJson ? "JSON" : value.kind}</dd></div>
       <div><dt>TTL</dt><dd>{value.ttl_ms === null ? "만료 없음" : `${number.format(value.ttl_ms)} ms`}</dd></div>
       <div><dt>메모리</dt><dd>{value.memory_bytes === null ? "조회 불가" : `${number.format(value.memory_bytes)} B`}</dd></div>
-      {value.length !== null && <div><dt>{value.kind === "string" ? "값 크기" : "항목 수"}</dt>
-        <dd>{number.format(value.length)}{value.kind === "string" ? " B" : "개"}</dd></div>}
+      {value.length !== null && <div><dt>{byteLength ? "값 크기" : "항목 수"}</dt>
+        <dd>{number.format(value.length)}{byteLength ? " B" : "개"}</dd></div>}
     </dl>
     {value.columns.length ? <div className="redis-values" role="region" tabIndex={0} aria-label="Redis 값 목록">
       <table aria-label="Redis 값"><thead><tr>{value.columns.map(column => <th key={column} scope="col">{column}</th>)}</tr></thead>
@@ -270,6 +294,7 @@ function KeyValue({ value, positions, setPositions }: {
         </td>)}</tr>)}</tbody>
       </table>
     </div> : <p className="result-empty">이 키 타입의 값 미리보기를 사용할 수 없습니다.</p>}
+    {isJson && value.rows[0]?.[0]?.truncated && <p className="result-empty">64 KiB를 초과한 JSON 문서는 앞부분만 표시합니다.</p>}
     {(positions.length > 1 || value.next) && <div className="redis-page" role="group" aria-label="값 탐색 페이지">
       <button className="secondary small" type="button" disabled={positions.length <= 1} onClick={() => setPositions(positions.slice(0, -1))}>이전 값</button>
       <span>{positions.length} 페이지</span>
