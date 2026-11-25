@@ -1024,6 +1024,17 @@ async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, ob
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn run_sql_server_query(manager: State<'_, sql_server::Manager>, id: String, request_id: String,
+    input: sql_server::QueryInput) -> Result<sql_server::QueryOutcome, String> {
+    manager.run_query(&id, &request_id, input).await
+}
+
+#[tauri::command]
+fn cancel_sql_server_query(manager: State<'_, sql_server::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_query(&id, &request_id)
+}
+
+#[tauri::command]
 async fn export_sql_server(manager: State<'_, sql_server::Manager>, id: String, request_id: String,
     object: i32, clauses: TableQueryClauses, options: sql_server::ExportOptions) -> Result<sql_server::ExportOutcome, String> {
     manager.export(&id, request_id, object, clauses, options).await
@@ -2495,6 +2506,8 @@ fn main() {
             sql_server_structure,
             sql_server_definition,
             sql_server_data,
+            run_sql_server_query,
+            cancel_sql_server_query,
             export_sql_server,
             sql_server_export_progress,
             cancel_sql_server_export,

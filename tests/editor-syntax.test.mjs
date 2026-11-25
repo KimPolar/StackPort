@@ -45,6 +45,15 @@ test("highlights MySQL backticks, placeholder and comment rules", () => {
   ]);
 });
 
+test("highlights T-SQL batch boundaries, Unicode literals, identifiers and nested comments", () => {
+  const text = "SELECT TOP 1 [a]]b], N'한글 ''GO''', @값, @@TRANCOUNT\n/* /* GO */ SELECT */\nGO 2";
+  assert.deepEqual(marked(text, "tsql"), [
+    ["keyword", "SELECT"], ["keyword", "TOP"], ["number", "1"], ["identifier", "[a]]b]"],
+    ["string", "N'한글 ''GO'''"], ["parameter", "@값"], ["parameter", "@@TRANCOUNT"],
+    ["comment", "/* /* GO */ SELECT */"], ["keyword", "GO"], ["number", "2"],
+  ]);
+});
+
 test("clips multiline tokens to the visible line and falls back at rendering limits", () => {
   const text = "/* 첫 줄\n둘😀째 */ SELECT 12";
   const tokens = editorSyntaxTokens(text, "sqlite");

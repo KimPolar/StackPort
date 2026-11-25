@@ -2239,6 +2239,8 @@ const auditOperationNames: Record<string, string> = {
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "redis.key.delete": "Redis 키 삭제",
   "redis.key.delete.unconfirmed": "Redis 키 삭제 결과 미확인",
+  "sql_server.sql.execute": "SQL Server SQL 실행", "sql_server.sql.execute.cancel": "SQL Server SQL 실행 중단",
+  "sql_server.sql.execute.timeout": "SQL Server SQL 실행 시간 초과",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
   "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",
@@ -2292,7 +2294,9 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
       {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => {
-        const outcome = event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel") ? "cancelled" : event.outcome;
+        const cancelled = event.operation === "sql_server.sql.execute.cancel" ||
+          (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
+        const outcome = cancelled ? "cancelled" : event.outcome;
         return <li key={event.id}>
           <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${outcome}`}>{auditOutcomeNames[outcome] ?? outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
         </li>;

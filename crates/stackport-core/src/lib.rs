@@ -974,6 +974,11 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "postgres.row.insert" | "postgres.row.delete" | "postgres.row.paste" | "postgres.row.import" => "postgres-row-change-confirmed",
         "postgres.edit.grid" if record.environment == Some("PROD") => "postgres-grid-update-prod-confirmed",
         "postgres.edit.grid" => "postgres-grid-update-confirmed",
+        "sql_server.sql.execute" | "sql_server.sql.execute.cancel" | "sql_server.sql.execute.timeout"
+            if record.environment == Some("PROD") => "sql-server-session-prod-confirmed",
+        "sql_server.sql.execute" | "sql_server.sql.execute.cancel" | "sql_server.sql.execute.timeout" => {
+            "sql-server-session-login-permissions"
+        }
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

@@ -28,7 +28,8 @@ tokio-native-tls = "0.3"
 mysql_async = { version = "=0.37.1", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"] }
 mongodb = { version = "=3.10.2", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls", "dns-resolver", "redact-errors"] }
 bson = { version = "3.1", features = ["serde_json-1"] }
-tiberius = "=0.13.0"
+tiberius = { version = "=0.13.0", features = ["chrono"] }
+chrono = { version = "0.4", default-features = false }
 oracledb = "=26.0.0-beta.6"
 reqwest = { version = "=0.13.5", default-features = false, features = ["gzip", "json", "native-tls", "system-proxy"] }
 tokio-util = { version = "0.7", features = ["compat"] }

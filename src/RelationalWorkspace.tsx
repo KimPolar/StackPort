@@ -7,6 +7,7 @@ import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 import { PostgresPager } from "./PostgresPager";
 import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
+import { SqlServerSqlWorkspace } from "./SqlServerSqlWorkspace";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
@@ -86,13 +87,15 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
         <p className="path">{engine} · {endpoint} / {session?.database ?? database}{session && <> · {session.version}{session.context && <> · {session.context}</>}</>}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {prefix === "sql_server" ? "계정 권한 적용" : "읽기 전용"}</span>
         {session ? <button type="button" className="secondary" onClick={disconnect}>{engine} 연결 끊기</button>
           : <button type="button" className="primary" onClick={() => { setError(""); setLogin(true); }}><Plug size={15} aria-hidden /> {engine} 연결</button>}
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />}
+    {session && (prefix === "sql_server"
+      ? <SqlServerViews key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />
+      : <Browse key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />)}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
@@ -113,6 +116,19 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
       </form>
     </Dialog>}
   </section>;
+}
+
+function SqlServerViews(props: { session: Session; profile: Profile } & Adapter) {
+  const [sqlVisible, setSqlVisible] = useState(false);
+  const [sqlOpened, setSqlOpened] = useState(false);
+  return <>
+    <div className="mysql-sql-actions relational-workspace-views" role="group" aria-label="SQL Server 작업 보기">
+      <button type="button" className="secondary small" aria-pressed={!sqlVisible} onClick={() => setSqlVisible(false)}>객체 탐색</button>
+      <button type="button" className="secondary small" aria-pressed={sqlVisible} onClick={() => { setSqlOpened(true); setSqlVisible(true); }}>SQL 편집기</button>
+    </div>
+    <div hidden={sqlVisible}><Browse {...props} /></div>
+    {sqlOpened && <div hidden={!sqlVisible}><SqlServerSqlWorkspace id={props.session.id} database={props.session.database} /></div>}
+  </>;
 }
 
 function Browse({ session, profile, engine, prefix }: { session: Session; profile: Profile } & Adapter) {

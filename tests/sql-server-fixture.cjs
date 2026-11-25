@@ -6,11 +6,13 @@ const definitionDependencies = `
 CREATE TYPE [archive].[fixture_count] FROM int NOT NULL;
 CREATE XML SCHEMA COLLECTION [archive].[fixture_xml] AS N'<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"><xsd:element name="entry" type="xsd:string"/></xsd:schema>';
 CREATE TABLE [archive].[accounts] (tenant int NOT NULL, account bigint NOT NULL, PRIMARY KEY (tenant, account));
+CREATE TABLE [archive].[execution_fixture] (id int NOT NULL PRIMARY KEY);
 `;
 
 const definitionPermissions = account => `
 GRANT SELECT, VIEW DEFINITION ON [archive].[script]]sample] TO [${account}];
 GRANT SELECT ON [archive].[accounts] TO [${account}];
+GRANT INSERT ON [archive].[execution_fixture] TO [${account}];
 GRANT VIEW DEFINITION ON TYPE::[archive].[fixture_count] TO [${account}];
 GRANT VIEW DEFINITION ON XML SCHEMA COLLECTION::[archive].[fixture_xml] TO [${account}];
 `;

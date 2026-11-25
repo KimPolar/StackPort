@@ -1,11 +1,10 @@
 use super::{
-    authentication,
     catalog::{
         columns_sql, data_suffix, decode_column, ident, is_binary, lookup_object, object_sql,
         text_expression, KEYS_SQL,
     },
-    connect, query_error, Column, ExportOptions, ExportOutcome, Manager, Password, Session,
-    SqlClient, TIMEOUT,
+    connect, query_error, Column, ExportOptions, ExportOutcome, Manager, Session, SqlClient,
+    TIMEOUT,
 };
 use crate::{
     insert_audit,
@@ -35,18 +34,9 @@ const MAX_COLUMNS: usize = 4095;
 const MAX_LOB_BYTES: u64 = 32 * 1024 * 1024;
 const STATE_ERROR: &str = "SQL Server 내보내기 상태를 읽을 수 없습니다.";
 
+#[derive(Default)]
 pub(super) struct State {
-    password: Option<Password>,
     active: Option<ActiveExport>,
-}
-
-impl State {
-    pub(super) fn new(password: Password) -> Self {
-        Self {
-            password: Some(password),
-            active: None,
-        }
-    }
 }
 
 struct ActiveExport {
@@ -73,8 +63,7 @@ impl Drop for Registration<'_> {
 
 impl Session {
     pub(super) fn stop_export(&self) -> Result<()> {
-        let mut state = self.export.lock().map_err(|_| STATE_ERROR)?;
-        state.password = None;
+        let state = self.export.lock().map_err(|_| STATE_ERROR)?;
         if let Some(active) = &state.active {
             if !active.publishing {
                 active.job.stop.cancel();
@@ -148,12 +137,8 @@ impl Manager {
             .await
             .map_err(|_| "SQL Server 내보내기 파일을 열 수 없습니다.")??;
         let settings = &session.profile.settings;
-        let auth = {
-            let state = session.export.lock().map_err(|_| STATE_ERROR)?;
-            let Some(password) = &state.password else {
-                return Ok(ExportOutcome::Cancelled);
-            };
-            authentication(settings, password)?
+        let Some(auth) = session.operation_auth()? else {
+            return Ok(ExportOutcome::Cancelled);
         };
         let mut client = tokio::select! {
             biased;

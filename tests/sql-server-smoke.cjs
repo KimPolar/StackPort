@@ -65,6 +65,7 @@ async function verify(page, hiddenObject, exportFolder) {
     const schemas = search => command('sql_server_schemas', { id, search, page: 0 });
     assert.deepEqual((await schemas('')).items, ['archive', 'catalog']);
     assert.deepEqual((await schemas('%')).items, []);
+    await verifySqlExecution(command, id);
     const objects = await command('sql_server_objects', { id, schema: 'catalog', search: '', page: 0 });
     assert.deepEqual(objects.items.map(row => [row.kind, row.name]), [['table', 'metadata_only'], ['table', 'order]daily'], ['view', 'recent']]);
     const table = objects.items.find(row => row.name === 'order]daily');
@@ -212,6 +213,10 @@ async function verify(page, hiddenObject, exportFolder) {
   });
   const script = await verifyDefinitionPanel(page, tableDetail, 'SQL Server', '생성 SQL');
   assert.equal(script, generatedTable);
+  const observer = await open(profile);
+  try { await verifySqlEditor(workspace, command, observer.id); }
+  finally { await command('close_sql_server', { id: observer.id }); }
+  await tableDetail.getByRole('heading', { name: 'script]sample', exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'SQL Server 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   const replayDatabase = database + '_replay';
@@ -223,6 +228,149 @@ async function verify(page, hiddenObject, exportFolder) {
     assert.equal(rebuilt, script);
   } finally { await command('close_sql_server', { id: replay.id }); }
   assert.deepEqual(errors, []);
+}
+
+async function verifySqlExecution(command, id) {
+  const query = (sql, options = {}) => command('run_sql_server_query', {
+    id, requestId: randomUUID(), input: { sql, first_line: 1, cursor_line: null }, ...options,
+  });
+  const script = await query(`
+CREATE TABLE #steps (n int);
+INSERT #steps VALUES (7);
+GO
+SELECT n FROM #steps;
+SELECT n FROM #steps WHERE 1 = 0;
+GO 2
+SELECT CAST(-0.012340 AS decimal(12,6)) AS fixed, CONVERT(bigint, '9223372036854775807') AS big,
+       CONVERT(nvarchar(max), N'한글 🚀') AS korean, 0x00FF11 AS bytes, CAST(NULL AS varbinary(max)) AS missing,
+       CAST('2026-09-18T04:12:33.1234567+09:00' AS datetimeoffset(7)) AS with_offset,
+       CAST('99999999999999999999999999999999999999' AS decimal(38,0)) AS scale_zero;
+`);
+  assert.equal(script.status, 'succeeded', JSON.stringify(script.error));
+  assert.equal(script.completed_batches, 4);
+  assert.equal(script.transaction, 'none_open');
+  assert.deepEqual(script.result_sets.map(result => result.rows_received), [1, 0, 1, 0, 1]);
+  assert.equal(script.result_sets[0].rows[0][0].text, '7');
+  assert.equal(script.result_sets[1].columns[0].name, 'n');
+  const [fixed, big, korean, bytes, missing, offset, scaleZero] = script.result_sets[4].rows[0];
+  assert.equal(fixed.text, '-0.012340');
+  assert.equal(big.text, '9223372036854775807');
+  assert.equal(korean.text, '한글 🚀');
+  assert.equal(bytes.encoding, 'hex');
+  assert.equal(bytes.text, '00FF11');
+  assert.equal(missing, null);
+  assert.equal(offset.text, '2026-09-18 04:12:33.123456700 +09:00');
+  assert.equal(scaleZero.text, '9'.repeat(38));
+
+  const requestId = randomUUID();
+  const rolledBack = await query('BEGIN TRAN; INSERT [archive].[execution_fixture] VALUES (10);', { requestId });
+  assert.equal(rolledBack.transaction, 'rolled_back');
+  const audit = (await command('list_audit_events', {})).events.find(event => event.correlation_id === requestId);
+  assert.equal(audit.operation, 'sql_server.sql.execute');
+  assert.equal(audit.outcome, 'succeeded');
+  assert.doesNotMatch(JSON.stringify(audit), /execution_fixture|INSERT/);
+  const present = async () => {
+    const result = await query('SELECT id FROM [archive].[execution_fixture] ORDER BY id');
+    assert.equal(result.status, 'succeeded');
+    return result.result_sets[0].rows.map(row => row[0].text);
+  };
+  assert.deepEqual(await present(), []);
+  const committed = await query(`BEGIN TRAN; INSERT [archive].[execution_fixture] VALUES (11); COMMIT; SELECT 11 AS committed;
+GO
+THROW 50009, 'batch error', 1;
+GO
+INSERT [archive].[execution_fixture] VALUES (12);`);
+  assert.equal(committed.status, 'failed');
+  assert.equal(committed.completed_batches, 1);
+  assert.equal(committed.result_sets[0].rows[0][0].text, '11');
+  assert.deepEqual(committed.error, { message: 'batch error', code: 50009, line: 3, procedure: null });
+  assert.deepEqual(await present(), ['11']);
+  const denied = await query('SELECT id FROM [private].[hidden_data];');
+  assert.equal(denied.status, 'failed');
+  assert.equal(denied.error.code, 229);
+
+  const many = await query('SELECT id FROM [archive].[export_fixture] ORDER BY id;');
+  assert.equal(many.status, 'succeeded');
+  assert.equal(many.result_sets[0].rows_received, 121);
+  assert.equal(many.result_sets[0].rows.length, 100);
+
+  const timeoutId = randomUUID();
+  const timedOut = await query(`BEGIN TRAN; INSERT [archive].[execution_fixture] VALUES (13);
+SELECT @@TRANCOUNT AS open_transactions;
+GO
+WAITFOR DELAY '00:00:40';`, { requestId: timeoutId });
+  assert.equal(timedOut.status, 'timed_out');
+  assert.equal(timedOut.completed_batches, 1);
+  assert.equal(timedOut.result_sets[0].rows[0][0].text, '1');
+  assert.ok(['confirmed', 'unconfirmed'].includes(timedOut.attention));
+  assert.equal(timedOut.transaction, 'unknown');
+  assert.equal(timedOut.audit_warning, false);
+  const timeoutAudit = (await command('list_audit_events', {})).events.find(event => event.correlation_id === timeoutId);
+  assert.equal(timeoutAudit.operation, 'sql_server.sql.execute.timeout');
+  assert.equal(timeoutAudit.outcome, 'failed');
+  assert.deepEqual(await present(), ['11']);
+}
+
+async function verifySqlEditor(workspace, command, observerId) {
+  const mode = workspace.getByRole('group', { name: 'SQL Server 작업 보기' });
+  await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  const editorPane = workspace.getByRole('region', { name: 'SQL Server SQL 편집기', exact: true });
+  const editor = editorPane.getByRole('textbox', { name: 'SQL Server SQL 문장', exact: true });
+  const results = editorPane.getByRole('region', { name: 'SQL Server 실행 결과', exact: true });
+  const grid = results.getByRole('table', { name: 'SQL Server SQL 결과 표', exact: true });
+  await editor.fill('SELECT N\'first result\' AS answer;\nGO\nSELECT N\'second result\' AS answer;');
+  await editorPane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  await grid.getByText('first result', { exact: true }).waitFor();
+  await results.getByRole('combobox', { name: '결과 집합' }).selectOption('1');
+  await grid.getByText('second result', { exact: true }).waitFor();
+  await editor.press('Control+Home');
+  await editor.press('Control+Enter');
+  await grid.getByText('first result', { exact: true }).waitFor();
+  assert.equal(await results.getByRole('combobox', { name: '결과 집합' }).count(), 0);
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await editorPane.getByRole('button', { name: '선택 실행', exact: true }).click();
+  await grid.getByText('second result', { exact: true }).waitFor();
+
+  await editor.fill(`INSERT [archive].[execution_fixture] VALUES (15);
+WAITFOR DELAY '00:00:08'; INSERT [archive].[execution_fixture] VALUES (14);`);
+  await editorPane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const cancel = editorPane.getByRole('button', { name: '실행 중단', exact: true });
+  await cancel.waitFor();
+  const started = performance.now();
+  let running = false;
+  while (performance.now() - started < 7000) {
+    const marker = await command('run_sql_server_query', {
+      id: observerId, requestId: randomUUID(),
+      input: { sql: 'SELECT id FROM [archive].[execution_fixture] WHERE id = 15;', first_line: 1, cursor_line: null },
+    });
+    assert.equal(marker.status, 'succeeded', JSON.stringify(marker.error));
+    if (marker.result_sets[0].rows_received === 1) {
+      running = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  assert.ok(running, 'The server must commit the first statement before cancellation.');
+  await cancel.click();
+  const cancelStatus = results.getByRole('status');
+  await cancelStatus.waitFor();
+  assert.match(await cancelStatus.innerText(), /실행 중단[\s\S]*(서버가 중단 요청을 확인했습니다|서버의 중단 응답을 확인하지 못했습니다)/);
+  assert.equal(await grid.count(), 0);
+  const cancelAudit = (await command('list_audit_events', {})).events.find(event => event.operation === 'sql_server.sql.execute.cancel');
+  assert.equal(cancelAudit.outcome, 'failed');
+  await new Promise(resolve => setTimeout(resolve, 8500));
+  const check = "SELECT N'after cancel' AS answer, COUNT(*) AS after_delay FROM [archive].[execution_fixture] WHERE id = 14;";
+  await editor.fill(check);
+  await editorPane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  await grid.getByText('after cancel', { exact: true }).waitFor();
+  await grid.getByText('0', { exact: true }).waitFor();
+
+  await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
+  await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  assert.equal(await editor.inputValue(), check);
+  await grid.getByText('after cancel', { exact: true }).waitFor();
+  await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
 }
 
 async function verifyExportCommands(command, id, profile, folder, { table, view, hidden, metadataOnly, wide, oversized, variant }) {
@@ -428,7 +576,7 @@ async function main() {
     for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
     fs.rmdirSync(exportFolder);
   }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation, T-SQL execution and rollback).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

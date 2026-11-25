@@ -2,6 +2,7 @@ mod catalog;
 mod definition;
 mod export;
 mod profiles;
+mod query;
 mod structure;
 
 pub use crate::result_export::{
@@ -9,6 +10,7 @@ pub use crate::result_export::{
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
+pub use query::{QueryInput, QueryOutcome};
 pub use structure::{Structure, StructureSection};
 
 use crate::{Result, Store};
@@ -57,7 +59,9 @@ struct Session {
     connection: AsyncMutex<SqlClient>,
     closed: AtomicBool,
     profile: Profile,
+    password: Mutex<Option<Password>>,
     export: Mutex<export::State>,
+    query: Mutex<Option<query::ActiveQuery>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -128,7 +132,9 @@ impl Manager {
                     connection: AsyncMutex::new(client),
                     closed: AtomicBool::new(false),
                     profile,
-                    export: Mutex::new(export::State::new(password)),
+                    password: Mutex::new(Some(password)),
+                    export: Mutex::new(export::State::default()),
+                    query: Mutex::new(None),
                     _permit: permit,
                 }),
             );
@@ -147,6 +153,12 @@ impl Manager {
             .remove(id);
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
+            session.stop_query();
+            session
+                .password
+                .lock()
+                .map_err(|_| "SQL Server 인증 상태를 읽을 수 없습니다.")?
+                .take();
             session.stop_export()?;
         }
         Ok(())
@@ -186,6 +198,19 @@ impl Manager {
                 Err("SQL Server 조회 시간이 초과되어 연결이 닫혔습니다. 다시 연결하세요.".into())
             }
         }
+    }
+}
+
+impl Session {
+    fn operation_auth(&self) -> Result<Option<AuthMethod>> {
+        let password = self
+            .password
+            .lock()
+            .map_err(|_| "SQL Server 인증 상태를 읽을 수 없습니다.")?;
+        password
+            .as_ref()
+            .map(|password| authentication(&self.profile.settings, password))
+            .transpose()
     }
 }
 
