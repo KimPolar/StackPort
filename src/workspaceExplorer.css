@@ -141,7 +141,11 @@ button.explorer-group-title:hover { background: var(--surface-hover); color: var
 }
 .explorer-profile-text strong { grid-column: 2 / -1; color: var(--text); font-weight: 600; }
 .profile-row[aria-current="true"] .explorer-profile-text strong { color: var(--text-accent); }
-.explorer-profile-text small { color: var(--text-muted); font-size: 10px; }
+.explorer-profile-text small { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-muted); font-size: 10px; }
+.explorer-profile-text small > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.explorer-profile-engine { flex-shrink: 0; padding-inline-end: 5px; border-inline-end: 1px solid var(--divider); color: var(--text-subtle); }
+.explorer-database-choices { display: grid; gap: 6px; padding: 2px 21px 21px; }
+.explorer-database-choices > button { justify-content: flex-start; min-height: 38px; text-align: start; }
 .explorer-profile-actions { flex: 0 0 auto; display: flex; }
 .explorer-profile-actions .icon-button { width: 24px; height: 28px; }
 .explorer-profile-actions .icon-button svg { width: 13px; height: 13px; }

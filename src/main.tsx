@@ -4,7 +4,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
-  Database, FileCode2, FileDown, Focus, FolderOpen, HardDrive, History, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
+  Database, FileCode2, FileDown, Focus, FolderOpen, HardDrive, History, KeyRound, Layers3, PanelLeftClose, PanelLeftOpen, PanelsTopLeft,
   Plug, Plus, RefreshCw, Search, Settings, ShieldCheck, Table2, TerminalSquare, Trash2, Workflow, Play,
 } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
@@ -192,6 +192,7 @@ function App() {
   const [mysqlProfiles, setMysqlProfiles] = useState<MysqlProfile[]>([]);
   const [mysqlId, setMysqlId] = useState("");
   const [mysqlAction, setMysqlAction] = useState<MysqlProfileAction | null>(null);
+  const [databasePicker, setDatabasePicker] = useState(false);
   const mysqlProfile = mysqlProfiles.find(item => item.id === mysqlId && item.project_id === projectId);
   const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile;
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
@@ -416,7 +417,7 @@ function App() {
     objectGeneration.current++;
     setProfiles([]); setSshProfiles([]); setPostgresProfiles([]); setPostgresId(""); setPostgresAction(null); setPostgresObjectRequest(null);
     setRedisProfiles([]); setRedisId(""); setRedisAction(null);
-    setMysqlProfiles([]); setMysqlId(""); setMysqlAction(null);
+    setMysqlProfiles([]); setMysqlId(""); setMysqlAction(null); setDatabasePicker(false);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -1501,7 +1502,7 @@ function App() {
     {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
     !project ? <EmptyState title="첫 프로젝트를 만드세요" text="프로젝트에서 SQLite, PostgreSQL, MySQL · MariaDB, Redis와 SSH 연결을 함께 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
     !sqliteWorkspace ? null :
-    !profile ? <EmptyState title="데이터베이스를 연결하세요" text="기존 SQLite 파일을 연결해 테이블을 조회하고 지원되는 셀을 미리보기 후 편집할 수 있습니다." action="SQLite 연결 추가" onAction={() => openModal("profile")} /> : <>
+    !profile ? <EmptyState title="데이터베이스를 연결하세요" text="저장된 연결을 탐색기에서 열 수 있습니다." action="데이터베이스 연결 추가" onAction={() => setDatabasePicker(true)} /> : <>
       <div className="content-header"><div className="database-target"><h1><Database size={21} aria-hidden /><span title={profile.name}>{profile.name}</span><span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span></h1><p className="path"><HardDrive size={13} aria-hidden /><span title={displayPath(profile.path)}>{displayPath(profile.path)}</span></p></div>
         <div className="header-actions"><span className="readonly"><ShieldCheck size={15} /> SQL 조회 전용</span>
           <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setDiagramProfile(profile.id)}><Workflow size={14} aria-hidden /> 관계도</button>
@@ -1829,10 +1830,10 @@ function App() {
       <div className="body-layout">
         <WorkspaceExplorer desktop={desktop} hidden={focusMode || !explorerOpen} projectId={projectId} projects={projects} favorites={favorites}
           favoriteScope={favoriteScope} onFavoriteScope={setFavoriteScope}
-          onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction}
+          onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction} onAddDatabase={() => setDatabasePicker(true)}
           sqlite={{ profiles, loadedId: profileId, active: sqliteWorkspace, objects, selected: sqliteWorkspace ? selectedObject?.name : undefined,
             loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
-            add: () => openModal("profile"), restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
+            restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
           postgres={{ profiles: postgresProfiles, activeId: postgresId, connection: postgresConnection,
             open: selectPostgresProfile, openObject: openPostgresObject, action: setPostgresAction }}
           redis={{ profiles: redisProfiles, activeId: redisId, open: selectRedisProfile, action: setRedisAction }}
@@ -1873,6 +1874,19 @@ function App() {
           <option value="compact">컴팩트</option>
         </select></label>
         {densitySaveError && <p className="form-error" role="alert">화면 밀도를 저장할 수 없어 현재 창에만 적용됩니다.</p>}
+      </div>
+    </Dialog>}
+    {databasePicker && project && <Dialog title="데이터베이스 연결 추가" busy={false} onClose={() => setDatabasePicker(false)}>
+      <div className="explorer-database-choices">
+        {[
+          { name: "SQLite", Icon: Database, open: () => openModal("profile") },
+          { name: "PostgreSQL", Icon: Database, open: () => setPostgresAction({ kind: "create" }) },
+          ...(desktop ? [
+            { name: "MySQL · MariaDB", Icon: Database, open: () => setMysqlAction({ kind: "create" }) },
+            { name: "Redis", Icon: KeyRound, open: () => setRedisAction({ kind: "create" }) },
+          ] : []),
+        ].map(({ name, Icon, open }) => <button type="button" key={name} className="secondary"
+          onClick={() => { setDatabasePicker(false); open(); }}><Icon size={16} aria-hidden />{name}</button>)}
       </div>
     </Dialog>}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>

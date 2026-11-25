@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const { createHash, randomUUID } = require('crypto');
 const { execFileSync } = require('child_process');
+const { chooseDatabase } = require('./database-picker.cjs');
 const database = process.env.STACKPORT_TEST_DATABASE;
 if (!database) throw new Error('Set STACKPORT_TEST_DATABASE to the isolated fixture path.');
 const python = process.env.STACKPORT_TEST_PYTHON || 'python';
@@ -33,7 +34,7 @@ async function main() {
   await page.getByRole('button', { name: '새 프로젝트' }).click();
   await page.getByLabel('이름', { exact: true }).fill('E2E 테스트');
   await page.getByRole('button', { name: '저장' }).click();
-  await page.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).last().click();
+  await chooseDatabase(page, 'SQLite');
   await page.getByLabel('이름', { exact: true }).fill('테스트 DB');
   await page.getByLabel('SQLite 파일 경로').fill(database);
   await page.getByRole('button', { name: '저장' }).click();
@@ -160,7 +161,7 @@ async function main() {
   assert.equal(await pinPeople.evaluate(button => document.activeElement === button), true);
   const otherDatabase = path.join(path.dirname(database), 'explorer-catalog.sqlite');
   execFileSync(python, ['-c', 'import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("CREATE TABLE catalog_only (id INTEGER)"); db.commit(); db.close()', otherDatabase]);
-  await explorer.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).click();
+  await chooseDatabase(page, 'SQLite');
   const newCatalog = page.getByRole('dialog', { name: 'SQLite 연결 추가', exact: true });
   await newCatalog.getByLabel('이름', { exact: true }).fill('다른 카탈로그');
   await newCatalog.getByLabel('SQLite 파일 경로').fill(otherDatabase);
@@ -959,7 +960,7 @@ async function main() {
   await page.getByRole('button', { name: '닫기', exact: true }).last().click();
   await edit.getByRole('button', { name: '변경 버리기', exact: true }).click();
 
-  await page.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).first().click();
+  await chooseDatabase(page, 'SQLite');
   await page.getByLabel('이름', { exact: true }).fill('운영 DB');
   await page.getByLabel('SQLite 파일 경로').fill(database);
   await page.getByLabel('환경').selectOption('PROD');
@@ -1006,7 +1007,7 @@ async function main() {
   await page.getByRole('status').getByText('SQLite 복원 완료 · 검증 통과').waitFor();
   if (!fs.readFileSync(restoredPath).equals(originalBackup)) throw new Error('Restored database differs from the verified backup.');
   if (scalar('SELECT name FROM people WHERE id=1') !== '백업 이후 변경') throw new Error('Restore altered the active database.');
-  await page.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).first().click();
+  await chooseDatabase(page, 'SQLite');
   await page.getByLabel('이름', { exact: true }).fill('복원 검증');
   await page.getByLabel('SQLite 파일 경로').fill(restoredPath);
   await page.getByRole('button', { name: '저장' }).click();
@@ -1115,9 +1116,64 @@ async function main() {
   await palette.getByRole('option', { name: /복원 검증.*SQLite 연결/ }).click();
   await page.getByRole('heading', { name: /복원 검증/ }).waitFor();
 
+  await verifyDatabaseExplorer(page);
   if (errors.length) throw new Error(`Page errors: ${errors.join('\n')}`);
   console.log('SQLite browsing, cancellation, editing, CSV/JSON/XML import, restore, audit, project lifecycle and workspace copy passed.');
   await browser.close();
+}
+
+async function verifyDatabaseExplorer(page) {
+  await page.getByRole('button', { name: '새 프로젝트', exact: true }).click();
+  const project = page.getByRole('dialog', { name: '새 프로젝트', exact: true });
+  await project.getByLabel('이름', { exact: true }).fill('DB 탐색기 검증');
+  await project.getByRole('button', { name: '저장', exact: true }).click();
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기', exact: true });
+  await explorer.getByText('저장된 데이터베이스 연결이 없습니다.', { exact: true }).waitFor();
+  const group = explorer.getByRole('button', { name: '데이터베이스', exact: true });
+  assert.equal(await group.getAttribute('aria-description'), '연결 0개');
+  await page.locator('#workspace-panes').getByRole('button', { name: '데이터베이스 연결 추가', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: '데이터베이스 연결 추가', exact: true });
+  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'Redis']) {
+    await picker.getByRole('button', { name: engine, exact: true }).waitFor();
+  }
+  await page.keyboard.press('Escape');
+  await picker.waitFor({ state: 'detached' });
+
+  for (const [engine, dialog, name] of [
+    ['SQLite', 'SQLite 연결 추가', '연결 20'],
+    ['PostgreSQL', 'PostgreSQL 연결 추가', '연결 4'],
+    ['MySQL · MariaDB', 'MySQL 계열 연결 추가', '연결 11'],
+    ['Redis', 'Redis 연결 추가', '연결 2'],
+  ]) {
+    await chooseDatabase(page, engine);
+    const form = page.getByRole('dialog', { name: dialog, exact: true });
+    if (engine === 'SQLite') {
+      await form.getByLabel('이름', { exact: true }).fill(name);
+      await form.getByLabel('SQLite 파일 경로').fill(database);
+    } else {
+      await form.getByLabel('연결 이름').fill(name);
+      await form.getByLabel('호스트 이름 또는 IP').fill('localhost');
+      if (engine === 'PostgreSQL') await form.getByLabel('데이터베이스 이름').fill('postgres');
+      if (engine !== 'Redis') await form.getByLabel('사용자 이름').fill('fixture');
+    }
+    await form.getByRole('button', { name: '저장', exact: true }).click();
+    await form.waitFor({ state: 'detached' });
+  }
+  const rows = explorer.locator('#explorer-databases .profile-row');
+  await rows.nth(3).waitFor();
+  assert.equal(await group.getAttribute('aria-description'), '연결 4개');
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 4', '연결 11', '연결 20']);
+  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'PostgreSQL', 'MySQL · MariaDB', 'SQLite']);
+  await group.click();
+  await rows.first().waitFor({ state: 'hidden' });
+  const search = explorer.getByRole('searchbox', { name: '탐색기 검색', exact: true });
+  await search.fill('mariadb');
+  await rows.first().waitFor();
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 11']);
+  await search.press('Escape');
+  assert.equal(await group.getAttribute('aria-expanded'), 'false');
+  await group.click();
+  await rows.nth(3).waitFor();
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

@@ -34,7 +34,7 @@ type ExplorerProps = {
     profiles: SqliteProfile[]; loadedId: string; active: boolean; objects: DatabaseObject[];
     selected: string | undefined; loading: boolean; displayPath: (path: string) => string;
     open: (id: string) => void; openObject: (item: DatabaseObject) => void; openPinnedObject: (id: string, name: string) => void; refresh: () => void;
-    add: () => void; restore: () => void;
+    restore: () => void;
   };
   postgres: {
     profiles: PostgresProfile[]; activeId: string; connection: PostgresConnection | null;
@@ -45,6 +45,7 @@ type ExplorerProps = {
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
+  onAddDatabase: () => void;
 };
 
 const projectActions = [
@@ -84,16 +85,19 @@ function ExplorerGroup({ id, name, Icon, count, filtering, actions, children, un
   </section>;
 }
 
-function ExplorerProfile({ name, environment, detail, label, selected, Icon, onOpen, children }: {
+function ExplorerProfile({ name, environment, detail, engine, label, selected, Icon, onOpen, children }: {
   name: string; environment: string; detail: string; label?: string; selected?: boolean; Icon: LucideIcon;
+  engine?: string;
   onOpen: () => void; children?: ReactNode;
 }) {
   return <div className="explorer-profile">
     <button type="button" className="profile-row" aria-current={selected ? "true" : undefined}
-      aria-label={label ?? `${name} ${environment}`} aria-description={label ? `${detail} · ${environment}` : detail}
+      aria-label={label ?? `${name} ${environment}`} aria-description={[engine, detail, label && environment].filter(Boolean).join(" · ")}
       title={detail} onClick={onOpen}>
       <Icon size={15} aria-hidden />
-      <span className="explorer-profile-text"><strong>{name}</strong><small>{detail}</small></span>
+      <span className="explorer-profile-text"><strong>{name}</strong><small>
+        {engine && <span className="explorer-profile-engine">{engine}</span>}<span>{detail}</span>
+      </small></span>
       <span className={`environment ${environment.toLowerCase()}`}>{environment}</span>
     </button>
     {children && <span className="explorer-profile-actions">{children}</span>}
@@ -117,7 +121,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, redis, mysql, ssh, onProjectSelect, onProjectAction }: ExplorerProps) {
+  sqlite, postgres, redis, mysql, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -158,6 +162,12 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스"));
   const mysqlMatches = mysql.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database ?? undefined, item.settings.environment, "MySQL MariaDB 데이터베이스"));
+  const databaseItems = [
+    ...visibleSqlite.map(item => ({ engine: "sqlite" as const, name: item.name, item })),
+    ...visiblePostgres.map(item => ({ engine: "postgres" as const, name: item.settings.name, item })),
+    ...(desktop ? mysqlMatches.map(item => ({ engine: "mysql" as const, name: item.settings.name, item })) : []),
+    ...(desktop ? redisMatches.map(item => ({ engine: "redis" as const, name: item.settings.name, item })) : []),
+  ].sort((left, right) => left.name.localeCompare(right.name, "ko", { numeric: true }));
   const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length + sshMatches.length;
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
@@ -200,6 +210,80 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     setQuery("");
     setRemoteSearch(null);
     input.current?.focus();
+  }
+
+  function databaseEntry(entry: (typeof databaseItems)[number]) {
+    if (entry.engine === "sqlite") {
+      const item = entry.item;
+      return <div key={`sqlite:${item.id}`}>
+        <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)} engine="SQLite"
+          Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)}>
+          {favoriteButton({ kind: "sqlite", profile_id: item.id }, item.name)}
+        </ExplorerProfile>
+        {item === loaded && (sqlite.active || filtering) && <div className="object-list">
+          <div className="object-toolbar"><span>객체</span>
+            <ExplorerButton label="객체 새로고침" Icon={RefreshCw} onClick={sqlite.refresh} disabled={sqlite.loading} />
+          </div>
+          {sqlite.loading ? <p className="sidebar-empty" role="status">불러오는 중…</p> :
+            !objects.length ? <p className="sidebar-empty">{filtering ? "일치하는 객체가 없습니다." : "테이블이나 뷰가 없습니다."}</p> : <>
+              <ObjectGroup name="테이블" items={objects.filter(item => item.kind === "table")} selected={sqlite.selected} onOpen={sqlite.openObject}
+                favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
+              <ObjectGroup name="뷰" items={objects.filter(item => item.kind === "view")} selected={sqlite.selected} onOpen={sqlite.openObject}
+                favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
+            </>}
+        </div>}
+      </div>;
+    }
+    if (entry.engine === "postgres") {
+      const item = entry.item;
+      return <div key={`postgres:${item.id}`}>
+        <ExplorerProfile name={item.settings.name} environment={item.settings.environment}
+          detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} engine="PostgreSQL" label={`PostgreSQL ${item.settings.name} 열기`}
+          Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
+          {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
+          <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
+          <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
+        </ExplorerProfile>
+        {item === activePostgres && submitted && <div className="object-list explorer-postgres-results" role="group" aria-label="PostgreSQL 서버 검색 결과">
+          {pgSearch.loading && <p className="sidebar-empty" role="status">PostgreSQL 객체를 검색하는 중…</p>}
+          {pgSearch.error && <p className="sidebar-empty" role="alert">{pgSearch.error}</p>}
+          {pgSearch.data && <>
+            {pgSearch.data.hits.length ? <p className="group-title">객체 {pgSearch.data.hits.length}개</p> :
+              <p className="sidebar-empty" role="status">일치하는 PostgreSQL 객체가 없습니다.</p>}
+            {pgSearch.data.hits.map(hit => {
+              const target: PostgresFavorite = { kind: "postgres_object", profile_id: item.id, schema_name: hit.schema, object_name: hit.name };
+              const qualified = `${hit.schema}.${hit.name}`;
+              return <div className="explorer-object" key={hit.id}>
+                <button type="button" className="object-row explorer-postgres-object" title={qualified}
+                  aria-label={`PostgreSQL 객체 ${qualified} 열기`} onClick={() => postgres.openObject(target)}>
+                  <Table2 size={13} aria-hidden />
+                  <span><strong>{hit.name}</strong><small>{hit.schema} · {postgresObjectLabels[hit.kind]}</small></span>
+                </button>
+                {favoriteButton(target, `검색 결과 ${qualified}`, submitted.id)}
+              </div>;
+            })}
+            <PostgresPager label="PostgreSQL 객체" page={submitted.page} next={pgSearch.data.has_next}
+              change={page => setRemoteSearch({ ...submitted, page })} />
+          </>}
+        </div>}
+      </div>;
+    }
+    if (entry.engine === "mysql") {
+      const item = entry.item;
+      return <ExplorerProfile key={`mysql:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+        detail={networkAddressText(item.settings)} engine="MySQL · MariaDB" label={`MySQL ${item.settings.name} 열기`}
+        Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
+        <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
+        <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
+      </ExplorerProfile>;
+    }
+    const item = entry.item;
+    return <ExplorerProfile key={`redis:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      detail={`${networkAddressText(item.settings)} / DB ${item.settings.database}`} engine="Redis" label={`Redis ${item.settings.name} 열기`}
+      Icon={KeyRound} selected={item.id === redis.activeId} onOpen={() => redis.open(item.id)}>
+      <ExplorerButton label={`${item.settings.name} Redis 연결 수정`} Icon={Pencil} onClick={() => redis.action({ kind: "edit", profile: item })} />
+      <ExplorerButton label={`${item.settings.name} Redis 연결 삭제`} Icon={Trash2} onClick={() => redis.action({ kind: "delete", profile: item })} />
+    </ExplorerProfile>;
   }
 
   return <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={hidden}>
@@ -280,84 +364,13 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
               }} />
           </ExplorerProfile>)}
         </ExplorerGroup>}
-        <ExplorerGroup id="explorer-sqlite" name="SQLite" Icon={Database} count={visibleSqlite.length} filtering={filtering} actions={<>
+        <ExplorerGroup id="explorer-databases" name="데이터베이스" Icon={Database} count={databaseItems.length} filtering={filtering} actions={<>
           <ExplorerButton label="SQLite 백업 복원" Icon={RotateCcw} onClick={sqlite.restore} />
-          <ExplorerButton label="SQLite 연결 추가" Icon={Plus} onClick={sqlite.add} />
+          <ExplorerButton label="데이터베이스 연결 추가" Icon={Plus} onClick={onAddDatabase} />
         </>}>
-          {!visibleSqlite.length && <p className="sidebar-empty">저장된 SQLite 연결이 없습니다.</p>}
-          {visibleSqlite.map(item => <div key={item.id}>
-            <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)}
-              Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)}>
-              {favoriteButton({ kind: "sqlite", profile_id: item.id }, item.name)}
-            </ExplorerProfile>
-            {item === loaded && (sqlite.active || filtering) && <div className="object-list">
-              <div className="object-toolbar"><span>객체</span>
-                <ExplorerButton label="객체 새로고침" Icon={RefreshCw} onClick={sqlite.refresh} disabled={sqlite.loading} />
-              </div>
-              {sqlite.loading ? <p className="sidebar-empty" role="status">불러오는 중…</p> :
-                !objects.length ? <p className="sidebar-empty">{filtering ? "일치하는 객체가 없습니다." : "테이블이나 뷰가 없습니다."}</p> : <>
-                  <ObjectGroup name="테이블" items={objects.filter(item => item.kind === "table")} selected={sqlite.selected} onOpen={sqlite.openObject}
-                    favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
-                  <ObjectGroup name="뷰" items={objects.filter(item => item.kind === "view")} selected={sqlite.selected} onOpen={sqlite.openObject}
-                    favoriteAction={object => favoriteButton({ kind: "sqlite_object", profile_id: item.id, object_name: object.name }, object.name)} />
-                </>}
-            </div>}
-          </div>)}
+          {!databaseItems.length && <p className="sidebar-empty">저장된 데이터베이스 연결이 없습니다.</p>}
+          {databaseItems.map(databaseEntry)}
         </ExplorerGroup>
-        <ExplorerGroup id="explorer-postgres" name="PostgreSQL" Icon={Database} count={visiblePostgres.length} filtering={filtering}
-          actions={<ExplorerButton label="PostgreSQL 연결 추가" Icon={Plus} onClick={() => postgres.action({ kind: "create" })} />}>
-          {!visiblePostgres.length && <p className="sidebar-empty">저장된 PostgreSQL 연결이 없습니다.</p>}
-          {visiblePostgres.map(item => <div key={item.id}><ExplorerProfile name={item.settings.name} environment={item.settings.environment}
-            detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} label={`PostgreSQL ${item.settings.name} 열기`}
-            Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
-            {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
-            <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
-            <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
-          </ExplorerProfile>
-            {item === activePostgres && submitted && <div className="object-list explorer-postgres-results" role="group" aria-label="PostgreSQL 서버 검색 결과">
-              {pgSearch.loading && <p className="sidebar-empty" role="status">PostgreSQL 객체를 검색하는 중…</p>}
-              {pgSearch.error && <p className="sidebar-empty" role="alert">{pgSearch.error}</p>}
-              {pgSearch.data && <>
-                {pgSearch.data.hits.length ? <p className="group-title">객체 {pgSearch.data.hits.length}개</p> :
-                  <p className="sidebar-empty" role="status">일치하는 PostgreSQL 객체가 없습니다.</p>}
-                {pgSearch.data.hits.map(hit => {
-                  const target: PostgresFavorite = { kind: "postgres_object", profile_id: item.id, schema_name: hit.schema, object_name: hit.name };
-                  const qualified = `${hit.schema}.${hit.name}`;
-                  return <div className="explorer-object" key={hit.id}>
-                    <button type="button" className="object-row explorer-postgres-object" title={qualified}
-                      aria-label={`PostgreSQL 객체 ${qualified} 열기`} onClick={() => postgres.openObject(target)}>
-                      <Table2 size={13} aria-hidden />
-                      <span><strong>{hit.name}</strong><small>{hit.schema} · {postgresObjectLabels[hit.kind]}</small></span>
-                    </button>
-                    {favoriteButton(target, `검색 결과 ${qualified}`, submitted.id)}
-                  </div>;
-                })}
-                <PostgresPager label="PostgreSQL 객체" page={submitted.page} next={pgSearch.data.has_next}
-                  change={page => setRemoteSearch({ ...submitted, page })} />
-              </>}
-            </div>}
-          </div>)}
-        </ExplorerGroup>
-        {desktop && <ExplorerGroup id="explorer-mysql" name="MySQL · MariaDB" Icon={Database} count={mysqlMatches.length} filtering={filtering}
-          actions={<ExplorerButton label="MySQL 계열 연결 추가" Icon={Plus} onClick={() => mysql.action({ kind: "create" })} />}>
-          {!mysqlMatches.length && <p className="sidebar-empty">저장된 MySQL 계열 연결이 없습니다.</p>}
-          {mysqlMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
-            detail={networkAddressText(item.settings)} label={`MySQL ${item.settings.name} 열기`}
-            Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
-            <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
-            <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
-          </ExplorerProfile>)}
-        </ExplorerGroup>}
-        {desktop && <ExplorerGroup id="explorer-redis" name="Redis" Icon={KeyRound} count={redisMatches.length} filtering={filtering}
-          actions={<ExplorerButton label="Redis 연결 추가" Icon={Plus} onClick={() => redis.action({ kind: "create" })} />}>
-          {!redisMatches.length && <p className="sidebar-empty">저장된 Redis 연결이 없습니다.</p>}
-          {redisMatches.map(item => <ExplorerProfile key={item.id} name={item.settings.name} environment={item.settings.environment}
-            detail={`${networkAddressText(item.settings)} / DB ${item.settings.database}`} label={`Redis ${item.settings.name} 열기`}
-            Icon={KeyRound} selected={item.id === redis.activeId} onOpen={() => redis.open(item.id)}>
-            <ExplorerButton label={`${item.settings.name} Redis 연결 수정`} Icon={Pencil} onClick={() => redis.action({ kind: "edit", profile: item })} />
-            <ExplorerButton label={`${item.settings.name} Redis 연결 삭제`} Icon={Trash2} onClick={() => redis.action({ kind: "delete", profile: item })} />
-          </ExplorerProfile>)}
-        </ExplorerGroup>}
         <ExplorerGroup id="explorer-ssh" name="SSH" Icon={TerminalSquare} count={sshMatches.length} filtering={filtering} actions={<>
           <ExplorerButton label="SSH 연결 가져오기" Icon={FileUp} onClick={() => ssh.action("import")} />
           <ExplorerButton label="SSH 연결 내보내기" Icon={FileDown} onClick={() => ssh.action("export")}

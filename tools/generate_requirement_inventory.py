@@ -10,7 +10,7 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
-    "SP-UI-002": "접을 수 있는 SQLite·PostgreSQL·MySQL/MariaDB·Redis·SSH 연결 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
+    "SP-UI-002": "이름순 단일 데이터베이스 연결 목록·행별 엔진 표시·엔진 선택형 등록, 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "탐색기에서 연결과 즐겨찾기·SQLite 객체 필터링, 연결된 PostgreSQL에 이름·스키마 객체 검색 제출 및 명령 팔레트 검색",

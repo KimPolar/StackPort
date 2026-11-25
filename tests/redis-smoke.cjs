@@ -8,6 +8,7 @@ const tls = require('node:tls');
 const { Transform } = require('node:stream');
 const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
+const { chooseDatabase } = require('./database-picker.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_REDIS_BIN;
@@ -144,7 +145,7 @@ async function verify(browser, serverPort, secure) {
   const project = await command('create_project', { name: 'Redis 검증' });
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
-  await page.getByRole('button', { name: 'Redis 연결 추가', exact: true }).click();
+  await chooseDatabase(page, 'Redis');
   const create = page.getByRole('dialog', { name: 'Redis 연결 추가', exact: true });
   await create.getByLabel('연결 이름').fill('캐시 검증');
   await create.getByLabel('호스트 이름 또는 IP').fill('localhost');

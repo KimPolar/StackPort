@@ -8,6 +8,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { startGateway } = require('./ssh-forward-fixture.cjs');
+const { chooseDatabase } = require('./database-picker.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_MYSQL_BIN;
@@ -178,7 +179,7 @@ async function verify(page, server) {
   const project = await command('create_project', { name: engine + ' 실제 서버 검증' });
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
-  await page.getByRole('button', { name: 'MySQL 계열 연결 추가', exact: true }).click();
+  await chooseDatabase(page, 'MySQL · MariaDB');
   const create = page.getByRole('dialog', { name: 'MySQL 계열 연결 추가', exact: true });
   await create.getByLabel('연결 이름').fill(engine + ' 검증');
   await create.getByLabel('호스트 이름 또는 IP').fill('localhost');
@@ -393,7 +394,7 @@ async function verifyClientIdentity(page, command, project, server, alternate) {
   await assert.rejects(open(await alternate('잘못된 개인 키 형식', { ...identitySettings(server), client_key_path: invalidKey })), /개인 키의 PEM 형식/);
 
   const name = engine + ' 클라이언트 인증 검증';
-  await page.getByRole('button', { name: 'MySQL 계열 연결 추가', exact: true }).click();
+  await chooseDatabase(page, 'MySQL · MariaDB');
   const create = page.getByRole('dialog', { name: 'MySQL 계열 연결 추가', exact: true });
   await create.getByLabel('연결 이름').fill(name);
   await create.getByLabel('호스트 이름 또는 IP').fill('localhost');

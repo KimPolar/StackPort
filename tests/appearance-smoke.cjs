@@ -2,6 +2,7 @@
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { chooseDatabase } = require('./database-picker.cjs');
 
 async function expectScheme(page, scheme) {
   await page.waitForFunction(expected =>
@@ -44,7 +45,7 @@ async function openFixtureTable(page) {
   await project.getByRole('button', { name: '저장', exact: true }).click();
   await project.waitFor({ state: 'detached' });
   const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기', exact: true });
-  await explorer.getByRole('button', { name: 'SQLite 연결 추가', exact: true }).click();
+  await chooseDatabase(page, 'SQLite');
   const connection = page.getByRole('dialog', { name: 'SQLite 연결 추가', exact: true });
   await connection.getByRole('textbox', { name: '이름', exact: true }).fill('화면 검증 DB');
   await connection.getByLabel('SQLite 파일 경로').fill(database);
