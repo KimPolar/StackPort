@@ -11,7 +11,7 @@ use crate::{
 use serde::Serialize;
 use tiberius::{Row, ToSql};
 
-const CATALOG_LIMIT: usize = 50;
+pub(super) const CATALOG_LIMIT: usize = 50;
 const ROW_LIMIT: usize = 50;
 const COLUMN_LIMIT: usize = 64;
 const VALUE_LIMIT: usize = 256;
@@ -135,7 +135,7 @@ impl Manager {
         ))
     }
 
-    async fn object(&self, id: &str, object: i32) -> Result<Object> {
+    pub(super) async fn object(&self, id: &str, object: i32) -> Result<Object> {
         let sql = format!(
             "SELECT o.object_id, s.name, o.name, RTRIM(o.type)
             FROM sys.objects AS o INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
@@ -393,11 +393,11 @@ fn filter_binding(
     Ok(expression)
 }
 
-fn offset(page: u32, limit: usize) -> i64 {
+pub(super) fn offset(page: u32, limit: usize) -> i64 {
     i64::from(page) * limit as i64
 }
 
-fn catalog_page<T>(mut items: Vec<T>) -> CatalogPage<T> {
+pub(super) fn catalog_page<T>(mut items: Vec<T>) -> CatalogPage<T> {
     let has_next = items.len() > CATALOG_LIMIT;
     items.truncate(CATALOG_LIMIT);
     CatalogPage { items, has_next }
@@ -410,7 +410,7 @@ fn validate_search(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn get<'a, T: tiberius::FromSql<'a>>(row: &'a Row, index: usize) -> Result<T> {
+pub(super) fn get<'a, T: tiberius::FromSql<'a>>(row: &'a Row, index: usize) -> Result<T> {
     row.try_get(index)
         .map_err(query_error)?
         .ok_or_else(|| "SQL Server 응답에서 필요한 값을 읽을 수 없습니다.".into())

@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
+import { ObjectStructureItem } from "./ObjectStructureItem";
 
 export type MysqlObjectInfo = { name: string; kind: string; engine: string | null };
 export type MysqlStructureSection = "indexes" | "constraints" | "references" | "definition";
@@ -29,7 +29,7 @@ export function MysqlObjectStructure({ data, target, onFollow }: { data: MysqlSt
   if (data.section === "definition") return <ObjectDefinitionPanel {...data.definition} target={target} engine="MySQL" title="생성 SQL" />;
   if (data.items.length === 0) return <p className="result-empty">현재 계정에 표시된 항목이 없습니다.</p>;
   return <div className="mysql-inspection-list">
-    {data.section === "indexes" && data.items.map(index => <Detail key={index.name} title={index.name}
+    {data.section === "indexes" && data.items.map(index => <ObjectStructureItem key={index.name} title={index.name}
       meta={[index.method, index.name === "PRIMARY" ? "기본 키" : index.unique && "고유", index.visible === false && "옵티마이저에서 제외"].filter(Boolean).join(" · ")}>
       <div className="mysql-table" tabIndex={0} role="region" aria-label={`${index.name} 인덱스 구성 스크롤`}>
         <table aria-label={`${index.name} 인덱스 구성`}><thead><tr>
@@ -40,26 +40,19 @@ export function MysqlObjectStructure({ data, target, onFollow }: { data: MysqlSt
           <td>{part.prefix ?? "—"}</td><td>{part.cardinality ?? "—"}</td>
         </tr>)}</tbody></table>
       </div>
-    </Detail>)}
-    {data.section === "constraints" && data.items.map(item => <Detail key={JSON.stringify([item.kind, item.name])} title={item.name}
+    </ObjectStructureItem>)}
+    {data.section === "constraints" && data.items.map(item => <ObjectStructureItem key={JSON.stringify([item.kind, item.name])} title={item.name}
       meta={[constraintLabels[item.kind] ?? item.kind, item.enforced === false && "검사 비활성"].filter(Boolean).join(" · ")}>
       {item.reference && <Related relation={item.reference} label="참조 대상" onFollow={onFollow} />}
       <KeyDetails data={item} />
       {item.expression && <pre className="mysql-inspection-expression" tabIndex={0} aria-label="CHECK 조건 식">{fragmentText(item.expression)}</pre>}
-    </Detail>)}
-    {data.section === "references" && data.items.map(item => <Detail key={JSON.stringify([item.source.database, item.source.name, item.name])}
+    </ObjectStructureItem>)}
+    {data.section === "references" && data.items.map(item => <ObjectStructureItem key={JSON.stringify([item.source.database, item.source.name, item.name])}
       title={item.name} meta={`${item.source.database}.${item.source.name}`}>
       <Related relation={item.source} label="참조하는 객체" onFollow={onFollow} />
       <KeyDetails data={item} />
-    </Detail>)}
+    </ObjectStructureItem>)}
   </div>;
-}
-
-function Detail({ title, meta, children }: { title: string; meta: string; children: ReactNode }) {
-  return <details className="mysql-inspection-item">
-    <summary><strong>{title}</strong><small>{meta}</small></summary>
-    <div>{children}</div>
-  </details>;
 }
 
 function KeyDetails({ data }: { data: KeyRules }) {

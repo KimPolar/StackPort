@@ -1,8 +1,10 @@
 mod catalog;
 mod profiles;
+mod structure;
 
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
+pub use structure::{Structure, StructureSection};
 
 use crate::{Result, Store};
 use serde::{Deserialize, Deserializer, Serialize};

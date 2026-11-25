@@ -5,6 +5,7 @@ import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePrevie
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 import { PostgresPager } from "./PostgresPager";
+import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
@@ -14,7 +15,7 @@ type Session = { id: string; database: string; version: string; context?: string
 type CatalogPage<T> = { items: T[]; has_next: boolean };
 type ServerObject = { id: number | string; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
 const objectKind = { table: "테이블", view: "뷰", materialized_view: "구체화 뷰" };
-type ObjectView = "data" | "columns" | "definition";
+type ObjectView = "data" | "columns" | "structure" | "definition";
 type SearchField = "name" | "column";
 type SearchInput = { schema: string | null; field: SearchField; kind: ServerObject["kind"] | null; term: string; page: number };
 type Column = { name: string; data_type: string; nullable: boolean; identity: boolean };
@@ -121,30 +122,30 @@ function Browse({ session, profile, engine, prefix }: { session: Session; profil
   const [searchOpen, setSearchOpen] = useState(false);
   const searchTrigger = useRef<HTMLButtonElement>(null);
   const detailHeading = useRef<HTMLHeadingElement>(null);
-  const focusAfterSearch = useRef<"trigger" | "object" | null>(null);
+  const pendingFocus = useRef<"trigger" | "object" | null>(null);
   const schemaArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const objectArgs = useMemo(() => ({ id: session.id, schema }), [session.id, schema]);
   const refresh = () => setRevision(current => current + 1);
 
   useEffect(() => {
-    if (searchOpen || focusAfterSearch.current === null) return;
-    const destination = focusAfterSearch.current === "object" ? detailHeading : searchTrigger;
+    if (searchOpen || pendingFocus.current === null) return;
+    const destination = pendingFocus.current === "object" ? detailHeading : searchTrigger;
     destination.current?.focus();
-    focusAfterSearch.current = null;
-  }, [searchOpen]);
+    pendingFocus.current = null;
+  }, [searchOpen, object, view]);
 
-  function openSearchResult(hit: ServerObject, nextView: ObjectView) {
+  function openObject(hit: ServerObject, nextView: ObjectView) {
     setSchema(hit.schema);
     setObject(hit);
     setView(nextView);
-    focusAfterSearch.current = "object";
+    pendingFocus.current = "object";
     setSearchOpen(false);
   }
 
   return <div className="mysql-layout">
     {searchOpen && <ObjectSearchDialog session={session} schema={schema} engine={engine} prefix={prefix}
-      onOpen={openSearchResult} onClose={() => {
-        focusAfterSearch.current = "trigger";
+      onOpen={openObject} onClose={() => {
+        pendingFocus.current = "trigger";
         setSearchOpen(false);
       }} />}
     <div className="mysql-catalog">
@@ -161,7 +162,8 @@ function Browse({ session, profile, engine, prefix }: { session: Session; profil
         }} />}
     </div>
     {object ? <ObjectDetail key={object.id} id={session.id} profile={profile} object={object} revision={revision} refresh={refresh}
-      headingRef={detailHeading} view={view} setView={setView} engine={engine} prefix={prefix} /> :
+      headingRef={detailHeading} view={view} setView={setView} engine={engine} prefix={prefix}
+      onFollow={table => openObject({ ...table, kind: "table" }, "columns")} /> :
       <section className="results-card"><div className="panel-heading"><h2>객체 조회</h2>
         <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
       </div><p className="result-empty">스키마에서 테이블 또는 뷰를 선택하세요.</p></section>}
@@ -258,9 +260,10 @@ function Catalog<T>({ title, command, args, revision, id, name, selected, detail
   </section>;
 }
 
-function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view, setView, engine, prefix }: {
+function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view, setView, engine, prefix, onFollow }: {
   id: string; profile: Profile; object: ServerObject; revision: number; refresh: () => void;
   headingRef: RefObject<HTMLHeadingElement | null>; view: ObjectView; setView: (view: ObjectView) => void;
+  onFollow: (table: SqlServerRelatedTable) => void;
 } & Adapter) {
   const [page, setPage] = useState(0);
   const [clauses, setClauses] = useState<TableQueryClauses>(emptyTableQueryClauses);
@@ -282,6 +285,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
     <div className="mysql-views" role="group" aria-label="객체 보기">
       <button type="button" className="secondary small" aria-pressed={view === "data"} onClick={() => setView("data")}>데이터</button>
       <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
+      {prefix === "sql_server" && <button type="button" className="secondary small" aria-pressed={view === "structure"}
+        onClick={() => setView("structure")}>키와 인덱스</button>}
       {canReadDefinition && <button type="button" className="secondary small" aria-pressed={view === "definition"}
         onClick={() => setView("definition")}>정의 SQL</button>}
     </div>
@@ -317,6 +322,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
         </tr>)}</tbody></table>
       </div>}
     </>}
+    {view === "structure" && typeof object.id === "number" && <SqlServerObjectStructure id={id} object={object.id}
+      table={object.kind === "table"} revision={revision} onFollow={onFollow} />}
     {view === "definition" && <>
       <ReadStatus {...definition} empty={false} />
       {definition.data && <ObjectDefinitionPanel text={definition.data} target={object.schema + "." + object.name}

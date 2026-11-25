@@ -33,10 +33,15 @@ async function seedSqlServer({ port, ca, database, account, password }) {
     await execute('CREATE SCHEMA [archive]');
     await execute('CREATE SCHEMA [private]');
     await execute(`
-CREATE TABLE [private].[hidden_data] (id int NOT NULL, [%_literal] int);
+CREATE TABLE [private].[hidden_data] (id int NOT NULL PRIMARY KEY, [%_literal] int);
 CREATE TABLE [catalog].[metadata_only] (id int NOT NULL);
 CREATE TABLE [archive].[order]]daily] ([%_literal] int, [%Xliteral] int);
 CREATE TABLE [archive].[wildcard_decoy] ([%Xliteral] int);
+CREATE TABLE [archive].[accounts] (tenant int NOT NULL, account bigint NOT NULL, PRIMARY KEY (tenant, account));
+CREATE TABLE [archive].[unique_disabled] (token int NOT NULL CONSTRAINT [uq_disabled_token] UNIQUE);
+ALTER INDEX [uq_disabled_token] ON [archive].[unique_disabled] DISABLE;
+CREATE TABLE [archive].[analytics_fixture] (event_id int, amount decimal(18,2));
+CREATE CLUSTERED COLUMNSTORE INDEX [cci_analytics] ON [archive].[analytics_fixture];
 CREATE TABLE [catalog].[order]]daily] (
     id bigint NOT NULL,
     seq int IDENTITY(1,1) NOT NULL,
@@ -44,7 +49,15 @@ CREATE TABLE [catalog].[order]]daily] (
     payload varbinary(max) NULL,
     title nvarchar(max) NULL,
     logged_at datetime2(6) NOT NULL,
-    CONSTRAINT [fixture_pk] PRIMARY KEY (id DESC, seq)
+    account_region int NULL,
+    account_id bigint NULL,
+    private_id int NULL,
+    related_id bigint NULL,
+    related_seq int NULL,
+    badge tinyint NOT NULL CONSTRAINT [df_fixture_badge] DEFAULT ((7)),
+    CONSTRAINT [fixture_pk] PRIMARY KEY (id DESC, seq),
+    CONSTRAINT [uq_fixture_seq] UNIQUE (seq),
+    CONSTRAINT [ck_fixture_amount] CHECK (exact_value >= 0)
 );
 DECLARE @i int = 0;
 WHILE @i < 61
@@ -57,6 +70,24 @@ BEGIN
         '2026-09-18T04:12:33.123456');
     SET @i += 1;
 END;
+ALTER TABLE [catalog].[order]]daily] NOCHECK CONSTRAINT [ck_fixture_amount];
+ALTER TABLE [catalog].[order]]daily] ADD CONSTRAINT [fk_fixture_account]
+    FOREIGN KEY (account_region, account_id) REFERENCES [archive].[accounts] (tenant, account)
+    ON UPDATE CASCADE ON DELETE SET NULL;
+ALTER TABLE [catalog].[order]]daily] ADD CONSTRAINT [fk_fixture_private]
+    FOREIGN KEY (private_id) REFERENCES [private].[hidden_data] (id);
+ALTER TABLE [catalog].[order]]daily] ADD CONSTRAINT [fk_fixture_self]
+    FOREIGN KEY (related_id, related_seq) REFERENCES [catalog].[order]]daily] (id, seq);
+CREATE TABLE [archive].[order_detail] (
+    base_id bigint, base_seq int, CONSTRAINT [fk_detail_order] FOREIGN KEY (base_id, base_seq)
+    REFERENCES [catalog].[order]]daily] (id, seq));
+CREATE TABLE [private].[hidden_order_detail] (
+    base_id bigint, base_seq int, CONSTRAINT [fk_hidden_incoming] FOREIGN KEY (base_id, base_seq)
+    REFERENCES [catalog].[order]]daily] (id, seq));
+CREATE INDEX [ix_fixture_filter] ON [catalog].[order]]daily] (exact_value DESC, logged_at)
+    INCLUDE (seq, account_id) WHERE account_id IS NOT NULL;
+CREATE INDEX [ix_fixture_disabled] ON [catalog].[order]]daily] (account_region);
+ALTER INDEX [ix_fixture_disabled] ON [catalog].[order]]daily] DISABLE;
 `);
     await execute('CREATE VIEW [catalog].[recent] AS\r\nSELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2\r\n-- 한글 정의');
     await execute('CREATE VIEW [archive].[sealed_report] WITH ENCRYPTION AS SELECT 1 AS id');
@@ -67,6 +98,9 @@ BEGIN
     DECLARE @name nvarchar(128) = N'report_' + RIGHT(N'00' + CONVERT(nvarchar(2), @i), 2);
     DECLARE @ddl nvarchar(max) = N'CREATE VIEW [archive].' + QUOTENAME(@name) + N' AS SELECT 2 AS match_a, 3 AS match_b';
     EXEC sys.sp_executesql @ddl;
+    DECLARE @check nvarchar(128) = N'check_' + RIGHT(N'00' + CONVERT(nvarchar(2), @i), 2);
+    SET @ddl = N'ALTER TABLE [catalog].[metadata_only] ADD CONSTRAINT ' + QUOTENAME(@check) + N' CHECK (id >= 0)';
+    EXEC sys.sp_executesql @ddl;
     SET @i += 1;
 END;
 `);
@@ -74,6 +108,7 @@ END;
 CREATE USER [${account}] FOR LOGIN [${account}];
 GRANT SELECT ON SCHEMA::[archive] TO [${account}];
 GRANT SELECT ON [catalog].[order]]daily] TO [${account}];
+GRANT VIEW DEFINITION ON [catalog].[order]]daily] TO [${account}];
 GRANT SELECT ON [catalog].[recent] TO [${account}];
 GRANT VIEW DEFINITION ON [catalog].[recent] TO [${account}];
 GRANT VIEW DEFINITION ON [archive].[sealed_report] TO [${account}];

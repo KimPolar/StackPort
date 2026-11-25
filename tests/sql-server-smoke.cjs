@@ -65,6 +65,7 @@ async function verify(page, hiddenObject) {
     const objects = await command('sql_server_objects', { id, schema: 'catalog', search: '', page: 0 });
     assert.deepEqual(objects.items.map(row => [row.kind, row.name]), [['table', 'metadata_only'], ['table', 'order]daily'], ['view', 'recent']]);
     const table = objects.items.find(row => row.name === 'order]daily');
+    await verifyStructureCommands(command, id, table, objects.items[0], hiddenObject);
     const search = (overrides = {}) => command('sql_server_search_objects', { id, input: {
       schema: null, field: 'name', kind: null, term: 'order]daily', page: 0, ...overrides,
     } });
@@ -167,12 +168,113 @@ async function verify(page, hiddenObject) {
   await verifyGridFilter(page, detail, grid, 'id', '9223372036854775807');
   await detail.getByRole('button', { name: '열 구조', exact: true }).click();
   await detail.getByRole('table', { name: 'SQL Server 열 구조', exact: true }).getByText('decimal(30,6)', { exact: true }).waitFor();
+  await verifyStructurePanel(workspace, detail);
   await workspace.getByRole('button', { name: 'recent 뷰', exact: true }).click();
   await detail.getByText('기본 키가 없어 최대 50행을 한 번에 표시합니다.', { exact: true }).waitFor();
   assert.match(await verifyDefinitionPanel(page, detail, 'SQL Server'), /AS\r\nSELECT/);
   await workspace.getByRole('button', { name: 'SQL Server 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifyStructureCommands(command, id, table, metadataOnly, hiddenObject) {
+  const read = (section, object = table.id, page = 0) => command('sql_server_structure', { id, object, section, page });
+  const indexes = await read('indexes');
+  assert.equal(indexes.section, 'indexes');
+  const primary = indexes.items.find(item => item.name === 'fixture_pk');
+  assert.deepEqual([primary.method, primary.primary_key, primary.unique, primary.partitions, primary.estimated_rows],
+    ['CLUSTERED', true, true, 1, '61']);
+  assert.deepEqual(primary.columns.map(column => [column.name, column.key_position, column.descending]),
+    [['id', 1, true], ['seq', 2, false]]);
+  const filtered = indexes.items.find(item => item.name === 'ix_fixture_filter');
+  assert.equal(filtered.has_filter, true);
+  assert.match(filtered.filter.text, /account_id.*IS NOT NULL/);
+  assert.equal(filtered.filter.truncated, false);
+  assert.deepEqual(filtered.columns.map(column => [column.name, column.key_position, column.descending, column.included]),
+    [['exact_value', 1, true, false], ['logged_at', 2, false, false], ['seq', 0, null, true], ['account_id', 0, null, true]]);
+  assert.equal(indexes.items.find(item => item.name === 'ix_fixture_disabled').disabled, true);
+  assert.equal(indexes.items.find(item => item.name === 'uq_fixture_seq').unique_constraint, true);
+  const archiveObject = async search => (await command('sql_server_objects', { id, schema: 'archive', search, page: 0 })).items[0].id;
+  const columnstore = (await read('indexes', await archiveObject('analytics_fixture'))).items[0];
+  assert.equal(columnstore.method, 'CLUSTERED COLUMNSTORE');
+  assert.deepEqual(columnstore.columns.map(column => [column.name, column.key_position, column.descending, column.included]),
+    [['event_id', 0, null, false], ['amount', 0, null, false]]);
+
+  const constraints = await read('constraints');
+  assert.equal(constraints.section, 'constraints');
+  assert.deepEqual(constraints.items.map(item => [item.name, item.kind]),
+    [['ck_fixture_amount', 'C'], ['df_fixture_badge', 'D'], ['fixture_pk', 'PK'], ['uq_fixture_seq', 'UQ']]);
+  const check = constraints.items[0];
+  assert.equal(check.disabled, true);
+  assert.equal(check.untrusted, true);
+  assert.match(check.expression.text, /exact_value/);
+  assert.equal(constraints.items[1].column, 'badge');
+  assert.match(constraints.items[1].expression.text, /7/);
+  assert.deepEqual(constraints.items[2].columns.map(column => [column.name, column.descending]), [['id', true], ['seq', false]]);
+  const disabled = (await read('constraints', await archiveObject('unique_disabled'))).items[0];
+  assert.deepEqual([disabled.name, disabled.kind, disabled.disabled], ['uq_disabled_token', 'UQ', true]);
+  const firstPage = await read('constraints', metadataOnly.id);
+  assert.equal(firstPage.items.length, 50);
+  assert.equal(firstPage.items.at(-1).name, 'check_50');
+  assert.equal(firstPage.has_next, true);
+  const lastPage = await read('constraints', metadataOnly.id, 1);
+  assert.deepEqual(lastPage.items.map(item => item.name), ['check_51']);
+  assert.equal(lastPage.has_next, false);
+
+  const keys = await read('foreign_keys');
+  assert.equal(keys.section, 'foreign_keys');
+  assert.deepEqual(keys.items.map(item => [item.name, item.direction]), [
+    ['fk_detail_order', 'incoming'], ['fk_fixture_account', 'outgoing'],
+    ['fk_fixture_private', 'outgoing'], ['fk_fixture_self', 'self_reference'],
+  ]);
+  const incoming = keys.items[0];
+  assert.equal(incoming.source.name, 'order_detail');
+  assert.equal(incoming.target.id, table.id);
+  assert.deepEqual(incoming.columns, [{ source: 'base_id', target: 'id' }, { source: 'base_seq', target: 'seq' }]);
+  const related = keys.items[1];
+  assert.deepEqual([related.target.schema, related.target.name, related.on_update, related.on_delete],
+    ['archive', 'accounts', 'CASCADE', 'SET_NULL']);
+  assert.deepEqual(related.columns, [{ source: 'account_region', target: 'tenant' }, { source: 'account_id', target: 'account' }]);
+  assert.equal(keys.items[2].target, null);
+  assert.deepEqual(keys.items[2].columns, [{ source: 'private_id', target: null }]);
+  assert.doesNotMatch(JSON.stringify(keys), /hidden_data|hidden_order_detail/);
+  await assert.rejects(read('indexes', hiddenObject), /공개되지/);
+}
+
+async function verifyStructurePanel(workspace, detail) {
+  const open = () => detail.getByRole('button', { name: '키와 인덱스', exact: true }).click();
+  const panel = detail.getByRole('region', { name: 'SQL Server 키와 인덱스', exact: true });
+  const entry = name => panel.locator('summary').filter({ hasText: name }).locator('..');
+  await open();
+  const filtered = entry('ix_fixture_filter');
+  await filtered.locator('summary').click();
+  const included = filtered.getByRole('table', { name: 'ix_fixture_filter 구성', exact: true })
+    .getByRole('row', { name: /seq.*포함 열/ });
+  assert.equal(await included.getByRole('cell').nth(1).innerText(), '—');
+  await filtered.getByLabel('인덱스 필터', { exact: true }).waitFor();
+  await panel.getByRole('button', { name: '제약조건', exact: true }).click();
+  const check = entry('ck_fixture_amount');
+  await check.getByText(/비활성.*기존 행 미검증/).waitFor();
+  await panel.getByRole('button', { name: '외래 키', exact: true }).click();
+  const restricted = entry('fk_fixture_private');
+  await restricted.locator('summary').click();
+  await restricted.getByText('현재 계정에 비공개', { exact: true }).waitFor();
+  assert.equal(await restricted.getByRole('button', { name: /구조 열기/ }).count(), 0);
+  const outgoing = entry('fk_fixture_account');
+  await outgoing.locator('summary').click();
+  await outgoing.getByRole('button', { name: 'archive.accounts 구조 열기', exact: true }).press('Enter');
+  const accounts = detail.getByRole('heading', { name: 'accounts', exact: true });
+  await accounts.waitFor();
+  assert.ok(await accounts.evaluate(heading => document.activeElement === heading));
+  await detail.getByRole('table', { name: 'SQL Server 열 구조', exact: true }).getByRole('rowheader', { name: 'tenant' }).waitFor();
+
+  await open();
+  await panel.getByRole('button', { name: '외래 키', exact: true }).click();
+  const incoming = entry('fk_fixture_account');
+  await incoming.locator('summary').click();
+  await incoming.getByText('들어오는 외래 키', { exact: true }).waitFor();
+  await incoming.getByRole('button', { name: 'catalog.order]daily 구조 열기', exact: true }).press('Enter');
+  await workspace.getByRole('heading', { name: 'order]daily', exact: true }).waitFor();
 }
 
 async function main() {
@@ -182,7 +284,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], hidden); }
   finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, view definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, indexes, constraints, related tables, view definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

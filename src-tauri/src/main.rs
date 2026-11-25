@@ -1009,6 +1009,12 @@ async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String,
     -> Result<sql_server::CatalogPage<sql_server::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
+async fn sql_server_structure(manager: State<'_, sql_server::Manager>, id: String, object: i32,
+    section: sql_server::StructureSection, page: u32) -> Result<sql_server::Structure, String> {
+    manager.structure(&id, object, section, page).await
+}
+
+#[tauri::command]
 async fn sql_server_definition(manager: State<'_, sql_server::Manager>, id: String, object: i32) -> Result<String, String> {
     manager.definition(&id, object).await
 }
@@ -2438,6 +2444,7 @@ fn main() {
             sql_server_objects,
             sql_server_search_objects,
             sql_server_columns,
+            sql_server_structure,
             sql_server_definition,
             sql_server_data,
             list_oracle_profiles,

@@ -14,6 +14,8 @@ MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·
 
 SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개된 스키마, 테이블, 뷰를 검색합니다. 열 이름·타입·NULL·IDENTITY를 표시하며, 미리보기는 앞 64개 열을 읽습니다. 테이블은 기본 키의 열 순서와 정렬 방향으로 50행씩 읽습니다. 기본 키가 없으면 한 번에 최대 50행을 표시합니다. 큰 정수와 소수는 문자열로, 바이너리는 HEX로 보존하며 값은 처음 256문자 또는 256바이트까지 표시합니다. 잘린 문자열의 크기는 UTF-16으로 변환한 전체 값의 바이트 수입니다. [SQL Server 메타데이터 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration)
 
+SQL Server의 **키와 인덱스**는 현재 계정에 공개된 인덱스, 제약조건, 외래 키를 항목별로 50개씩 보여줍니다. 인덱스의 종류·고유 여부·비활성 상태, 키 순서와 정렬 방향, 포함 열, 공개된 필터와 파티션별 추정 행 수의 합계를 표시합니다. 제약조건에서 기본 키·고유 키·CHECK·DEFAULT를 확인합니다. 외래 키는 들어오는 참조·나가는 참조·자기 참조를 구분하며, 복합 키의 열 대응과 갱신·삭제 동작을 표시합니다. 공개된 테이블은 열 구조로 바로 이동하고 공개 범위 밖의 대상 이름과 열은 가립니다. [sys.index_columns](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-index-columns-transact-sql) · [sys.foreign_keys](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-foreign-keys-transact-sql)
+
 **Oracle Database**는 Oracle의 Rust Thin 드라이버 프리릴리스 버전을 고정해 사용합니다. Windows 실행 파일에서 별도 Oracle Instant Client 설치 없이 호스트·포트·서비스 이름 또는 SID를 지정해 접속합니다. 기본 전송 방식인 TCPS는 호스트 이름과 인증서를 검증하며 드라이버에 포함된 신뢰 루트와 선택한 PEM CA를 사용합니다. 일반 TCP도 선택할 수 있습니다. 암호는 연결할 때 입력하고 운영 환경에서는 `PROD`를 확인합니다. [Oracle Rust Thin 드라이버](https://oracle.github.io/rust-oracledb/)
 
 Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
@@ -502,6 +504,8 @@ SQL Server 2022 CU28과 2025 CU11에서 Windows 앱의 SQL 로그인, 필수 TLS
 SQL Server 2022와 Oracle Database 26ai Free의 Windows 검사에서 큰 소수와 시각 조건, 문자열 포함, 여러 열·NULL 정렬, 조건이 적용된 페이지 이동과 저장된 조건의 재적용을 확인합니다.
 
 같은 검사에서 두 스키마에 있는 동명 객체, 권한이 없는 객체 제외, 열 검색의 리터럴 `%_`, 검색 결과에서 키보드로 열 구조 이동, Escape로 검색 버튼에 포커스 복귀를 확인합니다. SQL Server의 열 이름 검색은 한 객체에 일치하는 열이 여러 개여도 한 건으로 표시하고, 51개 결과의 두 페이지를 검사합니다.
+
+SQL Server 구조 검사는 내림차순 복합 기본 키, 포함 열과 필터가 있는 인덱스, 컬럼스토어 열의 정렬 방향 생략, 비활성 인덱스·고유 키·CHECK, DEFAULT, 51개 제약조건의 두 페이지를 확인합니다. 교차 스키마·자기 참조 외래 키, 접근할 수 없는 참조 대상 가림, 키보드로 부모·자식 테이블에 오가는 동작도 확인합니다.
 
 정의 SQL 검사는 SQL Server 뷰의 권한 제한·암호화, Oracle의 소유 객체 정의와 타 스키마 메타데이터 제한, 두 엔진에서의 원문 복사 및 UTF-8 파일 저장을 확인합니다.
 
