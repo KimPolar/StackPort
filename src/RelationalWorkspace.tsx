@@ -9,6 +9,7 @@ import { PostgresPager } from "./PostgresPager";
 import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
 import { SqlServerSqlWorkspace } from "./SqlServerSqlWorkspace";
+import { SqlWorkspaceTabs, type SqlEditorState } from "./SqlTabs";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
@@ -31,8 +32,8 @@ type DataPage = {
 type Adapter = { engine: string; prefix: "sql_server" | "oracle" | "snowflake" };
 type Profile = { id: string; project_id: string; revision: number; settings: { name: string; host: string; port?: number; environment: string } };
 
-export function RelationalWorkspace({ profile, engine, prefix, database, passwordless = false, passwordLimit = 128, transportNote, tokenLabel }: Adapter & {
-  profile: Profile; database: string; passwordless?: boolean; passwordLimit?: number; transportNote?: string; tokenLabel?: string;
+export function RelationalWorkspace({ profile, editor, engine, prefix, database, passwordless = false, passwordLimit = 128, transportNote, tokenLabel }: Adapter & {
+  profile: Profile; editor: SqlEditorState; database: string; passwordless?: boolean; passwordLimit?: number; transportNote?: string; tokenLabel?: string;
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
@@ -94,7 +95,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <RelationalViews key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />}
+    {session && <RelationalViews key={session.id} session={session} profile={profile} editor={editor} engine={engine} prefix={prefix} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
@@ -117,7 +118,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
   </section>;
 }
 
-function RelationalViews(props: { session: Session; profile: Profile } & Adapter) {
+function RelationalViews(props: { session: Session; profile: Profile; editor: SqlEditorState } & Adapter) {
   const [sqlVisible, setSqlVisible] = useState(false);
   const [sqlOpened, setSqlOpened] = useState(false);
   return <>
@@ -126,9 +127,11 @@ function RelationalViews(props: { session: Session; profile: Profile } & Adapter
       <button type="button" className="secondary small" aria-pressed={sqlVisible} onClick={() => { setSqlOpened(true); setSqlVisible(true); }}>SQL 편집기</button>
     </div>
     <div hidden={sqlVisible}><Browse {...props} /></div>
-    {sqlOpened && <div hidden={!sqlVisible}>{props.prefix === "sql_server"
-      ? <SqlServerSqlWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} />
-      : <RelationalScriptWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} engine={props.prefix} />}</div>}
+    {sqlOpened && <div hidden={!sqlVisible}>
+      <SqlWorkspaceTabs editor={props.editor} render={tab => props.prefix === "sql_server"
+        ? <SqlServerSqlWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} tab={tab} />
+        : <RelationalScriptWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} engine={props.prefix} tab={tab} />} />
+    </div>}
   </>;
 }
 

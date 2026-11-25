@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
+const { verifySqlDocumentTabs } = require('./sql-document-tabs.cjs');
 const { execFileSync } = require('node:child_process');
 const { randomBytes, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
@@ -438,6 +439,7 @@ async function verifyMockBindEditor(page) {
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  await verifySqlDocumentTabs(page, workspace, 'Oracle SQL 문장');
   const pane = workspace.getByRole('region', { name: 'Oracle SQL 편집기', exact: true });
   await verifyBindForm(pane,
     pane.getByRole('textbox', { name: 'Oracle SQL 문장', exact: true }),

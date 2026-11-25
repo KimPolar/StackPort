@@ -8,6 +8,7 @@ import { MysqlQueryPlan, type MysqlPlan } from "./MysqlQueryPlan";
 import { MysqlScriptResults, type MysqlScriptOutcome } from "./MysqlScriptResults";
 import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 import { SqlParameterSets, type ParameterInput, type ParameterPlan, type ParameterSetScope } from "./SqlParameterSets";
+import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
 type Parameter = ParameterInput<ParameterKind>;
@@ -20,16 +21,14 @@ type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValu
   more_rows: boolean; more_columns: boolean; elapsed_ms: number };
 
 const number = new Intl.NumberFormat("ko-KR");
-const byteLimit = 128 * 1024;
 const encoder = new TextEncoder();
 
-export function MysqlSqlWorkspace({ id, projectId, database, environment, text, onTextChange, onExport }: {
+export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, onExport }: {
   id: string;
   projectId: string;
   database: string | null;
   environment: string;
-  text: string;
-  onTextChange: (text: string) => void;
+  tab: SqlTabEditor;
   onExport: (source: MysqlExportTarget) => void;
 }) {
   const [hasSelection, setHasSelection] = useState(false);
@@ -51,6 +50,8 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, text, 
   const pending = useRef(false);
   const active = useRef<string | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const { text, onTextChange } = tab;
+  useSqlTabBusy(tab, busy || !!draft || !!analysisTarget || !!scriptConfirmation);
   const setScope: ParameterSetScope | undefined = draft?.statement.parameterScope
     ? { project_id: projectId, engine: draft.statement.script ? "mysql_script" : "mysql", key: draft.statement.parameterScope }
     : undefined;
@@ -199,7 +200,7 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, text, 
         <Square size={14} aria-hidden /> 실행 중단</button>}
       {busy && <span role="status">{cancelPending ? "중단 요청 중…" : running ? "실행 중…" : "문장 확인 중…"}</span>}
     </div>
-    <CodeTextarea id="mysql-sql-editor" editorRef={editor} aria-label="MySQL SQL 문장" value={text} language="mysql" maxLength={byteLimit}
+    <CodeTextarea id={sqlDocumentEditorId(tab.tabId)} editorRef={editor} aria-label="MySQL SQL 문장" value={text} language="mysql" maxLength={sqlTabTextLimit}
       readOnly={busy || Boolean(draft)} placeholder="SELECT ..." onChange={event => onTextChange(event.target.value)}
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {

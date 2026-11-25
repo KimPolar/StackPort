@@ -6,6 +6,7 @@ import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePrevie
 import { Dialog } from "./Dialog";
 import { SqlServerParameterFields, type SqlParameter, type SqlServerParameterValue } from "./SqlParameterFields";
 import type { ParameterPlan } from "./SqlParameterSets";
+import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 
 type Scope = "document" | "batch" | "selection";
 type QueryInput = {
@@ -45,10 +46,10 @@ const attentionText = {
   unconfirmed: "서버의 중단 응답을 확인하지 못했습니다.",
 };
 const number = new Intl.NumberFormat("ko-KR");
-const sqlLimit = 256 * 1024;
-
-export function SqlServerSqlWorkspace({ id, projectId, database }: { id: string; projectId: string; database: string }) {
-  const [text, setText] = useState("");
+export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
+  id: string; projectId: string; database: string; tab: SqlTabEditor;
+}) {
+  const { text, onTextChange } = tab;
   const [hasSelection, setHasSelection] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [resultIndex, setResultIndex] = useState(0);
@@ -59,10 +60,11 @@ export function SqlServerSqlWorkspace({ id, projectId, database }: { id: string;
   const [error, setError] = useState("");
   const editor = useRef<HTMLTextAreaElement>(null);
   const active = useRef<string | null>(null);
-  const editorId = useId();
+  const editorId = sqlDocumentEditorId(tab.tabId);
   const noteId = useId();
   const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
   const result = outcome?.result_sets[resultIndex];
+  useSqlTabBusy(tab, busy || preparing || !!parameterRequest);
 
   function queryInput(scope: Scope): QueryInput | null {
     const field = editor.current;
@@ -150,9 +152,9 @@ export function SqlServerSqlWorkspace({ id, projectId, database }: { id: string;
       </button>}
       <span role="status">{stopping ? "중단 요청 중…" : busy ? "실행 중…" : preparing ? "매개변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlTabTextLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
       aria-label="SQL Server SQL 문장" aria-describedby={noteId} placeholder="SELECT …"
-      onChange={event => setText(event.target.value)}
+      onChange={event => onTextChange(event.target.value)}
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {
         if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter" || event.nativeEvent.isComposing) return;

@@ -6,6 +6,7 @@ import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePrevie
 import { Dialog } from "./Dialog";
 import { OracleParameterFields, SnowflakeParameterFields, type OracleParameterValue, type SnowflakeParameterValue } from "./SqlParameterFields";
 import type { ParameterPlan } from "./SqlParameterSets";
+import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
 
 type Scope = "document" | "current" | "selection";
 type Engine = "oracle" | "snowflake";
@@ -52,8 +53,10 @@ const statsFields = [
   ["num_rows_deleted", "삭제"], ["num_duplicate_rows_updated", "중복 수정"],
 ] as const;
 
-export function RelationalScriptWorkspace({ id, projectId, database, engine }: { id: string; projectId: string; database: string; engine: Engine }) {
-  const [text, setText] = useState("");
+export function RelationalScriptWorkspace({ id, projectId, database, engine, tab }: {
+  id: string; projectId: string; database: string; engine: Engine; tab: SqlTabEditor;
+}) {
+  const { text, onTextChange } = tab;
   const [selected, setSelected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -64,10 +67,11 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine }: {
   const [statementIndex, setStatementIndex] = useState(0);
   const editor = useRef<HTMLTextAreaElement>(null);
   const active = useRef<string | null>(null);
-  const editorId = useId();
+  const editorId = sqlDocumentEditorId(tab.tabId);
   const noteId = useId();
   const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
   const name = engineName[engine];
+  useSqlTabBusy(tab, busy || preparing || !!parameterRequest);
 
   async function run(scope: Scope, withParameters = false) {
     const field = editor.current;
@@ -143,9 +147,9 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine }: {
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}><Square size={14} aria-hidden /> 실행 중단</button>}
       <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : preparing ? "바인드 변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={256 * 1024} readOnly={busy || preparing || Boolean(parameterRequest)}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={sqlTabTextLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
       aria-label={name + " SQL 문장"} aria-describedby={noteId} placeholder={engine === "oracle" ? "SELECT … FROM DUAL" : "SELECT …"}
-      onChange={event => setText(event.target.value)}
+      onChange={event => onTextChange(event.target.value)}
       onSelect={event => setSelected(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {
         if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter" || event.nativeEvent.isComposing) return;

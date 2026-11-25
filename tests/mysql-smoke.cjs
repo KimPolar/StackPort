@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
+const { verifySqlDocumentTabs } = require('./sql-document-tabs.cjs');
 const { execFileSync, spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
@@ -1160,6 +1161,7 @@ async function saveJsonFromDialog(page, output) {
 async function verifySqlEditor(page, workspace) {
   const toggle = workspace.getByRole('button', { name: 'SQL 편집기', exact: true });
   await toggle.click();
+  await verifySqlDocumentTabs(page, workspace, 'MySQL SQL 문장');
   const editor = workspace.getByRole('region', { name: 'MySQL SQL 편집기', exact: true });
   const input = editor.getByRole('textbox', { name: 'MySQL SQL 문장', exact: true });
   const result = editor.getByRole('table', { name: 'MySQL SQL 결과 표', exact: true });

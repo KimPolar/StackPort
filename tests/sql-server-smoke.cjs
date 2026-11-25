@@ -6,6 +6,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
+const { verifySqlDocumentTabs } = require('./sql-document-tabs.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
 const { verifyDefinitionPanel } = require('./relational-definition.cjs');
@@ -713,6 +714,7 @@ async function verifyMockBindEditor(page) {
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  await verifySqlDocumentTabs(page, workspace, 'SQL Server SQL 문장');
   const pane = workspace.getByRole('region', { name: 'SQL Server SQL 편집기', exact: true });
   await verifyBindForm(pane, pane.getByRole('textbox', { name: 'SQL Server SQL 문장', exact: true }),
     pane.getByRole('table', { name: 'SQL Server SQL 결과 표', exact: true }));

@@ -8,18 +8,8 @@ import { PostgresParameterDialog, type PostgresBindings, type PostgresParameter 
 import { PostgresQueryPlan, type PostgresPlan } from "./PostgresQueryPlan";
 import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport";
 import { PostgresScriptResults, type PostgresScriptOutcome } from "./PostgresScriptResults";
-import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlTabSet } from "./SqlTabs";
+import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlEditorState } from "./SqlTabs";
 import type { QueryActivity } from "./WorkspaceStatus";
-
-export type PostgresEditorState = {
-  tabs: SqlTabSet;
-  select: (id: string) => void;
-  add: (text?: string) => void;
-  close: (draft: SqlDraft) => void;
-  edit: (id: string, text: string) => void;
-  openFile: () => void;
-  saveFile: (draft: SqlDraft) => void;
-};
 
 type Mode = "query" | "estimate" | "analyze" | "script";
 type ResultView = "data" | "plan" | "script";
@@ -48,7 +38,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
   session: string | null;
   projectId: string;
   environment: string;
-  editor: PostgresEditorState;
+  editor: SqlEditorState;
   onExport: (target: PostgresExportTarget) => void;
   onQueryActivity: (activity: QueryActivity) => void;
 }) {

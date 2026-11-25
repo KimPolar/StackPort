@@ -114,7 +114,7 @@ PARTIAL = {
     "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지, MySQL 계열 조회 가능 열 지문과 구조 재확인",
     "SP-DT-022": "SQLite·PostgreSQL 다중 셀·행 수정의 트랜잭션·전체 롤백·저장 값 검증, 여러 행 붙여넣기 롤백 및 PostgreSQL 커밋 결과 미확정 표시, MySQL 계열 한 행 다중 셀 트랜잭션과 커밋 결과 미확정 표시",
     "SP-DT-024": "SQLite·PostgreSQL 제약·형식·충돌 실패 시 롤백과 오류 표시, MySQL 계열 제약·길이·경고·충돌 실패 시 롤백",
-    "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인, MySQL 계열·SQL Server·Oracle·Snowflake 단일 편집기와 구문 강조",
+    "SP-SQ-001": "7개 관계형 엔진의 연결별 다중 SQL 탭, 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기, 메모리 초안과 닫기 확인",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
     "SP-SQ-003": "SQLite 준비 단계의 문법·객체·타입·읽기 전용 진단과 문서 범위 이동, PostgreSQL 실행 전 서버 파싱 오류의 문서 위치 이동",
     "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정보를 호버와 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
@@ -131,7 +131,7 @@ PARTIAL = {
     "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL·MySQL·MariaDB 스캔·조인·정렬·인덱스와 엔진별 비용·예상/실제 행 및 긴 리프 표시, PostgreSQL 행 오차 표시",
     "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
-    "SP-SQ-018": "SQLite·PostgreSQL 편집기에서 1 MiB 이하 UTF-8 SQL 파일 열기·새 파일 저장, BOM·LF/CRLF 유지 및 명시 실행",
+    "SP-SQ-018": "7개 관계형 엔진에서 1 MiB 이하 UTF-8 SQL 파일을 새 탭에 열고 명시적으로 실행, 새 파일 저장 및 BOM·LF/CRLF 유지",
     "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
     "SP-MD-002": "SQLite·PostgreSQL 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
@@ -334,7 +334,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-UI-014", "SP-SQ-009"}:
                 evidence = "crates/stackport-core/tests/query_cancel.rs; crates/stackport-core/src/query.rs; tests/desktop-smoke.cjs; src/; src-tauri/"
             elif requirement_id == "SP-SQ-001":
-                evidence = "src/CodeTextarea.tsx; src/editorSyntax.ts; src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/editor-syntax.test.mjs; tests/sql-file-smoke.cjs; tests/workspace-resume-smoke.cjs"
+                evidence = "src/CodeTextarea.tsx; src/editorSyntax.ts; src/SqlTabs.tsx; src/SqlFileDialog.tsx; src/main.tsx; tests/editor-syntax.test.mjs; tests/sql-file-smoke.cjs; tests/sql-document-tabs.cjs; tests/workspace-resume-smoke.cjs"
             elif requirement_id == "SP-SQ-002":
                 evidence = "crates/stackport-core/src/sql_completion.rs; src/sqlCompletion.ts; src/useEditorCompletion.ts; tests/sql-completion.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-003":
@@ -346,7 +346,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id == "SP-SQ-006":
                 evidence = "src/sqlFormatting.ts; src/sqlFormatting.worker.ts; src/SqlFormatDialog.tsx; tests/sql-formatting.test.mjs; tests/sql-file-smoke.cjs"
             elif requirement_id in {"SP-SQ-018", "SP-SQ-025"}:
-                evidence = "crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; tests/sql-file-smoke.cjs"
+                evidence = "crates/stackport-core/src/sql_file.rs; crates/stackport-core/tests/sql_file.rs; src/SqlFileDialog.tsx; src/SqlTabs.tsx; tests/sql-file-smoke.cjs; tests/sql-document-tabs.cjs"
             elif requirement_id == "SP-SQ-007":
                 evidence = "src/main.tsx; crates/stackport-core/src/query.rs; crates/stackport-core/src/sql_statement.rs; crates/stackport-core/tests/sql_statement.rs; crates/stackport-core/tests/query_cancel.rs; tests/sql-file-smoke.cjs"
             elif requirement_id == "SP-SQ-008":

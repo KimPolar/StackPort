@@ -26,7 +26,8 @@ import { SqliteQueryPlan, type QueryPlan } from "./SqliteQueryPlan";
 import { SqlFileDialog } from "./SqlFileDialog";
 import {
   addSqlTab, CloseSqlTabDialog, emptySqlDocument, emptySqlTabs, isSqlDraftDirty, SqlTabStrip,
-  sqlTabButtonId, sqlTabPanelId, sqlTabTitle, type SqlDocument, type SqlDraft, type SqlTabSet, type SqlTarget,
+  sqlDocumentEditorId, sqlTabButtonId, sqlTabId, sqlTabPanelId, sqlTabTitle,
+  type SqlDocument, type SqlDraft, type SqlEditorState, type SqlTabSet, type SqlTarget,
 } from "./SqlTabs";
 import { ResultExportDialog, type ExportReport, type ExportSource } from "./ResultExportDialog";
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
@@ -242,6 +243,13 @@ function App() {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [sqlTabSets, setSqlTabSets] = useState<Record<string, SqlTabSet>>({});
   const [sqlFileAction, setSqlFileAction] = useState<SqlFileAction | null>(null);
+  const sqlFocusRequest = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const id = sqlFocusRequest.current;
+    if (!id || sqlFileAction) return;
+    sqlFocusRequest.current = null;
+    document.getElementById(id)?.focus({ preventScroll: true });
+  }, [sqlTabSets, sqlFileAction]);
   const [templateLibrary, setTemplateLibrary] = useState<{ projectId: string; source: string; selection: boolean } | null>(null);
   const [sqlHistory, setSqlHistory] = useState<SqlHistoryEntry[]>([]);
   const [sqlHistoryProfile, setSqlHistoryProfile] = useState<string | null>(null);
@@ -338,9 +346,11 @@ function App() {
   const sqlTarget = profile && project ? {
     profileId: profile.id, projectId: project.id, projectName: project.name, profileName: profile.name,
   } : null;
-  const postgresTarget = postgresProfile && project ? {
-    profileId: postgresProfile.id, projectId: project.id, projectName: project.name, profileName: postgresProfile.settings.name,
+  const networkSqlProfile = postgresProfile ?? mysqlProfile ?? sqlServerProfile ?? oracleProfile ?? snowflakeProfile;
+  const networkSqlTarget = networkSqlProfile && project ? {
+    profileId: networkSqlProfile.id, projectId: project.id, projectName: project.name, profileName: networkSqlProfile.settings.name,
   } : null;
+  const networkSqlEditor = networkSqlTarget && sqlEditorState(networkSqlTarget);
   const sqlTabs = sqlTarget ? sqlTabSets[sqlTarget.profileId] ?? initialSqlTabs(sqlTarget) : emptySqlTabs;
   const sqlDraft = sqlTabs.tabs.find(draft => draft.id === sqlTabs.activeId);
   const sqlView = sqlQueryViews[sqlTabs.activeId] ?? emptySqlQueryView;
@@ -707,6 +717,30 @@ function App() {
     }));
   }
 
+  function requestNewSqlTabFocus(target: SqlTarget) {
+    const group = sqlTabSets[target.profileId] ?? initialSqlTabs(target);
+    sqlFocusRequest.current = target.profileId === profileId ? "sql-editor"
+      : target.profileId === postgresId ? "postgres-sql-editor"
+      : sqlDocumentEditorId(sqlTabId(target.profileId, group.nextNumber));
+  }
+
+  function sqlEditorState(target: SqlTarget): SqlEditorState {
+    return {
+      tabs: sqlTabSets[target.profileId] ?? initialSqlTabs(target),
+      select: id => editSqlTabs(target, group => ({ ...group, activeId: id })),
+      add: (text = "") => {
+        requestNewSqlTabFocus(target);
+        editSqlTabs(target, group => addSqlTab(group, target, { ...emptySqlDocument, text }));
+      },
+      close: requestCloseSqlTab,
+      edit: (id, text) => editSqlTabs(target, group => ({
+        ...group, tabs: group.tabs.map(draft => draft.id === id ? { ...draft, document: { ...draft.document, text } } : draft),
+      })),
+      openFile: () => setSqlFileAction({ mode: "open", target }),
+      saveFile: draft => setSqlFileAction({ mode: "save", draft: { ...draft, ...target } }),
+    };
+  }
+
   function editSqlQueryView(id: string, changes: Partial<SqlQueryView>) {
     setSqlQueryViews(current => ({ ...current, [id]: { ...(current[id] ?? emptySqlQueryView), ...changes } }));
   }
@@ -790,8 +824,8 @@ function App() {
   function newSqlTab() {
     if (!sqlTarget) return;
     resetSqlView();
+    requestNewSqlTabFocus(sqlTarget);
     editSqlTabs(sqlTarget, group => addSqlTab(group, sqlTarget));
-    requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
   }
 
   function removeSqlTab(draft: SqlDraft) {
@@ -802,10 +836,10 @@ function App() {
     const wasActive = group.activeId === draft.id;
     const activeId = wasActive ? (remaining[index] ?? remaining[index - 1])?.id ?? "" : group.activeId;
     if (wasActive && draft.profileId === profileId) resetSqlView();
+    sqlFocusRequest.current = activeId ? sqlTabButtonId(activeId) : "new-sql-tab";
     editSqlTabs(draft, previous => ({ ...previous, tabs: previous.tabs.filter(item => item.id !== draft.id), activeId }));
     forgetSqlQueryViews(new Set([draft.id]));
     setClosingSqlTab(null);
-    requestAnimationFrame(() => document.getElementById(activeId ? sqlTabButtonId(activeId) : "new-sql-tab")?.focus());
   }
 
   function requestCloseSqlTab(draft: SqlDraft) {
@@ -854,12 +888,8 @@ function App() {
 
   function finishSqlFile(action: SqlFileAction, contents: SqlDocument, path: string) {
     if (action.mode === "open") {
-      if (action.target.profileId === profileId) {
-        resetSqlView();
-        requestAnimationFrame(() => document.getElementById("sql-editor")?.focus());
-      } else if (action.target.profileId === postgresId) {
-        requestAnimationFrame(() => document.getElementById("postgres-sql-editor")?.focus());
-      }
+      if (action.target.profileId === profileId) resetSqlView();
+      requestNewSqlTabFocus(action.target);
       editSqlTabs(action.target, group => addSqlTab(group, action.target, contents, { path }));
     } else if (action.closeAfter) {
       removeSqlTab(action.draft);
@@ -1208,7 +1238,10 @@ function App() {
     setMysqlProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (mysqlAction.kind === "create" && saved) selectMysqlProfile(saved.id);
-    if (!saved && previous === mysqlId) setNetworkProfile(null);
+    if (!saved && previous) {
+      removeSqlConnections(new Set([previous]));
+      if (previous === mysqlId) setNetworkProfile(null);
+    }
     setMysqlAction(null);
   }
 
@@ -1226,7 +1259,10 @@ function App() {
     const previous = "profile" in sqlServerAction ? sqlServerAction.profile.id : null;
     setSqlServerProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (sqlServerAction.kind === "create" && saved) selectSqlServerProfile(saved.id);
-    if (!saved && previous === sqlServerId) setNetworkProfile(null);
+    if (!saved && previous) {
+      removeSqlConnections(new Set([previous]));
+      if (previous === sqlServerId) setNetworkProfile(null);
+    }
     setSqlServerAction(null);
   }
 
@@ -1235,7 +1271,10 @@ function App() {
     const previous = "profile" in oracleAction ? oracleAction.profile.id : null;
     setOracleProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (oracleAction.kind === "create" && saved) selectOracleProfile(saved.id);
-    if (!saved && previous === oracleId) setNetworkProfile(null);
+    if (!saved && previous) {
+      removeSqlConnections(new Set([previous]));
+      if (previous === oracleId) setNetworkProfile(null);
+    }
     setOracleAction(null);
   }
 
@@ -1244,7 +1283,10 @@ function App() {
     const previous = "profile" in snowflakeAction ? snowflakeAction.profile.id : null;
     setSnowflakeProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (snowflakeAction.kind === "create" && saved) selectSnowflakeProfile(saved.id);
-    if (!saved && previous === snowflakeId) setNetworkProfile(null);
+    if (!saved && previous) {
+      removeSqlConnections(new Set([previous]));
+      if (previous === snowflakeId) setNetworkProfile(null);
+    }
     setSnowflakeAction(null);
   }
 
@@ -1596,37 +1638,26 @@ function App() {
       <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile}
         onBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
-    {mysqlProfile && <div hidden={historyOpen}><MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} onOpenTunnels={openTunnels} /></div>}
+    {mysqlProfile && networkSqlEditor && <div hidden={historyOpen}>
+      <MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} editor={networkSqlEditor} onOpenTunnels={openTunnels} />
+    </div>}
     {mongoProfile && <div hidden={historyOpen}><MongoWorkspace key={`${mongoProfile.id}:${mongoProfile.revision}`} profile={mongoProfile} /></div>}
-    {sqlServerProfile && <div hidden={historyOpen}><RelationalWorkspace key={`${sqlServerProfile.id}:${sqlServerProfile.revision}`}
+    {sqlServerProfile && networkSqlEditor && <div hidden={historyOpen}><RelationalWorkspace key={`${sqlServerProfile.id}:${sqlServerProfile.revision}`} editor={networkSqlEditor}
       engine="SQL Server" prefix="sql_server" profile={sqlServerProfile} database={sqlServerProfile.settings.database}
       passwordless={sqlServerProfile.settings.authentication === "windows"} /></div>}
-    {oracleProfile && <div hidden={historyOpen}><RelationalWorkspace key={`${oracleProfile.id}:${oracleProfile.revision}`}
+    {oracleProfile && networkSqlEditor && <div hidden={historyOpen}><RelationalWorkspace key={`${oracleProfile.id}:${oracleProfile.revision}`} editor={networkSqlEditor}
       engine="Oracle Database" prefix="oracle" profile={oracleProfile} database={oracleProfile.settings.service} passwordLimit={256}
       transportNote={oracleProfile.settings.transport === "tcp" ? ORACLE_TCP_NOTE : undefined} /></div>}
-    {snowflakeProfile && <div hidden={historyOpen}><RelationalWorkspace key={`${snowflakeProfile.id}:${snowflakeProfile.revision}`}
+    {snowflakeProfile && networkSqlEditor && <div hidden={historyOpen}><RelationalWorkspace key={`${snowflakeProfile.id}:${snowflakeProfile.revision}`} editor={networkSqlEditor}
       engine="Snowflake" prefix="snowflake" profile={snowflakeProfile} database={snowflakeProfile.settings.database}
       tokenLabel={snowflakeProfile.settings.auth === "pat" ? "Snowflake 액세스 토큰 (PAT)" : "Snowflake OAuth 액세스 토큰"} /></div>}
-    {postgresProfile && postgresTarget && <div hidden={historyOpen}>
+    {postgresProfile && networkSqlEditor && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
         onOpenTunnels={openTunnels} onConnectionChange={setPostgresConnection} onQueryActivity={setPostgresActivity}
         objectRequest={postgresObjectRequest?.profile_id === postgresProfile.id ? postgresObjectRequest : null}
         onObjectHandled={finishPostgresObject} favorites={favorites} favoriteScope={favoriteScope}
-        onFileBusy={busy => { localFileBusy.current = busy; }} editor={{
-        tabs: sqlTabSets[postgresTarget.profileId] ?? initialSqlTabs(postgresTarget),
-        select: id => editSqlTabs(postgresTarget, group => ({ ...group, activeId: id })),
-        add: (text = "") => {
-          editSqlTabs(postgresTarget, group => addSqlTab(group, postgresTarget, { ...emptySqlDocument, text }));
-          requestAnimationFrame(() => document.getElementById("postgres-sql-editor")?.focus());
-        },
-        close: requestCloseSqlTab,
-        edit: (id, text) => editSqlTabs(postgresTarget, group => ({
-          ...group, tabs: group.tabs.map(draft => draft.id === id ? { ...draft, document: { ...draft.document, text } } : draft),
-        })),
-        openFile: () => setSqlFileAction({ mode: "open", target: postgresTarget }),
-        saveFile: draft => setSqlFileAction({ mode: "save", draft: { ...draft, ...postgresTarget } }),
-      }} />
+        onFileBusy={busy => { localFileBusy.current = busy; }} editor={networkSqlEditor} />
     </div>}
     {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
     !project ? <EmptyState title="첫 프로젝트를 만드세요" text="데이터베이스와 SSH 연결을 프로젝트별로 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :

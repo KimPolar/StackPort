@@ -11,6 +11,7 @@ import { MysqlServerMonitor } from "./MysqlServerMonitor";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
 import { ResultFileReport, type ExportReport } from "./ResultExportDialog";
+import { SqlWorkspaceTabs, type SqlEditorState } from "./SqlTabs";
 import { emptyTableQueryClauses, TableQueryControls } from "./TableQueryControls";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
@@ -36,7 +37,9 @@ type Sample = {
   edit?: { rows: (MysqlRowStamp | null)[]; keys: string[]; columns: string[] };
 };
 
-export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfile; onOpenTunnels: () => void }) {
+export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
+  profile: MysqlProfile; editor: SqlEditorState; onOpenTunnels: () => void;
+}) {
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
@@ -52,7 +55,6 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
   const [view, setView] = useState<ObjectView>("columns");
   const [structurePage, setStructurePage] = useState(0);
   const [mode, setMode] = useState<"objects" | "sql" | "monitor">("objects");
-  const [sqlText, setSqlText] = useState("");
   const [schemaSearch, setSchemaSearch] = useState("");
   const [objectSearch, setObjectSearch] = useState("");
   const [schemaPage, setSchemaPage] = useState(0);
@@ -174,7 +176,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
     const id = active.current;
     if (!id) return;
     active.current = null; setSession(null); setExportTarget(null); chooseDatabase(null); setError("");
-    setMode("objects"); setSqlText("");
+    setMode("objects");
     try { await invoke("close_mysql", { id }); }
     catch (cause) { if (mounted.current) setError(String(cause)); }
   }
@@ -293,8 +295,11 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
           </div>
         </>}
       </section>
-      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} projectId={profile.project_id} database={database} environment={settings.environment}
-        text={sqlText} onTextChange={setSqlText} onExport={beginExport} /></div>
+      <div hidden={!sqlOpen}>
+        <SqlWorkspaceTabs key={session.id} editor={editor} render={tab =>
+          <MysqlSqlWorkspace id={session.id} projectId={profile.project_id} database={database}
+            environment={settings.environment} tab={tab} onExport={beginExport} />} />
+      </div>
       </div>
     </div></div>}
     {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}

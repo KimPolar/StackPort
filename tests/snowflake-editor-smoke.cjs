@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
+const { verifySqlDocumentTabs } = require('./sql-document-tabs.cjs');
 
 async function verify(page) {
   const errors = [];
@@ -121,6 +122,7 @@ async function verify(page) {
   const showEditor = mode.getByRole('button', { name: 'SQL 편집기', exact: true });
   const browse = mode.getByRole('button', { name: '객체 탐색', exact: true });
   await showEditor.click();
+  await verifySqlDocumentTabs(page, workspace, 'Snowflake SQL 문장');
   const pane = workspace.getByRole('region', { name: 'Snowflake SQL 편집기', exact: true });
   const editor = pane.getByRole('textbox', { name: 'Snowflake SQL 문장', exact: true });
   const results = pane.getByRole('region', { name: 'Snowflake 실행 결과', exact: true });
@@ -132,6 +134,15 @@ async function verify(page) {
   await results.getByRole('combobox', { name: '문장 결과' }).selectOption('1');
   await grid.getByText('두 번째', { exact: true }).waitFor();
   await results.getByText('00000000-0000-4000-8000-000000000001', { exact: true }).waitFor();
+  const originalTab = workspace.getByRole('tab', { name: 'SQL 1', exact: true });
+  await workspace.getByRole('button', { name: '새 SQL 탭', exact: true }).click();
+  const newTab = workspace.getByRole('tab', { name: 'SQL 3', exact: true });
+  assert.equal(await newTab.getAttribute('aria-selected'), 'true');
+  assert.equal(await editor.inputValue(), '');
+  assert.equal(await results.count(), 0);
+  await newTab.press('Delete');
+  assert.equal(await originalTab.getAttribute('aria-selected'), 'true');
+  await grid.getByText('두 번째', { exact: true }).waitFor();
   await editor.press('Control+End');
   await editor.press('Home');
   await editor.press('Control+Enter');
@@ -185,6 +196,7 @@ async function verify(page) {
   ]) {
     await editor.fill(sql);
     await all.click();
+    assert.equal(await workspace.getByRole('button', { name: '새 SQL 탭', exact: true }).isDisabled(), true);
     await pane.getByRole('button', { name: '실행 중단', exact: true }).click();
     const status = results.getByRole('status');
     await status.waitFor();

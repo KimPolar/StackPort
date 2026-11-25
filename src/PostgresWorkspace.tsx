@@ -20,7 +20,8 @@ import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, p
 import { gridDisplay, gridTypeLabels, postgresGridValueType } from "./gridValuePresentation";
 import { PostgresPager as Pager } from "./PostgresPager";
 import type { PostgresBindings } from "./PostgresParameterDialog";
-import { PostgresSqlWorkspace, PostgresValue, type PostgresCell, type PostgresEditorState } from "./PostgresSqlWorkspace";
+import { PostgresSqlWorkspace, PostgresValue, type PostgresCell } from "./PostgresSqlWorkspace";
+import type { SqlEditorState } from "./SqlTabs";
 import { PostgresResultExport, type PostgresExportTarget } from "./PostgresResultExport";
 import type { ExportReport } from "./ResultExportDialog";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
@@ -70,7 +71,7 @@ function filterBindings(query: TableQueryClauses, types: number[]): PostgresBind
 
 export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEditExitGuard, onOpenTunnels, onConnectionChange, onQueryActivity,
   objectRequest, onObjectHandled, favorites, favoriteScope }: {
-  profile: PostgresProfile; editor: PostgresEditorState; onFileBusy: (busy: boolean) => void;
+  profile: PostgresProfile; editor: SqlEditorState; onFileBusy: (busy: boolean) => void;
   visible: boolean;
   onEditExitGuard: (guard: GridEditExitGuard | null) => void;
   onOpenTunnels: () => void;
