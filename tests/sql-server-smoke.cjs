@@ -234,9 +234,10 @@ async function verify(page, hiddenObject, exportFolder) {
 }
 
 async function verifySqlExecution(command, id) {
-  const query = (sql, options = {}) => command('run_sql_server_query', {
-    id, requestId: randomUUID(), input: { sql, first_line: 1, cursor_line: null }, ...options,
+  const query = (sql, { confirmation = 'PROD', ...options } = {}) => command('run_sql_server_query', {
+    id, requestId: randomUUID(), input: { sql, first_line: 1, cursor_line: null, confirmation }, ...options,
   });
+  await assert.rejects(query('CREATE TABLE #unconfirmed (id int);', { confirmation: '' }), /PROD/);
   const script = await query(`
 CREATE TABLE #steps (n int);
 INSERT #steps VALUES (7);
@@ -341,6 +342,9 @@ async function verifySqlEditor(workspace, command, observerId) {
   await editor.fill(`INSERT [archive].[execution_fixture] VALUES (15);
 WAITFOR DELAY '00:00:08'; INSERT [archive].[execution_fixture] VALUES (14);`);
   await editorPane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const production = editorPane.getByRole('dialog', { name: '운영 SQL 실행 검토', exact: true });
+  await production.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+  await production.getByRole('button', { name: 'SQL 실행', exact: true }).click();
   const cancel = editorPane.getByRole('button', { name: '실행 중단', exact: true });
   await cancel.waitFor();
   const started = performance.now();
@@ -716,7 +720,25 @@ async function verifyMockBindEditor(page) {
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
   await verifySqlDocumentTabs(page, workspace, 'SQL Server SQL 문장');
   const pane = workspace.getByRole('region', { name: 'SQL Server SQL 편집기', exact: true });
-  await verifyBindForm(pane, pane.getByRole('textbox', { name: 'SQL Server SQL 문장', exact: true }),
+  const input = pane.getByRole('textbox', { name: 'SQL Server SQL 문장', exact: true });
+  const batch = "DROP TABLE dbo.fixture_only;\nGO\nUPDATE dbo.fixture_only SET x = 1\nGO 3\nSELECT 1;";
+  await input.fill(batch);
+  await pane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const risk = page.getByRole('dialog', { name: 'SQL 실행 검토', exact: true });
+  await risk.getByText('1줄 · DROP', { exact: true }).waitFor();
+  await risk.getByText('3줄 · UPDATE · 3회 실행', { exact: true }).waitFor();
+  await risk.getByRole('button', { name: '취소', exact: true }).click();
+  await risk.waitFor({ state: 'detached' });
+  await input.press('Control+End');
+  await input.press('Home');
+  await input.press('ArrowUp');
+  await input.press('ArrowUp');
+  await pane.getByRole('button', { name: '현재 배치 실행', exact: true }).click();
+  await risk.getByText('3줄 · UPDATE', { exact: true }).waitFor();
+  assert.equal(await risk.getByText('1줄 · DROP', { exact: true }).count(), 0);
+  await risk.getByRole('button', { name: '취소', exact: true }).click();
+  await risk.waitFor({ state: 'detached' });
+  await verifyBindForm(pane, input,
     pane.getByRole('table', { name: 'SQL Server SQL 결과 표', exact: true }));
 }
 

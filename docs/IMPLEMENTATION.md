@@ -378,6 +378,10 @@ SQL 편집기에서 최대 1 MiB의 `.sql` 파일을 새 탭에 열 수 있습�
 
 MySQL·MariaDB, SQL Server, Oracle, Snowflake도 PostgreSQL과 같은 연결별 SQL 문서 탭과 파일 열기·저장을 사용합니다. 파일을 열면 내용과 파일 이름을 표시하고 실행은 별도 버튼이나 단축키로 시작합니다. 한 번의 실행 요청은 MySQL 계열에서 128 KiB, SQL Server·Oracle·Snowflake에서 256 KiB까지 받습니다. 실행 중이거나 매개변수 입력이 열려 있으면 해당 탭에서 작업을 끝낸 뒤 탭을 전환합니다. 같은 연결 세션에서 탭별 결과를 유지하고, 연결을 끊거나 다른 연결을 열어도 초안과 파일 정보는 앱을 닫을 때까지 메모리에 유지합니다.
 
+쓰기 가능한 SQL 편집기는 실행 범위에 포함된 문장과 배치의 위험을 서버 실행 전에 검토합니다. 행을 제한하는 `WHERE`가 없는 `UPDATE`·`DELETE`, `WHERE TRUE`·`WHERE 1=1`, `TRUNCATE`, 객체·권한 변경, `INSERT … SELECT`, `MERGE`, 대량 로드와 `CALL`·`EXECUTE` 같은 호출을 구분합니다. PostgreSQL의 변경 CTE도 검사하며 SQL Server의 `GO` 반복 횟수를 경고에 표시합니다. MySQL 계열의 실행 가능한 주석과 Oracle의 PL/SQL 블록은 내부 영향이 달라질 수 있는 작업으로 표시합니다. [PostgreSQL의 변경 CTE](https://www.postgresql.org/docs/18/queries-with.html) · [SQL Server GO](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/sql-server-utilities-statements-go?view=sql-server-ver17) · [MySQL 실행 주석](https://dev.mysql.com/doc/refman/8.4/en/extensions-to-ansi.html)
+
+검토 창에는 연결 이름·환경·기본 데이터베이스, 실행 범위, 문장 줄 번호와 구문에서 확인한 영향을 표시합니다. 실제 행 수는 서버 실행 후 확인합니다. 운영 PostgreSQL과 MySQL 계열 스크립트는 실행마다 `PROD`를 입력하며, SQL Server·Oracle·Snowflake는 변경 가능성이 식별된 운영 요청에서 네이티브 실행 경로도 `PROD`를 확인합니다.
+
 SQL을 선택하면 실행 버튼이 **선택 영역 실행**으로 바뀝니다. `Ctrl+Enter`와 실행 계획도 선택한 부분을 대상으로 합니다. 선택 영역이 없으면 편집기의 전체 입력을 사용합니다. **현재 문장** 또는 `Ctrl+Shift+Enter`는 커서가 속한 문장을 사용합니다. 따옴표나 주석 안의 세미콜론은 문장 끝으로 보지 않으며, SQLite 트리거 본문은 `END;`까지 같은 문장으로 읽습니다. 한 번에 실행 가능한 범위는 SQLite 읽기 전용 문장 하나입니다. [SQLite 문장 경계](https://www.sqlite.org/c3ref/complete.html) · [SQLite 주석 구문](https://www.sqlite.org/lang_comment.html)
 
 열린 SQL 탭마다 마지막 조회 결과의 현재 페이지와 실행 계획을 메모리에 유지합니다. 다른 탭이나 연결을 거쳐 돌아와도 같은 페이지가 표시됩니다. 실행 후 편집한 SQL은 다음 실행부터 적용되며, 기존 결과의 페이지 이동과 내보내기에는 원래 실행한 입력을 사용합니다. 편집 내용이 바뀌면 이전 실행 계획은 닫힙니다.

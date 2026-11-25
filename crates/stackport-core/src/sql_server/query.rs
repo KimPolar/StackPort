@@ -32,6 +32,8 @@ pub struct QueryInput {
     first_line: u32,
     cursor_line: Option<u32>,
     parameters: Option<Vec<ParameterInput>>,
+    #[serde(default)]
+    confirmation: String,
 }
 
 impl QueryInput {
@@ -49,11 +51,20 @@ impl QueryInput {
         parameters::indexes(&self.batches()?)
     }
 
+    pub fn review(&self) -> Result<crate::SqlExecutionReview> {
+        Ok(review_batches(&self.batches()?))
+    }
+
     pub fn parameter_plan(&self) -> Result<crate::SqlParameterPlan<Vec<u16>>> {
         let batches = self.batches()?;
         let indexes = parameters::indexes(&batches)?;
         crate::SqlParameterPlan::new(indexes, batches.iter().map(|part| part.sql.trim().as_bytes()))
     }
+}
+
+fn review_batches(batches: &[batches::Batch<'_>]) -> crate::SqlExecutionReview {
+    crate::sql_risk::review(crate::sql_risk::Dialect::SqlServer,
+        batches.iter().map(|batch| (batch.sql, batch.first_line, batch.repeat)))
 }
 
 #[derive(Serialize)]
@@ -176,6 +187,9 @@ impl Manager {
             .map(|values| Bindings::new(&batches, values))
             .transpose()?;
         let session = self.session(id)?;
+        if session.profile.settings.environment == "PROD" {
+            review_batches(&batches).require_production_confirmation("PROD", &input.confirmation)?;
+        }
         let stop = CancellationToken::new();
         {
             let mut slot = session.query.lock().map_err(|_| STATE_ERROR)?;

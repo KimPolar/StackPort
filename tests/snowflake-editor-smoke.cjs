@@ -38,6 +38,7 @@ async function verify(page) {
     async function respond(name, args) {
       if (name === 'open_snowflake') {
         if (args.token !== 'synthetic-token-for-local-ui-test') throw new Error('Wrong test token');
+        if (args.confirmation !== 'PROD') throw new Error('Expected production login confirmation');
         return { id: 'snowflake-fixture', database: 'DEMO', version: 'fixture', context: 'READER / DEMO_WH' };
       }
       if (name === 'snowflake_schemas') return { items: ['PUBLIC'], has_next: false };
@@ -72,9 +73,10 @@ async function verify(page) {
           status: 'failed', server_completed: false,
           error: { line, code: '000904', sql_state: '42000', message: 'SQL compilation error: invalid identifier' },
         });
-        if (sql.includes('UPDATE')) return reply({
-          statements: [{ line, data: null, warning: null, stats: { num_rows_updated: 2 } }],
-        });
+        if (sql.includes('UPDATE')) {
+          if (args.input.confirmation !== 'PROD') throw new Error('Expected production SQL confirmation');
+          return reply({ statements: [{ line, data: null, warning: null, stats: { num_rows_updated: 2 } }] });
+        }
         if (cursor !== null) {
           const after = new TextEncoder().encode("SELECT '한글';\n").length;
           if (cursor !== after || line !== 1) throw new Error('Expected current statement byte offset');
@@ -108,12 +110,14 @@ async function verify(page) {
   await profile.getByLabel('연결 이름').fill('Snowflake 편집기 픽스처');
   await profile.getByLabel('계정 식별자 또는 호스트').fill('stackport-fixture');
   await profile.getByLabel('데이터베이스 이름').fill('DEMO');
+  await profile.getByLabel('환경').selectOption('PROD');
   await profile.getByRole('button', { name: '저장', exact: true }).click();
   await profile.waitFor({ state: 'detached' });
   const workspace = page.getByRole('region', { name: 'Snowflake 작업 공간', exact: true });
   await workspace.getByRole('button', { name: 'Snowflake 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'Snowflake 연결', exact: true });
   await login.getByLabel('Snowflake 액세스 토큰 (PAT)', { exact: true }).fill('synthetic-token-for-local-ui-test');
+  await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await workspace.getByRole('button', { name: 'PUBLIC', exact: true }).waitFor();
@@ -184,6 +188,17 @@ async function verify(page) {
 
   await editor.fill("UPDATE demo SET x = 1;");
   await all.click();
+  const risk = page.getByRole('dialog', { name: '운영 SQL 실행 검토', exact: true });
+  await risk.getByText('1줄 · UPDATE', { exact: true }).waitFor();
+  await risk.getByText('행을 제한하는 WHERE 조건을 확인할 수 없습니다.', { exact: true }).waitFor();
+  const execute = risk.getByRole('button', { name: 'SQL 실행', exact: true });
+  assert.equal(await execute.isEnabled(), false);
+  await risk.getByRole('button', { name: '취소', exact: true }).click();
+  await risk.waitFor({ state: 'detached' });
+  assert.equal(await results.getByText('수정 2행', { exact: true }).count(), 0);
+  await all.click();
+  await risk.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+  await execute.click();
   await results.getByText('수정 2행', { exact: true }).waitFor();
   await editor.fill("SELECT ERROR;");
   await all.click();

@@ -1041,6 +1041,11 @@ fn sql_server_query_parameters(input: sql_server::QueryInput, with_scope: Option
 }
 
 #[tauri::command]
+fn sql_server_query_review(input: sql_server::QueryInput) -> Result<stackport_core::SqlExecutionReview, String> {
+    input.review()
+}
+
+#[tauri::command]
 async fn run_sql_server_query(manager: State<'_, sql_server::Manager>, id: String, request_id: String,
     input: sql_server::QueryInput) -> Result<sql_server::QueryOutcome, String> {
     manager.run_query(&id, &request_id, input).await
@@ -1126,6 +1131,11 @@ async fn oracle_definition(manager: State<'_, oracle::Manager>, id: String, obje
 #[tauri::command]
 async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32, clauses: Option<TableQueryClauses>)
     -> Result<oracle::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
+
+#[tauri::command]
+fn oracle_query_review(input: oracle::QuerySource) -> Result<stackport_core::SqlExecutionReview, String> {
+    input.review()
+}
 
 #[tauri::command]
 async fn run_oracle_query(manager: State<'_, oracle::Manager>, id: String, request_id: String,
@@ -1223,6 +1233,11 @@ async fn snowflake_definition(manager: State<'_, snowflake::Manager>, id: String
 #[tauri::command]
 async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, object: String, page: u32, clauses: Option<TableQueryClauses>)
     -> Result<snowflake::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
+
+#[tauri::command]
+fn snowflake_query_review(input: snowflake::QuerySource) -> Result<stackport_core::SqlExecutionReview, String> {
+    input.review()
+}
 
 #[tauri::command]
 async fn run_snowflake_query(manager: State<'_, snowflake::Manager>, id: String, request_id: String,
@@ -1388,6 +1403,12 @@ fn mysql_script_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: S
     } else {
         mysql.script_parameters(&id, &sql, &scope).map(ParameterDiscovery::Plain)
     }
+}
+
+#[tauri::command]
+fn mysql_script_review(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String,
+    scope: stackport_core::MysqlScriptScope) -> Result<stackport_core::SqlExecutionReview, String> {
+    mysql.script_review(&id, &sql, &scope)
 }
 
 #[tauri::command]
@@ -1818,6 +1839,12 @@ async fn execute_postgres_sql(
     export: Option<PostgresExportOptions>,
 ) -> Result<PostgresSqlOutcome, String> {
     postgres.execute_sql(&id, &request, PostgresSqlInput { source, scope, bindings, mode: mode.unwrap_or_default(), export }).await
+}
+
+#[tauri::command]
+fn postgres_script_review(postgres: State<'_, PostgresManager>, id: String, source: String,
+    scope: PostgresSqlScope) -> Result<stackport_core::SqlExecutionReview, String> {
+    postgres.script_review(&id, &source, scope)
 }
 
 #[tauri::command]
@@ -2619,6 +2646,7 @@ fn main() {
             sql_server_definition,
             sql_server_data,
             sql_server_query_parameters,
+            sql_server_query_review,
             run_sql_server_query,
             cancel_sql_server_query,
             export_sql_server,
@@ -2636,6 +2664,7 @@ fn main() {
             oracle_columns,
             oracle_definition,
             oracle_data,
+            oracle_query_review,
             run_oracle_query,
             oracle_query_parameters,
             cancel_oracle_query,
@@ -2654,6 +2683,7 @@ fn main() {
             snowflake_columns,
             snowflake_definition,
             snowflake_data,
+            snowflake_query_review,
             run_snowflake_query,
             snowflake_query_parameters,
             cancel_snowflake_query,
@@ -2681,6 +2711,7 @@ fn main() {
             mysql_export_progress,
             mysql_sql_parameters,
             mysql_script_parameters,
+            mysql_script_review,
             run_mysql_script,
             run_mysql_sql,
             mysql_sql_plan,
@@ -2750,6 +2781,7 @@ fn main() {
             preview_postgres_row_paste,
             apply_postgres_row_paste,
             execute_postgres_sql,
+            postgres_script_review,
             execute_postgres_script,
             postgres_export_progress,
             cancel_postgres_sql,

@@ -29,6 +29,8 @@ pub struct QueryInput {
     source: QuerySource,
     #[serde(default)]
     parameters: Vec<ParameterInput>,
+    #[serde(default)]
+    confirmation: String,
 }
 
 #[derive(Deserialize)]
@@ -39,6 +41,10 @@ pub struct QuerySource {
 }
 
 impl QuerySource {
+    pub fn review(&self) -> Result<crate::SqlExecutionReview> {
+        Ok(review_statements(&self.statements()?))
+    }
+
     fn statements(&self) -> Result<Vec<script::Statement<'_>>> {
         if self.sql.len() > SQL_LIMIT
             || self.sql.contains('\0')
@@ -48,6 +54,11 @@ impl QuerySource {
         }
         script::split(&self.sql, self.first_line, self.cursor_byte)
     }
+}
+
+fn review_statements(statements: &[script::Statement<'_>]) -> crate::SqlExecutionReview {
+    crate::sql_risk::review(crate::sql_risk::Dialect::Oracle,
+        statements.iter().map(|statement| (statement.sql, statement.line, 1)))
 }
 
 #[derive(Serialize)]
@@ -227,6 +238,9 @@ impl Manager {
             let statements = input.source.statements()?;
             let bindings = Bindings::new(&input.parameters)?;
             let session = &registration.0;
+            if session.profile.settings.environment == "PROD" {
+                review_statements(&statements).require_production_confirmation("PROD", &input.confirmation)?;
+            }
             let mut outcome = execute(session, &job, &statements, &bindings);
             outcome.elapsed_ms = start.elapsed().as_millis() as u64;
             let profile = session.profile.clone();

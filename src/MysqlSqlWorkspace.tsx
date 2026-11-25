@@ -9,6 +9,7 @@ import { MysqlScriptResults, type MysqlScriptOutcome } from "./MysqlScriptResult
 import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 import { SqlParameterSets, type ParameterInput, type ParameterPlan, type ParameterSetScope } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
+import { needsSqlReview, SqlRiskSummary, type SqlExecutionReview } from "./SqlRiskReview";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
 type Parameter = ParameterInput<ParameterKind>;
@@ -23,10 +24,11 @@ type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValu
 const number = new Intl.NumberFormat("ko-KR");
 const encoder = new TextEncoder();
 
-export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, onExport }: {
+export function MysqlSqlWorkspace({ id, projectId, database, connection, environment, tab, onExport }: {
   id: string;
   projectId: string;
   database: string | null;
+  connection: string;
   environment: string;
   tab: SqlTabEditor;
   onExport: (source: MysqlExportTarget) => void;
@@ -43,7 +45,7 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, o
   const [analysisTarget, setAnalysisTarget] = useState<Statement | null>(null);
   const [scriptMode, setScriptMode] = useState(false);
   const [autocommit, setAutocommit] = useState(true);
-  const [scriptConfirmation, setScriptConfirmation] = useState<{ statement: Statement; text: string } | null>(null);
+  const [scriptConfirmation, setScriptConfirmation] = useState<{ statement: Statement; review: SqlExecutionReview; text: string } | null>(null);
   const [scriptResult, setScriptResult] = useState<MysqlScriptOutcome | null>(null);
   const [error, setError] = useState("");
   const mounted = useRef(false);
@@ -78,7 +80,7 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, o
     else void prepareRequest(statement, action);
   }
 
-  function prepareScript(kind: ScriptScope["kind"]) {
+  async function prepareScript(kind: ScriptScope["kind"]) {
     const field = editor.current;
     if (!field || pending.current || draft || scriptConfirmation || !field.value.trim()) return;
     const { value, selectionStart, selectionEnd, selectionDirection } = field;
@@ -92,7 +94,20 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, o
     }
     const statement: Statement = { sql: value, database, scope: kind === "document" ? "전체 문서" : kind === "current" ? "현재 문장" : "선택 영역",
       script: { scope, autocommit, confirmation: "" } };
-    if (environment === "PROD") setScriptConfirmation({ statement, text: "" });
+    pending.current = true;
+    setBusy(true); setError("");
+    let review: SqlExecutionReview;
+    try {
+      review = await invoke<SqlExecutionReview>("mysql_script_review", { id, sql: value, scope });
+    } catch (cause) {
+      if (mounted.current) setError(String(cause));
+      return;
+    } finally {
+      pending.current = false;
+      if (mounted.current) setBusy(false);
+    }
+    if (!mounted.current) return;
+    if (environment === "PROD" || needsSqlReview(review, environment)) setScriptConfirmation({ statement, review, text: "" });
     else void prepareRequest(statement, "script");
   }
 
@@ -251,20 +266,22 @@ export function MysqlSqlWorkspace({ id, projectId, database, environment, tab, o
         </div>
       </form>
     </Dialog>}
-    {scriptConfirmation && <Dialog title="운영 스크립트 실행" busy={false} onClose={() => setScriptConfirmation(null)}>
+    {scriptConfirmation && <Dialog title={environment === "PROD" ? "운영 스크립트 실행" : "SQL 실행 검토"}
+      busy={false} onClose={() => setScriptConfirmation(null)}>
       <form onSubmit={event => {
         event.preventDefault();
         const { statement, text } = scriptConfirmation;
-        if (text !== "PROD" || !statement.script) return;
+        if ((environment === "PROD" && text !== "PROD") || !statement.script) return;
         setScriptConfirmation(null);
         void prepareRequest({ ...statement, script: { ...statement.script, confirmation: text } }, "script");
       }}>
-        <p className="confirm-copy">실행 범위는 {scriptConfirmation.statement.scope}입니다. 실행하면 운영 데이터나 구조가 변경될 수 있습니다.</p>
-        <label className="field">운영 환경 확인<input autoFocus value={scriptConfirmation.text} placeholder="PROD" autoComplete="off"
-          onChange={event => setScriptConfirmation({ ...scriptConfirmation, text: event.target.value })} /></label>
+        <SqlRiskSummary target={{ connection, environment, database: scriptConfirmation.statement.database, scope: scriptConfirmation.statement.scope }}
+          review={scriptConfirmation.review} />
+        {environment === "PROD" && <label className="field">운영 환경 확인<input autoFocus value={scriptConfirmation.text} placeholder="PROD" autoComplete="off"
+          onChange={event => setScriptConfirmation({ ...scriptConfirmation, text: event.target.value })} /></label>}
         <div className="dialog-actions">
-          <button type="button" className="secondary" onClick={() => setScriptConfirmation(null)}>취소</button>
-          <button type="submit" className="primary" disabled={scriptConfirmation.text !== "PROD"}>계속</button>
+          <button type="button" className="secondary" autoFocus={environment !== "PROD"} onClick={() => setScriptConfirmation(null)}>취소</button>
+          <button type="submit" className="primary" disabled={environment === "PROD" && scriptConfirmation.text !== "PROD"}>계속</button>
         </div>
       </form>
     </Dialog>}

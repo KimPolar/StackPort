@@ -132,7 +132,7 @@ PARTIAL = {
     "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
     "SP-SQ-018": "7개 관계형 엔진에서 1 MiB 이하 UTF-8·UTF-16 LE/BE·Windows-949·Windows-1252 SQL 파일을 새 탭에 열고 명시적으로 실행, 새 파일 저장 및 BOM·LF/CRLF 유지",
-    "SP-SQ-022": "PostgreSQL에서 단일 조회 준비와 읽기 전용 트랜잭션으로 DDL·DML 차단",
+    "SP-SQ-022": "쓰기 가능한 관계형 SQL 편집기에서 선택한 실행 범위의 조건 없는 DML·DDL·대량 작업·동적 실행 식별, 줄 번호·반복·연결·환경 표시와 운영 확인. SQLite·PostgreSQL·MySQL 계열 읽기 전용 실행 보호",
     "SP-SQ-023": "SQLite 연결별 세션 메모리에 최근 실행 범위·SQL·상태·시간, 값과 이름을 가린 목록, 원문 열기와 연결별 삭제",
     "SP-MD-002": "SQLite·PostgreSQL 기본 키 및 외래 키 방향을 표시하는 읽기 전용 관계형 ERD",
     "SP-MD-006": "SQLite·PostgreSQL 스키마의 읽기 스냅샷에서 테이블·열·복합 외래 키를 추출하고 이름과 관계로 선택·필터",
@@ -179,11 +179,11 @@ PARTIAL = {
     "SP-ST-014": "Windows 작업 공간과 선택한 SSH 신뢰 파일을 검증하여 새 폴더에 백업",
     "SP-SEC-007": "Tauri 콘텐츠 보안 정책",
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
-    "SP-SEC-003": "SFTP 원격 삭제 시 연결·경로·영향과 PROD 확인, SQLite 운영 환경 셀 변경의 미리보기와 확인",
+    "SP-SEC-003": "SFTP 원격 삭제 및 SQLite 셀 변경의 영향·운영 확인, 쓰기 가능한 SQL 편집기의 실행 범위·연결·환경과 위험 유형 사전 표시",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키 편집·삭제와 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
-    "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경과 PostgreSQL PROD 스크립트 실행, Redis PROD 키 편집·삭제, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인, MySQL 계열 PROD 그리드 적용 및 스크립트 실행 전 확인",
+    "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키 편집·삭제, SFTP 삭제·원격 편집 저장에도 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
@@ -457,6 +457,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/postgres/sql.rs; src/PostgresSqlWorkspace.tsx; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-SQ-010", "SP-AT-011"}:
                 evidence += "; crates/stackport-core/src/postgres/parameters.rs; src/PostgresParameterDialog.tsx; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-SQ-022", "SP-SEC-003", "SP-SEC-015"}:
+                evidence += "; crates/stackport-core/src/sql_risk.rs; src/SqlRiskReview.tsx; tests/sql-server-smoke.cjs; tests/snowflake-editor-smoke.cjs"
             if requirement_id in {"SP-SQ-014", "SP-SQ-015", "SP-SQ-016", "SP-AT-011"}:
                 evidence += "; crates/stackport-core/src/postgres/plan.rs; src/PostgresQueryPlan.tsx"
                 if requirement_id != "SP-AT-011":

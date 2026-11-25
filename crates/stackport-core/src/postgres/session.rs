@@ -875,6 +875,15 @@ impl PostgresManager {
         }
     }
 
+    pub fn script_review(&self, id: &str, source: &str, scope: crate::PostgresSqlScope) -> Result<crate::SqlExecutionReview> {
+        self.session(id)?;
+        let spans = sql_range::script(source, scope)?;
+        Ok(crate::sql_risk::review(crate::sql_risk::Dialect::Postgres, spans.into_iter().map(|span| {
+            let line = sql::script::line_at(source, span.start);
+            (&source[span], line, 1)
+        })))
+    }
+
     pub async fn execute_script(
         &self,
         id: &str,

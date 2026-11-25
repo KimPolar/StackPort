@@ -129,8 +129,10 @@ function RelationalViews(props: { session: Session; profile: Profile; editor: Sq
     <div hidden={sqlVisible}><Browse {...props} /></div>
     {sqlOpened && <div hidden={!sqlVisible}>
       <SqlWorkspaceTabs editor={props.editor} render={tab => props.prefix === "sql_server"
-        ? <SqlServerSqlWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} tab={tab} />
-        : <RelationalScriptWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database} engine={props.prefix} tab={tab} />} />
+        ? <SqlServerSqlWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database}
+          connection={props.profile.settings.name} environment={props.profile.settings.environment} tab={tab} />
+        : <RelationalScriptWorkspace id={props.session.id} projectId={props.profile.project_id} database={props.session.database}
+          connection={props.profile.settings.name} environment={props.profile.settings.environment} engine={props.prefix} tab={tab} />} />
     </div>}
   </>;
 }

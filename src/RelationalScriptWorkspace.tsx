@@ -7,10 +7,11 @@ import { Dialog } from "./Dialog";
 import { OracleParameterFields, SnowflakeParameterFields, type OracleParameterValue, type SnowflakeParameterValue } from "./SqlParameterFields";
 import type { ParameterPlan } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
+import { SqlRiskDialog, useSqlExecutionCheck } from "./SqlRiskReview";
 
 type Scope = "document" | "current" | "selection";
 type Engine = "oracle" | "snowflake";
-type QuerySource = { sql: string; first_line: number; cursor_byte: number | null };
+type QuerySource = { sql: string; first_line: number; cursor_byte: number | null; confirmation?: string };
 type OracleBinding = OracleParameterValue & { name: string };
 type ParameterRequest = { input: QuerySource; parameterScope: string } &
   ({ engine: "oracle"; names: string[] } | { engine: "snowflake"; count: number });
@@ -53,8 +54,8 @@ const statsFields = [
   ["num_rows_deleted", "삭제"], ["num_duplicate_rows_updated", "중복 수정"],
 ] as const;
 
-export function RelationalScriptWorkspace({ id, projectId, database, engine, tab }: {
-  id: string; projectId: string; database: string; engine: Engine; tab: SqlTabEditor;
+export function RelationalScriptWorkspace({ id, projectId, database, connection, environment, engine, tab }: {
+  id: string; projectId: string; database: string; connection: string; environment: string; engine: Engine; tab: SqlTabEditor;
 }) {
   const { text, onTextChange } = tab;
   const [selected, setSelected] = useState(false);
@@ -69,13 +70,15 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine, tab
   const active = useRef<string | null>(null);
   const editorId = sqlDocumentEditorId(tab.tabId);
   const noteId = useId();
-  const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
+  const review = useSqlExecutionCheck(environment);
+  const blocked = busy || preparing || review.checking || Boolean(review.proposal || parameterRequest);
+  const ready = !blocked && Boolean(text.trim());
   const name = engineName[engine];
-  useSqlTabBusy(tab, busy || preparing || !!parameterRequest);
+  useSqlTabBusy(tab, blocked);
 
-  async function run(scope: Scope, withParameters = false) {
+  function run(scope: Scope, withParameters = false) {
     const field = editor.current;
-    if (!field || active.current || parameterRequest) return;
+    if (!field || blocked || active.current) return;
     const { value, selectionStart, selectionEnd, selectionDirection } = field;
     const sql = scope === "selection" ? value.slice(selectionStart, selectionEnd) : value;
     if (!sql.trim()) return;
@@ -85,6 +88,14 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine, tab
       first_line: scope === "selection" ? value.slice(0, selectionStart).split("\n").length : 1,
       cursor_byte: scope === "current" ? encoder.encode(value.slice(0, caret)).length : null,
     };
+    setError("");
+    const label = { document: "전체 문서", current: "현재 문장", selection: "선택 영역" }[scope];
+    void review.check(engine + "_query_review", { input }, label, confirmation => {
+      void prepare({ ...input, confirmation }, withParameters);
+    }, setError);
+  }
+
+  async function prepare(input: QuerySource, withParameters: boolean) {
     if (engine === "oracle" || withParameters) {
       active.current = crypto.randomUUID();
       setPreparing(true); setError("");
@@ -145,9 +156,9 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine, tab
       {engine === "snowflake" && <button type="button" className="secondary small" disabled={!ready}
         onClick={() => void run(selected ? "selection" : "current", true)}><Braces size={14} aria-hidden /> 매개변수 실행</button>}
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}><Square size={14} aria-hidden /> 실행 중단</button>}
-      <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : preparing ? "바인드 변수 확인 중…" : ""}</span>
+      <span role="status">{stopping ? (engine === "oracle" ? "중단 요청됨 · 진행 중인 호출 처리 중…" : "중단 요청 중…") : busy ? "실행 중…" : review.checking ? "실행 범위 검토 중…" : preparing ? "바인드 변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={sqlTabTextLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language={engine} maxLength={sqlTabTextLimit} readOnly={blocked}
       aria-label={name + " SQL 문장"} aria-describedby={noteId} placeholder={engine === "oracle" ? "SELECT … FROM DUAL" : "SELECT …"}
       onChange={event => onTextChange(event.target.value)}
       onSelect={event => setSelected(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
@@ -161,6 +172,8 @@ export function RelationalScriptWorkspace({ id, projectId, database, engine, tab
       : <>같은 트랜잭션의 문장은 한 번에 실행하고 익명 블록은 <code>EXECUTE IMMEDIATE $$…$$</code>로 감싸세요. <code>?</code> 값은 한 문장을 대상으로 매개변수 실행에서 입력합니다.</>}</p>
     {error && <p className="error-banner" role="alert">{error}</p>}
     {outcome && <ScriptResults engine={engine} outcome={outcome} index={statementIndex} onSelect={setStatementIndex} />}
+    {review.proposal && <SqlRiskDialog target={{ connection, database, environment, scope: review.proposal.scope }}
+      review={review.proposal.review} onClose={review.close} onConfirm={review.confirm} />}
     {parameterRequest && <Dialog title={`${name} SQL 바인드 변수`} busy={false} onClose={() => setParameterRequest(null)}>
       {parameterRequest.engine === "oracle" ? <OracleParameterFields parameters={parameterRequest.names.map((name, index) => ({ index: index + 1, name: oracleBindLabel(name) }))}
         setScope={{ project_id: projectId, engine: "oracle", key: parameterRequest.parameterScope }}

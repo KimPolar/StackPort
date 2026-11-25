@@ -1227,11 +1227,18 @@ async function verifySqlEditor(page, workspace) {
 
   await editor.getByRole('button', { name: 'SQL 스크립트', exact: true }).click();
   await editor.getByLabel('자동 커밋', { exact: true }).uncheck();
-  await input.fill("SELECT '스크립트 첫 결과';\nSELECT ? AS next_result;");
   const production = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
   const proceed = production.getByRole('button', { name: '계속', exact: true });
+  await input.fill("SELECT 'WHERE';\nUPDATE sample_limit SET number = 1;");
+  await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+  await production.getByRole('list', { name: '변경 가능성이 있는 SQL' })
+    .getByText('2줄 · UPDATE', { exact: true }).waitFor();
+  await production.getByRole('button', { name: '취소', exact: true }).click();
+  await production.waitFor({ state: 'detached' });
+  await input.fill("SELECT '스크립트 첫 결과';\nSELECT ? AS next_result;");
   const openScriptBindings = async () => {
     await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+    await production.waitFor();
     assert.equal(await proceed.isDisabled(), true);
     await production.getByLabel('운영 환경 확인').fill('PROD');
     await proceed.click();

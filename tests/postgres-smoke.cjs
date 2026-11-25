@@ -1193,12 +1193,20 @@ async function verify(browser, fixture, gateway, jump) {
   const autocommit = page.getByRole('checkbox', { name: '자동 커밋', exact: true });
   assert.equal(await autocommit.isChecked(), true);
   await autocommit.uncheck();
+  await sql.fill("SELECT 'DELETE in text';\nDELETE FROM report.write_probe;");
+  await page.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const risk = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
+  await risk.getByRole('list', { name: '변경 가능성이 있는 SQL' }).getByText('2줄 · DELETE', { exact: true }).waitFor();
+  assert.match(await risk.innerText(), /PROD.*\s+기본 데이터베이스/s);
+  await risk.getByRole('button', { name: '취소', exact: true }).click();
+  await risk.waitFor({ state: 'detached' });
   await sql.fill("SELECT $1::text AS marker;\nSELECT $2::text AS marker;");
   const scriptConfirmation = page.getByRole('dialog', { name: '스크립트 실행 및 저장', exact: true });
   const confirmScript = scriptConfirmation.getByRole('button', { name: '실행 및 JSON 저장', exact: true });
   const scriptFile = path.join(root, 'postgres-script-editor.json');
   async function requestScriptExport() {
     await page.getByRole('button', { name: '실행 및 저장', exact: true }).click();
+    await scriptConfirmation.waitFor();
     assert.equal(await confirmScript.isEnabled(), false);
     await scriptConfirmation.getByLabel('새 JSON 파일 경로', { exact: true }).fill(scriptFile);
     assert.equal(await confirmScript.isEnabled(), false);

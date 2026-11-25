@@ -14,6 +14,41 @@ fn input(sql: &str, first_line: u32, cursor_byte: Option<usize>) -> QueryInput {
 }
 
 #[tokio::test]
+async fn production_changes_require_confirmation_before_posting() {
+    let (fixture, mut api) = fixture(Auth::Pat, true).await;
+    api.settings.environment = "PROD".into();
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _) = test_session(dir.path(), api, "prod-sql", "DEMO");
+    let sql = "UPDATE demo SET x = 5";
+    let request = Uuid::new_v4().to_string();
+    let refused = tokio::time::timeout(
+        Duration::from_secs(2),
+        manager.run_query("prod-sql", &request, input(sql, 1, None)),
+    )
+    .await
+    .expect("rejected locally")
+    .err()
+    .expect("confirmation required");
+    assert!(refused.contains("PROD"));
+
+    let confirmed: QueryInput = serde_json::from_value(json!({
+        "sql": sql, "first_line": 1, "confirmation": "PROD"
+    }))
+    .unwrap();
+    let server = tokio::spawn(async move {
+        let (_, body, stream) = fixture.request("PROGRAMMATIC_ACCESS_TOKEN").await;
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap()["statement"], sql);
+        reply(stream, "200 OK", "", &encoded(json!({
+            "statementHandle": HANDLE, "stats": { "numRowsUpdated": 2 }
+        })))
+        .await;
+    });
+    let outcome = manager.run_query("prod-sql", &request, confirmed).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(serde_json::to_value(outcome).unwrap()["status"], "succeeded");
+}
+
+#[tokio::test]
 async fn runs_one_transaction_request_and_reads_child_results_in_order() {
     let (fixture, api) = fixture(Auth::Pat, true).await;
     let dir = tempfile::tempdir().unwrap();

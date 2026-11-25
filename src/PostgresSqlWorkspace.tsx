@@ -10,6 +10,7 @@ import type { PostgresExportTarget, PostgresScope } from "./PostgresResultExport
 import { PostgresScriptResults, type PostgresScriptOutcome } from "./PostgresScriptResults";
 import { sqlTabButtonId, sqlTabPanelId, sqlTabTitle, SqlTabStrip, type SqlDraft, type SqlEditorState } from "./SqlTabs";
 import type { QueryActivity } from "./WorkspaceStatus";
+import { needsSqlReview, SqlRiskSummary, type SqlExecutionReview } from "./SqlRiskReview";
 
 type Mode = "query" | "estimate" | "analyze" | "script";
 type ResultView = "data" | "plan" | "script";
@@ -34,10 +35,12 @@ const viewNames: Record<ResultView, string> = { data: "조회 결과", plan: "�
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : mode === "script" ? "script" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석", script: "스크립트 실행" };
 
-export function PostgresSqlWorkspace({ session, projectId, environment, editor, onExport, onQueryActivity }: {
+export function PostgresSqlWorkspace({ session, projectId, environment, connection, database, editor, onExport, onQueryActivity }: {
   session: string | null;
   projectId: string;
   environment: string;
+  connection: string;
+  database: string;
   editor: SqlEditorState;
   onExport: (target: PostgresExportTarget) => void;
   onQueryActivity: (activity: QueryActivity) => void;
@@ -53,7 +56,12 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
   const [analysisTarget, setAnalysisTarget] = useState<QueryTarget | null>(null);
   const [scriptMode, setScriptMode] = useState(false);
   const [autocommit, setAutocommit] = useState(true);
-  const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
+  const [scriptTarget, setScriptTarget] = useState<{ target: ScriptTarget; review: SqlExecutionReview } | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const reviewPending = useRef(false);
+  const currentSession = useRef(session);
+  currentSession.current = session;
   const { tabs, select, add, close, edit, openFile, saveFile } = editor;
   const draft = tabs.tabs.find(item => item.id === tabs.activeId);
   const tabPreview = previews.find(item => item.tab === tabs.activeId);
@@ -64,7 +72,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
   const busy = running !== null;
   const exporting = running?.mode === "script" && running.exportDestination ? running : null;
   const exportProgress = exporting ? `${written.toLocaleString("ko-KR")}행 기록 · 결과 파일 만드는 중…` : "";
-  const cannotRun = !session || busy || !source.trim();
+  const cannotRun = !session || busy || reviewing || !source.trim();
   const activity = session && running?.session === session
     ? cancelStatus === "취소 요청 중…" ? "cancelling" : "running" : null;
   useEffect(() => {
@@ -150,17 +158,34 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
 
   function execute(current: boolean, mode: Mode = scriptMode ? "script" : "query", field = input.current,
     options: { whole?: boolean; exportResults?: boolean } = {}) {
-    if (!field || !session || !draft || cannotRun || active.current ||
-      parameterRequest?.target.session === session || analysisTarget?.session === session || scriptTarget?.session === session) return;
+    if (!field || !session || !draft || cannotRun || active.current || reviewPending.current ||
+      parameterRequest?.target.session === session || analysisTarget?.session === session || scriptTarget?.target.session === session) return;
+    setReviewError("");
     const { selectionStart: start, selectionEnd: end } = field;
     const scope: PostgresScope = current ? { kind: "current", cursor: start } : options.whole || start === end ? { kind: "document" } : { kind: "selection", start, end };
     const target = { session, tab: draft.id, title: sqlTabTitle(draft), source, scope };
     if (mode === "script") {
       const script: ScriptTarget = { ...target, mode, autocommit, confirmation: "", exportDestination: options.exportResults ? "" : undefined };
-      if (environment === "PROD" || options.exportResults) setScriptTarget(script);
-      else void run(script);
+      void reviewScript(script);
     } else if (mode === "analyze") setAnalysisTarget({ ...target, mode });
     else void run({ ...target, mode });
+  }
+
+  async function reviewScript(target: ScriptTarget) {
+    reviewPending.current = true;
+    setReviewing(true);
+    try {
+      const review = await invoke<SqlExecutionReview>("postgres_script_review", { id: target.session, source: target.source, scope: target.scope });
+      if (currentSession.current !== target.session) return;
+      if (environment === "PROD" || target.exportDestination !== undefined || needsSqlReview(review, environment)) {
+        setScriptTarget({ target, review });
+      } else void run(target);
+    } catch (cause) {
+      if (currentSession.current === target.session) setReviewError(String(cause));
+    } finally {
+      reviewPending.current = false;
+      setReviewing(false);
+    }
   }
 
   function showResult(view: ResultView) {
@@ -189,7 +214,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
             onClick={() => execute(false, "script", input.current, { whole: true })}>전체 실행</button>}
           {scriptMode && <button type="button" className="secondary small" disabled={cannotRun}
             onClick={() => execute(false, "script", input.current, { exportResults: true })}><FileDown size={14} aria-hidden /> 실행 및 저장</button>}
-          <button type="button" className="primary small" title="Ctrl+Enter" disabled={!session || busy || !(selected || source).trim()}
+          <button type="button" className="primary small" title="Ctrl+Enter" disabled={!session || busy || reviewing || !(selected || source).trim()}
             onClick={() => execute(false)}><Play size={14} aria-hidden />{selected ? "선택 영역 실행" : scriptMode ? "전체 실행" : "쿼리 실행"}</button>
           {busy && <button type="button" className="secondary small" disabled={cancelStatus === "취소 요청 중…"}
             onClick={() => void stop()}><Square size={13} aria-hidden /> 쿼리 취소</button>}
@@ -207,7 +232,7 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
       </div>
       {scriptMode && <p className="form-note postgres-page-note">자동 커밋을 끄면 스크립트의 COMMIT으로 변경을 저장합니다. 실행 종료 시 열린 트랜잭션은 롤백합니다.</p>}
       <SqlTabStrip group={tabs} onSelect={id => { setSelection(null); select(id); }} onNew={() => add()} onClose={closeTab}
-        closeDisabledFor={running?.tab} />
+        closeDisabledFor={running?.tab} busy={reviewing} />
       {tabs.tabs.map(item => <div key={item.id} role="tabpanel" id={sqlTabPanelId(item.id)}
         aria-labelledby={sqlTabButtonId(item.id)} hidden={item.id !== tabs.activeId}>
         {item.id === draft?.id && <>
@@ -226,6 +251,8 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
       {!draft && <><p className="sql-tabs-empty">열린 SQL 탭이 없습니다.</p><div className="editor-footer">{fileActions}</div></>}
     </section>
     {!session && <p className="form-note">PostgreSQL에 연결하면 SQL을 실행할 수 있습니다.</p>}
+    {reviewing && <p className="form-note" role="status">실행 범위 검토 중…</p>}
+    {reviewError && <p className="error-banner" role="alert">{reviewError}</p>}
     {running && <p className="form-note" role="status">{cancelStatus || exportProgress || `${running.title} · ${modeNames[running.mode]} 중…`}</p>}
     {tabPreview && availableViews.length > 1 && <div className="postgres-result-views" role="group" aria-label="PostgreSQL 결과 보기">
       {availableViews.map(view => <button key={view} type="button" className="secondary small"
@@ -255,7 +282,8 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
         </div>
       </div>
     </Dialog>}
-    {scriptTarget && session === scriptTarget.session && <ScriptRunDialog target={scriptTarget} environment={environment}
+    {scriptTarget && session === scriptTarget.target.session && <ScriptRunDialog target={scriptTarget.target} review={scriptTarget.review}
+      connection={connection} database={database} environment={environment}
       onClose={() => { setScriptTarget(null); requestAnimationFrame(() => input.current?.focus()); }}
       onRun={target => { setScriptTarget(null); void run(target); }} />}
     {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
@@ -267,8 +295,11 @@ export function PostgresSqlWorkspace({ session, projectId, environment, editor, 
   </div>;
 }
 
-function ScriptRunDialog({ target, environment, onClose, onRun }: {
+function ScriptRunDialog({ target, review, connection, database, environment, onClose, onRun }: {
   target: ScriptTarget;
+  review: SqlExecutionReview;
+  connection: string;
+  database: string;
   environment: string;
   onClose: () => void;
   onRun: (target: ScriptTarget) => void;
@@ -292,14 +323,14 @@ function ScriptRunDialog({ target, environment, onClose, onRun }: {
     } catch (error) { setError(String(error)); }
   }
 
-  return <Dialog title={exporting ? "스크립트 실행 및 저장" : "운영 스크립트 실행"} busy={false} onClose={onClose}>
+  const scope = { document: "전체 문서", selection: "선택 영역", current: "현재 문장" }[target.scope.kind];
+  return <Dialog title={exporting ? "스크립트 실행 및 저장" : production ? "운영 스크립트 실행" : "SQL 실행 검토"} busy={false} onClose={onClose}>
     <form onSubmit={event => {
       event.preventDefault();
       if (enabled) onRun({ ...target, confirmation, exportDestination: exporting ? destination.trim() : undefined });
     }}>
-      <p className="form-note"><strong>{target.title}</strong> · {environment}
-        {exporting ? " · 이번 실행의 문장별 전체 결과를 JSON으로 저장합니다." : " · 운영 PostgreSQL에 스크립트를 실행합니다."}
-      </p>
+      <SqlRiskSummary target={{ connection, database, environment, scope: target.title + " · " + scope }} review={review} />
+      {exporting && <p className="form-note">이번 실행의 문장별 전체 결과를 JSON으로 저장합니다.</p>}
       {exporting && <div className="field"><label htmlFor={pathId}>새 JSON 파일 경로</label><span className="file-input">
         <input id={pathId} required autoFocus value={destination} placeholder="새 파일의 절대 경로"
           onChange={event => setDestination(event.target.value)} />
@@ -309,7 +340,7 @@ function ScriptRunDialog({ target, environment, onClose, onRun }: {
         onChange={event => setConfirmation(event.target.value)} /></label>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
-        <button type="button" className="secondary" onClick={onClose}>취소</button>
+        <button type="button" className="secondary" autoFocus={!production && !exporting} onClick={onClose}>취소</button>
         <button type="submit" className="primary" disabled={!enabled}>{exporting ? "실행 및 JSON 저장" : "스크립트 실행"}</button>
       </div>
     </form>

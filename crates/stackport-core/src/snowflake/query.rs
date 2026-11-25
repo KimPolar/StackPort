@@ -34,6 +34,8 @@ pub struct QueryInput {
     source: QuerySource,
     #[serde(default)]
     parameters: Vec<ParameterInput>,
+    #[serde(default)]
+    confirmation: String,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +46,10 @@ pub struct QuerySource {
 }
 
 impl QuerySource {
+    pub fn review(&self) -> Result<crate::SqlExecutionReview> {
+        Ok(review_statements(&self.statements()?))
+    }
+
     pub fn parameter_count(&self) -> Result<usize> {
         parameters::parameter_count(&self.statements()?)
     }
@@ -65,6 +71,11 @@ impl QuerySource {
         }
         script::split(&self.sql, self.first_line, self.cursor_byte)
     }
+}
+
+fn review_statements(statements: &[script::Statement<'_>]) -> crate::SqlExecutionReview {
+    crate::sql_risk::review(crate::sql_risk::Dialect::Snowflake,
+        statements.iter().map(|statement| (statement.sql, statement.line, 1)))
 }
 
 #[derive(Serialize)]
@@ -165,6 +176,9 @@ impl Manager {
         let statements = input.source.statements()?;
         let bindings = Bindings::new(&statements, &input.parameters)?;
         let session = self.session(id)?;
+        if session.profile.settings.environment == "PROD" {
+            review_statements(&statements).require_production_confirmation("PROD", &input.confirmation)?;
+        }
         let _permit = session.operation()?;
         let stop = session.api.operation_token();
         {

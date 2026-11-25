@@ -7,12 +7,14 @@ import { Dialog } from "./Dialog";
 import { SqlServerParameterFields, type SqlParameter, type SqlServerParameterValue } from "./SqlParameterFields";
 import type { ParameterPlan } from "./SqlParameterSets";
 import { sqlDocumentEditorId, sqlTabTextLimit, useSqlTabBusy, type SqlTabEditor } from "./SqlTabs";
+import { SqlRiskDialog, useSqlExecutionCheck } from "./SqlRiskReview";
 
 type Scope = "document" | "batch" | "selection";
 type QueryInput = {
   sql: string;
   first_line: number;
   cursor_line: number | null;
+  confirmation?: string;
   parameters?: (SqlServerParameterValue & { index: number })[];
 };
 type ResultSet = {
@@ -46,8 +48,8 @@ const attentionText = {
   unconfirmed: "서버의 중단 응답을 확인하지 못했습니다.",
 };
 const number = new Intl.NumberFormat("ko-KR");
-export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
-  id: string; projectId: string; database: string; tab: SqlTabEditor;
+export function SqlServerSqlWorkspace({ id, projectId, database, connection, environment, tab }: {
+  id: string; projectId: string; database: string; connection: string; environment: string; tab: SqlTabEditor;
 }) {
   const { text, onTextChange } = tab;
   const [hasSelection, setHasSelection] = useState(false);
@@ -62,9 +64,11 @@ export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
   const active = useRef<string | null>(null);
   const editorId = sqlDocumentEditorId(tab.tabId);
   const noteId = useId();
-  const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
+  const review = useSqlExecutionCheck(environment);
+  const blocked = busy || preparing || review.checking || Boolean(review.proposal || parameterRequest);
+  const ready = !blocked && Boolean(text.trim());
   const result = outcome?.result_sets[resultIndex];
-  useSqlTabBusy(tab, busy || preparing || !!parameterRequest);
+  useSqlTabBusy(tab, blocked);
 
   function queryInput(scope: Scope): QueryInput | null {
     const field = editor.current;
@@ -81,16 +85,21 @@ export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
     };
   }
 
-  function run(scope: Scope) {
-    if (parameterRequest) return;
+  function run(scope: Scope, withParameters = false) {
+    if (blocked || active.current) return;
     const input = queryInput(scope);
-    if (input) void execute(input);
+    if (!input) return;
+    setError("");
+    const label = { document: "전체 문서", batch: "현재 배치", selection: "선택 영역" }[scope];
+    void review.check("sql_server_query_review", { input }, label, confirmation => {
+      const approved = { ...input, confirmation };
+      if (withParameters) void prepareParameters(approved);
+      else void execute(approved);
+    }, setError);
   }
 
-  async function prepareParameters() {
+  async function prepareParameters(input: QueryInput) {
     if (active.current || parameterRequest) return;
-    const input = queryInput(hasSelection ? "selection" : "batch");
-    if (!input) return;
     active.current = crypto.randomUUID();
     setPreparing(true); setError("");
     try {
@@ -146,13 +155,13 @@ export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
       <button type="button" className="secondary small" disabled={!ready} onClick={() => void run("batch")}>현재 배치 실행</button>
       <button type="button" className="secondary small" disabled={!ready || !hasSelection} onClick={() => void run("selection")}>선택 실행</button>
       <button type="button" className="secondary small" disabled={!ready} title="현재 배치 또는 선택 영역의 @P1~@P64에 값 입력"
-        onClick={() => void prepareParameters()}><Braces size={14} aria-hidden /> 매개변수 실행</button>
+        onClick={() => run(hasSelection ? "selection" : "batch", true)}><Braces size={14} aria-hidden /> 매개변수 실행</button>
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}>
         <Square size={14} aria-hidden /> 실행 중단
       </button>}
-      <span role="status">{stopping ? "중단 요청 중…" : busy ? "실행 중…" : preparing ? "매개변수 확인 중…" : ""}</span>
+      <span role="status">{stopping ? "중단 요청 중…" : busy ? "실행 중…" : review.checking ? "실행 범위 검토 중…" : preparing ? "매개변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlTabTextLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlTabTextLimit} readOnly={blocked}
       aria-label="SQL Server SQL 문장" aria-describedby={noteId} placeholder="SELECT …"
       onChange={event => onTextChange(event.target.value)}
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
@@ -164,6 +173,8 @@ export function SqlServerSqlWorkspace({ id, projectId, database, tab }: {
       }}
       footer={<span>Ctrl + Enter · 현재 배치 또는 선택 실행</span>} />
     <p className="form-note mysql-table-note" id={noteId}>로그인 계정의 권한으로 실행합니다. 커밋된 변경은 유지되고 열린 트랜잭션은 실행 연결이 닫힐 때 롤백됩니다.</p>
+    {review.proposal && <SqlRiskDialog target={{ connection, database, environment, scope: review.proposal.scope }}
+      review={review.proposal.review} onClose={review.close} onConfirm={review.confirm} />}
     {parameterRequest && <Dialog title="SQL Server 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
       <SqlServerParameterFields parameters={parameterRequest.parameters}
         setScope={{ project_id: projectId, engine: "sql_server", key: parameterRequest.parameterScope }}

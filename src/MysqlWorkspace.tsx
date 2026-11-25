@@ -298,7 +298,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
       <div hidden={!sqlOpen}>
         <SqlWorkspaceTabs key={session.id} editor={editor} render={tab =>
           <MysqlSqlWorkspace id={session.id} projectId={profile.project_id} database={database}
-            environment={settings.environment} tab={tab} onExport={beginExport} />} />
+            connection={settings.name} environment={settings.environment} tab={tab} onExport={beginExport} />} />
       </div>
       </div>
     </div></div>}

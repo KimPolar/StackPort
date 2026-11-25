@@ -710,7 +710,7 @@ fn short_text(value: &str) -> String {
     value.chars().take(VALUE_LENGTH).collect()
 }
 
-fn line_at(source: &str, offset: usize) -> u32 {
+pub(in crate::postgres) fn line_at(source: &str, offset: usize) -> u32 {
     source[..offset]
         .bytes()
         .filter(|byte| *byte == b'\n')

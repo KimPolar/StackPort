@@ -217,12 +217,13 @@ async function verify(page, hiddenObject, exportFolder) {
 
 const executionFixture = `${owner}."Execution Fixture"`;
 
-function oracleQuery(command, id, sql, requestId = randomUUID()) {
-  return command('run_oracle_query', { id, requestId, input: { sql, first_line: 1, cursor_byte: null } });
+function oracleQuery(command, id, sql, requestId = randomUUID(), confirmation = 'PROD') {
+  return command('run_oracle_query', { id, requestId, input: { sql, first_line: 1, cursor_byte: null, confirmation } });
 }
 
 async function verifyOracleExecution(command, id) {
   const query = (sql, requestId) => oracleQuery(command, id, sql, requestId);
+  await assert.rejects(oracleQuery(command, id, 'BEGIN NULL; END;\n/', randomUUID(), ''), /PROD/);
   const values = async () => {
     const result = await query(`SELECT id FROM ${executionFixture} ORDER BY id;`);
     assert.equal(result.status, 'succeeded', JSON.stringify(result.error));
@@ -324,6 +325,9 @@ BEGIN SYS.DBMS_SESSION.SLEEP(12); END;
 INSERT INTO ${executionFixture} VALUES (14);
 COMMIT;`);
   await entire.click();
+  const production = pane.getByRole('dialog', { name: '운영 SQL 실행 검토', exact: true });
+  await production.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+  await production.getByRole('button', { name: 'SQL 실행', exact: true }).click();
   const cancel = pane.getByRole('button', { name: '실행 중단', exact: true });
   await cancel.waitFor();
   const started = performance.now();
@@ -441,8 +445,14 @@ async function verifyMockBindEditor(page) {
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
   await verifySqlDocumentTabs(page, workspace, 'Oracle SQL 문장');
   const pane = workspace.getByRole('region', { name: 'Oracle SQL 편집기', exact: true });
-  await verifyBindForm(pane,
-    pane.getByRole('textbox', { name: 'Oracle SQL 문장', exact: true }),
+  const editor = pane.getByRole('textbox', { name: 'Oracle SQL 문장', exact: true });
+  await editor.fill("<<control>>\nBEGIN\n  NULL;\nEND;\n/");
+  await pane.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const risk = page.getByRole('dialog', { name: 'SQL 실행 검토', exact: true });
+  await risk.getByText('2줄 · BEGIN', { exact: true }).waitFor();
+  await risk.getByRole('button', { name: '취소', exact: true }).click();
+  await risk.waitFor({ state: 'detached' });
+  await verifyBindForm(pane, editor,
     pane.getByRole('table', { name: 'Oracle SQL 결과 표', exact: true }));
 }
 
@@ -450,7 +460,7 @@ async function verifyOracleBindings(command, id) {
   const source = (sql, cursor_byte = null) => ({ sql, first_line: 1, cursor_byte });
   const inspect = input => command('oracle_query_parameters', { id, input });
   const run = (sql, parameters, requestId = randomUUID()) =>
-    command('run_oracle_query', { id, requestId, input: { ...source(sql), parameters } });
+    command('run_oracle_query', { id, requestId, input: { ...source(sql), parameters, confirmation: 'PROD' } });
   const example = `SELECT q'[한글 :ignored]', :p, :P FROM dual; -- :comment
 SELECT :"Mixed name", :3 FROM dual;`;
   assert.deepEqual(await inspect(source(example)), ['P', 'Mixed name', '3']);
