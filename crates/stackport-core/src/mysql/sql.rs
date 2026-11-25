@@ -12,6 +12,12 @@ use std::{
 use tokio::{sync::oneshot, time::timeout};
 use uuid::Uuid;
 
+mod execution;
+mod script;
+
+pub use execution::{MysqlScriptInput, MysqlScriptOutcome};
+pub use script::Scope as MysqlScriptScope;
+
 const MAX_SQL: usize = 128 * 1024;
 const MAX_PARAMETERS: usize = 64;
 const PARAMETER_BYTES: usize = 64 * 1024;

@@ -148,6 +148,10 @@ async function fixture() {
       CREATE USER 'catalog_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       CREATE USER 'monitor_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       CREATE USER 'certificate_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE X509;
+      CREATE DATABASE script_db CHARACTER SET utf8mb4;
+      CREATE TABLE script_db.script_rows (id INT PRIMARY KEY) ENGINE=InnoDB;
+      CREATE USER 'script_writer'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
+      GRANT SELECT, INSERT, CREATE ROUTINE, EXECUTE ON script_db.* TO 'script_writer'@'%';
       GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';
       GRANT UPDATE ON visible_db.grid_edit_records TO 'catalog_reader'@'%';
       GRANT SELECT ON visible_db.* TO 'monitor_reader'@'%';
@@ -206,6 +210,9 @@ async function verify(page, server) {
   assert.equal(session.database, 'visible_db');
   const id = session.id;
   await verifyGridWrites(command, id, profile, server.port);
+  const writer = await open(await alternate('스크립트 실행 권한', { username: 'script_writer', database: 'script_db' }));
+  try { await verifyScript(command, writer.id, id, server.port); }
+  finally { await command('close_mysql', { id: writer.id }); }
   await verifyPlans(command, id);
   const schemas = await command('mysql_databases', { id, search: '', page: 0 });
   assert.ok(schemas.items.includes('visible_db'));
@@ -1044,6 +1051,103 @@ async function verifyPlans(command, id) {
   assert.ok((await plan(source, false, params)).steps.length > 0);
 }
 
+async function verifyScript(command, writer, reader, port) {
+  const document = { kind: 'document' };
+  const config = { database: 'script_db', autocommit: false, confirmation: 'PROD', parameters: [] };
+  const run = (sql, overrides = {}, requestId = randomUUID(), id = writer) =>
+    command('run_mysql_script', { id, requestId, input: { sql, scope: document, ...config, ...overrides } });
+  await assert.rejects(run('INSERT INTO script_rows VALUES (99);', { confirmation: '' }), /PROD/);
+  const denied = await run('INSERT INTO visible_db.sample_limit(number) VALUES (9999);', { database: 'visible_db' }, randomUUID(), reader);
+  assert.equal(denied.status, 'failed');
+  assert.ok([1044, 1142].includes(denied.error.code));
+  assert.equal(denied.error.line, 1);
+
+  const sql = `-- 한글 주석
+DELIMITER $$
+CREATE PROCEDURE script_sets()
+BEGIN
+  SELECT '첫 번째;';
+  SELECT '두 번째;';
+END$$
+DELIMITER ;
+START TRANSACTION;
+INSERT INTO script_rows VALUES (?);
+SAVEPOINT item;
+INSERT INTO script_rows VALUES (102);
+ROLLBACK TO SAVEPOINT item;
+COMMIT;
+INSERT INTO script_rows VALUES (103);
+CALL script_sets();`;
+  const requestId = randomUUID();
+  assert.equal(await command('mysql_script_parameters', { id: writer, sql, scope: document }), 1);
+  const response = await run(sql, { parameters: [{ kind: 'integer', value: '101' }] }, requestId);
+  assert.equal(response.status, 'succeeded', JSON.stringify(response.error));
+  assert.equal(response.transaction, 'cleanup_confirmed');
+  assert.deepEqual(response.statements.map(statement => statement.line), [3, 9, 10, 11, 12, 13, 14, 15, 16]);
+  assert.equal(response.statements[2].sets[0].affected_rows, 1);
+  assert.deepEqual(response.statements.at(-1).sets.filter(set => set.columns.length).map(set => set.rows[0][0].text), ['첫 번째;', '두 번째;']);
+  assert.equal(admin(port, 'SELECT id FROM script_db.script_rows ORDER BY id;').trim(), '101');
+  const audit = (await command('list_audit_events', {})).events.find(event => event.correlation_id === requestId);
+  assert.deepEqual([audit.operation, audit.outcome, audit.policy], ['mysql.sql.script', 'succeeded', 'mysql-script-prod-confirmed']);
+  assert.doesNotMatch(JSON.stringify(audit), /script_rows|SELECT|첫 번째/);
+
+  const scoped = "SELECT '한글';\nSELECT ? AS target;\nINSERT INTO script_rows VALUES (99);";
+  const start = Buffer.byteLength(scoped.slice(0, scoped.indexOf('SELECT ?')));
+  const end = start + Buffer.byteLength('SELECT ? AS target;');
+  for (const scope of [{ kind: 'current', cursor_byte: start + 7 }, { kind: 'selection', start_byte: start, end_byte: end }]) {
+    const selected = await run(scoped, { scope, parameters: [{ kind: 'text', value: '선택값' }], autocommit: true });
+    assert.equal(selected.status, 'succeeded', JSON.stringify(selected.error));
+    assert.equal(selected.statements.length, 1);
+    assert.equal(selected.statements[0].line, 2);
+    assert.equal(selected.statements[0].sets[0].rows[0][0].text, '선택값');
+  }
+  const failed = await run('INSERT INTO script_rows VALUES (105);\nSELECT invalid_sql_column;\nCOMMIT;');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.line, 2);
+  assert.equal(failed.error.code, 1054);
+  assert.equal(failed.statements.length, 1);
+  assert.equal(failed.transaction, 'cleanup_confirmed');
+
+  const partial = await run(`DELIMITER //
+CREATE PROCEDURE script_partial()
+BEGIN
+  SELECT 'retained first result';
+  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'fixture error';
+END//
+DELIMITER ;
+CALL script_partial();
+COMMIT;`);
+  assert.equal(partial.status, 'failed');
+  assert.equal(partial.error.sql_state, '45000');
+  assert.equal(partial.statements.length, 2);
+  assert.equal(partial.statements.at(-1).sets[0].rows[0][0].text, 'retained first result');
+
+  const stopId = randomUUID();
+  const query = 'SELECT id FROM script_rows WHERE SLEEP(12) = 0 /* cancel-script-fixture */';
+  const running = run(`INSERT INTO script_rows VALUES (106);\n${query};\nCOMMIT;`, {}, stopId);
+  let active = false;
+  for (let attempt = 0; attempt < 40 && !active; attempt++) {
+    active = Number(admin(port, "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'script_writer' AND INFO LIKE '%cancel-script-fixture%';")) > 0;
+    if (!active) await delay(100);
+  }
+  assert.ok(active, 'Script query must reach the fixture server before cancellation.');
+  assert.equal(await command('cancel_mysql_sql', { id: writer, requestId: stopId }), true);
+  const stopped = await running;
+  assert.equal(stopped.status, 'cancelled');
+  assert.equal(stopped.server_interrupted, true, JSON.stringify(stopped));
+  assert.equal(stopped.transaction, 'cleanup_confirmed');
+  assert.equal(admin(port, 'SELECT id FROM script_db.script_rows ORDER BY id;').trim(), '101');
+
+  const limit = maria
+    ? 'SET STATEMENT max_statement_time = 0.1 FOR SELECT id FROM script_rows WHERE SLEEP(8) = 0'
+    : 'SELECT /*+ MAX_EXECUTION_TIME(100) */ id FROM script_rows WHERE SLEEP(8) = 0';
+  const timed = await run(`INSERT INTO script_rows VALUES (107);\n${limit};\nCOMMIT;`);
+  assert.equal(timed.status, 'timed_out', JSON.stringify(timed));
+  assert.equal(timed.server_interrupted, true);
+  assert.equal(timed.transaction, 'cleanup_confirmed');
+  assert.equal(admin(port, 'SELECT id FROM script_db.script_rows ORDER BY id;').trim(), '101');
+}
+
 async function saveJsonFromDialog(page, output) {
   const dialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
   await dialog.getByRole('combobox').selectOption('JSON');
@@ -1114,6 +1218,24 @@ async function verifySqlEditor(page, workspace) {
   await parameter.fill('3');
   await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
   await plan.getByRole('columnheader', { name: '실제 행 / 회' }).waitFor();
+
+  await editor.getByRole('button', { name: 'SQL 스크립트', exact: true }).click();
+  await editor.getByLabel('자동 커밋', { exact: true }).uncheck();
+  await input.fill("SELECT '스크립트 첫 결과';\nSELECT '스크립트 다음 결과';");
+  await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
+  const production = page.getByRole('dialog', { name: '운영 스크립트 실행', exact: true });
+  const proceed = production.getByRole('button', { name: '계속', exact: true });
+  assert.equal(await proceed.isDisabled(), true);
+  await production.getByLabel('운영 환경 확인').fill('PROD');
+  await proceed.click();
+  const scriptResult = editor.getByRole('region', { name: 'MySQL 스크립트 결과', exact: true });
+  const scriptGrid = scriptResult.getByRole('table', { name: 'MySQL 스크립트 결과 표', exact: true });
+  await scriptGrid.getByRole('cell', { name: '스크립트 첫 결과', exact: true }).waitFor();
+  await scriptResult.getByRole('status').filter({ hasText: '결과를 받은 문장 2개' }).waitFor();
+  await scriptResult.getByRole('combobox').selectOption('1');
+  await scriptGrid.getByRole('cell', { name: '스크립트 다음 결과', exact: true }).waitFor();
+  await editor.getByRole('button', { name: '읽기 전용 조회', exact: true }).click();
+  await plan.getByRole('columnheader', { name: '실제 행 / 회' }).waitFor();
   await toggle.click();
 }
 
@@ -1123,7 +1245,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (TLS, SSH, catalog, activity, grid, read-only SQL, execution plans and export).`);
+    console.log(`${engine} Windows E2E passed (TLS, SSH, catalog, activity, grid, read-only SQL, scripts, transactions, cancellation, execution plans and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

@@ -1355,6 +1355,18 @@ fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: Stri
 }
 
 #[tauri::command]
+fn mysql_script_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String,
+    scope: stackport_core::MysqlScriptScope) -> Result<usize, String> {
+    mysql.script_parameters(&id, &sql, &scope)
+}
+
+#[tauri::command]
+async fn run_mysql_script(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
+    input: stackport_core::MysqlScriptInput) -> Result<stackport_core::MysqlScriptOutcome, String> {
+    mysql.run_script(&id, &request_id, input).await
+}
+
+#[tauri::command]
 async fn run_mysql_sql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
     database: Option<String>, sql: String, parameters: Vec<stackport_core::MysqlSqlParameter>) -> Result<stackport_core::MysqlSqlResult, String> {
     mysql.run_sql(&id, request_id, database, sql, parameters).await
@@ -2606,6 +2618,8 @@ fn main() {
             export_mysql,
             mysql_export_progress,
             mysql_sql_parameters,
+            mysql_script_parameters,
+            run_mysql_script,
             run_mysql_sql,
             mysql_sql_plan,
             cancel_mysql_sql,

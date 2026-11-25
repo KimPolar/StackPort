@@ -25,7 +25,7 @@ pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 mod mysql;
 pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
-pub use mysql::{MysqlSqlParameter, MysqlSqlResult};
+pub use mysql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::MysqlPlan;
 pub use mysql::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
 pub use mysql::{MysqlStructure, MysqlStructureSection};
@@ -989,6 +989,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "snowflake.sql.execute" | "snowflake.sql.execute.cancel" | "snowflake.sql.execute.timeout" => {
             "snowflake-session-role-permissions"
         }
+        "mysql.sql.script" | "mysql.sql.script.cancel" | "mysql.sql.script.timeout"
+            if record.environment == Some("PROD") => "mysql-script-prod-confirmed",
+        "mysql.sql.script" | "mysql.sql.script.cancel" | "mysql.sql.script.timeout" => "mysql-script-login-permissions",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

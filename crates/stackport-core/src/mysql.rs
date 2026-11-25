@@ -14,7 +14,7 @@ pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use plan::MysqlPlan;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
-pub use sql::{MysqlSqlParameter, MysqlSqlResult};
+pub use sql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use structure::{MysqlStructure, MysqlStructureSection};
 
 use crate::{
@@ -43,6 +43,7 @@ use zeroize::Zeroizing;
 
 const CONNECT: Duration = Duration::from_secs(12);
 const READ: Duration = Duration::from_secs(12);
+const UTF8_SESSION: &str = "SET NAMES utf8mb4";
 const CATALOG_LIMIT: usize = 100;
 const ROW_LIMIT: usize = 50;
 const COLUMN_LIMIT: usize = 128;
@@ -239,7 +240,7 @@ impl MysqlManager {
             .ssl_opts(tls)
             .max_allowed_packet(Some(4 * 1024 * 1024))
             .init(vec![
-                "SET NAMES utf8mb4",
+                UTF8_SESSION,
                 "SET SESSION TRANSACTION READ ONLY",
             ]);
         drop(password);

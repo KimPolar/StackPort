@@ -5,21 +5,27 @@ import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
 import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
 import { MysqlQueryPlan, type MysqlPlan } from "./MysqlQueryPlan";
+import { MysqlScriptResults, type MysqlScriptOutcome } from "./MysqlScriptResults";
 import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 
 type ParameterKind = "text" | "integer" | "real" | "null";
 type Parameter = { kind: ParameterKind; value: string; masked: boolean };
-type Action = "execute" | "estimate" | "analyze";
-type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" };
+type Action = "execute" | "estimate" | "analyze" | "script";
+type ScriptScope = { kind: "document" } | { kind: "current"; cursor_byte: number }
+  | { kind: "selection"; start_byte: number; end_byte: number };
+type Statement = { sql: string; database: string | null; scope: "문장" | "선택 영역" | "전체 문서" | "현재 문장";
+  script?: { scope: ScriptScope; autocommit: boolean; confirmation: string } };
 type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValue | null)[][];
   more_rows: boolean; more_columns: boolean; elapsed_ms: number };
 
 const number = new Intl.NumberFormat("ko-KR");
 const byteLimit = 128 * 1024;
+const encoder = new TextEncoder();
 
-export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }: {
+export function MysqlSqlWorkspace({ id, database, environment, text, onTextChange, onExport }: {
   id: string;
   database: string | null;
+  environment: string;
   text: string;
   onTextChange: (text: string) => void;
   onExport: (source: MysqlExportTarget) => void;
@@ -33,6 +39,10 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
   const [plan, setPlan] = useState<MysqlPlan | null>(null);
   const [view, setView] = useState<"data" | "plan">("data");
   const [analysisTarget, setAnalysisTarget] = useState<Statement | null>(null);
+  const [scriptMode, setScriptMode] = useState(false);
+  const [autocommit, setAutocommit] = useState(true);
+  const [scriptConfirmation, setScriptConfirmation] = useState<{ statement: Statement; text: string } | null>(null);
+  const [scriptResult, setScriptResult] = useState<MysqlScriptOutcome | null>(null);
   const [error, setError] = useState("");
   const mounted = useRef(false);
   const pending = useRef(false);
@@ -60,11 +70,31 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
     else void prepareRequest(statement, action);
   }
 
+  function prepareScript(kind: ScriptScope["kind"]) {
+    const field = editor.current;
+    if (!field || pending.current || draft || scriptConfirmation || !field.value.trim()) return;
+    const { value, selectionStart, selectionEnd, selectionDirection } = field;
+    const position = (chars: number) => encoder.encode(value.slice(0, chars)).length;
+    let scope: ScriptScope = { kind: "document" };
+    if (kind === "selection") {
+      if (selectionStart === selectionEnd) return;
+      scope = { kind, start_byte: position(selectionStart), end_byte: position(selectionEnd) };
+    } else if (kind === "current") {
+      scope = { kind, cursor_byte: position(selectionDirection === "backward" ? selectionStart : selectionEnd) };
+    }
+    const statement: Statement = { sql: value, database, scope: kind === "document" ? "전체 문서" : kind === "current" ? "현재 문장" : "선택 영역",
+      script: { scope, autocommit, confirmation: "" } };
+    if (environment === "PROD") setScriptConfirmation({ statement, text: "" });
+    else void prepareRequest(statement, "script");
+  }
+
   async function prepareRequest(statement: Statement, action: Action) {
     if (pending.current) return;
     pending.current = true; setBusy(true); setError("");
     try {
-      const count = await invoke<number>("mysql_sql_parameters", { id, sql: statement.sql, selectOnly: action !== "execute" });
+      const count = statement.script
+        ? await invoke<number>("mysql_script_parameters", { id, sql: statement.sql, scope: statement.script.scope })
+        : await invoke<number>("mysql_sql_parameters", { id, sql: statement.sql, selectOnly: action !== "execute" });
       if (!mounted.current) return;
       if (count) setDraft({ statement, action, parameters: Array.from({ length: count }, () => ({ kind: "text", value: "", masked: false })) });
       else await execute(statement, [], action);
@@ -77,7 +107,13 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
     active.current = requestId; setRunning(requestId);
     const args = { id, requestId, database: statement.database, sql: statement.sql, parameters: bindings(values) };
     try {
-      if (action === "execute") {
+      if (action === "script" && statement.script) {
+        setScriptResult(null);
+        const outcome = await invoke<MysqlScriptOutcome>("run_mysql_script", { id, requestId, input: {
+          ...statement.script, sql: statement.sql, database: statement.database, parameters: args.parameters,
+        } });
+        if (mounted.current) setScriptResult(outcome);
+      } else if (action === "execute") {
         const data = await invoke<Result>("run_mysql_sql", args);
         if (mounted.current) {
           setResult({ data, statement, parameterFields: values.map(({ kind, masked }) => ({ kind, masked })) });
@@ -127,12 +163,27 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
 
   return <section className="results-card mysql-sql" aria-label="MySQL SQL 편집기">
     <div className="panel-heading"><h2>SQL 편집기</h2><span>{database ?? "기본 DB 선택 안 됨"}</span></div>
+    <div className="mysql-sql-actions" role="group" aria-label="MySQL 실행 방식">
+      <button type="button" className="secondary small" disabled={busy || !!draft} aria-pressed={!scriptMode}
+        onClick={() => { setScriptMode(false); setError(""); }}>읽기 전용 조회</button>
+      <button type="button" className="secondary small" disabled={busy || !!draft} aria-pressed={scriptMode}
+        onClick={() => { setScriptMode(true); setError(""); }}>SQL 스크립트</button>
+    </div>
     <div className="mysql-sql-actions">
+      {scriptMode ? <>
+        <button type="button" className="primary small" disabled={busy || !!draft || !text.trim()} onClick={() => prepareScript("document")}>
+          <Play size={14} aria-hidden /> 전체 실행</button>
+        <button type="button" className="secondary small" disabled={busy || !!draft || !text.trim()} onClick={() => prepareScript("current")}>현재 문장 실행</button>
+        <button type="button" className="secondary small" disabled={busy || !!draft || !hasSelection} onClick={() => prepareScript("selection")}>선택 실행</button>
+        <label className="mysql-mask"><input type="checkbox" checked={autocommit} disabled={busy || !!draft}
+          onChange={event => setAutocommit(event.target.checked)} /> 자동 커밋</label>
+      </> : <>
       <button type="button" className="primary small" disabled={busy || !!draft || !text.trim()} onClick={() => void prepare(false)}>
         <Play size={14} aria-hidden /> 문장 실행</button>
       <button type="button" className="secondary small" disabled={busy || !!draft || !hasSelection} onClick={() => void prepare(true)}>선택 실행</button>
       <button type="button" className="secondary small" disabled={busy || !!draft || !text.trim()} onClick={() => prepare(true, "estimate")}>실행 계획</button>
       <button type="button" className="secondary small" disabled={busy || !!draft || !text.trim()} onClick={() => prepare(true, "analyze")}>실행 분석</button>
+      </>}
       {running && <button type="button" className="secondary small" disabled={cancelPending} onClick={() => void cancel(running)}>
         <Square size={14} aria-hidden /> 실행 중단</button>}
       {busy && <span role="status">{cancelPending ? "중단 요청 중…" : running ? "실행 중…" : "문장 확인 중…"}</span>}
@@ -142,9 +193,13 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) {
-          event.preventDefault(); void prepare(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd);
+          event.preventDefault();
+          const selected = event.currentTarget.selectionStart !== event.currentTarget.selectionEnd;
+          if (scriptMode) prepareScript(selected ? "selection" : "current");
+          else prepare(selected);
         }
-      }} footer={<span>Ctrl + Enter · 한 번에 한 문장</span>} />
+      }} footer={<span>{scriptMode ? "Ctrl + Enter · 현재 문장 또는 선택 실행" : "Ctrl + Enter · 한 번에 한 문장"}</span>} />
+    {scriptMode && <p className="form-note mysql-table-note">스크립트가 끝나면 열린 트랜잭션을 롤백합니다. 일부 DDL은 자동 커밋 설정과 관계없이 커밋됩니다. 프로시저 본문은 <code>DELIMITER</code>로 구분하세요.</p>}
     {draft && <form className="mysql-sql-parameters" onSubmit={event => void submit(event)}>
       <h3>{draft.action === "export" ? "내보내기 매개변수 다시 입력"
         : draft.action === "estimate" ? "실행 계획 매개변수" : draft.action === "analyze" ? "실행 분석 매개변수" : "SQL 매개변수"}</h3>
@@ -179,13 +234,31 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
         </div>
       </form>
     </Dialog>}
+    {scriptConfirmation && <Dialog title="운영 스크립트 실행" busy={false} onClose={() => setScriptConfirmation(null)}>
+      <form onSubmit={event => {
+        event.preventDefault();
+        const { statement, text } = scriptConfirmation;
+        if (text !== "PROD" || !statement.script) return;
+        setScriptConfirmation(null);
+        void prepareRequest({ ...statement, script: { ...statement.script, confirmation: text } }, "script");
+      }}>
+        <p className="confirm-copy">실행 범위는 {scriptConfirmation.statement.scope}입니다. 실행하면 운영 데이터나 구조가 변경될 수 있습니다.</p>
+        <label className="field">운영 환경 확인<input autoFocus value={scriptConfirmation.text} placeholder="PROD" autoComplete="off"
+          onChange={event => setScriptConfirmation({ ...scriptConfirmation, text: event.target.value })} /></label>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" onClick={() => setScriptConfirmation(null)}>취소</button>
+          <button type="submit" className="primary" disabled={scriptConfirmation.text !== "PROD"}>계속</button>
+        </div>
+      </form>
+    </Dialog>}
     {error && <p className="error-banner" role="alert">{error}</p>}
-    {result && plan && <div className="mysql-sql-actions" role="group" aria-label="MySQL 결과 보기">
+    {scriptMode && scriptResult && <MysqlScriptResults outcome={scriptResult} />}
+    {!scriptMode && result && plan && <div className="mysql-sql-actions" role="group" aria-label="MySQL 결과 보기">
       <button type="button" className="secondary small" aria-pressed={view === "data"} onClick={() => setView("data")}>데이터 결과</button>
       <button type="button" className="secondary small" aria-pressed={view === "plan"} onClick={() => setView("plan")}>계획 결과</button>
     </div>}
-    {view === "plan" && plan && <MysqlQueryPlan plan={plan} />}
-    {view === "data" && result && <section aria-label="MySQL 실행 결과">
+    {!scriptMode && view === "plan" && plan && <MysqlQueryPlan plan={plan} />}
+    {!scriptMode && view === "data" && result && <section aria-label="MySQL 실행 결과">
       <div className="panel-heading"><h3>실행 결과</h3><span>{result.statement.scope} · {result.statement.database ?? "기본 DB 선택 안 됨"}</span></div>
       <p className="form-note mysql-table-note" role="status">{number.format(result.data.rows.length)}행{result.data.more_rows && " 표시 · 추가 행 있음"}
         {result.data.more_columns && " · 앞 128개 열"} · {number.format(result.data.elapsed_ms)} ms</p>

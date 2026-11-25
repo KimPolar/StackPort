@@ -2245,6 +2245,8 @@ const auditOperationNames: Record<string, string> = {
   "oracle.sql.execute.timeout": "Oracle SQL 실행 시간 초과",
   "snowflake.sql.execute": "Snowflake SQL 실행", "snowflake.sql.execute.cancel": "Snowflake SQL 실행 중단",
   "snowflake.sql.execute.timeout": "Snowflake SQL 실행 시간 초과",
+  "mysql.sql.script": "MySQL 스크립트 실행", "mysql.sql.script.cancel": "MySQL 스크립트 실행 중단",
+  "mysql.sql.script.timeout": "MySQL 스크립트 실행 시간 초과",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
   "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",
@@ -2299,7 +2301,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
     <div className="audit-card" aria-busy={loading}>
       {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => {
         const cancelled = event.operation === "sql_server.sql.execute.cancel" || event.operation === "oracle.sql.execute.cancel" ||
-          event.operation === "snowflake.sql.execute.cancel" ||
+          event.operation === "snowflake.sql.execute.cancel" || event.operation === "mysql.sql.script.cancel" ||
           (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
         const outcome = cancelled ? "cancelled" : event.outcome;
         return <li key={event.id}>
