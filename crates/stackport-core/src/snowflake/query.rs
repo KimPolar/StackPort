@@ -1,3 +1,4 @@
+mod parameters;
 mod script;
 
 use super::{
@@ -8,6 +9,7 @@ use super::{
     Manager, Session,
 };
 use crate::{insert_audit, AuditRecord, Result};
+use parameters::{Bindings, ParameterInput};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, time::Duration};
@@ -28,9 +30,33 @@ const STATE_ERROR: &str = "Snowflake SQL 실행 상태를 읽을 수 없습니�
 
 #[derive(Deserialize)]
 pub struct QueryInput {
+    #[serde(flatten)]
+    source: QuerySource,
+    #[serde(default)]
+    parameters: Vec<ParameterInput>,
+}
+
+#[derive(Deserialize)]
+pub struct QuerySource {
     sql: String,
     first_line: u32,
     cursor_byte: Option<usize>,
+}
+
+impl QuerySource {
+    pub fn parameter_count(&self) -> Result<usize> {
+        parameters::parameter_count(&self.statements()?)
+    }
+
+    fn statements(&self) -> Result<Vec<script::Statement<'_>>> {
+        if self.sql.len() > SQL_LIMIT
+            || self.sql.contains('\0')
+            || !(1..=1_000_000).contains(&self.first_line)
+        {
+            return Err("Snowflake SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
+        }
+        script::split(&self.sql, self.first_line, self.cursor_byte)
+    }
 }
 
 #[derive(Serialize)]
@@ -128,13 +154,8 @@ impl Manager {
         input: QueryInput,
     ) -> Result<QueryOutcome> {
         let request_id = query_id(request_id)?;
-        if input.sql.len() > SQL_LIMIT
-            || input.sql.contains('\0')
-            || !(1..=1_000_000).contains(&input.first_line)
-        {
-            return Err("Snowflake SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
-        }
-        let statements = script::split(&input.sql, input.first_line, input.cursor_byte)?;
+        let statements = input.source.statements()?;
+        let bindings = Bindings::new(&statements, &input.parameters)?;
         let session = self.session(id)?;
         let _permit = session.operation()?;
         let stop = session.api.operation_token();
@@ -157,6 +178,7 @@ impl Manager {
             &session.api,
             request_id,
             &statements,
+            &bindings,
             &stop,
             start + DEADLINE,
         )
@@ -205,6 +227,7 @@ async fn execute(
     api: &Api,
     request_id: Uuid,
     statements: &[script::Statement<'_>],
+    bindings: &Bindings<'_>,
     stop: &CancellationToken,
     deadline: Instant,
 ) -> QueryOutcome {
@@ -233,6 +256,7 @@ async fn execute(
                 request_id,
                 statements.len(),
                 MAX_ROWS + 1,
+                &bindings.values,
                 &mut pending,
             )
             .await?;
@@ -252,12 +276,15 @@ async fn execute(
             if matches!(outcome.status, Status::Cancelled | Status::TimedOut) {
                 outcome.server_interrupted = Some(true);
             }
-            outcome.error = Some(server_error(problem, statements, handle));
+            outcome.error = Some(server_error(problem, statements, handle, bindings.masked));
             return Ok(());
         }
         let response = successful(response).await?;
         outcome.server_completed = true;
-        let first = read_payload(response).await?;
+        let mut first = read_payload(response).await?;
+        if bindings.masked {
+            first.message = None;
+        }
         let handle = finish_handle(&mut pending, first.statement_handle)?;
         let mut budget = PREVIEW_BYTES;
         if statements.len() == 1 {
@@ -325,6 +352,7 @@ fn server_error(
     payload: Payload,
     statements: &[script::Statement<'_>],
     query_id: Option<Uuid>,
+    masked: bool,
 ) -> QueryError {
     QueryError {
         line: (statements.len() == 1).then_some(statements[0].line),
@@ -334,12 +362,16 @@ fn server_error(
         sql_state: payload.sql_state.filter(|state| {
             state.len() == 5 && state.bytes().all(|byte| byte.is_ascii_alphanumeric())
         }),
-        message: payload
-            .message
-            .as_deref()
-            .map(limited_text)
-            .filter(|message| !message.is_empty())
-            .unwrap_or_else(|| "Snowflake가 SQL 실행을 완료하지 못했습니다.".into()),
+        message: if masked {
+            "숨긴 값이 있어 Snowflake 오류 상세를 표시하지 않습니다.".into()
+        } else {
+            payload
+                .message
+                .as_deref()
+                .map(limited_text)
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "Snowflake가 SQL 실행을 완료하지 못했습니다.".into())
+        },
         query_id,
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::snowflake::QueryInput;
+use crate::snowflake::{QueryInput, QuerySource};
 
 const START: &str = "00000000-0000-4000-8000-000000000001";
 const UPDATE: &str = "00000000-0000-4000-8000-000000000002";
@@ -159,7 +159,7 @@ async fn retains_error_location_and_snowflake_code_for_current_statement() {
         let (_, body, stream) = fixture.request("OAUTH").await;
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["statement"], "SELECT missing");
-        assert_eq!(body["parameters"]["MULTI_STATEMENT_COUNT"], "1");
+        assert!(body["parameters"].get("MULTI_STATEMENT_COUNT").is_none());
         reply(
             stream,
             "422 Unprocessable Entity",
@@ -187,6 +187,173 @@ async fn retains_error_location_and_snowflake_code_for_current_statement() {
     assert_eq!(value["error"]["sql_state"], "42000");
     assert_eq!(value["error"]["query_id"], HANDLE);
     server.await.unwrap();
+}
+
+fn with_bindings(
+    sql: &str,
+    first_line: u32,
+    cursor: Option<usize>,
+    parameters: Value,
+) -> QueryInput {
+    serde_json::from_value(json!({ "sql": sql, "first_line": first_line, "cursor_byte": cursor, "parameters": parameters })).unwrap()
+}
+
+#[tokio::test]
+async fn sends_ordered_typed_bindings_for_the_current_statement() {
+    let (fixture, api) = fixture(Auth::Pat, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _) = test_session(dir.path(), api, "sql", "DEMO");
+    let exact = "-12345678901234567890123456789012.345678";
+    let text = "한글 '?'; 🚀";
+    let statement = "SELECT '?' AS LITERAL, ?, ?, ?, ?, ?, ?, ?";
+    let sql = format!("SELECT '앞 문장';\n{statement};\nSELECT 99;");
+    let cursor = sql.find("AS LITERAL");
+    let source: QuerySource =
+        serde_json::from_value(json!({"sql": sql, "first_line": 6, "cursor_byte": cursor}))
+            .unwrap();
+    assert_eq!(source.parameter_count().unwrap(), 7);
+    let server = tokio::spawn(async move {
+        let (_, body, stream) = fixture.request("PROGRAMMATIC_ACCESS_TOKEN").await;
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["statement"], statement);
+        assert!(body["parameters"].get("MULTI_STATEMENT_COUNT").is_none());
+        assert_eq!(
+            body["bindings"],
+            json!({
+                "1": {"type": "TEXT", "value": text},
+                "2": {"type": "FIXED", "value": "9007199254740993"},
+                "3": {"type": "DECFLOAT", "value": exact},
+                "4": {"type": "REAL", "value": "1.25e-3"},
+                "5": {"type": "BOOLEAN", "value": "true"},
+                "6": {"type": "BINARY", "value": "00fF"},
+                "7": {"type": "ANY", "value": null},
+            })
+        );
+        reply(stream, "200 OK", "", &encoded(json!({
+            "statementHandle": HANDLE, "message": format!("Warning about {text}"),
+            "resultSetMetaData": {"numRows": 1, "partitionInfo": [{"rowCount": 1}], "rowType": [{"name": "EXACT", "type": "decfloat"}]},
+            "data": [[exact]]
+        }))).await;
+    });
+    let args = json!([
+        {"kind": "text", "value": text, "masked": true}, {"kind": "integer", "value": "9007199254740993"},
+        {"kind": "decimal", "value": exact}, {"kind": "real", "value": "1.25e-3"},
+        {"kind": "boolean", "value": "1"}, {"kind": "blob", "value": "00fF"}, {"kind": "null"},
+    ]);
+    let response = manager
+        .run_query(
+            "sql",
+            &Uuid::new_v4().to_string(),
+            with_bindings(&sql, 6, cursor, args),
+        )
+        .await
+        .unwrap();
+    let value = serde_json::to_value(response).unwrap();
+    assert_eq!(value["status"], "succeeded");
+    assert_eq!(value["statements"][0]["line"], 7);
+    assert!(value["statements"][0]["warning"].is_null());
+    assert_eq!(value["statements"][0]["data"]["rows"][0][0]["text"], exact);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn suppresses_sensitive_server_error_details_and_audit_values() {
+    let (fixture, api) = fixture(Auth::Oauth, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _) = test_session(dir.path(), api, "sql", "DEMO");
+    let secret = "masked-value-for-test";
+    let server = tokio::spawn(async move {
+        let (_, _, stream) = fixture.request("OAUTH").await;
+        reply(stream, "422 Unprocessable Entity", "", &encoded(json!({
+            "statementHandle": HANDLE, "code": "100037", "sqlState": "22018", "message": format!("Could not convert {secret}")
+        }))).await;
+    });
+    let request_id = Uuid::new_v4().to_string();
+    let response = manager
+        .run_query(
+            "sql",
+            &request_id,
+            with_bindings(
+                "SELECT TO_NUMBER(?)",
+                3,
+                None,
+                json!([{"kind": "text", "value": secret, "masked": true}]),
+            ),
+        )
+        .await
+        .unwrap();
+    let value = serde_json::to_value(response).unwrap();
+    assert_eq!(value["status"], "failed");
+    assert_eq!(value["error"]["line"], 3);
+    assert_eq!(value["error"]["code"], "100037");
+    assert_eq!(value["error"]["sql_state"], "22018");
+    assert_eq!(value["error"]["query_id"], HANDLE);
+    assert!(value["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("숨긴 값"));
+    assert!(!value.to_string().contains(secret));
+    let audit = serde_json::to_value(manager.store.list_audit_events(None).unwrap()).unwrap();
+    let event = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["correlation_id"] == request_id)
+        .unwrap();
+    assert_eq!(event["outcome"], "failed");
+    assert!(!event.to_string().contains(secret));
+    assert!(!event.to_string().contains("SELECT"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn rejects_mismatched_invalid_and_multi_statement_bindings_before_posting() {
+    let (fixture, api) = fixture(Auth::Pat, true).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _) = test_session(dir.path(), api, "sql", "DEMO");
+    for (sql, parameter, reason) in [
+        ("SELECT ?; SELECT 1", json!({"kind": "null"}), "문장 하나"),
+        ("SELECT ?, ?", json!({"kind": "null"}), "? 개수"),
+        (
+            "SELECT ?",
+            json!({"kind": "integer", "value": "9223372036854775808", "masked": true}),
+            "64비트",
+        ),
+        (
+            "SELECT ?",
+            json!({"kind": "decimal", "value": "123456789012345678901234567890123456789"}),
+            "38자리",
+        ),
+        (
+            "SELECT ?",
+            json!({"kind": "blob", "value": "00f"}),
+            "16진수",
+        ),
+        (
+            "SELECT ?",
+            json!({"kind": "text", "value": "한".repeat(6000)}),
+            "16 KiB",
+        ),
+    ] {
+        let result = manager
+            .run_query(
+                "sql",
+                &Uuid::new_v4().to_string(),
+                with_bindings(sql, 1, None, json!([parameter])),
+            )
+            .await;
+        let Err(message) = result else {
+            panic!("invalid binding succeeded");
+        };
+        assert!(message.contains(reason), "{message}");
+        assert!(!message.contains("9223372036854775808"));
+    }
+    assert!(tokio::time::timeout(
+        Duration::from_millis(100),
+        fixture.request("PROGRAMMATIC_ACCESS_TOKEN")
+    )
+    .await
+    .is_err());
 }
 
 #[tokio::test]

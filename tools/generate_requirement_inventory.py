@@ -123,7 +123,7 @@ PARTIAL = {
     "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회의 문서·선택·현재 문장, MySQL 계열 문서·선택 단일 실행, SQL Server 전체·현재 배치·선택 실행과 GO 경계·반복 처리, Oracle SQL·PL/SQL 경계와 Snowflake 스크립팅 인용 경계를 처리하는 전체·현재·선택 실행",
     "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회 결과·시간·오류 위치, MySQL 계열 결과 타입·시간·미리보기 한도와 마지막 SQL 내보내기, SQL Server 복수 결과 집합·시간·오류 위치, Oracle 문장별 결과·오류·경고·DML 영향 행 수, Snowflake 문장별 결과·쿼리 ID·SQLSTATE와 DML 통계",
     "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL 검증 TLS 경로의 서버 취소·중단 확인·시간 제한, MySQL 계열 실행 연결 중단·시간 한도·서버 상태 미확인 표시, SQL Server 타임아웃·중단 응답 확인, Oracle 호출 사이 중단·소켓 시간 제한과 별도 실행 연결 종료로 트랜잭션 정리, Snowflake 비동기 실행 핸들 취소와 결과 수신 중단 구분",
-    "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, SQL Server 번호별 타입 바인딩, Oracle 범위별 이름 감지와 타입 바인딩, SQL Server·Oracle 38자리 소수와 값·오류 상세 숨기기",
+    "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, SQL Server 번호별 타입 바인딩, Oracle 범위별 이름 감지와 타입 바인딩, Snowflake 단일 문장 위치별 타입 바인딩, SQL Server·Oracle·Snowflake 38자리 소수와 값·오류 상세 숨기기. Snowflake 실제 계정 검증 대기",
     "SP-SQ-011": "SQL Server·Oracle 스크립트에서 COMMIT·ROLLBACK 실행과 종료 시 트랜잭션 정리, Snowflake 스크립트의 단일 SQL API 요청에서 명시적 트랜잭션 실행",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
@@ -519,6 +519,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id == "SP-SQ-010":
                 evidence += "; crates/stackport-core/src/sql_server/query/parameters.rs; src/SqlParameterFields.tsx; tests/sql-server-smoke.cjs"
                 evidence += "; crates/stackport-core/src/oracle/query/parameters.rs; src/RelationalScriptWorkspace.tsx; tests/oracle-smoke.cjs"
+                evidence += "; crates/stackport-core/src/snowflake/query/parameters.rs; crates/stackport-core/src/snowflake/api/tests/sql_editor.rs; tests/snowflake-editor-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/edit.rs; src/RedisEditDialog.tsx"
                 if requirement_id in {"SP-SEC-011", "SP-SEC-015"}:

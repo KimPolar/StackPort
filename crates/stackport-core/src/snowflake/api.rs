@@ -4,13 +4,31 @@ use reqwest::{
     header::{HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Client, Method, RequestBuilder, Response, StatusCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Serialize)]
+pub(super) struct Binding<'a> {
+    #[serde(rename = "type")]
+    pub(super) data_type: &'static str,
+    pub(super) value: Option<&'a str>,
+}
+
+fn set_bindings<'a>(body: &mut Value, values: impl IntoIterator<Item = Binding<'a>>) {
+    let values = values
+        .into_iter()
+        .enumerate()
+        .map(|(index, binding)| ((index + 1).to_string(), json!(binding)))
+        .collect::<Map<_, _>>();
+    if !values.is_empty() {
+        body["bindings"] = Value::Object(values);
+    }
+}
 use zeroize::Zeroizing;
 
 #[cfg(test)]
@@ -199,19 +217,13 @@ impl Api {
                 "rows_per_resultset": row_limit
             }
         });
-        if !bindings.is_empty() {
-            let values: Map<String, Value> = bindings
-                .iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    (
-                        (index + 1).to_string(),
-                        json!({ "type": "TEXT", "value": value }),
-                    )
-                })
-                .collect();
-            body["bindings"] = Value::Object(values);
-        }
+        set_bindings(
+            &mut body,
+            bindings.iter().map(|value| Binding {
+                data_type: "TEXT",
+                value: Some(value),
+            }),
+        );
 
         let request_timeout = if row_limit == 0 {
             Duration::from_secs(statement_seconds)
@@ -230,14 +242,14 @@ impl Api {
         request_id: Uuid,
         count: usize,
         row_limit: usize,
+        bindings: &[Binding<'_>],
         pending: &mut Option<Uuid>,
     ) -> Result<Response> {
-        let body = json!({
+        let mut body = json!({
             "statement": sql,
             "database": self.settings.database,
             "timeout": STATEMENT_SECONDS,
             "parameters": {
-                "MULTI_STATEMENT_COUNT": count.to_string(),
                 "rows_per_resultset": row_limit,
                 "binary_output_format": "HEX",
                 "date_output_format": "YYYY-MM-DD",
@@ -247,6 +259,10 @@ impl Api {
                 "timestamp_tz_output_format": "YYYY-MM-DD\"T\"HH24:MI:SS.FF9TZH:TZM"
             }
         });
+        if count > 1 {
+            body["parameters"]["MULTI_STATEMENT_COUNT"] = json!(count.to_string());
+        }
+        set_bindings(&mut body, bindings.iter().copied());
         self.post(body, request_id, Duration::from_secs(12), pending)
             .await
     }

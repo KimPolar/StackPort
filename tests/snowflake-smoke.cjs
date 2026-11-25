@@ -61,7 +61,8 @@ async function verify(page) {
     const mode = workspace.getByRole('group', { name: 'Snowflake 작업 보기' });
     await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
     const editor = workspace.getByRole('region', { name: 'Snowflake SQL 편집기', exact: true });
-    await editor.getByRole('textbox', { name: 'Snowflake SQL 문장', exact: true }).fill(
+    const sqlText = editor.getByRole('textbox', { name: 'Snowflake SQL 문장', exact: true });
+    await sqlText.fill(
       "SELECT 12345678901234567890123456789012345678 AS VALUE;\nSELECT '다음 결과' AS VALUE;",
     );
     await editor.getByRole('button', { name: '전체 실행', exact: true }).click();
@@ -69,6 +70,19 @@ async function verify(page) {
     await grid.getByText('12345678901234567890123456789012345678', { exact: true }).waitFor();
     await editor.getByRole('combobox', { name: '문장 결과' }).selectOption('1');
     await grid.getByText('다음 결과', { exact: true }).waitFor();
+
+    const exact = '12345678901234567890123456789012.345678';
+    await sqlText.fill('SELECT ?::VARCHAR AS NOTE, ?::NUMBER(38,6) AS EXACT, ?::VARCHAR IS NULL AS IS_MISSING');
+    await editor.getByRole('button', { name: '매개변수 실행', exact: true }).click();
+    const binding = page.getByRole('dialog', { name: 'Snowflake SQL 바인드 변수', exact: true });
+    await binding.getByLabel('?1 값', { exact: true }).fill("한글 '?' 🚀");
+    await binding.getByLabel('?2 형식', { exact: true }).selectOption('decimal');
+    await binding.getByLabel('?2 값', { exact: true }).fill(exact);
+    await binding.getByLabel('?3 형식', { exact: true }).selectOption('null');
+    await binding.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+    await grid.getByText("한글 '?' 🚀", { exact: true }).waitFor();
+    await grid.getByText(exact, { exact: true }).waitFor();
+    await grid.getByText('true', { exact: true }).waitFor();
   } finally {
     await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
   }

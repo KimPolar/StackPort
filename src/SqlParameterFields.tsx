@@ -6,18 +6,19 @@ export type SqlParameterValue =
   | { kind: "text" | "integer" | "real" | "blob"; value: string };
 type SqliteParameterKind = SqlParameterValue["kind"];
 type OracleParameterKind = SqliteParameterKind | "decimal";
-type SqlServerParameterKind = OracleParameterKind | "boolean";
-type Field<Kind extends SqlServerParameterKind> = { kind: Kind; value: string; masked: boolean };
-type MaskedParameterValue<Kind extends SqlServerParameterKind> =
+type TypedParameterKind = OracleParameterKind | "boolean";
+type Field<Kind extends TypedParameterKind> = { kind: Kind; value: string; masked: boolean };
+type MaskedParameterValue<Kind extends TypedParameterKind> =
   | { kind: "null"; masked: false }
   | { kind: Exclude<Kind, "null">; value: string; masked: boolean };
-export type SqlServerParameterValue = MaskedParameterValue<SqlServerParameterKind>;
+export type SqlServerParameterValue = MaskedParameterValue<TypedParameterKind>;
 export type OracleParameterValue = MaskedParameterValue<OracleParameterKind>;
+export type SnowflakeParameterValue = MaskedParameterValue<TypedParameterKind>;
 
 const sqliteOptions: readonly (readonly [SqliteParameterKind, string])[] = [
   ["text", "텍스트"], ["integer", "정수"], ["real", "실수"], ["blob", "BLOB (16진수)"], ["null", "NULL"],
 ];
-const sqlServerOptions: readonly (readonly [SqlServerParameterKind, string])[] = [
+const sqlServerOptions: readonly (readonly [TypedParameterKind, string])[] = [
   ["text", "텍스트 (nvarchar)"], ["integer", "정수 (bigint)"], ["decimal", "소수 (decimal)"],
   ["real", "실수 (float)"], ["boolean", "참·거짓 (bit)"], ["blob", "바이너리 (16진수)"], ["null", "NULL"],
 ];
@@ -25,14 +26,18 @@ const oracleOptions: readonly (readonly [OracleParameterKind, string])[] = [
   ["text", "텍스트 (VARCHAR2)"], ["integer", "64비트 정수 (NUMBER)"], ["decimal", "십진수 (NUMBER)"],
   ["real", "실수 (BINARY_DOUBLE)"], ["blob", "RAW (16진수)"], ["null", "NULL"],
 ];
+const snowflakeOptions: readonly (readonly [TypedParameterKind, string])[] = [
+  ["text", "텍스트 (VARCHAR)"], ["integer", "64비트 정수 (NUMBER)"], ["decimal", "십진수 (DECFLOAT)"],
+  ["real", "실수 (FLOAT)"], ["boolean", "참·거짓 (BOOLEAN)"], ["blob", "BINARY (16진수)"], ["null", "NULL"],
+];
 const encoder = new TextEncoder();
 
-function maskedValues<Kind extends SqlServerParameterKind>(fields: Field<Kind>[]): MaskedParameterValue<Kind>[] {
+function maskedValues<Kind extends TypedParameterKind>(fields: Field<Kind>[]): MaskedParameterValue<Kind>[] {
   return fields.map(({ kind, value, masked }) => kind === "null"
     ? { kind: "null", masked: false } : { kind: kind as Exclude<Kind, "null">, value, masked });
 }
 
-function invalidValue(field: Field<SqlServerParameterKind>, allByteLimited: boolean): string | undefined {
+function invalidValue(field: Field<TypedParameterKind>, allByteLimited: boolean): string | undefined {
   if (field.kind === "null") return;
   if ((allByteLimited || field.kind === "text") && encoder.encode(field.value).length > 16384) {
     return "값은 UTF-8 기준 16 KiB까지 입력할 수 있습니다.";
@@ -88,7 +93,18 @@ export function OracleParameterFields({ parameters, submit, dismiss }: {
     submit={fields => submit(maskedValues(fields))} />;
 }
 
-function ParameterForm<Kind extends SqlServerParameterKind>({ parameters, options, note, allByteLimited = false, submit, dismiss }: {
+export function SnowflakeParameterFields({ count, submit, dismiss }: {
+  count: number;
+  submit: (values: SnowflakeParameterValue[]) => void;
+  dismiss: () => void;
+}) {
+  const parameters = Array.from({ length: count }, (_, index) => ({ index: index + 1, name: null }));
+  return <ParameterForm options={snowflakeOptions} parameters={parameters} dismiss={dismiss} allByteLimited
+    note="문장에 ?가 나온 순서대로 값을 전달합니다. 숨긴 값이 있으면 서버 오류 상세와 경고를 가립니다."
+    submit={fields => submit(maskedValues(fields))} />;
+}
+
+function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, note, allByteLimited = false, submit, dismiss }: {
   parameters: SqlParameter[];
   options: readonly (readonly [Kind, string])[];
   note: string;

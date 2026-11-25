@@ -6,6 +6,7 @@ const MAX_STATEMENTS: usize = 100;
 pub(super) struct Statement<'a> {
     pub sql: &'a str,
     pub line: u32,
+    pub placeholders: usize,
     end: usize,
 }
 
@@ -17,6 +18,52 @@ enum Quoted {
     Comment(usize),
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Parentheses {
+    #[default]
+    Other,
+    MatchRecognize,
+    Pattern,
+}
+
+#[derive(Default)]
+struct BindMarkers {
+    count: usize,
+    parentheses: Vec<Parentheses>,
+    next_group: Parentheses,
+    pattern_groups: usize,
+}
+
+impl BindMarkers {
+    fn word(&mut self, word: &[u8]) {
+        self.next_group = if word.eq_ignore_ascii_case(b"MATCH_RECOGNIZE") {
+            Parentheses::MatchRecognize
+        } else if word.eq_ignore_ascii_case(b"PATTERN")
+            && self.parentheses.last() == Some(&Parentheses::MatchRecognize)
+        {
+            Parentheses::Pattern
+        } else {
+            Parentheses::Other
+        };
+    }
+
+    fn punctuation(&mut self, token: u8) {
+        let next = std::mem::take(&mut self.next_group);
+        match token {
+            b'(' => {
+                self.pattern_groups += usize::from(next == Parentheses::Pattern);
+                self.parentheses.push(next);
+            }
+            b')' => {
+                self.pattern_groups -=
+                    usize::from(self.parentheses.pop() == Some(Parentheses::Pattern))
+            }
+            b'?' if self.pattern_groups == 0 => self.count += 1,
+            _ => {}
+        }
+    }
+}
+
 pub(super) fn split(
     source: &str,
     first_line: u32,
@@ -26,6 +73,7 @@ pub(super) fn split(
     let mut statements = Vec::new();
     let mut start = None;
     let mut quote = None;
+    let mut markers = BindMarkers::default();
     let mut line = first_line;
     let mut index = 0;
     while index < bytes.len() {
@@ -78,7 +126,15 @@ pub(super) fn split(
             index += 2;
             continue;
         } else if tail[0] == b';' {
-            finish(source, start.take(), index, index + 1, &mut statements);
+            finish(
+                source,
+                start.take(),
+                index,
+                index + 1,
+                markers.count,
+                &mut statements,
+            );
+            markers = BindMarkers::default();
         } else if !tail[0].is_ascii_whitespace() {
             start.get_or_insert((index, line));
             match tail[0] {
@@ -88,15 +144,34 @@ pub(super) fn split(
                     && (index == 0 || !identifier_byte(bytes[index - 1])) =>
                 {
                     quote = Some(Quoted::Dollar);
+                    markers.punctuation(b'$');
                     index += 2;
+                    continue;
+                }
+                byte if identifier_byte(byte) => {
+                    let width = tail
+                        .iter()
+                        .copied()
+                        .take_while(|byte| identifier_byte(*byte))
+                        .count();
+                    markers.word(&tail[..width]);
+                    index += width;
                     continue;
                 }
                 _ => {}
             }
+            markers.punctuation(tail[0]);
         }
         index += 1;
     }
-    finish(source, start, source.len(), source.len(), &mut statements);
+    finish(
+        source,
+        start,
+        source.len(),
+        source.len(),
+        markers.count,
+        &mut statements,
+    );
     if statements.is_empty() {
         return Err("실행할 Snowflake SQL 문장이 없습니다.".into());
     }
@@ -121,12 +196,14 @@ fn finish<'a>(
     start: Option<(usize, u32)>,
     sql_end: usize,
     end: usize,
+    placeholders: usize,
     statements: &mut Vec<Statement<'a>>,
 ) {
     if let Some((start, line)) = start {
         statements.push(Statement {
             sql: source[start..sql_end].trim_end(),
             line,
+            placeholders,
             end,
         });
     }
@@ -176,5 +253,20 @@ mod tests {
             ["BEGIN TRANSACTION", "INSERT INTO t VALUES (1)", "COMMIT"]
         );
         assert!(split("-- only a comment;", 1, None).is_err());
+    }
+
+    #[test]
+    fn counts_qmarks_outside_quoted_tokens_comments_and_match_patterns() {
+        let source = "SELECT ? AS \"?\", 'it''s?', $$?$$, 'it\\'s?'; -- ?\n\nSELECT ? FROM t MATCH_RECOGNIZE /* ? */ (\n  PATTERN ((A B?) C+?)\n  DEFINE A AS A.price >= ?\n) WHERE sold > ?;";
+        let statements = split(source, 1, None).unwrap();
+        assert_eq!(
+            statements
+                .iter()
+                .map(|part| part.placeholders)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+        let offset = source.find("MATCH_RECOGNIZE").unwrap();
+        assert_eq!(split(source, 1, Some(offset)).unwrap()[0].placeholders, 3);
     }
 }

@@ -1215,6 +1215,11 @@ async fn run_snowflake_query(manager: State<'_, snowflake::Manager>, id: String,
 }
 
 #[tauri::command]
+fn snowflake_query_parameters(input: snowflake::QuerySource) -> Result<usize, String> {
+    input.parameter_count()
+}
+
+#[tauri::command]
 fn cancel_snowflake_query(manager: State<'_, snowflake::Manager>, id: String, request_id: String) -> Result<bool, String> {
     manager.cancel_query(&id, &request_id)
 }
@@ -2576,6 +2581,7 @@ fn main() {
             snowflake_definition,
             snowflake_data,
             run_snowflake_query,
+            snowflake_query_parameters,
             cancel_snowflake_query,
             export_snowflake,
             snowflake_export_progress,

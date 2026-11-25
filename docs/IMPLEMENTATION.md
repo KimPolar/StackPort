@@ -48,9 +48,11 @@ Snowflake 작업 공간은 현재 역할로 볼 수 있는 데이터베이스의
 
 Snowflake **SQL 편집기**는 전체 문서, 현재 문장, 선택 영역을 실행합니다. 세미콜론으로 문장을 나누고 인용 문자열·인용 식별자·주석의 구분 문자를 보존합니다. 익명 Snowflake Scripting 블록은 `EXECUTE IMMEDIATE $$…$$`로 감쌉니다. 한 번에 최대 100개 SQL 문장을 하나의 SQL API 요청에 담으므로 명시적 트랜잭션과 세션 문맥을 그 요청 안에서 이어서 사용할 수 있습니다. [Snowflake 다중 문장 요청](https://docs.snowflake.com/en/developer-guide/sql-api/submitting-multiple-statements)
 
+**매개변수 실행**은 현재 문장이나 선택한 문장의 `?`에 값을 등장 순서대로 연결합니다. Snowflake SQL API는 매개변수가 있는 요청을 한 문장으로 제한합니다. 문자열, 64비트 정수, 최대 38자리 `DECFLOAT`, 실수, 불리언, 16진수 바이너리, `NULL` 값을 요청의 `bindings`에 담습니다. 숨긴 값이 있으면 입력란, 서버 오류 상세, 경고를 가립니다. 쿼리에서 직접 반환한 값은 결과 표에 표시됩니다. SQL과 입력값은 감사 기록에 남기지 않습니다. [Snowflake SQL API의 바인딩](https://docs.snowflake.com/en/developer-guide/sql-api/submitting-requests)
+
 문장별 쿼리 ID·DML 삽입/수정/삭제 통계·서버 오류 코드와 SQLSTATE를 표시합니다. 개별 결과는 필요한 파티션에서 최대 100행·128열을 표시하며, 소수는 서버가 반환한 문자열을 사용합니다. HTTP 응답당 8 MiB와 전체 미리보기 저장 한도를 적용합니다. 중단 시 실행 핸들을 받았으면 SQL API에 취소를 요청하고 서버의 응답을 표시합니다. 서버 실행이 완료된 결과는 수신만 중단합니다. API 실행 제한 시간은 30초이고 앱의 결과 대기 한도는 45초입니다. 쿼리 본문은 실행 감사 기록에서 제외합니다. [Snowflake SQL API 응답과 중단](https://docs.snowflake.com/en/developer-guide/sql-api/reference)
 
-HTTPS 모의 서버로 스크립트 제출, 문장별 결과 파티션과 중단 요청을 검증했고 Windows 앱에서 모의 IPC로 편집기 조작을 확인했습니다. 실제 Snowflake 계정 검증과 SQL 편집기 매개변수 입력은 남아 있습니다.
+HTTPS 모의 서버로 스크립트 제출, 타입별 바인딩 요청, 문장별 결과 파티션과 중단을 검증했고 Windows 앱에서 편집기 조작을 확인했습니다. 실제 Snowflake 계정 검증과 매개변수 세트 저장은 남아 있습니다.
 
 Snowflake의 **결과 내보내기**는 현재 역할·웨어하우스에서 필터와 정렬이 적용된 테이블·뷰·구체화 뷰를 다시 조회합니다. SQL API 파티션을 번호순으로 요청하고 행을 읽는 대로 UTF-8 CSV 또는 버전형 JSON 파일에 기록합니다. 숫자는 SQL API의 문자열 값을 사용하고, 바이너리는 HEX, 공간 데이터는 EWKB의 HEX로 기록합니다. `VARIANT`와 배열·객체 등은 Snowflake의 `TO_JSON` 표기로 저장합니다. SQL `NULL`은 빈 문자열과 구분합니다. [Snowflake SQL API 결과](https://docs.snowflake.com/en/developer-guide/sql-api/handling-responses) · [Snowflake TO_JSON](https://docs.snowflake.com/en/sql-reference/functions/to_json)
 

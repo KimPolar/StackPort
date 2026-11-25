@@ -9,7 +9,7 @@ pub use crate::result_export::{
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Auth, Profile, ProfileSettings};
-pub use query::{QueryInput, QueryOutcome};
+pub use query::{QueryInput, QueryOutcome, QuerySource};
 
 use self::api::Api;
 use crate::{Result, Store};

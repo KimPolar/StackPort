@@ -50,6 +50,16 @@ async function verify(page) {
       if (name === 'run_snowflake_query') {
         if (args.id !== 'snowflake-fixture') throw new Error('Wrong test session');
         const { sql, first_line: line, cursor_byte: cursor } = args.input;
+        if (sql.includes('BIND_TEST')) {
+          const wanted = "SELECT '?', ?::NUMBER(38,6) AS BIND_TEST, ?::VARCHAR";
+          if (sql !== wanted || line !== 2 || cursor !== null) throw new Error('Wrong selected binding scope');
+          const parameters = args.input.parameters;
+          if (JSON.stringify(parameters) !== JSON.stringify([
+            { kind: 'decimal', value: '-12345678901234567890123456789012.345678', masked: true },
+            { kind: 'null', masked: false },
+          ])) throw new Error('Wrong typed Snowflake bindings');
+          return reply({ statements: [plan(parameters[0].value, 2)] });
+        }
         if (sql.includes('WAITING')) return new Promise(resolve => {
           pending = { id: args.requestId, resolve, completed: sql.includes('DOWNLOAD') };
         });
@@ -126,6 +136,28 @@ async function verify(page) {
   await editor.press('Shift+End');
   await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
   await grid.getByText('선택 문장', { exact: true }).waitFor();
+
+  const decimal = '-12345678901234567890123456789012.345678';
+  const bindSql = "SELECT '앞 문장';\nSELECT '?', ?::NUMBER(38,6) AS BIND_TEST, ?::VARCHAR";
+  const bindAction = pane.getByRole('button', { name: '매개변수 실행', exact: true });
+  await editor.fill(bindSql);
+  await editor.press('Control+a');
+  await bindAction.click();
+  await pane.getByRole('alert').filter({ hasText: '문장 하나' }).waitFor();
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await bindAction.click();
+  const form = page.getByRole('dialog', { name: 'Snowflake SQL 바인드 변수', exact: true });
+  await form.getByLabel('?1 형식', { exact: true }).selectOption('decimal');
+  const decimalInput = form.getByLabel('?1 값', { exact: true });
+  await decimalInput.fill(decimal);
+  await form.getByLabel('?1 값 숨기기', { exact: true }).check();
+  assert.equal(await decimalInput.getAttribute('type'), 'password');
+  await form.getByLabel('?2 형식', { exact: true }).selectOption('null');
+  assert.equal(await form.getByRole('group').count(), 2);
+  await form.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await form.waitFor({ state: 'detached' });
+  await grid.getByText(decimal, { exact: true }).waitFor();
 
   await editor.fill("UPDATE demo SET x = 1;");
   await all.click();

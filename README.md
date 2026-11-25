@@ -37,7 +37,7 @@ StackPort는 로컬 우선 원격 접속·데이터베이스 작업 공간을 �
 - Oracle Database의 서비스 이름 또는 SID로 연결. 계정에 공개된 스키마·테이블·뷰·구체화 뷰를 검색하고, NUMBER 정밀도와 문자·바이너리·LOB 미리보기를 확인
 - Oracle **SQL 편집기**에서 이름 있는 변수에 타입과 값을 지정해 SQL 및 PL/SQL을 실행하고 문장별 결과와 영향받은 행 수 확인
 - Snowflake 계정에 PAT 또는 OAuth 액세스 토큰으로 연결. 현재 역할에 공개된 스키마·테이블·뷰를 검색하고 열 구조와 데이터를 읽기 전용으로 확인
-- Snowflake **SQL 편집기**에서 여러 문장을 같은 SQL API 요청으로 실행하고 문장별 결과, 쿼리 ID, DML 통계 확인
+- Snowflake **SQL 편집기**에서 여러 문장을 같은 SQL API 요청으로 실행하고 문장별 결과, 쿼리 ID, DML 통계 확인. 한 문장에서 `?` 매개변수의 타입과 값을 지정해 실행
 - SQL Server·Oracle Database·Snowflake의 데이터 미리보기에서도 서버 필터와 여러 열 정렬을 적용하고, 연결과 객체별로 저장해 다시 사용
 - SQL Server·Oracle Database·Snowflake 객체를 데이터베이스 전체 또는 현재 스키마에서 이름·열 이름·종류로 검색하고 결과에서 데이터나 열 구조 열기
 - SQL Server의 뷰, Oracle·Snowflake의 테이블·뷰·구체화 뷰에서 계정에 공개된 정의 SQL을 열고 복사하거나 새 `.sql` 파일로 저장
