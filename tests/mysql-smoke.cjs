@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
 const { once } = require('node:events');
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
@@ -153,6 +154,7 @@ async function verify(page, server) {
   assert.equal(capped.rows.length, 50);
   assert.equal(capped.more_rows, true);
   await assert.rejects(read('hidden_db', 'hidden_table', true), /권한/);
+  await verifySql(command, id, server.port);
   await command('close_mysql', { id });
   await assert.rejects(command('mysql_databases', { id, search: '', page: 0 }), /연결이 닫혔습니다/);
 
@@ -172,9 +174,92 @@ async function verify(page, server) {
   await grid.getByText('한글', { exact: true }).waitFor();
   await grid.getByText('00ff21', { exact: true }).waitFor();
   await grid.getByText('NULL', { exact: true }).waitFor();
+  await verifySqlEditor(workspace);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifySql(command, id, port) {
+  const run = (sql, parameters = [], requestId = randomUUID()) => command('run_mysql_sql', {
+    id, requestId, database: 'visible_db', sql, parameters,
+  });
+  const count = sql => command('mysql_sql_parameters', { id, sql });
+  const cancel = requestId => command('cancel_mysql_sql', { id, requestId });
+  assert.equal(await count("# ?\n SELECT '?' AS literal, ? AS bound; -- ?"), 1);
+  for (const sql of [
+    'DELETE FROM sample_limit', 'SELECT 1; SELECT 2', 'SELECT 1 INTO @value',
+    'SELECT * FROM sample_limit FOR UPDATE', 'SELECT GET_LOCK(\'fixture\', 0)',
+    'SELECT /*!80000 1 */ 2', 'SELECT /*M! 1 */ 2', 'WITH cte AS (SELECT 1) DELETE FROM sample_limit',
+  ]) await assert.rejects(run(sql));
+  await assert.rejects(run('SELECT ?'), /매개변수 개수/);
+  await assert.rejects(run('SELECT ? AS n', [{ kind: 'integer', value: '18446744073709551616' }]), /64비트/);
+  await assert.rejects(run('SELECT FROM hidden_error_detail'), error => /SQL 구문/.test(String(error)) && !String(error).includes('hidden_error_detail'));
+
+  const params = [{ kind: 'integer', value: '18446744073709551615' }, { kind: 'text', value: '문자열 매개변수' }, { kind: 'null' }, { kind: 'real', value: '0.125' }];
+  const result = await run('WITH x AS (SELECT CAST(? AS UNSIGNED) AS target) SELECT o.id, o.title, o.exact_value, o.payload, ? AS label, ? AS empty_value, ? AS real_value FROM `orders``daily` o JOIN x ON x.target=o.id', params);
+  assert.deepEqual(result.columns.map(column => column.name), ['id', 'title', 'exact_value', 'payload', 'label', 'empty_value', 'real_value']);
+  assert.deepEqual(result.rows[0].map(cell => cell?.text ?? null), ['18446744073709551615', '한글', '123456789012345678901234.567890', '00ff21', '문자열 매개변수', null, '0.125']);
+  assert.equal(result.rows[0][3].encoding, 'hex');
+  assert.equal(result.more_rows, false);
+  const readOnly = await run(maria ? 'SELECT @@SESSION.tx_read_only AS enabled' : 'SELECT @@SESSION.transaction_read_only AS enabled');
+  assert.equal(readOnly.rows[0][0].text, '1');
+  assert.ok((await run('SHOW TABLES')).rows.some(row => row[0].text === 'order_view'));
+  assert.ok((await run('DESCRIBE `orders``daily`')).rows.some(row => row[0].text === 'payload'));
+  assert.ok((await run('EXPLAIN SELECT * FROM sample_limit')).rows.length > 0);
+  const cap = await run('SELECT number FROM sample_limit ORDER BY number');
+  assert.equal(cap.rows.length, 50);
+  assert.equal(cap.rows[49][0].text, '49');
+  assert.equal(cap.more_rows, true);
+
+  const requestId = randomUUID();
+  const pending = run('SELECT SLEEP(10) AS cancellation_fixture', [], requestId);
+  void pending.catch(() => {});
+  let executing = false;
+  for (let attempt = 0; attempt < 35; attempt++) {
+    if (admin(port, "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER='catalog_reader' AND INFO LIKE '%cancellation_fixture%';").trim() === '1') {
+      executing = true;
+      break;
+    }
+    await delay(100);
+  }
+  assert.equal(executing, true);
+  assert.equal(await cancel(randomUUID()), false);
+  assert.equal(await cancel(requestId), true);
+  await assert.rejects(pending, /서버의 실행 중단 여부는 확인되지 않았습니다/);
+  assert.equal((await run('SELECT 7 AS after_stop')).rows[0][0].text, '7');
+  await assert.rejects(run('SELECT SLEEP(30) AS timeout_fixture'), /조회 시간이 초과되었습니다/);
+  assert.equal((await run('SELECT 8 AS after_timeout')).rows[0][0].text, '8');
+  assert.ok((await command('mysql_databases', { id, search: 'visible', page: 0 })).items.includes('visible_db'));
+}
+
+async function verifySqlEditor(workspace) {
+  const toggle = workspace.getByRole('button', { name: 'SQL 편집기', exact: true });
+  await toggle.click();
+  const editor = workspace.getByRole('region', { name: 'MySQL SQL 편집기', exact: true });
+  const input = editor.getByRole('textbox', { name: 'MySQL SQL 문장', exact: true });
+  const result = editor.getByRole('table', { name: 'MySQL SQL 결과 표', exact: true });
+  await input.fill('SELECT ? AS bound_value;');
+  await editor.getByRole('button', { name: '문장 실행', exact: true }).click();
+  await editor.getByRole('heading', { name: 'SQL 매개변수', exact: true }).waitFor();
+  const parameter = editor.getByLabel('매개변수 1 값');
+  await parameter.fill('bound-ui-fixture');
+  await editor.getByLabel('값 숨기기').check();
+  assert.equal(await parameter.getAttribute('type'), 'password');
+  await editor.getByRole('button', { name: '바인딩하고 실행', exact: true }).click();
+  await result.getByText('bound-ui-fixture', { exact: true }).waitFor();
+  const selectedSql = "SELECT 'not-selected';\nSELECT 'selected-query' AS selection_value;";
+  await input.fill(selectedSql);
+  await input.press('Control+End');
+  await input.press('Home');
+  await input.press('Shift+End');
+  await editor.getByRole('button', { name: '선택 실행', exact: true }).click();
+  await result.getByText('selected-query', { exact: true }).waitFor();
+  await toggle.click();
+  await toggle.click();
+  assert.equal(await input.inputValue(), selectedSql);
+  await result.getByText('selected-query', { exact: true }).waitFor();
+  await toggle.click();
 }
 
 async function main() {
@@ -183,7 +268,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (verified TLS, authentication, permissions, catalogs, views and bounded typed data previews).`);
+    console.log(`${engine} Windows E2E passed (TLS, catalog, typed previews, read-only SQL, binding, limits and client cancellation).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

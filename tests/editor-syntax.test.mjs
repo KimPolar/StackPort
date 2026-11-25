@@ -37,6 +37,14 @@ test("highlights PostgreSQL dollar strings, escaped strings, nested comments and
   ]);
 });
 
+test("highlights MySQL backticks, placeholder and comment rules", () => {
+  const sql = "SELECT `a``b`, ?, 'x\\'?', 2--1 # ?\n-- note\nSHOW TABLES";
+  assert.deepEqual(marked(sql, "mysql"), [
+    ["keyword", "SELECT"], ["identifier", "`a``b`"], ["parameter", "?"], ["string", "'x\\'?'"],
+    ["number", "2"], ["number", "1"], ["comment", "# ?"], ["comment", "-- note"], ["keyword", "SHOW"],
+  ]);
+});
+
 test("clips multiline tokens to the visible line and falls back at rendering limits", () => {
   const text = "/* 첫 줄\n둘😀째 */ SELECT 12";
   const tokens = editorSyntaxTokens(text, "sqlite");

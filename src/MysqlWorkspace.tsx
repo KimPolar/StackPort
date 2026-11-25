@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
+import { Code2, Database, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
+import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
 import type { MysqlProfile } from "./MysqlProfileDialog";
+import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
 import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
@@ -11,8 +13,7 @@ type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; datab
 type Page<T> = { items: T[]; has_next: boolean };
 type ObjectInfo = { name: string; kind: string; engine: string | null };
 type Column = { name: string; data_type: string; column_type: string; nullable: boolean; key: string };
-type Cell = { text: string; encoding: "utf8" | "hex"; bytes: number; truncated: boolean };
-type Sample = { columns: Column[]; rows: (Cell | null)[][]; more_columns: boolean; more_rows: boolean };
+type Sample = { columns: Column[]; rows: (MysqlValue | null)[][]; more_columns: boolean; more_rows: boolean };
 
 export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const settings = profile.settings;
@@ -25,6 +26,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [database, setDatabase] = useState<string | null>(null);
   const [object, setObject] = useState<ObjectInfo | null>(null);
   const [view, setView] = useState<"columns" | "rows">("columns");
+  const [sqlOpen, setSqlOpen] = useState(false);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [objectSearch, setObjectSearch] = useState("");
   const [schemaPage, setSchemaPage] = useState(0);
@@ -72,7 +74,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       const next = await invoke<Session>("open_mysql", { profileId: profile.id, revision: profile.revision, password, confirmation });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
-      setSession(next); setLogin(false);
+      setSession(next); setSqlOpen(false); setLogin(false);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
     finally { connecting.current = false; if (mounted.current) setBusy(false); }
   }
@@ -93,7 +95,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
       </div>
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
-        {session ? <><button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
+        {session ? <><button type="button" className="secondary" aria-pressed={sqlOpen} onClick={() => setSqlOpen(value => !value)}><Code2 size={15} aria-hidden /> SQL 편집기</button>
+          <button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
           <button type="button" className="secondary" onClick={() => void disconnect()}>MySQL 연결 끊기</button></> :
           <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setLogin(true); }}><Plug size={15} aria-hidden /> MySQL 연결</button>}
       </div>
@@ -115,14 +118,15 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           <Search key={database} label="테이블 및 뷰 검색" onSearch={value => { setObjectSearch(value); setObjectPage(0); }} />
           <ReadNotice loading={objects.loading} error={objects.error} empty={objects.data?.items.length === 0} />
           <ul className="mysql-catalog-items">{objects.data?.items.map(item => <li key={item.name}>
-            <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => { setObject(item); setView("columns"); }}>
+            <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => { setObject(item); setView("columns"); setSqlOpen(false); }}>
               <Table2 size={14} aria-hidden /><span>{item.name}</span><small>{item.kind.endsWith("VIEW") ? "뷰" : "테이블"}</small>
             </button>
           </li>)}</ul>
           <Pager page={objectPage} loading={objects.loading} hasNext={objects.data?.has_next === true} onPage={setObjectPage} />
         </section>}
       </div>
-      <section className="results-card mysql-detail" aria-label="MySQL 객체 상세">
+      <div className="mysql-detail">
+      <section className="results-card" aria-label="MySQL 객체 상세" hidden={sqlOpen}>
         <div className="panel-heading"><h2>{object?.name ?? "객체 상세"}</h2>{object?.engine && <span>{object.engine}</span>}</div>
         {!object && <p className="result-empty">데이터베이스에서 테이블이나 뷰를 선택하세요.</p>}
         {object && <>
@@ -134,6 +138,8 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           {detail.data && <TablePreview data={detail.data} rows={view === "rows"} />}
         </>}
       </section>
+      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} /></div>
+      </div>
     </div>}
     {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
@@ -178,13 +184,7 @@ function TablePreview({ data, rows }: { data: Sample; rows: boolean }) {
     {data.more_columns && <p className="form-note mysql-table-note">앞 128개 열을 표시합니다.</p>}
     {rows ? <>
       <p className="form-note mysql-table-note">{data.more_rows ? "처음 50개 행을 표시합니다." : `${data.rows.length}개 행`}</p>
-      <div className="mysql-table" tabIndex={0} role="region" aria-label="MySQL 데이터 표 스크롤">
-        <table aria-label="MySQL 데이터 미리보기"><thead><tr>{data.columns.map(column => <th scope="col" key={column.name}>{column.name}</th>)}</tr></thead>
-          <tbody>{data.rows.map((row, index) => <tr key={index}>{row.map((cell, i) => <td key={i}>{cell ?
-            <>{cell.encoding === "hex" && <small>HEX </small>}<code>{cell.text || "(빈 값)"}{cell.truncated && "…"}</code>
-              {cell.truncated && <small> {cell.bytes} B</small>}</> : <span className="cell-null">NULL</span>}</td>)}</tr>)}</tbody>
-        </table>
-      </div>
+      <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기" />
     </> : <div className="mysql-table" tabIndex={0} role="region" aria-label="MySQL 열 구조 스크롤">
       <table aria-label="MySQL 열 구조"><thead><tr><th scope="col">열</th><th scope="col">타입</th><th scope="col">NULL 허용</th><th scope="col">키</th></tr></thead>
         <tbody>{data.columns.map(column => <tr key={column.name}><th scope="row">{column.name}</th><td><code>{column.column_type}</code></td>

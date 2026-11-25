@@ -22,4 +22,15 @@
 .mysql-table thead th { position: sticky; top: 0; background: var(--surface); }
 .mysql-table td { max-width: 32ch; overflow-wrap: anywhere; white-space: pre-wrap; }
 .mysql-table small { color: var(--text-muted); }
+.mysql-sql-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+.mysql-sql-actions > span { color: var(--text-muted); font-size: 12px; }
+.mysql-sql .panel-heading h3, .mysql-sql-parameters h3 { margin: 0; font-size: 14px; }
+.mysql-sql .code-editor { margin: 0 12px; }
+.mysql-sql-parameters { margin: 12px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+.mysql-parameter { display: grid; grid-template-columns: minmax(100px, auto) minmax(0, 1fr) auto; align-items: end; gap: 8px; border: 0; padding: 5px 0; margin: 0; }
+.mysql-parameter legend { color: var(--text-muted); font-size: 12px; }
+.mysql-parameter .field { margin: 0; }
+.mysql-mask { display: flex; align-items: center; gap: 5px; padding: 9px 0; font-size: 12px; }
+.mysql-sql-parameters .mysql-sql-actions { padding-inline: 0; }
 @media (max-width: 760px) { .mysql-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) { .mysql-parameter { grid-template-columns: minmax(0, 1fr); } }

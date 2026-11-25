@@ -113,19 +113,19 @@ PARTIAL = {
     "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지",
     "SP-DT-022": "SQLite·PostgreSQL 다중 셀·행 수정의 트랜잭션·전체 롤백·저장 값 검증, 여러 행 붙여넣기 롤백 및 PostgreSQL 커밋 결과 미확정 표시",
     "SP-DT-024": "SQLite·PostgreSQL 제약·형식·충돌 실패 시 롤백과 오류 표시",
-    "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인",
+    "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인, MySQL 계열 단일 편집기와 구문 강조",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
     "SP-SQ-003": "SQLite 준비 단계의 문법·객체·타입·읽기 전용 진단과 문서 범위 이동, PostgreSQL 실행 전 서버 파싱 오류의 문서 위치 이동",
     "SP-SQ-004": "현재 SQLite 연결의 main 테이블·뷰·열 정보를 호버와 F12로 표시, 생성 SQL과 같은 쿼리 범위의 확인된 참조 위치로 이동",
     "SP-SQ-005": "SQLite 조회의 테이블 별칭과 유효 범위 참조 변경, SQLite의 실행 명령·결과 열 비교, SQL 서식 변경 및 되돌리기",
     "SP-SQ-006": "SQLite 문서 및 범위 서식·축약, 키워드 대소문자·들여쓰기·문장 사이 빈 줄 설정 저장",
-    "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회의 문서·선택·현재 문장 실행, 방언별 문자열·주석·SQLite 트리거 경계 처리",
-    "SP-SQ-008": "SQLite SQL 탭별 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회의 결과·시간·오류 위치",
-    "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL의 검증 TLS 경로를 통한 서버 취소와 서버 중단 확인·시간 제한",
-    "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, 입력 숨기기",
+    "SP-SQ-007": "SQLite 문서·선택 일괄 실행과 현재 문장, PostgreSQL 단일 조회의 문서·선택·현재 문장 및 MySQL 계열 문서·선택 단일 실행, 방언별 문자열·주석·SQLite 트리거 경계 처리",
+    "SP-SQ-008": "SQLite 개별·일괄 조회 결과와 시간·페이지·내보내기, PostgreSQL 탭별 마지막 조회 결과·시간·오류 위치, MySQL 계열 결과 타입·시간·미리보기 한도",
+    "SP-SQ-009": "SQLite 조회 중단과 시간 초과, PostgreSQL 검증 TLS 경로의 서버 취소·중단 확인·시간 제한, MySQL 계열 실행 연결 중단·시간 한도·서버 상태 미확인 표시",
+    "SP-SQ-010": "SQLite 슬롯 감지와 형식·값 바인딩, PostgreSQL 서버 타입 추론과 값·NULL 바인딩 및 오류 수정, MySQL 계열 위치별 문자열·정수·실수·NULL 바인딩, 입력 숨기기",
     "SP-SQ-012": "SQLite 테이블·뷰 드래그와 조인 관계 표시, 외래 키와 수동 열 조인, WHERE·GROUP BY·HAVING·ORDER BY·LIMIT, 새 탭에서 SQL 실행",
     "SP-SQ-013": "SQLite SQL 탭마다 조회 페이지 고정, 동일 페이지의 열·값·행 차이 표시, 저장 쿼리와 매개변수 재실행",
-    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL EXPLAIN·EXPLAIN ANALYZE의 텍스트와 단계 트리",
+    "SP-SQ-014": "SQLite EXPLAIN QUERY PLAN과 PostgreSQL EXPLAIN·EXPLAIN ANALYZE의 텍스트·단계 트리, MySQL 계열 EXPLAIN 결과 표",
     "SP-SQ-015": "SQLite 스캔·조건 검색·임시 B-Tree, PostgreSQL 스캔·조인·정렬·인덱스와 비용·예상/실제 행, 긴 리프와 행 오차 표시",
     "SP-SQ-016": "SQLite 조회·스캔·정렬·인덱스·가상 머신 지표와 비교, PostgreSQL 실행 계획·시간·버퍼와 pg_stat_statements 누적 실행·블록 통계",
     "SP-SQ-017": "SQLite 프로젝트별 템플릿·폴더·즐겨찾기·검색, 선택 SQL 저장과 새 탭 열기, 연결별 최근 SQL",
@@ -460,6 +460,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; src/RedisProfileDialog.tsx; crates/stackport-core/tests/redis_profiles.rs; tests/redis-smoke.cjs"
             if requirement_id in {"SP-UI-002", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009", "SP-DB-010", "SP-DB-022"}:
                 evidence += "; crates/stackport-core/src/mysql.rs; crates/stackport-core/tests/mysql_profiles.rs; src/MysqlWorkspace.tsx; tests/mysql-smoke.cjs"
+            if requirement_id in {"SP-SQ-001", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009", "SP-SQ-010", "SP-SQ-014"}:
+                evidence += "; crates/stackport-core/src/mysql/sql.rs; src/MysqlSqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/edit.rs; src/RedisEditDialog.tsx"
                 if requirement_id in {"SP-SEC-011", "SP-SEC-015"}:

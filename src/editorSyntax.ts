@@ -1,4 +1,4 @@
-export type EditorLanguage = "sqlite" | "postgres" | "json" | "xml";
+export type EditorLanguage = "sqlite" | "postgres" | "mysql" | "json" | "xml";
 type SyntaxKind = "comment" | "string" | "identifier" | "number" | "keyword" | "parameter" | "property" | "tag";
 type SyntaxToken = { start: number; end: number; kind: SyntaxKind };
 type SyntaxPart = { text: string; kind?: SyntaxKind };
@@ -53,6 +53,18 @@ const postgresKeywords = new Set([
   "BEGIN COMMIT ROLLBACK SAVEPOINT RELEASE TRANSACTION READ WRITE EXPLAIN ANALYZE FOR OF SHARE SKIP LOCKED",
   "CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER SESSION_USER LOCALTIME LOCALTIMESTAMP",
 ].flatMap(line => line.split(" ")));
+const mysql = syntaxGrammar(
+  /(?<comment>#[^\r\n]*|--(?=[\x00-\x20])[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$))/,
+  /(?<string>'(?:''|\\[\s\S]|[^'\\])*(?:'|$)|"(?:""|\\[\s\S]|[^"\\])*(?:"|$))/,
+  /(?<identifier>`(?:``|[^`])*(?:`|$))/,
+  /(?<parameter>\?)/,
+  sqliteRules[4], sqliteRules[5],
+);
+const mysqlKeywords = new Set(`SELECT FROM WHERE JOIN INNER LEFT RIGHT OUTER CROSS NATURAL ON USING AS DISTINCT ALL UNION INTERSECT EXCEPT
+  WITH RECURSIVE INSERT INTO UPDATE DELETE REPLACE CREATE ALTER DROP TABLE VIEW INDEX SET DATABASE SCHEMA START TRANSACTION READ ONLY
+  SHOW DESC DESCRIBE EXPLAIN ANALYZE ORDER BY GROUP HAVING LIMIT OFFSET ASC NULL TRUE FALSE AND OR NOT IS IN EXISTS BETWEEN LIKE REGEXP
+  CASE WHEN THEN ELSE END CAST CONVERT OVER WINDOW PARTITION ROW ROWS RANGE ROLLUP PRIMARY FOREIGN KEY REFERENCES VALUES
+`.trim().split(/\s+/));
 
 export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
 
@@ -90,7 +102,7 @@ export function editorLanguageForFile(filename: string): EditorLanguage | undefi
 export function editorSyntaxTokens(value: string, language: EditorLanguage): SyntaxToken[] | null {
   if (value.length > textLimit) return null;
   const tokens: SyntaxToken[] = [];
-  const grammar = new RegExp({ sqlite, postgres, json, xml }[language]);
+  const grammar = new RegExp({ sqlite, postgres, mysql, json, xml }[language]);
   for (let match = grammar.exec(value); match; match = grammar.exec(value)) {
     const groups = match.groups!;
     const start = match.index;
@@ -102,7 +114,8 @@ export function editorSyntaxTokens(value: string, language: EditorLanguage): Syn
     let kind: SyntaxKind;
     if (groups.word) {
       const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : language === "postgres"
-        ? postgresKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
+        ? postgresKeywords.has(groups.word.toUpperCase()) : language === "mysql"
+          ? mysqlKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
       if (!marked) continue;
       kind = "keyword";
     } else if (groups.string && language === "json") {

@@ -1,13 +1,15 @@
 mod profiles;
+mod sql;
 
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
+pub use sql::{MysqlSqlParameter, MysqlSqlResult};
 
 use crate::{Result, Store};
 use mysql_async::{
     from_row_opt,
     prelude::{FromRow, Queryable},
-    Conn, Error, IoError, OptsBuilder, Row, SslOpts, Value,
+    Conn, Error, IoError, Opts, OptsBuilder, Row, SslOpts, Value,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{
@@ -100,6 +102,9 @@ pub struct MysqlTable {
 
 struct Session {
     connection: AsyncMutex<Option<Conn>>,
+    options: Opts,
+    sql_mode: sql::SqlMode,
+    running_sql: Mutex<Option<sql::RunningSql>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -173,14 +178,15 @@ impl MysqlManager {
                 "SET SESSION TRANSACTION READ ONLY",
             ]);
         drop(password);
-        let (connection, version) = timeout(CONNECT, async {
+        let (connection, version, mode) = timeout(CONNECT, async {
             let mut connection = Conn::new(options).await?;
             let row = connection
-                .query_first::<Row, _>("SELECT VERSION()")
+                .query_first::<Row, _>("SELECT VERSION(), @@SESSION.sql_mode")
                 .await?
                 .ok_or(ReadError::Shape)?;
-            let (version,): (String,) = from_row_opt(row).map_err(|_| ReadError::Shape)?;
-            Ok::<_, ReadError>((connection, version))
+            let (version, mode): (String, String) =
+                from_row_opt(row).map_err(|_| ReadError::Shape)?;
+            Ok::<_, ReadError>((connection, version, sql::SqlMode::parse(&mode)))
         })
         .await
         .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
@@ -197,6 +203,9 @@ impl MysqlManager {
             .insert(
                 id.clone(),
                 Arc::new(Session {
+                    options: connection.opts().clone(),
+                    sql_mode: mode,
+                    running_sql: Mutex::default(),
                     connection: AsyncMutex::new(Some(connection)),
                     _permit: permit,
                 }),
@@ -210,10 +219,14 @@ impl MysqlManager {
     }
 
     pub fn close(&self, id: &str) -> Result<()> {
-        self.sessions
+        let session = self
+            .sessions
             .lock()
             .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
             .remove(id);
+        if let Some(session) = session {
+            sql::stop_active(&session, None)?;
+        }
         Ok(())
     }
 
@@ -268,13 +281,7 @@ impl MysqlManager {
         id: &str,
         query: impl for<'a> FnOnce(&'a mut Conn) -> Work<'a, T>,
     ) -> Result<T> {
-        let session = self
-            .sessions
-            .lock()
-            .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
-            .get(id)
-            .cloned()
-            .ok_or(DISCONNECTED)?;
+        let session = self.session(id)?;
         let mut slot = timeout(READ, session.connection.lock())
             .await
             .map_err(|_| "앞선 MySQL 조회가 끝날 때까지 기다려 주세요.")?;
@@ -303,6 +310,15 @@ impl MysqlManager {
                 Err(format!("MySQL 조회 시간이 초과되었습니다. {DISCONNECTED}"))
             }
         }
+    }
+
+    fn session(&self, id: &str) -> Result<Arc<Session>> {
+        self.sessions
+            .lock()
+            .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
+            .get(id)
+            .cloned()
+            .ok_or_else(|| DISCONNECTED.into())
     }
 }
 

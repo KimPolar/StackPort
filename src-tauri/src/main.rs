@@ -953,6 +953,22 @@ async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String,
     -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows).await }
 
 #[tauri::command]
+fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String) -> Result<usize, String> {
+    mysql.sql_parameters(&id, &sql)
+}
+
+#[tauri::command]
+async fn run_mysql_sql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String,
+    database: Option<String>, sql: String, parameters: Vec<stackport_core::MysqlSqlParameter>) -> Result<stackport_core::MysqlSqlResult, String> {
+    mysql.run_sql(&id, request_id, database, sql, parameters).await
+}
+
+#[tauri::command]
+fn cancel_mysql_sql(mysql: State<'_, stackport_core::MysqlManager>, id: String, request_id: String) -> Result<bool, String> {
+    mysql.cancel_sql(&id, &request_id)
+}
+
+#[tauri::command]
 async fn create_redis_profile(store: State<'_, Store>, project_id: String, input: stackport_core::RedisSettings)
     -> Result<stackport_core::RedisProfile, String> {
     let store = store.inner().clone();
@@ -2046,6 +2062,9 @@ fn main() {
             mysql_databases,
             mysql_objects,
             mysql_table,
+            mysql_sql_parameters,
+            run_mysql_sql,
+            cancel_mysql_sql,
             create_redis_profile,
             update_redis_profile,
             delete_redis_profile,
