@@ -31,19 +31,21 @@ pub struct CatalogPage<T> {
 #[derive(Serialize)]
 pub struct Object {
     id: i64,
-    schema: String,
-    name: String,
+    pub(super) schema: String,
+    pub(super) name: String,
     kind: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct Column {
-    name: String,
-    data_type: String,
+    pub(super) name: String,
+    pub(super) data_type: String,
     nullable: bool,
     identity: bool,
     #[serde(skip)]
-    native_type: String,
+    pub(super) native_type: String,
+    #[serde(skip)]
+    pub(super) byte_length: i64,
 }
 
 #[derive(Serialize)]
@@ -224,7 +226,7 @@ fn rows(connection: &Connection, sql: &str, values: &[&dyn ToDbValue]) -> Result
         .collect()
 }
 
-fn find_object(connection: &Connection, id: i64) -> Result<Object> {
+pub(super) fn find_object(connection: &Connection, id: i64) -> Result<Object> {
     let sql = format!(
         "SELECT o.object_id, o.owner, o.object_name, {OBJECT_KIND}
         FROM all_objects o WHERE {OBJECTS} AND o.object_id = :id"
@@ -237,6 +239,17 @@ fn find_object(connection: &Connection, id: i64) -> Result<Object> {
 }
 
 fn columns(connection: &Connection, object: &Object) -> Result<CatalogPage<Column>> {
+    let mut items = read_columns(connection, object, COLUMN_LIMIT + 1)?;
+    let has_next = items.len() > COLUMN_LIMIT as usize;
+    items.truncate(COLUMN_LIMIT as usize);
+    Ok(CatalogPage { items, has_next })
+}
+
+pub(super) fn read_columns(
+    connection: &Connection,
+    object: &Object,
+    limit: i64,
+) -> Result<Vec<Column>> {
     let rows = rows(
         connection,
         "SELECT column_name, data_type, nullable, identity_column,
@@ -244,12 +257,9 @@ fn columns(connection: &Connection, object: &Object) -> Result<CatalogPage<Colum
         FROM all_tab_columns
         WHERE owner = :owner AND table_name = :name AND column_id IS NOT NULL
         ORDER BY column_id FETCH FIRST :limit ROWS ONLY",
-        &[&object.schema, &object.name, &(COLUMN_LIMIT + 1)],
+        &[&object.schema, &object.name, &limit],
     )?;
-    let mut items = rows.iter().map(decode_column).collect::<Result<Vec<_>>>()?;
-    let has_next = items.len() > COLUMN_LIMIT as usize;
-    items.truncate(COLUMN_LIMIT as usize);
-    Ok(CatalogPage { items, has_next })
+    rows.iter().map(decode_column).collect()
 }
 
 fn data(
@@ -266,39 +276,7 @@ fn data(
     if columns.is_empty() {
         return Err("Oracle 계정에 공개된 열이 없습니다.".into());
     }
-    let keys = rows(
-        connection,
-        "SELECT cc.column_name
-        FROM all_constraints c
-        JOIN all_cons_columns cc ON cc.owner = c.owner AND cc.constraint_name = c.constraint_name
-        WHERE c.owner = :owner AND c.table_name = :name AND c.constraint_type = 'P'
-        AND c.status = 'ENABLED' AND c.validated = 'VALIDATED' ORDER BY cc.position",
-        &[&target.schema, &target.name],
-    )?;
-    let keys = keys
-        .iter()
-        .map(|row| row.get::<&str>(0).map_err(query_error))
-        .collect::<Result<Vec<_>>>()?;
-    let stable_order = !keys.is_empty();
-    let mut parameters = Vec::new();
-    clauses.validate_sort(|name| {
-        columns
-            .iter()
-            .any(|column| column.name == name && sortable(&column.native_type))
-    })?;
-    let suffix = clauses.suffix(
-        TableQueryDialect::Oracle,
-        "sp_source",
-        columns.iter().map(|column| column.name.as_str()),
-        keys,
-        |name, value, operation| {
-            let column = columns
-                .iter()
-                .find(|column| column.name == name)
-                .ok_or(input::UNSUPPORTED)?;
-            filter_binding(&column.native_type, value, operation, &mut parameters)
-        },
-    )?;
+    let (suffix, parameters, stable_order) = data_suffix(connection, &target, &columns, &clauses)?;
     let table = format!("{}.{}", ident(&target.schema), ident(&target.name));
     let select = columns
         .iter()
@@ -347,14 +325,56 @@ fn data(
     })
 }
 
-enum Parameter {
+pub(super) fn data_suffix(
+    connection: &Connection,
+    target: &Object,
+    columns: &[Column],
+    clauses: &TableQueryClauses,
+) -> Result<(String, Vec<Parameter>, bool)> {
+    let keys = rows(
+        connection,
+        "SELECT cc.column_name
+        FROM all_constraints c
+        JOIN all_cons_columns cc ON cc.owner = c.owner AND cc.constraint_name = c.constraint_name
+        WHERE c.owner = :owner AND c.table_name = :name AND c.constraint_type = 'P'
+        AND c.status = 'ENABLED' AND c.validated = 'VALIDATED' ORDER BY cc.position",
+        &[&target.schema, &target.name],
+    )?;
+    let keys = keys
+        .iter()
+        .map(|row| row.get::<&str>(0).map_err(query_error))
+        .collect::<Result<Vec<_>>>()?;
+    let stable_order = !keys.is_empty();
+    let mut parameters = Vec::new();
+    clauses.validate_sort(|name| {
+        columns
+            .iter()
+            .any(|column| column.name == name && sortable(&column.native_type))
+    })?;
+    let suffix = clauses.suffix(
+        TableQueryDialect::Oracle,
+        "sp_source",
+        columns.iter().map(|column| column.name.as_str()),
+        keys,
+        |name, value, operation| {
+            let column = columns
+                .iter()
+                .find(|column| column.name == name)
+                .ok_or(input::UNSUPPORTED)?;
+            filter_binding(&column.native_type, value, operation, &mut parameters)
+        },
+    )?;
+    Ok((suffix, parameters, stable_order))
+}
+
+pub(super) enum Parameter {
     Text(String),
     Number(OracleNumber),
     Float(f64),
 }
 
 impl Parameter {
-    fn bound(&self) -> &dyn ToDbValue {
+    pub(super) fn bound(&self) -> &dyn ToDbValue {
         match self {
             Self::Text(value) => value,
             Self::Number(value) => value,
@@ -468,7 +488,7 @@ fn validate_search(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn ident(name: &str) -> String {
+pub(super) fn ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
@@ -487,6 +507,7 @@ fn decode_object(row: &Row) -> Result<Object> {
 
 fn decode_column(row: &Row) -> Result<Column> {
     let native_type = row.get::<String>(1).map_err(query_error)?;
+    let byte_length = row.get::<Option<i64>>(8).map_err(query_error)?.unwrap_or(0);
     let data_type = match native_type.as_str() {
         "NUMBER" => match (
             row.get::<Option<i64>>(4).map_err(query_error)?,
@@ -517,6 +538,7 @@ fn decode_column(row: &Row) -> Result<Column> {
         identity: row.get::<&str>(3).map_err(query_error)? == "YES",
         data_type,
         native_type,
+        byte_length,
     })
 }
 

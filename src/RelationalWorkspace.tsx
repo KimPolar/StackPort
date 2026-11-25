@@ -282,11 +282,11 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
   const definition = useNativeRead<string>(prefix + "_definition", view === "definition" ? target : null, revision);
   const exportDriver: ExportDriver = {
     prepare: async () => crypto.randomUUID(),
-    run: (requestId, options) => invoke<ExportOutcome>("export_sql_server", {
+    run: (requestId, options) => invoke<ExportOutcome>(`export_${prefix}`, {
       ...target, requestId, clauses, options: { ...options, format: options.format.toLowerCase() },
     }),
-    progress: requestId => invoke<number | null>("sql_server_export_progress", { id, requestId }),
-    cancel: requestId => invoke<boolean>("cancel_sql_server_export", { id, requestId }),
+    progress: requestId => invoke<number | null>(`${prefix}_export_progress`, { id, requestId }),
+    cancel: requestId => invoke<boolean>(`cancel_${prefix}_export`, { id, requestId }),
   };
   return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"}
     aria-busy={data.loading || columns.loading || definition.loading}>
@@ -300,7 +300,7 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
         onClick={() => setView("structure")}>키와 인덱스</button>}
       <button type="button" className="secondary small" aria-pressed={view === "definition"}
         onClick={() => setView("definition")}>{definitionTitle}</button>
-      {prefix === "sql_server" && view === "data" && <button type="button" className="secondary small"
+      {prefix !== "snowflake" && view === "data" && <button type="button" className="secondary small"
         disabled={!data.data} onClick={() => { setExportReport(null); setExportOpen(true); }}>
         <Download size={14} aria-hidden /> 결과 내보내기
       </button>}

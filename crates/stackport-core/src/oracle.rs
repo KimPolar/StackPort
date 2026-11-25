@@ -1,6 +1,10 @@
 mod catalog;
+mod export;
 mod profiles;
 
+pub use crate::result_export::{
+    ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
+};
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Profile, ProfileSettings, Target, Transport};
 
@@ -54,6 +58,8 @@ pub struct SessionInfo {
 struct Session {
     connection: Arc<AsyncMutex<Connection>>,
     closed: AtomicBool,
+    profile: Profile,
+    export: Mutex<export::State>,
     _wallet: Option<TempDir>,
     _permit: OwnedSemaphorePermit,
 }
@@ -85,48 +91,18 @@ impl Manager {
             .try_acquire_owned()
             .map_err(|_| "열린 Oracle 연결이 너무 많습니다.")?;
         let opened = tokio::task::spawn_blocking(move || {
-            let settings = store.oracle_profile(&profile_id, revision)?.settings;
+            let profile = store.oracle_profile(&profile_id, revision)?;
+            let settings = &profile.settings;
             if settings.environment == "PROD" && confirmation != "PROD" {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
             if password.0.is_empty() || password.0.len() > 256 || password.0.contains('\0') {
                 return Err("Oracle 로그인 암호를 확인하세요.".into());
             }
-            let mut config = Config::default()
-                .set_connect_string(&settings.descriptor())
-                .map_err(connection_error)?
-                .set_credentials(&settings.username, password.0.as_str())
-                .set_driver_name("StackPort")
-                .set_transport_connect_timeout(Some(Duration::from_secs(5)));
-            drop(password);
-            let wallet = settings
-                .ca_path
-                .as_deref()
-                .map(Path::new)
-                .map(create_ca_wallet)
-                .transpose()?;
-            if let Some(directory) = &wallet {
-                config = config.set_wallet_location(directory.path().to_string_lossy());
-            }
-            let connection = oracledb::connect(config).map_err(connection_error)?;
-            connection
-                .set_call_timeout(Some(IO_TIMEOUT))
-                .map_err(query_error)?;
-            if settings.transport == Transport::Tcps {
-                let row = connection
-                    .query_row(
-                        "SELECT SYS_CONTEXT('USERENV','NETWORK_PROTOCOL') FROM DUAL",
-                        &[],
-                    )
-                    .map_err(query_error)?;
-                let protocol = row.get::<&str>(0).map_err(query_error)?;
-                if !protocol.eq_ignore_ascii_case("tcps") {
-                    return Err("Oracle 서버가 TCPS 세션을 제공하지 않았습니다.".into());
-                }
-            }
+            let (connection, wallet) = connect(settings, connection_config(settings, &password)?)?;
             let service = connection.service_name().map_err(query_error)?.to_owned();
             let database = if service.is_empty() {
-                settings.service
+                settings.service.clone()
             } else {
                 service
             };
@@ -134,6 +110,8 @@ impl Manager {
             let session = Session {
                 connection: Arc::new(AsyncMutex::new(connection)),
                 closed: AtomicBool::new(false),
+                profile,
+                export: Mutex::new(export::State::new(password)),
                 _wallet: wallet,
                 _permit: permit,
             };
@@ -163,6 +141,7 @@ impl Manager {
             .remove(id);
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
+            session.stop_export()?;
             tokio::task::spawn_blocking(move || drop(session));
         }
         Ok(())
@@ -176,6 +155,15 @@ impl Manager {
         self.read_with_deadline(id, READ_TIMEOUT, operation).await
     }
 
+    fn session(&self, id: &str) -> Result<Arc<Session>> {
+        self.sessions
+            .lock()
+            .map_err(|_| "Oracle 연결 목록을 읽을 수 없습니다.")?
+            .get(id)
+            .cloned()
+            .ok_or_else(|| CLOSED.into())
+    }
+
     async fn read_with_deadline<T, F>(
         &self,
         id: &str,
@@ -186,13 +174,7 @@ impl Manager {
         T: Send + 'static,
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
-        let session = self
-            .sessions
-            .lock()
-            .map_err(|_| "Oracle 연결 목록을 읽을 수 없습니다.")?
-            .get(id)
-            .cloned()
-            .ok_or(CLOSED)?;
+        let session = self.session(id)?;
         let connection = timeout(READ_TIMEOUT, Arc::clone(&session.connection).lock_owned())
             .await
             .map_err(|_| "앞선 Oracle 조회가 아직 끝나지 않았습니다.")?;
@@ -213,6 +195,50 @@ impl Manager {
             }
         }
     }
+}
+
+fn connection_config(settings: &ProfileSettings, password: &Password) -> Result<Config> {
+    Ok(Config::default()
+        .set_connect_string(&settings.descriptor())
+        .map_err(connection_error)?
+        .set_credentials(&settings.username, password.0.as_str())
+        .set_driver_name("StackPort")
+        .set_transport_connect_timeout(Some(Duration::from_secs(5))))
+}
+
+fn connect(
+    settings: &ProfileSettings,
+    mut config: Config,
+) -> Result<(Connection, Option<TempDir>)> {
+    let wallet = settings
+        .ca_path
+        .as_deref()
+        .map(Path::new)
+        .map(create_ca_wallet)
+        .transpose()?;
+    if let Some(directory) = &wallet {
+        config = config.set_wallet_location(directory.path().to_string_lossy());
+    }
+    let connection = oracledb::connect(config).map_err(connection_error)?;
+    connection
+        .set_call_timeout(Some(IO_TIMEOUT))
+        .map_err(query_error)?;
+    if settings.transport == Transport::Tcps {
+        let row = connection
+            .query_row(
+                "SELECT SYS_CONTEXT('USERENV','NETWORK_PROTOCOL') FROM DUAL",
+                &[],
+            )
+            .map_err(query_error)?;
+        if !row
+            .get::<&str>(0)
+            .map_err(query_error)?
+            .eq_ignore_ascii_case("tcps")
+        {
+            return Err("Oracle 서버가 TCPS 세션을 제공하지 않았습니다.".into());
+        }
+    }
+    Ok((connection, wallet))
 }
 
 fn create_ca_wallet(path: &Path) -> Result<TempDir> {

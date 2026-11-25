@@ -22,6 +22,10 @@ SQL Server의 **키와 인덱스**는 현재 계정에 공개된 인덱스, 제�
 
 Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
 
+Oracle의 **결과 내보내기**는 테이블·뷰·구체화 뷰에서 적용한 필터와 정렬로 전체 결과를 UTF-8 CSV 또는 버전형 JSON에 저장합니다. `NUMBER`는 정밀도를 유지하고, 시간대가 있는 타임스탬프는 오프셋과 저장된 지역을 기록합니다. `WITH LOCAL TIME ZONE` 값은 UTC로 기록합니다. `CLOB`·`NCLOB`·`BLOB`은 작은 단위로 읽고 SQL `NULL`과 비어 있는 LOB를 구분합니다. 네이티브 `JSON` 값은 Oracle이 표준 JSON 텍스트로 직렬화합니다. [Oracle JSON_SERIALIZE](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/JSON_SERIALIZE.html)
+
+내보내기는 같은 인증과 전송 설정으로 별도 연결을 엽니다. 암호는 열린 세션 동안 메모리에 유지하고 종료 시 지웁니다. 진행 행 수를 표시하며, 중단은 진행 중인 서버 호출이 반환된 뒤 처리합니다. 제한은 4,096열, 행당 값 합계 32 MiB, 전체 5분입니다. `BFILE`·`LONG` 등 지원 범위 밖의 열은 이름과 타입을 오류에 표시합니다. 성공한 파일만 지정 경로에 저장하고 대상 객체와 행 수를 작업 기록에 남깁니다.
+
 **Snowflake**는 공식 SQL API에 Windows의 인증서 검증을 사용하는 HTTPS로 연결합니다. 계정 식별자 또는 계정 호스트, 데이터베이스, 선택한 웨어하우스와 역할, 인증 방식과 환경을 프로젝트에 저장합니다. PAT 또는 OAuth 액세스 토큰은 연결할 때 입력하며 운영 프로필에는 PROD 확인이 필요합니다. 업무 화면에 연결된 실제 역할과 웨어하우스를 표시합니다. [Snowflake SQL API](https://docs.snowflake.com/en/developer-guide/sql-api/intro) · [Snowflake 인증 방식](https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/authentication)
 
 Snowflake 작업 공간은 현재 역할로 볼 수 있는 데이터베이스의 스키마, 테이블, 뷰, 구체화 뷰를 검색합니다. 열 구조는 이름, 데이터 타입, NULL 허용 여부와 IDENTITY를 표시합니다. 미리보기는 최대 50행과 64열을 읽습니다. NUMBER의 정밀도를 문자열로 보존하고, 긴 문자와 바이너리 값은 앞 256문자 또는 256바이트를 표시합니다. [Snowflake TABLES](https://docs.snowflake.com/en/sql-reference/info-schema/tables) · [Snowflake COLUMNS](https://docs.snowflake.com/en/sql-reference/info-schema/columns)

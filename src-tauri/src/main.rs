@@ -1100,6 +1100,22 @@ async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i6
     -> Result<oracle::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn export_oracle(manager: State<'_, oracle::Manager>, id: String, request_id: String, object: i64,
+    clauses: TableQueryClauses, options: oracle::ExportOptions) -> Result<oracle::ExportOutcome, String> {
+    manager.export(&id, request_id, object, clauses, options).await
+}
+
+#[tauri::command]
+fn oracle_export_progress(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<Option<u64>, String> {
+    manager.export_progress(&id, &request_id)
+}
+
+#[tauri::command]
+fn cancel_oracle_export(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_export(&id, &request_id)
+}
+
+#[tauri::command]
 async fn list_snowflake_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<snowflake::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_snowflake_profiles(&project_id)).await
@@ -2478,6 +2494,9 @@ fn main() {
             oracle_columns,
             oracle_definition,
             oracle_data,
+            export_oracle,
+            oracle_export_progress,
+            cancel_oracle_export,
             list_snowflake_profiles,
             create_snowflake_profile,
             update_snowflake_profile,

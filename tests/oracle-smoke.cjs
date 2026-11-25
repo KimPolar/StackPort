@@ -1,6 +1,8 @@
 const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
+const { randomBytes, randomUUID } = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
@@ -21,7 +23,7 @@ const password = 'StackPortReader84Za';
 const ownerPassword = 'StackPortOwner84Za';
 const engine = 'Oracle Database';
 
-async function verify(page, hiddenObject) {
+async function verify(page, hiddenObject, exportFolder) {
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   page.setDefaultTimeout(15_000);
@@ -77,11 +79,12 @@ async function verify(page, hiddenObject) {
     const schemas = await command('oracle_schemas', { id, search: 'sp_owner_', page: 0 });
     assert.deepEqual(schemas.items, [owner]);
     assert.deepEqual((await command('oracle_schemas', { id, search: '%', page: 0 })).items, []);
-    const objects = await command('oracle_objects', { id, schema: owner, search: '', page: 0 });
-    assert.deepEqual(objects.items.map(item => [item.name, item.kind]), [
+    const catalog = (await command('oracle_objects', { id, schema: owner, search: '', page: 0 })).items;
+    const objects = catalog.filter(item => ['Daily Summary', 'Order Daily', 'Recent View'].includes(item.name));
+    assert.deepEqual(objects.map(item => [item.name, item.kind]), [
       ['Daily Summary', 'materialized_view'], ['Order Daily', 'table'], ['Recent View', 'view'],
     ]);
-    const table = objects.items[1].id;
+    const table = objects[1].id;
     const definition = object => command('oracle_definition', { id, object });
     await assert.rejects(definition(table), /메타데이터 권한/);
     await assert.rejects(definition(hiddenObject), /공개되지/);
@@ -118,9 +121,9 @@ async function verify(page, hiddenObject) {
     assert.equal(next.rows.length, 11);
     assert.equal(next.rows[0][1].text, '9223372036854775797');
     assert.equal(next.has_next, false);
-    assert.equal((await data(objects.items[0].id, 0)).rows[0][1].text, '61');
-    assert.equal((await data(objects.items[2].id, 0)).stable_order, false);
-    await assert.rejects(data(objects.items[2].id, 1), /기본 키/);
+    assert.equal((await data(objects[0].id, 0)).rows[0][1].text, '61');
+    assert.equal((await data(objects[2].id, 0)).stable_order, false);
+    await assert.rejects(data(objects[2].id, 1), /기본 키/);
     await assert.rejects(data(hiddenObject, 0), /공개되지/);
     const typed = {
       filters: [comparison('EXACT_VALUE', 'eq', '123456789012345678901234.567891'),
@@ -141,6 +144,7 @@ async function verify(page, hiddenObject) {
     });
     assert.equal(found.rows.length, 1);
     assert.equal(found.rows[0][1].text, '9223372036854775747');
+    await verifyExports(command, id, profile, exportFolder, catalog, hiddenObject);
   } finally { await command('close_oracle', { id }); }
   await assert.rejects(command('oracle_schemas', { id, search: '', page: 0 }), /닫혔습니다/);
   const owned = await open(await other({ name: '소유자 정의 확인', username: owner }), ownerPassword);
@@ -172,6 +176,18 @@ async function verify(page, hiddenObject) {
   await detail.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
   await grid.getByText('9223372036854775797', { exact: true }).waitFor();
   await verifyGridFilter(page, detail, grid, 'ID', '9223372036854775747');
+  const exportedFile = path.join(exportFolder, 'filtered-ui.json');
+  await detail.getByRole('button', { name: '결과 내보내기', exact: true }).click();
+  const exportDialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  await exportDialog.getByLabel('파일 형식').selectOption('JSON');
+  await exportDialog.getByLabel('새 JSON 파일 경로', { exact: true }).fill(exportedFile);
+  await exportDialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await exportDialog.waitFor({ state: 'detached' });
+  await detail.getByRole('status').getByText(/JSON 저장 완료 · 1행/).waitFor();
+  const [exportedRow] = JSON.parse(fs.readFileSync(exportedFile, 'utf8')).rows;
+  assert.equal(exportedRow[1], '9223372036854775747');
+  assert.equal(exportedRow[4], '한'.repeat(255) + '🚀next');
+  assert.deepEqual(exportedRow.slice(6), ['a'.repeat(700), '00FF11']);
   await detail.getByRole('button', { name: '열 구조', exact: true }).click();
   await detail.getByRole('table', { name: engine + ' 열 구조', exact: true }).getByText('NUMBER(30,6)', { exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'Daily Summary 구체화 뷰', exact: true }).click();
@@ -189,6 +205,104 @@ async function verify(page, hiddenObject) {
   assert.deepEqual(errors, []);
 }
 
+async function verifyExports(command, id, profile, folder, catalog, hiddenObject) {
+  const objectId = name => catalog.find(item => item.name === name)?.id;
+  const read = name => JSON.parse(fs.readFileSync(path.join(folder, name), 'utf8'));
+  const emptyClauses = { filters: [], conjunction: 'all', sort: [] };
+  const save = (object, name, { format = 'json', clauses = emptyClauses, requestId = randomUUID() } = {}) =>
+    command('export_oracle', { id, object, requestId, clauses, options: {
+      destination: path.join(folder, name), format, include_header: true, spreadsheet_safe: true,
+    } });
+  const wide = objectId('Export Fixture');
+  const requestId = randomUUID();
+  const clauses = { filters: [comparison('ID', 'ge', '2')], conjunction: 'all', sort: [sort('ID', 'desc')] };
+  const result = await save(wide, 'wide.json', { clauses, requestId });
+  assert.equal(result.status, 'exported');
+  assert.equal(result.report.rows, 120);
+  assert.equal(result.report.size_bytes, fs.statSync(path.join(folder, 'wide.json')).size);
+  const full = read('wide.json');
+  assert.equal(full.format, 'stackport.oracle-results');
+  assert.equal(full.version, 1);
+  assert.equal(full.columns.length, 75);
+  assert.deepEqual(full.columns[2], { name: 'AMOUNT', data_type: 'NUMBER(38,6)' });
+  assert.equal(full.columns[4].encoding, 'hex');
+  assert.equal(full.columns.at(-1).name, 'EXTRA_66');
+  assert.deepEqual(full.rows.map(row => row[0]), Array.from({ length: 120 }, (_, i) => String(121 - i)));
+  const first = full.rows[0];
+  assert.equal(first[1], 'a'.repeat(21844) + '🚀' + '한'.repeat(20000) + '\n끝');
+  assert.equal(first[2], '-12345678901234567890123456789012.345678');
+  assert.equal(first[4], Buffer.from(Array.from({ length: 256 }, (_, i) => i)).toString('hex').toUpperCase().repeat(280));
+  assert.match(first[5], /^2026-09-18T04:12:33\.123456789\+09:00\[Asia\/Seoul\]$/i);
+  assert.equal(first[6], '2026-09-17T19:12:33.123456789Z');
+  assert.equal(first[7], 'P2DT3H4M5.123456789S');
+  assert.equal(first[8], '국'.repeat(23000) + '🚀終');
+  assert.equal(first.at(-1), '242');
+  assert.equal(full.rows.at(-2)[1], null);
+  assert.equal(full.rows.at(-1)[1], '');
+  assert.equal(full.rows.at(-1)[4], '');
+  const event = (await command('list_audit_events', {})).events.find(item => item.correlation_id === requestId);
+  assert.deepEqual([event.operation, event.profile_id, event.environment, event.object_name, event.affected_count],
+    ['oracle.export.json', profile.id, 'PROD', `"${owner}"."Export Fixture"`, 120]);
+
+  const csv = await save(wide, 'safe.csv', { format: 'csv', clauses: {
+    filters: [comparison('ID', 'le', '3')], conjunction: 'all', sort: [],
+  } });
+  assert.equal(csv.report.rows, 3);
+  assert.equal(csv.report.protected_fields, 1);
+  const csvPath = path.join(folder, 'safe.csv');
+  const csvText = fs.readFileSync(csvPath, 'utf8');
+  assert.match(csvText, /1,"'=SUM\(1,2\)",-12345678901234567890123456789012\.345678,"X'00FF11'",\\N,/);
+  assert.match(csvText, /2,"",-12345678901234567890123456789012\.345678,\\N,"X''",/);
+  assert.match(csvText, /3,\\N,-12345678901234567890123456789012\.345678,\\N,\\N,/);
+  await assert.rejects(save(wide, 'safe.csv', { format: 'csv' }), /같은 이름의 파일이 이미 있습니다/);
+  assert.equal(fs.readFileSync(csvPath, 'utf8'), csvText);
+  assert.equal((await save(objectId('Recent View'), 'view.json')).report.rows, 2);
+  assert.equal((await save(objectId('Daily Summary'), 'materialized.json')).report.rows, 1);
+  assert.deepEqual(read('materialized.json').rows, [['1', '61']]);
+  const native = objectId('Native Scalars');
+  if (native !== undefined) {
+    await save(native, 'native.json');
+    const [row] = read('native.json').rows;
+    assert.deepEqual(row.slice(0, 2), ['true', '1.25']);
+    assert.match(row[2], /12345678901234567890123456789012345678/);
+    assert.deepEqual(JSON.parse(row[2]).a, [null, true]);
+    assert.equal(JSON.parse(row[2]).s, '한글');
+    assert.deepEqual(row.slice(3), ['null', null]);
+  }
+  for (const [object, name, error] of [
+    [hiddenObject, 'hidden.json', /공개되지/],
+    [objectId('Oversize Export'), 'oversize.json', /32 MiB/],
+    [objectId('Unsupported Export'), 'unsupported.json', /BFILE/],
+  ]) {
+    await assert.rejects(save(object, name), error);
+    assert.equal(fs.existsSync(path.join(folder, name)), false);
+  }
+
+  const cancelled = randomUUID();
+  const progress = () => command('oracle_export_progress', { id, requestId: cancelled });
+  const cancel = requestId => command('cancel_oracle_export', { id, requestId });
+  const stopped = save(objectId('Late Export'), 'cancelled.json', { requestId: cancelled,
+    clauses: { ...emptyClauses, sort: [sort('ID', 'asc')] } });
+  const settled = stopped.then(value => ({ value }), error => ({ error: String(error) }));
+  try {
+    const until = Date.now() + 10_000;
+    while (!(await progress() > 0) && Date.now() < until) {
+      const exited = await Promise.race([settled, new Promise(resolve => setTimeout(resolve, 40))]);
+      if (exited) assert.fail(`Export finished before it could be interrupted: ${JSON.stringify(exited)}`);
+    }
+    assert.ok(await progress() > 0);
+    await assert.rejects(save(wide, 'concurrent.json'), /이미 실행 중/);
+    assert.ok((await command('oracle_schemas', { id, search: owner, page: 0 })).items.includes(owner));
+    assert.equal(await cancel(randomUUID()), false);
+    assert.equal(await cancel(cancelled), true);
+    assert.deepEqual(await stopped, { status: 'cancelled' });
+    assert.equal(await progress(), null);
+  } finally { await cancel(cancelled).catch(() => {}); }
+  assert.equal(fs.existsSync(path.join(folder, 'cancelled.json')), false);
+  assert.ok(fs.readdirSync(folder).every(file => !file.startsWith('.stackport-')));
+  assert.equal((await save(wide, 'after-cancel.json')).report.rows, 121);
+}
+
 async function main() {
   assert.ok(Number.isInteger(port) && port >= 1024 && port <= 65535);
   if (!tcpOnly) {
@@ -202,9 +316,14 @@ async function main() {
   }).trim());
   assert.ok(Number.isSafeInteger(object) && object > 0);
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
-  try { await verify(browser.contexts()[0].pages()[0], object); }
-  finally { await browser.close(); }
-  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
+  const exportFolder = fs.mkdtempSync(path.join(process.env.STACKPORT_TEST_ROOT || os.tmpdir(), 'stackport-oracle-export-'));
+  try { await verify(browser.contexts()[0].pages()[0], object, exportFolder); }
+  finally {
+    await browser.close();
+    for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
+    fs.rmdirSync(exportFolder);
+  }
+  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging, CSV and JSON exports with cancellation).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

@@ -36,7 +36,8 @@ with oracledb.connect(user='sys', password=os.environ['STACKPORT_ORACLE_SYS_PASS
         tablespace = f'SP_FIXTURE_{run}'
         cur.execute(f"CREATE TABLESPACE {tablespace} DATAFILE '{datafile}' SIZE 12M")
         cur.execute(f'CREATE USER {owner} IDENTIFIED BY "{owner_password}" DEFAULT TABLESPACE {tablespace} QUOTA UNLIMITED ON {tablespace}')
-        cur.execute(f'GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW TO {owner}')
+        cur.execute(f'GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW, CREATE PROCEDURE TO {owner}')
+        cur.execute(f'GRANT EXECUTE ON SYS.DBMS_SESSION TO {owner}')
         cur.execute(f'CREATE USER {reader} IDENTIFIED BY "{reader_password}"')
         cur.execute(f'GRANT CREATE SESSION TO {reader}')
         cur.execute(f'CREATE VIEW {reader}."Order Daily" AS SELECT 1 "X%_Y", 2 "X%XY", 3 "한글 정의" FROM dual')
@@ -74,7 +75,49 @@ with oracledb.connect(user=owner, password=owner_password, params=dsn) as connec
             CREATE MATERIALIZED VIEW "Daily Summary" BUILD IMMEDIATE REFRESH COMPLETE ON DEMAND AS
             SELECT tenant, COUNT(*) row_count FROM "Order Daily" GROUP BY tenant
         ''')
-        for name in ('Order Daily', 'Recent View', 'Daily Summary'):
+        extra_columns = ', '.join(f'extra_{i} NUMBER(4,0)' for i in range(1, 67))
+        cur.execute(f'''
+            CREATE TABLE "Export Fixture" (
+                id NUMBER(4,0) PRIMARY KEY, note CLOB, amount NUMBER(38,6), bytes RAW(32),
+                payload BLOB, recorded TIMESTAMP(9) WITH TIME ZONE, utc_at TIMESTAMP(9) WITH LOCAL TIME ZONE,
+                elapsed INTERVAL DAY(2) TO SECOND(9), national NCLOB, {extra_columns}
+            )
+        ''')
+        cur.execute('''
+            INSERT INTO "Export Fixture" (id, note, amount, bytes, payload, recorded, utc_at, elapsed, national, extra_66)
+            SELECT LEVEL, CASE LEVEL WHEN 1 THEN TO_CLOB('=SUM(1,2)') WHEN 2 THEN EMPTY_CLOB() END,
+                -12345678901234567890123456789012.345678,
+                CASE WHEN LEVEL = 1 THEN HEXTORAW('00FF11') END,
+                CASE WHEN LEVEL = 2 THEN EMPTY_BLOB() END,
+                TO_TIMESTAMP_TZ('2026-09-18T04:12:33.123456789 Asia/Seoul', 'YYYY-MM-DD"T"HH24:MI:SS.FF9 TZR'),
+                TO_TIMESTAMP_TZ('2026-09-18T04:12:33.123456789 +09:00', 'YYYY-MM-DD"T"HH24:MI:SS.FF9 TZH:TZM'),
+                INTERVAL '2 03:04:05.123456789' DAY TO SECOND(9),
+                NULL, LEVEL * 2
+            FROM dual CONNECT BY LEVEL <= 121
+        ''')
+        cur.setinputsizes(note=oracledb.DB_TYPE_CLOB, national=oracledb.DB_TYPE_NCLOB, payload=oracledb.DB_TYPE_BLOB)
+        cur.execute('UPDATE "Export Fixture" SET note = :note, national = :national, payload = :payload WHERE id = 121',
+                    note='a' * 21844 + '🚀' + '한' * 20000 + '\n끝', national='국' * 23000 + '🚀終',
+                    payload=bytes(range(256)) * 280)
+        cur.execute('''
+            CREATE FUNCTION fixture_pause(n NUMBER) RETURN NUMBER AS
+            BEGIN
+                IF n = 113 THEN SYS.DBMS_SESSION.SLEEP(4); END IF;
+                RETURN n;
+            END;
+        ''')
+        cur.execute('CREATE VIEW "Late Export" AS SELECT id, fixture_pause(id) paused FROM "Export Fixture"')
+        cur.execute('CREATE VIEW "Oversize Export" AS SELECT RPAD(TO_CLOB(\'a\'), 33554433, \'a\') large_note FROM dual')
+        cur.execute('CREATE VIEW "Unsupported Export" AS SELECT BFILENAME(\'STACKPORT_UNCONFIGURED\', \'example\') file_ref FROM dual')
+        names = ['Order Daily', 'Recent View', 'Daily Summary', 'Export Fixture', 'Late Export', 'Oversize Export', 'Unsupported Export']
+        if int(connection.version.split('.')[0]) >= 23:
+            cur.execute('''
+                CREATE VIEW "Native Scalars" AS SELECT TRUE enabled, TO_BINARY_DOUBLE(1.25) ratio,
+                    JSON('{"n":12345678901234567890123456789012345678,"s":"한글","a":[null,true]}') document,
+                    JSON('null') json_null, CAST(NULL AS JSON) sql_null FROM dual
+            ''')
+            names.append('Native Scalars')
+        for name in names:
             cur.execute(f'GRANT SELECT ON "{name}" TO {reader}')
         cur.execute("SELECT object_id FROM user_objects WHERE object_name = 'HIDDEN_DATA' AND object_type = 'TABLE'")
         print(cur.fetchone()[0])
