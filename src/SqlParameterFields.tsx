@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SqlParameterSets, type ParameterInput, type ParameterSetScope } from "./SqlParameterSets";
 
 export type SqlParameter = { index: number; name: string | null };
 export type SqlParameterValue =
@@ -7,7 +8,7 @@ export type SqlParameterValue =
 type SqliteParameterKind = SqlParameterValue["kind"];
 type OracleParameterKind = SqliteParameterKind | "decimal";
 type TypedParameterKind = OracleParameterKind | "boolean";
-type Field<Kind extends TypedParameterKind> = { kind: Kind; value: string; masked: boolean };
+type Field<Kind extends TypedParameterKind> = ParameterInput<Kind>;
 type MaskedParameterValue<Kind extends TypedParameterKind> =
   | { kind: "null"; masked: false }
   | { kind: Exclude<Kind, "null">; value: string; masked: boolean };
@@ -63,12 +64,13 @@ function invalidValue(field: Field<TypedParameterKind>, allByteLimited: boolean)
   }
 }
 
-export function SqlParameterFields({ parameters, submit, dismiss }: {
+export function SqlParameterFields({ parameters, setScope, submit, dismiss }: {
   parameters: SqlParameter[];
+  setScope?: ParameterSetScope;
   submit: (values: SqlParameterValue[]) => void;
   dismiss: () => void;
 }) {
-  return <ParameterForm options={sqliteOptions} parameters={parameters} dismiss={dismiss}
+  return <ParameterForm options={sqliteOptions} parameters={parameters} setScope={setScope} dismiss={dismiss}
     note="입력 값은 앱 실행 중 조회, 페이지 이동, 내보내기와 고정 쿼리 재실행에 사용합니다."
     submit={fields => submit(fields.map(({ kind, value }) => kind === "null" ? { kind } : { kind, value }))} />;
 }
@@ -104,16 +106,19 @@ export function SnowflakeParameterFields({ count, submit, dismiss }: {
     submit={fields => submit(maskedValues(fields))} />;
 }
 
-function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, note, allByteLimited = false, submit, dismiss }: {
+function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, note, allByteLimited = false, setScope, submit, dismiss }: {
   parameters: SqlParameter[];
   options: readonly (readonly [Kind, string])[];
   note: string;
   allByteLimited?: boolean;
+  setScope?: ParameterSetScope;
   submit: (fields: Field<Kind>[]) => void;
   dismiss: () => void;
 }) {
   const [fields, setFields] = useState<Field<Kind>[]>(() => parameters.map(() => ({ kind: options[0][0], value: "", masked: false })));
   const [error, setError] = useState("");
+  const [readyKey, setReadyKey] = useState<string | null>(null);
+  const cannotSubmit = Boolean(setScope && readyKey !== setScope.key) || fields.some(field => field.needsValue);
 
   function update(index: number, change: Partial<Field<Kind>>) {
     setError("");
@@ -122,6 +127,7 @@ function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, n
 
   return <form onSubmit={event => {
     event.preventDefault();
+    if (cannotSubmit) return;
     for (let index = 0; index < fields.length; index++) {
       const reason = invalidValue(fields[index], allByteLimited);
       if (reason) {
@@ -133,6 +139,9 @@ function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, n
     submit(fields);
   }}>
     <p className="form-note">{note}</p>
+    {setScope && <SqlParameterSets scope={setScope} fields={fields} allowedKinds={options.map(([kind]) => kind)}
+      onReady={() => setReadyKey(setScope.key)}
+      apply={values => { setFields(values); setError(""); }} />}
     <div className="sql-parameters">
       {parameters.map((parameter, index) => {
         const field = fields[index];
@@ -140,12 +149,15 @@ function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, n
         return <fieldset key={parameter.index}>
           <legend><code>{label}</code></legend>
           <div className="sql-parameter-row">
-            <select aria-label={`${label} 형식`} value={field.kind} onChange={event => update(index, { kind: event.target.value as Kind })}>
+            <select aria-label={`${label} 형식`} value={field.kind} onChange={event => update(index, {
+              kind: event.target.value as Kind, needsValue: event.target.value !== "null" && field.needsValue,
+            })}>
               {options.map(([kind, description]) => <option value={kind} key={kind}>{description}</option>)}
             </select>
             {field.kind !== "null" && <>
               <input aria-label={`${label} 값`} autoComplete="off" spellCheck={false} type={field.masked ? "password" : "text"} maxLength={16384} value={field.value}
-                required={field.kind !== "text" && field.kind !== "blob"} onChange={event => update(index, { value: event.target.value })} />
+                required={field.kind !== "text" && field.kind !== "blob"}
+                onChange={event => update(index, { value: event.target.value, needsValue: false })} />
               <label><input aria-label={`${label} 값 숨기기`} type="checkbox" checked={field.masked} onChange={event => update(index, { masked: event.target.checked })} /> 숨기기</label>
             </>}
           </div>
@@ -155,7 +167,7 @@ function ParameterForm<Kind extends TypedParameterKind>({ parameters, options, n
     {error && <p className="form-error" role="alert">{error}</p>}
     <div className="dialog-actions">
       <button type="button" className="secondary" onClick={dismiss}>취소</button>
-      <button type="submit" className="primary">매개변수로 실행</button>
+      <button type="submit" className="primary" disabled={cannotSubmit}>매개변수로 실행</button>
     </div>
   </form>;
 }

@@ -82,6 +82,11 @@ impl Plan {
             return Ok((!self.slots.is_empty()).then(|| PostgresScriptOutcome {
                 status: Status::ParametersRequired,
                 parameter_indexes: self.slots.iter().copied().collect(),
+                parameter_scope: Some(crate::sql_parameter_sets::fingerprint(
+                    self.statements
+                        .iter()
+                        .map(|item| &input.source.as_bytes()[item.span.clone()]),
+                )),
                 ..PostgresScriptOutcome::new()
             }));
         };
@@ -115,6 +120,8 @@ pub struct PostgresScriptOutcome {
     export_error: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     parameter_indexes: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parameter_scope: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -235,6 +242,7 @@ impl PostgresScriptOutcome {
             export_report: None,
             export_error: None,
             parameter_indexes: Vec::new(),
+            parameter_scope: None,
         }
     }
 

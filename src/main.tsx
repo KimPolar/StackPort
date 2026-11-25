@@ -86,7 +86,7 @@ type RuntimeInfo = { version: string; data_mode: "standard" | "custom" | "portab
 type Profile = { id: string; project_id: string; name: string; path: string; environment: "DEV" | "STAGING" | "PROD" };
 type BatchStop = SqlReferenceRange & { status: "error" | "cancelled" | "timed_out" | "parameters_required"; message: string };
 type SqlBatchOutcome = { status: "batch"; total: number; items: (SqlReferenceRange & { result: QueryPage })[]; stopped: BatchStop | null };
-type QueryOutcome = SqlBatchOutcome | { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[] } | { status: "cancelled" | "timed_out" };
+type QueryOutcome = SqlBatchOutcome | { status: "completed"; result: QueryPage } | { status: "plan"; plan: QueryPlan } | { status: "parameters_required"; parameters: SqlParameter[]; parameter_scope: string } | { status: "cancelled" | "timed_out" };
 type SqlDocumentRange = { source: string; offset: number };
 type SqlQueryTarget = { kind: "sql"; tabId: string; sql: string; parameters?: SqlParameterValue[]; planSource?: string; document?: SqlDocumentRange; batchIndex?: number; replayedFrom?: number };
 type QueryTarget = SqlQueryTarget | { kind: "table"; request: TableQuery };
@@ -269,7 +269,7 @@ function App() {
   const [resultMode, setResultMode] = useState<QueryTarget["kind"]>("sql");
   const [exportRequest, setExportRequest] = useState<{ profile: Profile; query: ExportSource } | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
-  const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[]; scope?: SqlHistoryScope } | null>(null);
+  const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[]; parameterScope: string; scope?: SqlHistoryScope } | null>(null);
   const [modal, setModal] = useState<Modal>(null);
   const sqliteProfileForm = modal === "profile" || modal === "duplicateProfile";
   const modalSaving = useRef(false);
@@ -1042,7 +1042,7 @@ function App() {
         } else if (response.status === "plan" && target.kind === "sql" && target.planSource !== undefined) {
           editSqlQueryView(target.tabId, { plan: { sql: target.planSource, data: response.plan } });
         } else if (response.status === "parameters_required" && target.kind === "sql") {
-          if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters, scope });
+          if (!task.cancelRequested) setParameterRequest({ target, parameters: response.parameters, parameterScope: response.parameter_scope, scope });
           else setQueryNotice("쿼리 실행을 중단했습니다.");
         } else if (response.status === "cancelled") {
           setQueryNotice("쿼리가 중단되었습니다. 읽기 전용 연결이 닫혔습니다.");
@@ -2029,7 +2029,7 @@ function App() {
     </Dialog>}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", duplicateProfile: "SQLite 연결 복제", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || sqliteProfileForm || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={sqliteProfileForm ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
-      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite·SSH 연결 정의와 SQL 템플릿을 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}
+      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 연결 설정, SQL 템플릿과 매개변수 세트를 복제합니다. 복제한 연결은 같은 데이터베이스와 SSH 대상에 접속합니다.</p>}
       {modal === "archiveProject" && <p className="confirm-copy"><strong>{project?.name}</strong>을 활성 목록에서 숨깁니다. 연결 정의와 파일은 보존되며 보관된 프로젝트 목록에서 다시 활성화할 수 있습니다.</p>}
       {sqliteProfileForm && <>
         <label className="field">SQLite 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" />
@@ -2142,7 +2142,10 @@ function App() {
         onClose={() => setSchemaDocumentRequest(null)} onBusy={busy => { localFileBusy.current = busy; }} />
     </React.Suspense>}
     {parameterRequest && <Dialog title="SQL 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
-      <SqlParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={parameters => {
+      <SqlParameterFields parameters={parameterRequest.parameters}
+        setScope={desktop && project && parameterRequest.parameterScope
+          ? { project_id: project.id, engine: "sqlite", key: parameterRequest.parameterScope } : undefined}
+        dismiss={() => setParameterRequest(null)} submit={parameters => {
         setParameterRequest(null);
         void executeQuery({ ...parameterRequest.target, parameters }, 0, parameterRequest.scope);
       }} />
@@ -2211,6 +2214,9 @@ const auditOperationNames: Record<string, string> = {
   "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",
+  "sql_parameter_set.create": "SQL 매개변수 세트 저장",
+  "sql_parameter_set.update": "SQL 매개변수 세트 갱신",
+  "sql_parameter_set.delete": "SQL 매개변수 세트 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
   "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",

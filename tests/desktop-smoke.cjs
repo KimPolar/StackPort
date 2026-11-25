@@ -858,6 +858,12 @@ async function main() {
   await page.getByRole('alert').getByText(/64비트 정수 범위/).waitFor();
   if (await secretField.inputValue() !== parameterSecret) throw new Error('Correctable input was lost after validation failure.');
   await page.getByLabel(':first 값', { exact: true }).fill('2');
+  const parameterSets = page.getByRole('group', { name: '매개변수 세트', exact: true });
+  await parameterSets.getByText('세트 저장', { exact: true }).click();
+  await parameterSets.getByLabel('세트 이름', { exact: true }).fill('SQLite 기본값');
+  await parameterSets.getByRole('checkbox', { name: '기본 세트', exact: true }).check();
+  await parameterSets.getByRole('button', { name: '새 세트로 저장', exact: true }).click();
+  await parameterSets.getByText('매개변수 세트를 저장했습니다.', { exact: true }).waitFor();
   await page.getByRole('button', { name: '매개변수로 실행' }).click();
   await resultRows.first().getByText('사용자 2', { exact: true }).waitFor();
   await page.getByRole('button', { name: '다음 페이지' }).click();
@@ -887,8 +893,14 @@ async function main() {
   }
 
   await page.getByRole('button', { name: '실행 계획', exact: true }).click();
-  await page.getByLabel(':first 형식').selectOption('integer');
-  await page.getByLabel(':first 값', { exact: true }).fill('2');
+  await parameterSets.getByText('숨김 값은 다시 입력하세요.', { exact: true }).waitFor();
+  if (await page.getByLabel(':first 형식').inputValue() !== 'integer' || await page.getByLabel(':first 값', { exact: true }).inputValue() !== '2') {
+    throw new Error('The saved SQLite default did not retain its typed value.');
+  }
+  if (await secretField.inputValue() !== '' || await secretField.getAttribute('type') !== 'password' ||
+      await page.getByRole('button', { name: '매개변수로 실행' }).isEnabled()) {
+    throw new Error('The saved SQLite set did not require reentry for its hidden value.');
+  }
   await page.getByLabel(':key 값', { exact: true }).fill(parameterSecret);
   await page.getByRole('button', { name: '매개변수로 실행' }).click();
   const plan = page.getByRole('region', { name: 'SQLite 실행 계획' });

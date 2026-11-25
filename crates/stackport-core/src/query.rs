@@ -50,6 +50,7 @@ pub enum QueryOutcome {
     },
     ParametersRequired {
         parameters: Vec<SqlParameter>,
+        parameter_scope: String,
     },
     Batch {
         total: usize,
@@ -102,7 +103,7 @@ pub struct SqlParameter {
     pub name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SqlParameterValue {
     Null,
@@ -113,7 +114,7 @@ pub enum SqlParameterValue {
 }
 
 impl SqlParameterValue {
-    fn sqlite_value(&self) -> Result<Value> {
+    pub(super) fn sqlite_value(&self) -> Result<Value> {
         match self {
             Self::Null => Ok(Value::Null),
             Self::Text(text) if text.len() <= MAX_PARAMETER_BYTES => Ok(Value::Text(text.clone())),
@@ -325,7 +326,7 @@ impl QueryManager {
 enum QueryFailure {
     Cancelled,
     TimedOut,
-    ParametersRequired(Vec<SqlParameter>),
+    ParametersRequired(Vec<SqlParameter>, String),
     Error(String),
 }
 
@@ -354,8 +355,8 @@ fn query_outcome(result: std::result::Result<QueryOutput, QueryFailure>) -> Resu
         Ok(QueryOutput::Export(report)) => Ok(QueryOutcome::Exported { report }),
         Err(QueryFailure::Cancelled) => Ok(QueryOutcome::Cancelled),
         Err(QueryFailure::TimedOut) => Ok(QueryOutcome::TimedOut),
-        Err(QueryFailure::ParametersRequired(parameters)) => {
-            Ok(QueryOutcome::ParametersRequired { parameters })
+        Err(QueryFailure::ParametersRequired(parameters, parameter_scope)) => {
+            Ok(QueryOutcome::ParametersRequired { parameters, parameter_scope })
         }
         Err(QueryFailure::Error(error)) => Err(error),
     }
@@ -454,7 +455,7 @@ impl Store {
             &guard.control,
             EXPORT_TIMEOUT,
         );
-        if matches!(result, Err(QueryFailure::ParametersRequired(_))) {
+        if matches!(result, Err(QueryFailure::ParametersRequired(..))) {
             result = Err(QueryFailure::Error(
                 "먼저 매개변수 값을 입력하고 쿼리를 실행하세요.".into(),
             ));
@@ -591,7 +592,7 @@ impl Store {
                             Err(QueryFailure::TimedOut) => {
                                 ("timed_out", "일괄 실행이 10초를 초과했습니다.".into())
                             }
-                            Err(QueryFailure::ParametersRequired(_)) => (
+                            Err(QueryFailure::ParametersRequired(..)) => (
                                 "parameters_required",
                                 "매개변수가 있는 문장은 현재 문장으로 실행해 값을 입력하세요."
                                     .into(),
@@ -684,7 +685,7 @@ impl Store {
             Ok(_) => Err("조회 결과를 받을 수 없습니다.".into()),
             Err(QueryFailure::Cancelled) => Err("쿼리가 중단되었습니다.".into()),
             Err(QueryFailure::TimedOut) => Err("쿼리 실행 시간이 초과되어 중단되었습니다.".into()),
-            Err(QueryFailure::ParametersRequired(_)) => {
+            Err(QueryFailure::ParametersRequired(..)) => {
                 Err("쿼리 매개변수 값을 입력하세요.".into())
             }
             Err(QueryFailure::Error(error)) => Err(error),
@@ -776,7 +777,8 @@ impl Store {
                                 name: original.parameter_name(index).map(str::to_owned),
                             })
                             .collect();
-                        return Err(QueryFailure::ParametersRequired(slots));
+                        let scope = crate::sql_parameter_sets::fingerprint([sql.as_bytes()]);
+                        return Err(QueryFailure::ParametersRequired(slots, scope));
                     }
                     Some(values) if values.len() == count => values
                         .iter()

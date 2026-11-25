@@ -1,5 +1,8 @@
 use rusqlite::{params, Connection};
-use stackport_core::{QueryOutcome, SqlParameterValue, Store};
+use serde_json::{json, Value as Json};
+use stackport_core::{
+    QueryOutcome, SqlParameterSetScope, SqlParameterSetWrite, SqlParameterValue, Store,
+};
 
 #[test]
 fn discovers_sqlite_slots_and_binds_repeatable_typed_values() {
@@ -21,7 +24,7 @@ fn discovers_sqlite_slots_and_binds_repeatable_typed_values() {
     let outcome = store
         .query_prepared(&first_token, &profile.id, sql, 0)
         .unwrap();
-    let QueryOutcome::ParametersRequired { parameters } = outcome else {
+    let QueryOutcome::ParametersRequired { parameters, .. } = outcome else {
         panic!("expected parameters before execution");
     };
     let slots: Vec<_> = parameters
@@ -99,6 +102,133 @@ fn discovers_sqlite_slots_and_binds_repeatable_typed_values() {
         .unwrap(),
         2
     );
+}
+
+#[test]
+fn parameter_sets_migrate_and_keep_one_default_per_sql_and_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    let store = Store::open(&path).unwrap();
+    let project = store.create_project("original").unwrap();
+    let unrelated = store.create_project("unrelated").unwrap();
+    drop(store);
+    let old = Connection::open(&path).unwrap();
+    old.execute_batch("DROP TABLE sql_parameter_sets; PRAGMA user_version = 18;")
+        .unwrap();
+    drop(old);
+
+    let store = Store::open(&path).unwrap();
+    let backup = std::fs::read_dir(directory.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("workspace.sqlite.v18-")
+        })
+        .unwrap();
+    let backup = Connection::open(backup).unwrap();
+    assert_eq!(
+        backup
+            .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+            .unwrap(),
+        18
+    );
+    let scope = |project_id: &str, engine: &str, token: char| -> SqlParameterSetScope {
+        serde_json::from_value(json!({ "project_id": project_id, "engine": engine, "key": token.to_string().repeat(64) })).unwrap()
+    };
+    let current = scope(&project.id, "sqlite", 'a');
+    let values = json!([
+        { "kind": "value", "value": { "kind": "integer", "value": "9223372036854775807" } },
+        { "kind": "value", "value": { "kind": "blob", "value": "00fe" } },
+        { "kind": "value", "value": { "kind": "null" } },
+        { "kind": "secret", "value_kind": "text" }
+    ]);
+    let create = |name| -> SqlParameterSetWrite {
+        serde_json::from_value(json!({ "kind": "create", "input": { "name": name, "is_default": true, "values": values } })).unwrap()
+    };
+    let first = serde_json::to_value(
+        store
+            .save_sql_parameter_set(&current, create("first"))
+            .unwrap(),
+    )
+    .unwrap();
+    let first_id = first["id"].as_str().unwrap();
+    let second = serde_json::to_value(
+        store
+            .save_sql_parameter_set(&current, create("second"))
+            .unwrap(),
+    )
+    .unwrap();
+    let second_id = second["id"].as_str().unwrap();
+    assert!(store
+        .save_sql_parameter_set(&current, create("SECOND"))
+        .is_err());
+    let stale_update = serde_json::from_value(json!({
+        "kind": "update", "id": first_id, "revision": 1,
+        "input": { "name": "stale", "is_default": true, "values": values }
+    }))
+    .unwrap();
+    assert!(store
+        .save_sql_parameter_set(&current, stale_update)
+        .is_err());
+    assert!(store.read_sql_parameter_set(&current, first_id, 1).is_err());
+    let summary = serde_json::to_value(store.list_sql_parameter_sets(&current).unwrap()).unwrap();
+    assert_eq!(summary[0]["id"], second_id);
+    assert_eq!(summary[0]["is_default"], true);
+    assert_eq!(summary[1]["is_default"], false);
+    assert_eq!(summary[1]["revision"], 2);
+    assert_eq!(
+        serde_json::to_value(store.read_sql_parameter_set(&current, first_id, 2).unwrap()).unwrap()
+            ["values"],
+        values
+    );
+
+    for other in [
+        scope(&project.id, "postgres", 'a'),
+        scope(&project.id, "sqlite", 'b'),
+        scope(&unrelated.id, "sqlite", 'a'),
+    ] {
+        assert!(store.list_sql_parameter_sets(&other).unwrap().is_empty());
+        assert!(store.read_sql_parameter_set(&other, first_id, 2).is_err());
+        assert!(store.delete_sql_parameter_set(&other, first_id, 2).is_err());
+    }
+    assert!(store
+        .save_sql_parameter_set(
+            &scope(&project.id, "postgres_script", 'c'),
+            create("invalid-type")
+        )
+        .is_err());
+    assert!(serde_json::from_value::<SqlParameterSetWrite>(json!({
+        "kind": "create",
+        "input": { "name": "invalid secret", "is_default": false,
+          "values": [{ "kind": "secret", "value_kind": "text", "value": "fixture-private" }] }
+    }))
+    .is_err());
+    let duplicate = store.duplicate_project(&project.id, "copy").unwrap();
+    let copied = serde_json::to_value(
+        store
+            .list_sql_parameter_sets(&scope(&duplicate.id, "sqlite", 'a'))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(copied[0]["name"], "second");
+    assert_ne!(copied[0]["id"], second_id);
+    store
+        .delete_sql_parameter_set(&current, first_id, 2)
+        .unwrap();
+    drop(store);
+    let saved = Store::open(&path).unwrap();
+    let persisted: Json = serde_json::to_value(
+        saved
+            .read_sql_parameter_set(&current, second_id, 1)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(persisted["values"], values);
+    saved.archive_project(&project.id).unwrap();
+    assert!(saved.list_sql_parameter_sets(&current).is_err());
 }
 
 #[test]

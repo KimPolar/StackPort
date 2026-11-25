@@ -82,6 +82,8 @@ enum Outcome {
     ParametersRequired {
         parameters: Vec<Parameter>,
         error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parameter_scope: Option<String>,
     },
     Interrupted {
         timed_out: bool,
@@ -281,8 +283,17 @@ pub(super) async fn query(
             );
         }
     }
-    let (state, sent_cancel, executed) =
+    let selected = &request.source[request.span.clone()];
+    let (mut state, sent_cancel, executed) =
         preview(&tx, request, &mut signal, cancel, tls, started).await;
+    if let Outcome::ParametersRequired {
+        parameters,
+        parameter_scope,
+        ..
+    } = &mut state
+    {
+        *parameter_scope = Some(super::parameters::scope_key(selected, parameters));
+    }
     // Roll back even after a successful SELECT. Session-level effects such as
     // advisory locks and LISTEN registrations are cleared before reusing the client.
     let reusable = !sent_cancel
@@ -601,6 +612,7 @@ fn parameters_required(types: &[Type], error: Option<String>) -> Outcome {
     Outcome::ParametersRequired {
         parameters: metadata(types),
         error,
+        parameter_scope: None,
     }
 }
 

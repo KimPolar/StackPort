@@ -45,6 +45,16 @@ pub(super) fn metadata(types: &[Type]) -> Vec<Parameter> {
         .collect()
 }
 
+pub(super) fn scope_key(sql: &str, parameters: &[Parameter]) -> String {
+    let signatures: Vec<_> = parameters
+        .iter()
+        .map(|item| format!("{}:{}", item.oid, item.data_type))
+        .collect();
+    crate::sql_parameter_sets::fingerprint(
+        std::iter::once(sql.as_bytes()).chain(signatures.iter().map(|item| item.as_bytes())),
+    )
+}
+
 pub(super) fn type_label(ty: &Type) -> String {
     if let Kind::Array(element) = ty.kind() {
         return format!("{}[]", type_label(element));

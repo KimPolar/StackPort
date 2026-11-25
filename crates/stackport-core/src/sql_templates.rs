@@ -194,7 +194,7 @@ pub(crate) fn copy_project_templates(
     Ok(count)
 }
 
-fn require_active_project(db: &Connection, project_id: &str) -> Result<()> {
+pub(super) fn require_active_project(db: &Connection, project_id: &str) -> Result<()> {
     let active: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM projects WHERE id = ?1 AND

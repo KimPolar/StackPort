@@ -539,6 +539,11 @@ async function verify(browser, fixture, gateway, jump) {
   const parameterized = "SELECT $1::numeric AS amount, $2::date, $3::report.grade, $4::int[], $5::text, length($6::text), coalesce($7::text, 'fallback')";
   const required = await query(parameterized);
   assert.equal(required.status, 'parameters_required', JSON.stringify(required));
+  assert.match(required.parameter_scope, /^[0-9a-f]{64}$/);
+  const inDocument = "SELECT '😀';\n" + parameterized;
+  const currentScope = await query(inDocument, { kind: 'current', cursor: inDocument.indexOf(parameterized) + 12 });
+  assert.equal(currentScope.parameter_scope, required.parameter_scope);
+  assert.notEqual((await query(parameterized.replace('fallback', 'other'))).parameter_scope, required.parameter_scope);
   assert.deepEqual(required.parameters.map(parameter => [parameter.index, parameter.data_type]), [
     [1, 'numeric'], [2, 'date'], [3, 'report.grade'], [4, 'int4[]'], [5, 'text'], [6, 'text'], [7, 'text'],
   ]);
@@ -1188,20 +1193,52 @@ async function verify(browser, fixture, gateway, jump) {
   const autocommit = page.getByRole('checkbox', { name: '자동 커밋', exact: true });
   assert.equal(await autocommit.isChecked(), true);
   await autocommit.uncheck();
-  await sql.fill("SELECT '첫 결과' AS marker;\nSELECT $2::text AS marker;");
-  await page.getByRole('button', { name: '실행 및 저장', exact: true }).click();
+  await sql.fill("SELECT $1::text AS marker;\nSELECT $2::text AS marker;");
   const scriptConfirmation = page.getByRole('dialog', { name: '스크립트 실행 및 저장', exact: true });
   const confirmScript = scriptConfirmation.getByRole('button', { name: '실행 및 JSON 저장', exact: true });
   const scriptFile = path.join(root, 'postgres-script-editor.json');
-  assert.equal(await confirmScript.isEnabled(), false);
-  await scriptConfirmation.getByLabel('새 JSON 파일 경로', { exact: true }).fill(scriptFile);
-  assert.equal(await confirmScript.isEnabled(), false);
-  await scriptConfirmation.getByLabel('운영 확인', { exact: true }).fill('PROD');
-  await confirmScript.click();
+  async function requestScriptExport() {
+    await page.getByRole('button', { name: '실행 및 저장', exact: true }).click();
+    assert.equal(await confirmScript.isEnabled(), false);
+    await scriptConfirmation.getByLabel('새 JSON 파일 경로', { exact: true }).fill(scriptFile);
+    assert.equal(await confirmScript.isEnabled(), false);
+    await scriptConfirmation.getByLabel('운영 확인', { exact: true }).fill('PROD');
+    await confirmScript.click();
+  }
+  await requestScriptExport();
   const scriptParameters = page.getByRole('dialog', { name: 'PostgreSQL 매개변수', exact: true });
   await scriptParameters.getByLabel('$2 값 숨기기', { exact: true }).check();
   const scriptValue = scriptParameters.getByLabel('$2 값', { exact: true });
   assert.equal(await scriptValue.getAttribute('type'), 'password');
+  await scriptParameters.getByLabel('$1 값', { exact: true }).fill('첫 결과');
+  await scriptValue.fill('temporary-hidden-fixture-value');
+  const sets = scriptParameters.getByRole('group', { name: '매개변수 세트', exact: true });
+  await sets.getByText('세트 저장', { exact: true }).click();
+  await sets.getByLabel('세트 이름', { exact: true }).fill('스크립트 기본값');
+  await sets.getByRole('checkbox', { name: '기본 세트', exact: true }).check();
+  await sets.getByRole('button', { name: '새 세트로 저장', exact: true }).click();
+  await sets.getByText('매개변수 세트를 저장했습니다.', { exact: true }).waitFor();
+  if (process.env.STACKPORT_DATA_DIR) {
+    const workspace = path.join(process.env.STACKPORT_DATA_DIR, 'workspace.sqlite');
+    const python = process.env.STACKPORT_TEST_PYTHON;
+    const saved = execFileSync(python || 'py.exe', [
+      ...(python ? [] : ['-3']), '-c',
+      "import sqlite3, sys\nwith sqlite3.connect(sys.argv[1]) as db: print(db.execute('SELECT values_json FROM sql_parameter_sets WHERE name = ?', (sys.argv[2],)).fetchone()[0])",
+      workspace, '스크립트 기본값',
+    ], { encoding: 'utf8', windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    assert.deepEqual(JSON.parse(saved), [
+      { kind: 'value', value: { kind: 'text', value: '첫 결과' } },
+      { kind: 'secret', value_kind: 'text' },
+    ]);
+  }
+  await scriptParameters.getByRole('button', { name: '취소', exact: true }).click();
+  assert.equal(fs.existsSync(scriptFile), false);
+  await requestScriptExport();
+  await sets.getByText('숨김 값은 다시 입력하세요.', { exact: true }).waitFor();
+  assert.equal(await scriptParameters.getByLabel('$1 값', { exact: true }).inputValue(), '첫 결과');
+  assert.equal(await scriptValue.inputValue(), '');
+  assert.equal(await scriptValue.getAttribute('type'), 'password');
+  assert.equal(await scriptParameters.getByRole('button', { name: '매개변수로 실행', exact: true }).isEnabled(), false);
   await scriptValue.fill('둘째 결과');
   await scriptParameters.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
   const scriptResults = page.getByRole('region', { name: 'PostgreSQL 스크립트 결과', exact: true });

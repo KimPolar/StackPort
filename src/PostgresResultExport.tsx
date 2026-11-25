@@ -8,11 +8,12 @@ export type PostgresExportTarget = { session: string; source: string; scope: Pos
 type NativeOutcome = { status: "exported"; report: ExportReport } |
   { status: "failed"; error: string } |
   { status: "interrupted"; timed_out: boolean } |
-  { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
-type Prompt = { token: string; parameters: PostgresParameter[]; error: string | null };
+  { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null; parameter_scope: string };
+type Prompt = { token: string; parameters: PostgresParameter[]; error: string | null; parameterScope: string };
 
-export function PostgresResultExport({ profile, target, unavailable, onClose, onExported }: {
+export function PostgresResultExport({ profile, projectId, target, unavailable, onClose, onExported }: {
   profile: { name: string; environment: string };
+  projectId: string;
   target: PostgresExportTarget;
   unavailable: string;
   onClose: () => void;
@@ -59,7 +60,7 @@ export function PostgresResultExport({ profile, target, unavailable, onClose, on
         setSubmitting(false); setCancelStatus("");
         const next = await new Promise<PostgresBindings | null>(resolve => {
           resolveValues.current = resolve;
-          setPrompt({ token, parameters: response.parameters, error: response.error });
+          setPrompt({ token, parameters: response.parameters, error: response.error, parameterScope: response.parameter_scope });
         });
         if (!next) return { status: "cancelled" };
         bindings = next;
@@ -88,8 +89,9 @@ export function PostgresResultExport({ profile, target, unavailable, onClose, on
   };
   return <>
     <ResultFileDialog profile={profile} source={target.title} driver={driver} onClose={onClose} onExported={onExported} unavailable={unavailable} />
-    {prompt && !unavailable && <PostgresParameterDialog key={prompt.parameters.map(parameter => parameter.oid).join(",")}
+    {prompt && !unavailable && <PostgresParameterDialog key={prompt.parameterScope}
       parameters={prompt.parameters} title={target.title} error={prompt.error} running={submitting}
+      setScope={{ project_id: projectId, engine: "postgres", key: prompt.parameterScope }}
       cancelStatus={cancelStatus || String(written) + "행 기록 · 파일을 만드는 중"}
       onSubmit={answer} onClose={() => answer(null)} onCancelQuery={() => void cancelPromptQuery(prompt.token)} />}
   </>;

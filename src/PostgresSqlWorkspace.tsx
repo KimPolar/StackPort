@@ -28,14 +28,14 @@ type Completed = { status: "completed"; columns: { name: string; data_type: stri
   total_columns: number; more_rows: boolean; elapsed_ms: number };
 type QueryStatus = Completed | { status: "plan"; plan: PostgresPlan } | { status: "failed"; error: string; position?: number | null } |
   { status: "interrupted"; timed_out: boolean; server_confirmed: boolean } | { status: "script"; script: PostgresScriptOutcome };
-type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null };
+type ParametersNeeded = { status: "parameters_required"; parameters: PostgresParameter[]; error: string | null; parameter_scope: string };
 type Outcome = (QueryStatus | ParametersNeeded) & { connection_closed?: boolean };
 type Preview = { id: string; target: QueryTarget; outcome: QueryStatus };
 type TabPreview = { tab: string; active: ResultView } & Partial<Record<ResultView, Preview>>;
 type ScriptTarget = PostgresExportTarget & { tab: string; mode: "script"; autocommit: boolean; confirmation: string; exportDestination?: string };
 type QueryTarget = (PostgresExportTarget & { tab: string; mode: Exclude<Mode, "script"> }) | ScriptTarget;
 type Running = QueryTarget & { request: string };
-type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null };
+type ParameterRequest = { id: string; target: QueryTarget; parameters: PostgresParameter[]; error: string | null; parameterScope: string };
 const editorId = "postgres-sql-editor";
 const resultPageSize = 25;
 const retainedPreviews = 4;
@@ -44,8 +44,9 @@ const viewNames: Record<ResultView, string> = { data: "조회 결과", plan: "�
 const resultView = (mode: Mode): ResultView => mode === "query" ? "data" : mode === "script" ? "script" : "plan";
 const modeNames: Record<Mode, string> = { query: "쿼리 실행", estimate: "실행 계획", analyze: "실행 분석", script: "스크립트 실행" };
 
-export function PostgresSqlWorkspace({ session, environment, editor, onExport, onQueryActivity }: {
+export function PostgresSqlWorkspace({ session, projectId, environment, editor, onExport, onQueryActivity }: {
   session: string | null;
+  projectId: string;
   environment: string;
   editor: PostgresEditorState;
   onExport: (target: PostgresExportTarget) => void;
@@ -108,14 +109,14 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
       const request = { id: target.session, request: operation.request };
       const sql = { source: target.source, scope: target.scope };
       if (target.mode === "script") {
-        const script = await invoke<PostgresScriptOutcome | { status: "parameters_required"; parameter_indexes: number[] }>("execute_postgres_script", {
+        const script = await invoke<PostgresScriptOutcome | { status: "parameters_required"; parameter_indexes: number[]; parameter_scope: string }>("execute_postgres_script", {
           ...request, input: { ...sql, autocommit: target.autocommit, confirmation: target.confirmation,
             export_destination: target.exportDestination,
             bindings: bindings && parameters?.map(({ index }, offset) => ({ index, value: bindings.values[offset] })),
           },
         });
         outcome = script.status === "parameters_required"
-          ? { status: "parameters_required", error: null,
+          ? { status: "parameters_required", error: null, parameter_scope: script.parameter_scope,
             parameters: script.parameter_indexes.map(index => ({ index, oid: 0, data_type: "서버에서 타입 추론" })) }
           : { status: "script", script };
       } else {
@@ -126,12 +127,12 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
     setRunning(null);
     setCancelStatus("");
     if (outcome.status === "parameters_required" && !outcome.connection_closed) {
-      const { parameters, error } = outcome;
+      const { parameters, error, parameter_scope: parameterScope } = outcome;
       setParameterRequest(previous => {
         const sameTypes = previous?.parameters.length === parameters.length && parameters.every((item, index) =>
           item.oid === previous.parameters[index].oid && item.index === previous.parameters[index].index);
-        const id = previous?.target === target && sameTypes ? previous.id : operation.request;
-        return { id, target, parameters, error };
+        const id = previous?.target === target && previous.parameterScope === parameterScope && sameTypes ? previous.id : operation.request;
+        return { id, target, parameters, error, parameterScope };
       });
       return;
     }
@@ -269,6 +270,7 @@ export function PostgresSqlWorkspace({ session, environment, editor, onExport, o
       onRun={target => { setScriptTarget(null); void run(target); }} />}
     {parameterRequest && session === parameterRequest.target.session && <PostgresParameterDialog key={parameterRequest.id}
       parameters={parameterRequest.parameters} title={`${parameterRequest.target.title} · ${modeNames[parameterRequest.target.mode]}`} error={parameterRequest.error}
+      setScope={{ project_id: projectId, engine: parameterRequest.target.mode === "script" ? "postgres_script" : "postgres", key: parameterRequest.parameterScope }}
       running={busy} cancelStatus={cancelStatus || exportProgress} onSubmit={bindings => void run(parameterRequest.target, bindings, parameterRequest.parameters)}
       onClose={() => { setParameterRequest(null); requestAnimationFrame(() => input.current?.focus()); }}
       onCancelQuery={() => void stop()} />}

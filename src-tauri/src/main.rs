@@ -4,6 +4,7 @@ mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
+use stackport_core::{SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -2229,6 +2230,30 @@ async fn delete_sql_template(store: State<'_, Store>, project_id: String, id: St
 }
 
 #[tauri::command]
+async fn list_sql_parameter_sets(store: State<'_, Store>, scope: SqlParameterSetScope) -> Result<Vec<SqlParameterSetSummary>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_sql_parameter_sets(&scope)).await
+}
+
+#[tauri::command]
+async fn read_sql_parameter_set(store: State<'_, Store>, scope: SqlParameterSetScope, id: String, revision: i64) -> Result<SqlParameterSet, String> {
+    let store = store.inner().clone();
+    worker(move || store.read_sql_parameter_set(&scope, &id, revision)).await
+}
+
+#[tauri::command]
+async fn save_sql_parameter_set(store: State<'_, Store>, scope: SqlParameterSetScope, write: SqlParameterSetWrite) -> Result<SqlParameterSetSummary, String> {
+    let store = store.inner().clone();
+    worker(move || store.save_sql_parameter_set(&scope, write)).await
+}
+
+#[tauri::command]
+async fn delete_sql_parameter_set(store: State<'_, Store>, scope: SqlParameterSetScope, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_sql_parameter_set(&scope, &id, revision)).await
+}
+
+#[tauri::command]
 async fn list_table_query_presets(store: State<'_, Store>, target: TableQueryTarget) -> Result<Vec<TableQueryPreset>, String> {
     let store = store.inner().clone();
     worker(move || store.list_table_query_presets(&target)).await
@@ -2755,6 +2780,10 @@ fn main() {
             read_sql_template,
             save_sql_template,
             delete_sql_template,
+            list_sql_parameter_sets,
+            read_sql_parameter_set,
+            save_sql_parameter_set,
+            delete_sql_parameter_set,
             choose_sqlite_file,
             list_database_exchange_candidates,
             export_database_profiles,

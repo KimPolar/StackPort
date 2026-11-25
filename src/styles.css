@@ -254,6 +254,13 @@ textarea:focus { outline-offset: -2px; }
 .sql-parameter-row > input, .sql-parameter-row > select { min-height: 30px; min-width: 0; border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; background: var(--surface); }
 .sql-parameter-row > input { flex: 1 1 120px; }
 .sql-parameter-row label { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.sql-parameter-sets { display: grid; gap: 8px; min-width: 0; margin: 0 0 8px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+.sql-parameter-sets legend, .sql-parameter-sets summary { font-size: 12px; color: var(--text-subtle); }
+.sql-parameter-sets summary { cursor: pointer; }
+.sql-parameter-sets details[open] > .sql-parameter-set-actions { margin-top: 8px; }
+.sql-parameter-set-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.sql-parameter-set-actions .field { flex: 1 1 140px; min-width: 0; margin: 0; }
+.sql-parameter-set-actions .files-check { align-self: end; margin: 0 0 7px; }
 .sql-editor-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .sqlite-plan-summary { margin: 0; padding: 9px 14px; color: var(--text-subtle); font-size: 12px; }
 .sqlite-plan-steps { margin: 0; padding: 0; list-style: none; }

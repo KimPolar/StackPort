@@ -106,6 +106,8 @@ pub use sql_diagnostics::SqlDiagnostics;
 mod sql_refactor;
 mod sql_templates;
 pub use sql_templates::{SqlTemplate, SqlTemplateInput, SqlTemplateSummary, SqlTemplateWrite};
+mod sql_parameter_sets;
+pub use sql_parameter_sets::{SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
 pub use sql_statement::sqlite_statement_at;
 mod text_draft;
 pub use text_draft::{save_text_draft, TextLineEnding};
@@ -148,7 +150,7 @@ pub use relational_object_search::RelationalObjectSearch;
 mod native_table_filter;
 mod tls;
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -430,6 +432,7 @@ impl Store {
                 tx.execute_batch(mysql::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(db_profiles::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -490,6 +493,9 @@ impl Store {
                     tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 } else if current < 18 {
                     table_query_presets::migrate(&tx, current >= 16)?;
+                }
+                if current < 19 {
+                    tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
@@ -996,6 +1002,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             if record.environment == Some("PROD") => "postgres-script-prod-confirmed",
         "postgres.sql.script" | "postgres.sql.script.cancel" | "postgres.sql.script.timeout" => "postgres-script-login-permissions",
         "postgres.sql.script.export.json" => "postgres-script-result-json-no-overwrite",
+        "sql_parameter_set.create" | "sql_parameter_set.update" | "sql_parameter_set.delete" => "sql-parameter-set-excludes-hidden-values",
         _ => "local-workspace",
     };
     db.execute("INSERT INTO audit_events (id, correlation_id, operation, project_id, profile_id, environment, object_name, outcome, policy, affected_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",

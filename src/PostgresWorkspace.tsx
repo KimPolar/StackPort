@@ -218,10 +218,10 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
           }} onExport={requestExport} onBackup={requestBackup} />
       </div>
     </>}
-    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} environment={environment} editor={editor} onExport={requestExport}
+    <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} projectId={profile.project_id} environment={environment} editor={editor} onExport={requestExport}
       onQueryActivity={onQueryActivity} /></div>
     {online && <PostgresServerMonitor key={session.id} workspace={session} environment={environment} database={database} visible={visible && view === "monitor"} />}
-    {exportTarget && <PostgresResultExport profile={profile.settings} target={exportTarget}
+    {exportTarget && <PostgresResultExport profile={profile.settings} projectId={profile.project_id} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {backup && <PostgresBackupDialog id={backup.id} target={backup.target} connection={name}
