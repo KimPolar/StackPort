@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Pencil, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, Database, Pencil, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
 import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditKind, type RedisEditReport } from "./RedisEditDialog";
+import { RedisServerMonitor } from "./RedisServerMonitor";
 import { useNativeRead } from "./usePostgresRead";
 import "./redisWorkspace.css";
 
@@ -22,6 +23,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [monitorOpen, setMonitorOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
@@ -61,7 +63,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (!(message.includes("연결이 닫혔습니다") || message.includes("연결이 끊겼습니다"))) return false;
     const id = active.current;
     if (id) {
-      active.current = null; setSession(null); setEditor(null); setEditReport(null); setError(message);
+      active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setError(message);
       void invoke("close_redis", { id }).catch(() => {});
     }
     return true;
@@ -94,7 +96,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     const id = active.current;
     if (!id) return;
     active.current = null;
-    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setError("");
+    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setError("");
     try { await invoke("close_redis", { id }); }
     catch (reason) { if (mounted.current) setError(String(reason)); }
   }
@@ -115,6 +117,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       </div>
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.allow_edits ? "키 편집 허용" : "읽기 전용"}</span>
+        {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setMonitorOpen(true)}>
+          <Activity size={15} aria-hidden /> 서버 모니터</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
           <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setConnectOpen(true); }}>
             <Plug size={15} aria-hidden /> Redis 연결</button>}
@@ -188,6 +192,9 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     {editor && session && <RedisEditDialog id={session.id} keyId={editor.key.id} display={editor.key.display} kind={editor.kind}
       environment={settings.environment} onBusy={onBusy} onFailure={handleFailure} onClose={() => setEditor(null)}
       onApplied={report => { setEditor(null); chooseKey(editor.key); setEditReport(report); }} />}
+    {monitorOpen && session && <RedisServerMonitor id={session.id} selectedDatabase={settings.database}
+      target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`}
+      onFailure={handleFailure} onClose={() => setMonitorOpen(false)} />}
   </section>;
 }
 

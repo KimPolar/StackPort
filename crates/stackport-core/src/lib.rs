@@ -27,7 +27,7 @@ pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
-pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
+pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisServerSnapshot, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};

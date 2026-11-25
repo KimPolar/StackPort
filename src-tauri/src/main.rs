@@ -944,6 +944,14 @@ async fn redis_value(redis: State<'_, stackport_core::RedisManager>, id: String,
     -> Result<stackport_core::RedisValuePage, String> { redis.value(&id, input).await }
 
 #[tauri::command]
+async fn redis_server_snapshot(
+    redis: State<'_, stackport_core::RedisManager>,
+    id: String,
+) -> Result<stackport_core::RedisServerSnapshot, String> {
+    redis.server_snapshot(&id).await
+}
+
+#[tauri::command]
 async fn preview_redis_edit(redis: State<'_, stackport_core::RedisManager>, id: String, key: String, input: stackport_core::RedisEditInput)
     -> Result<stackport_core::RedisEditPreview, String> { redis.preview_edit(&id, key, input).await }
 
@@ -1931,6 +1939,7 @@ fn main() {
             close_redis,
             redis_keys,
             redis_value,
+            redis_server_snapshot,
             preview_redis_edit,
             discard_redis_edit,
             apply_redis_edit,

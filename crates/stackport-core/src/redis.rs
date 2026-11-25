@@ -1,9 +1,11 @@
 mod edit;
 mod keys;
+mod monitor;
 mod profiles;
 mod resp;
 
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
+pub use monitor::RedisServerSnapshot;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{RedisProfile, RedisSettings};
 
@@ -150,6 +152,12 @@ impl RedisManager {
             Box::pin(keys::value(&mut state.wire, input))
         })
         .await
+    }
+
+    pub async fn server_snapshot(&self, id: &str) -> Result<RedisServerSnapshot> {
+        let session = self.session(id)?;
+        self.run(id, &session, |state| Box::pin(monitor::snapshot(&mut state.wire)))
+            .await
     }
 
     pub async fn preview_edit(

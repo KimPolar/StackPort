@@ -217,7 +217,7 @@ SP-NS-010,Redis 키 탐색,"SCAN 기반 키 검색·패턴·타입 필터, 키 �
 SP-NS-011,Redis 값 편집,"String, Hash, List, Set, Sorted Set, Stream, JSON 모듈(지원 시)의 타입별 UI.",partial,"String 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가와 UTF-8·HEX 미리보기",crates/stackport-core/src/redis.rs; crates/stackport-core/src/redis/keys.rs; src/RedisWorkspace.tsx; tests/redis-smoke.cjs; crates/stackport-core/src/redis/edit.rs; src/RedisEditDialog.tsx
 SP-NS-012,Redis 명령,"CLI 스타일 콘솔, 명령 자동 완성·결과 타입 표시·실행 이력, 위험 명령 경고.",not_started,,
 SP-NS-013,Redis Pub/Sub,채널 구독·메시지 수신·발행·자동 재연결·기록 관리.,not_started,,
-SP-NS-014,Redis 관리,메모리·클라이언트·슬로로그·키 분포·복제·Cluster 노드/슬롯 상태 표시.,not_started,,
+SP-NS-014,Redis 관리,메모리·클라이언트·슬로로그·키 분포·복제·Cluster 노드/슬롯 상태 표시.,partial,"단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",crates/stackport-core/src/redis.rs; crates/stackport-core/src/redis/keys.rs; src/RedisWorkspace.tsx; tests/redis-smoke.cjs; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx
 SP-NS-015,Redis 백업/명령 파일,"지원되는 RDB/AOF 관리 진입점, 명령 스크립트 실행, 읽기 전용/권한별 처리.",not_started,,
 SP-NS-016,데이터 구조 변환,JSON/BSON/RESP를 구분하여 내보내고 타입 정보 손실 가능성을 명시.,not_started,,
 SP-NS-017,서버 기능 확인,호환 서버라도 명령·모듈·프로토콜 차이를 탐지하고 해당 UI 기능을 차등 제공.,partial,"접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, 지원 키 타입의 읽기 명령 선택과 미지원 타입 표시",crates/stackport-core/src/redis.rs; crates/stackport-core/src/redis/keys.rs; src/RedisWorkspace.tsx; tests/redis-smoke.cjs

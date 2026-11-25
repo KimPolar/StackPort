@@ -52,6 +52,34 @@ async function ready(port, child) {
   throw new Error('The Redis fixture did not start.');
 }
 
+async function verifyReplica({ command, open, alternate, serverPort }) {
+  const port = await availablePort();
+  const directory = path.join(root, 'replica');
+  fs.mkdirSync(directory);
+  const replica = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no',
+    '--replicaof', '127.0.0.1', String(serverPort)], { cwd: directory, windowsHide: true, stdio: 'ignore' });
+  try {
+    await ready(port, replica);
+    const fixture = await alternate('복제본 모니터', { host: '127.0.0.1', port, tls: false, ca_path: null, username: '', environment: 'DEV' });
+    const { id } = await open(fixture, '', '');
+    try {
+      let snapshot;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        snapshot = await command('redis_server_snapshot', { id });
+        if (snapshot.upstream_link && snapshot.keyspace.some(database => database.database === 3)) break;
+        await delay(250);
+      }
+      assert.equal(snapshot.role, 'replica');
+      assert.equal(snapshot.upstream_link, true);
+      assert.ok(snapshot.keyspace.find(database => database.database === 3).keys > 300);
+    } finally {
+      await command('close_redis', { id });
+    }
+  } finally {
+    if (replica.exitCode === null) replica.kill();
+  }
+}
+
 async function proxy(port) {
   const ca = path.join(root, 'ca.pem');
   const caKey = path.join(root, 'ca.key');
@@ -129,6 +157,16 @@ async function verify(browser, serverPort, secure) {
   await command('close_redis', { id: plainSession.id });
 
   const { id } = await open(profile);
+  const monitor = await command('redis_server_snapshot', { id });
+  assert.ok(monitor.used_memory > 0 && monitor.peak_memory >= monitor.used_memory);
+  assert.ok(monitor.connected_clients >= 1);
+  assert.equal(monitor.role, 'primary');
+  assert.equal(monitor.connected_replicas, 0);
+  assert.equal(monitor.upstream_link, null);
+  assert.equal(monitor.keyspace.find(item => item.database === 0).keys, 1);
+  const selectedDb = monitor.keyspace.find(item => item.database === 3);
+  assert.ok(selectedDb.keys > 300 && selectedDb.expiring >= 2);
+  assert.deepEqual(monitor.slow_log, { status: 'unavailable', reason: '현재 Redis 역할에 이 명령의 권한이 없습니다.' });
   const scan = (cursor, pattern, kind = null) => command('redis_keys', { id, input: { cursor, pattern, kind } });
   const read = (key, position = null) => command('redis_value', { id, input: { key: keyId(key), position } });
   let cursor = '0';
@@ -174,6 +212,14 @@ async function verify(browser, serverPort, secure) {
   await command('close_redis', { id });
   await assert.rejects(scan('0', '*'), /연결이 닫혔습니다/);
   const writer = await alternate('편집 검증', { username: 'fixture_writer' });
+  const logSession = await open(writer);
+  const withLog = await command('redis_server_snapshot', { id: logSession.id });
+  assert.equal(withLog.slow_log.status, 'available');
+  assert.ok(withLog.slow_log.entries.length <= 20);
+  assert.ok(withLog.slow_log.entries.some(entry => entry.command === 'SET' && entry.duration_us >= 0));
+  assert.doesNotMatch(JSON.stringify(withLog.slow_log), /example-private-slowlog-payload|db0:only|127\.0\.0\.1/);
+  await command('close_redis', { id: logSession.id });
+  await verifyReplica({ command, open, alternate, serverPort });
   await verifyEdits({ command, open, profile, writer, serverPort, secure });
 
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
@@ -183,6 +229,18 @@ async function verify(browser, serverPort, secure) {
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await workspace.getByText(/Redis 8\.4\.7 · DB 3 · TLS/).waitFor();
+  await workspace.getByRole('button', { name: '서버 모니터', exact: true }).click();
+  const monitorDialog = page.getByRole('dialog', { name: 'Redis 서버 모니터', exact: true });
+  await monitorDialog.getByText('사용 메모리', { exact: true }).waitFor();
+  await monitorDialog.getByRole('row').filter({ hasText: '현재 DB' }).getByText('현재 DB', { exact: true }).waitFor();
+  await monitorDialog.getByText(/현재 Redis 역할에 이 명령의 권한이 없습니다/).waitFor();
+  const db0 = monitorDialog.getByRole('row').filter({ has: page.getByRole('rowheader', { name: '0', exact: true }) });
+  assert.equal(await db0.getByRole('cell').first().textContent(), '1');
+  cli(serverPort, [['SET', 'db0:monitor-refresh', 'fixture']]);
+  await monitorDialog.getByRole('button', { name: '새로 고침', exact: true }).click();
+  await db0.getByRole('cell', { name: '2', exact: true }).waitFor();
+  await monitorDialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await monitorDialog.waitFor({ state: 'detached' });
   await findKey(page, workspace, 'cache:list', 'list');
   const detail = workspace.getByRole('region', { name: 'Redis 키 상세', exact: true });
   await detail.getByText('entry-0', { exact: true }).waitFor();
@@ -319,7 +377,8 @@ async function verifyEdits({ command, open, profile, writer, serverPort, secure 
 
 async function main() {
   const port = await availablePort();
-  const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no', '--loglevel', 'warning'], {
+  const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no',
+    '--repl-diskless-sync-delay', '0', '--loglevel', 'warning'], {
     cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -347,12 +406,15 @@ async function main() {
         '+sscan', '+xlen', '+xrange', '+watch', '+unwatch', '+multi', '+exec', '+discard'],
       ['ACL', 'SETUSER', 'fixture_writer', 'on', '>' + secret, '~*',
         '+@read', '-keys', '+info', '+select', '+dbsize', '+memory|usage', '+watch', '+unwatch', '+multi', '+exec', '+discard',
-        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd'],
+        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+slowlog|get'],
+      ['CONFIG', 'SET', 'slowlog-log-slower-than', '0'],
+      ['SET', 'slowlog:fixture', 'example-private-slowlog-payload'],
+      ['CONFIG', 'SET', 'slowlog-log-slower-than', '-1'],
     ]);
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure);
-    console.log('Windows Redis E2E passed (ACL, TLS, cursor browsing, six typed edits, expiry, conflicts and unknown writes).');
+    console.log('Windows Redis E2E passed (ACL, TLS, server monitor, cursor browsing, six typed edits, expiry, conflicts and unknown writes).');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
     throw error;

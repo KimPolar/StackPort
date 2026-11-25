@@ -37,3 +37,11 @@
 .redis-edit-stream-field { padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
 .redis-edit-dialog .redis-values { max-height: 33vh; }
 .redis-edit-dialog .confirm-copy { overflow-wrap: anywhere; }
+.dialog.redis-monitor { width: min(760px, calc(100vw - 32px)); }
+.redis-monitor-body { display: grid; gap: 14px; padding: 0 21px 21px; }
+.redis-monitor-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.redis-monitor-toolbar p { margin: 0; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.redis-monitor .results-card { min-width: 0; }
+.redis-monitor .panel-heading h3 { font-size: 14px; margin: 0; }
+.redis-monitor .redis-values { max-height: 28dvh; font-variant-numeric: tabular-nums; }
+.redis-monitor .redis-values small { margin-left: 6px; }
