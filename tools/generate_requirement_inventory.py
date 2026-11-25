@@ -192,9 +192,10 @@ PARTIAL = {
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬, 페이지 단위 문서 조회와 BSON Canonical Extended JSON 표시",
+    "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
     "SP-NS-006": "MongoDB 컬렉션의 인덱스 키·고유 여부·TTL 조회",
-    "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·컬렉션·뷰·BSON 문서·인덱스 조회와 표본 스키마 분석, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
+    "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·컬렉션·뷰·BSON 문서·인덱스 조회, 표본 스키마 분석과 단계별 집계 미리보기, 프로젝트별 파이프라인 저장 및 교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
@@ -228,6 +229,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
         if subset:
             if requirement_id in {"SP-NS-001", "SP-NS-003", "SP-NS-006"}:
                 evidence = "crates/stackport-core/src/mongo.rs; crates/stackport-core/src/mongo/query.rs; src/MongoWorkspace.tsx; tests/mongo-smoke.cjs"
+            elif requirement_id == "SP-NS-004":
+                evidence = "crates/stackport-core/src/mongo/pipeline.rs; crates/stackport-core/src/mongo/pipeline_store.rs; crates/stackport-core/tests/mongo_pipelines.rs; src/MongoPipeline.tsx; tests/mongo-smoke.cjs"
             elif requirement_id == "SP-NS-005":
                 evidence = "crates/stackport-core/src/mongo/schema.rs; src/MongoSchemaAnalysis.tsx; tests/mongo-smoke.cjs"
             elif requirement_id.startswith("SP-NS-") or requirement_id == "SP-AT-018":

@@ -2,10 +2,11 @@ use super::{message, validate_namespace, MongoManager, READ_TIMEOUT, SERVER_TIME
 use crate::Result;
 use bson::{doc, raw::RawDocumentBuf, Bson, Document};
 use futures_util::TryStreamExt;
+use mongodb::Cursor;
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
-const PAGE_SIZE: usize = 20;
+pub(super) const PAGE_SIZE: usize = 20;
 const DOCUMENT_LIMIT: usize = 64 * 1024;
 const PAGE_BYTES: usize = 384 * 1024;
 
@@ -81,7 +82,7 @@ impl MongoManager {
             .database(database)
             .collection::<RawDocumentBuf>(collection);
         timeout(READ_TIMEOUT, async {
-            let mut cursor = collection
+            let cursor = collection
                 .find(filter)
                 .projection(projection)
                 .sort(sort)
@@ -91,42 +92,48 @@ impl MongoManager {
                 .max_time(SERVER_TIME)
                 .await
                 .map_err(message)?;
-            let mut items = Vec::new();
-            let mut remaining = PAGE_BYTES;
-            let mut has_next = false;
-            while let Some(raw) = cursor.try_next().await.map_err(message)? {
-                if items.len() == PAGE_SIZE {
-                    has_next = true;
-                    break;
-                }
-                let bytes = raw.as_bytes().len();
-                let mut item = DocumentPreview {
-                    id: None,
-                    bson_bytes: bytes,
-                    json: None,
-                };
-                if bytes <= DOCUMENT_LIMIT && bytes <= remaining {
-                    let document = Document::try_from(raw)
-                        .map_err(|_| "MongoDB BSON 문서를 읽을 수 없습니다.")?;
-                    item.id = document
-                        .get("_id")
-                        .map(|value| value.clone().into_canonical_extjson().to_string())
-                        .filter(|id| id.len() <= 256);
-                    let json = Bson::Document(document).into_canonical_extjson();
-                    if let Ok(serialized) = serde_json::to_string_pretty(&json) {
-                        if serialized.len() <= DOCUMENT_LIMIT && serialized.len() <= remaining {
-                            remaining -= serialized.len();
-                            item.json = Some(serialized);
-                        }
-                    }
-                }
-                items.push(item);
-            }
-            Ok(MongoDocumentPage { items, has_next })
+            read_document_page(cursor).await
         })
         .await
         .map_err(|_| "MongoDB 문서 조회 시간이 초과되었습니다.")?
     }
+}
+
+pub(super) async fn read_document_page(
+    mut cursor: Cursor<RawDocumentBuf>,
+) -> Result<MongoDocumentPage> {
+    let mut items = Vec::new();
+    let mut remaining = PAGE_BYTES;
+    let mut has_next = false;
+    while let Some(raw) = cursor.try_next().await.map_err(message)? {
+        if items.len() == PAGE_SIZE {
+            has_next = true;
+            break;
+        }
+        let bytes = raw.as_bytes().len();
+        let mut item = DocumentPreview {
+            id: None,
+            bson_bytes: bytes,
+            json: None,
+        };
+        if bytes <= DOCUMENT_LIMIT && bytes <= remaining {
+            let document =
+                Document::try_from(raw).map_err(|_| "MongoDB BSON 문서를 읽을 수 없습니다.")?;
+            item.id = document
+                .get("_id")
+                .map(|value| value.clone().into_canonical_extjson().to_string())
+                .filter(|id| id.len() <= 256);
+            let json = Bson::Document(document).into_canonical_extjson();
+            if let Ok(serialized) = serde_json::to_string_pretty(&json) {
+                if serialized.len() <= DOCUMENT_LIMIT && serialized.len() <= remaining {
+                    remaining -= serialized.len();
+                    item.json = Some(serialized);
+                }
+            }
+        }
+        items.push(item);
+    }
+    Ok(MongoDocumentPage { items, has_next })
 }
 
 fn read_document(text: &str, label: &str) -> Result<Document> {

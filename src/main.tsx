@@ -2109,7 +2109,7 @@ function App() {
     </Dialog>}
     {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", duplicateProfile: "SQLite 연결 복제", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
       {(modal === "project" || modal === "rename" || sqliteProfileForm || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={sqliteProfileForm ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
-      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 연결 설정, SQL 템플릿과 매개변수 세트를 복제합니다. 복제한 연결은 같은 데이터베이스와 SSH 대상에 접속합니다.</p>}
+      {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 연결 설정, SQL 템플릿, 매개변수 세트와 MongoDB 파이프라인을 복제합니다. 복제한 연결은 같은 데이터베이스와 SSH 대상에 접속합니다.</p>}
       {modal === "archiveProject" && <p className="confirm-copy"><strong>{project?.name}</strong>을 활성 목록에서 숨깁니다. 연결 정의와 파일은 보존되며 보관된 프로젝트 목록에서 다시 활성화할 수 있습니다.</p>}
       {sqliteProfileForm && <>
         <label className="field">SQLite 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" />
@@ -2298,6 +2298,7 @@ const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
   "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
+  "mongo_pipeline.create": "MongoDB 파이프라인 생성", "mongo_pipeline.update": "MongoDB 파이프라인 편집", "mongo_pipeline.delete": "MongoDB 파이프라인 삭제",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",
   "sql_parameter_set.create": "SQL 매개변수 세트 저장",

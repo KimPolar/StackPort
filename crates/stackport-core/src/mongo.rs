@@ -1,7 +1,12 @@
+mod pipeline;
+mod pipeline_store;
 mod profiles;
 mod query;
 mod schema;
 
+pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
+pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
+pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
 pub use profiles::{MongoProfile, MongoSettings};
 pub use query::{MongoDocumentPage, MongoQuery};
 pub use schema::MongoSchemaSample;

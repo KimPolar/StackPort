@@ -4,13 +4,14 @@ import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
+import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
+import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
 type Session = { id: string; database: string | null };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
-type Item = { id: string | null; bson_bytes: number; json: string | null };
 type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null };
 type Query = { filter: string; projection: string; sort_field: string; descending: boolean; page: number };
 
@@ -70,7 +71,7 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} />}
+    {session && <Browse key={session.id} session={session} projectId={profile.project_id} />}
     {login && <Dialog title="MongoDB 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{mongoAddress(settings.uri)}</p>
@@ -86,7 +87,7 @@ export function MongoWorkspace({ profile }: { profile: MongoProfile }) {
   </section>;
 }
 
-function Browse({ session }: { session: Session }) {
+function Browse({ session, projectId }: { session: Session; projectId: string }) {
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
@@ -103,7 +104,7 @@ function Browse({ session }: { session: Session }) {
     </div>
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
-        revision={revision} refresh={() => setRevision(value => value + 1)} />
+        projectId={projectId} revision={revision} refresh={() => setRevision(value => value + 1)} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
   </div>;
 }
@@ -134,15 +135,15 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, revision, refresh }: {
-  id: string; database: string; collection: Collection; revision: number; refresh: () => void;
+function CollectionContent({ id, database, collection, projectId, revision, refresh }: {
+  id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
 }) {
-  const [view, setView] = useState<"documents" | "indexes" | "schema">("documents");
+  const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline">("documents");
   const [draft, setDraft] = useState(defaultQuery);
   const [query, setQuery] = useState(defaultQuery);
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
-  const documents = useNativeRead<Page<Item>>("mongo_documents", docArgs, revision);
+  const documents = useNativeRead<MongoDocumentPage>("mongo_documents", docArgs, revision);
   const indexes = useNativeRead<Page<Index>>("mongo_indexes", view === "indexes" ? args : null, revision);
   const update = (change: Partial<Query>) => setDraft(value => ({ ...value, ...change }));
   const narrowDocument = () => { update({ projection: '{"_id": 1}' }); setQuery({ ...query, projection: '{"_id": 1}', page: 0 }); };
@@ -154,8 +155,10 @@ function CollectionContent({ id, database, collection, revision, refresh }: {
       <button type="button" className="secondary small" aria-pressed={view === "documents"} onClick={() => setView("documents")}>문서</button>
       {collection.kind !== "view" && <button type="button" className="secondary small" aria-pressed={view === "indexes"} onClick={() => setView("indexes")}>인덱스</button>}
       <button type="button" className="secondary small" aria-pressed={view === "schema"} onClick={() => setView("schema")}>스키마 분석</button>
+      <button type="button" className="secondary small" aria-pressed={view === "pipeline"} onClick={() => setView("pipeline")}>집계 파이프라인</button>
     </div>
     <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
+    <div hidden={view !== "pipeline"}><MongoPipeline target={args} projectId={projectId} /></div>
     {view === "indexes" && <>
       <ReadStatus {...indexes} />
       {indexes.data && <div className="table-wrap"><table aria-label="MongoDB 인덱스"><thead><tr>
@@ -187,14 +190,8 @@ function CollectionContent({ id, database, collection, revision, refresh }: {
         </form>
       </details>
       <ReadStatus {...documents} />
-      {documents.data?.items.length ? <ul className="mongo-document-list" aria-label="MongoDB 문서">
-        {documents.data.items.map((item, index) => <li key={index}><details open={index === 0}>
-          <summary><span>{query.page * 20 + index + 1}행</span>{item.id && <code title={item.id}>{item.id}</code>}
-            <small>{displayNumber.format(item.bson_bytes)} B</small></summary>
-          {item.json === null ? <p className="form-note">미리보기 한도를 초과했습니다. 표시 필드를 지정해 다시 조회하세요.</p>
-            : <pre aria-label="Canonical Extended JSON" tabIndex={0}><code>{item.json}</code></pre>}
-        </details></li>)}
-      </ul> : null}
+      {documents.data?.items.length ? <MongoDocumentList items={documents.data.items} offset={query.page * 20} heading="MongoDB 문서"
+        limitMessage="미리보기 한도를 초과했습니다. 표시 필드를 지정해 다시 조회하세요." /> : null}
       {documents.data?.items.some(item => item.json === null) && <div className="mongo-actions">
         <button type="button" className="secondary small" onClick={narrowDocument}>문서 ID만 보기</button>
       </div>}

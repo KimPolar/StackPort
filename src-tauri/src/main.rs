@@ -963,6 +963,34 @@ async fn mongo_schema_sample(mongo: State<'_, stackport_core::MongoManager>, id:
     -> Result<stackport_core::MongoSchemaSample, String> { mongo.schema_sample(&id, &database, &collection, sample_size).await }
 
 #[tauri::command]
+async fn mongo_pipeline_preview(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, request: stackport_core::MongoPipelinePreview)
+    -> Result<stackport_core::MongoDocumentPage, String> { mongo.preview_pipeline(&id, &database, &collection, request).await }
+
+#[tauri::command]
+async fn list_mongo_pipelines(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MongoPipelineSummary>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_mongo_pipelines(&project_id)).await
+}
+
+#[tauri::command]
+async fn read_mongo_pipeline(store: State<'_, Store>, project_id: String, id: String) -> Result<stackport_core::SavedMongoPipeline, String> {
+    let store = store.inner().clone();
+    worker(move || store.read_mongo_pipeline(&project_id, &id)).await
+}
+
+#[tauri::command]
+async fn save_mongo_pipeline(store: State<'_, Store>, project_id: String, write: stackport_core::MongoPipelineWrite) -> Result<stackport_core::SavedMongoPipeline, String> {
+    let store = store.inner().clone();
+    worker(move || store.save_mongo_pipeline(&project_id, write)).await
+}
+
+#[tauri::command]
+async fn delete_mongo_pipeline(store: State<'_, Store>, project_id: String, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_mongo_pipeline(&project_id, &id, revision)).await
+}
+
+#[tauri::command]
 async fn list_sql_server_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<sql_server::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_sql_server_profiles(&project_id)).await
@@ -2637,6 +2665,11 @@ fn main() {
             mongo_indexes,
             mongo_documents,
             mongo_schema_sample,
+            mongo_pipeline_preview,
+            list_mongo_pipelines,
+            read_mongo_pipeline,
+            save_mongo_pipeline,
+            delete_mongo_pipeline,
             list_sql_server_profiles,
             create_sql_server_profile,
             update_sql_server_profile,

@@ -32,6 +32,7 @@ pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
+pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
@@ -152,7 +153,7 @@ pub use relational_object_search::RelationalObjectSearch;
 mod native_table_filter;
 mod tls;
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -436,6 +437,7 @@ impl Store {
                 tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -500,7 +502,10 @@ impl Store {
                 if current < 19 {
                     tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 }
-                tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
+                if current < 20 {
+                    tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
+                }
+                tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

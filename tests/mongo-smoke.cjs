@@ -139,6 +139,31 @@ async function verify(page, port, ca) {
     const viewSchema = await analyze(50, database, 'recent_records');
     assert.equal(viewSchema.documents, 2);
     assert.equal(viewSchema.oversized, 1);
+    const stage = (operator, expression, enabled = true) => ({ operator, expression, enabled });
+    const preview = (stages, through = null, db = database, collection = 'records') =>
+      command('mongo_pipeline_preview', { id, database: db, collection, request: { stages, through } });
+    const pipeline = [
+      stage('$match', '{"rank":{"$gte":20},"exact":{"$numberLong":"9223372036854775807"}}'),
+      stage('$project', '{"rank":1,"exact":1,"_id":0}'),
+      stage('$limit', '{아직 작성 중', false),
+      stage('$group', '{"_id":null,"total":{"$sum":"$rank"},"exact":{"$max":"$exact"}}'),
+    ];
+    assert.equal((await preview(pipeline, 2)).items.length, 3);
+    assert.deepEqual(JSON.parse((await preview(pipeline)).items[0].json), {
+      _id: null, total: { $numberInt: '63' }, exact: { $numberLong: '9223372036854775807' },
+    });
+    const capped = await preview([stage('$match', '{}')]);
+    assert.equal(capped.items.length, 20);
+    assert.equal(capped.has_next, true);
+    const groupedView = await preview([stage('$count', '"count"')], null, database, 'recent_records');
+    assert.equal(JSON.parse(groupedView.items[0].json).count.$numberInt, '3');
+    const facet = await preview([stage('$facet', '{"totals":[{"$count":"count"}]}')]);
+    assert.equal(JSON.parse(facet.items[0].json).totals[0].count.$numberInt, '23');
+    await assert.rejects(preview([stage('$group', '{'), stage('$limit', '1')]), /1단계.*Extended JSON/);
+    await assert.rejects(preview([stage('$out', '"changed"')]), /1단계/);
+    await assert.rejects(preview([stage('$facet', '{"unsafe":[{"$lookup":{"from":"records","as":"joined","pipeline":[{"$merge":"changed"}]}}]}')]), /읽기 전용/);
+    await assert.rejects(preview([stage('$project', '{"calc":{"$function":{"body":"function() { return 1; }","args":[],"lang":"js"}}}')]), /JavaScript/);
+    await assert.rejects(preview([stage('$count', '"count"')], null, 'private', 'data'), /권한/);
   } finally {
     await command('close_mongo', { id });
   }
@@ -163,6 +188,7 @@ async function verify(page, port, ca) {
   await detail.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '"22"' }).waitFor();
   await detail.getByRole('button', { name: '인덱스', exact: true }).click();
   await detail.getByRole('rowheader', { name: 'expiry', exact: true }).waitFor();
+  await verifyPipeline(page, detail);
   await workspace.getByRole('button', { name: 'schema_samples 컬렉션', exact: true }).click();
   await detail.getByRole('button', { name: '스키마 분석', exact: true }).click();
   await detail.getByLabel('표본 크기', { exact: true }).selectOption('100');
@@ -188,6 +214,70 @@ async function verify(page, port, ca) {
   assert.deepEqual(errors, []);
 }
 
+async function verifyPipeline(page, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  const dialog = name => page.getByRole('dialog', { name, exact: true });
+  await button(detail, '집계 파이프라인').click();
+  const editor = detail.getByRole('region', { name: 'MongoDB 집계 파이프라인', exact: true });
+  const results = editor.getByRole('region', { name: 'MongoDB 집계 미리보기 결과' });
+  const addOperator = editor.getByLabel('추가할 집계 연산자', { exact: true });
+  const stageList = editor.getByRole('list', { name: '집계 단계', exact: true });
+  const expressions = ['{"rank":{"$gte":20},"title":{"$exists":true}}', '{"rank":1,"_id":0}', '{"rank":-1}', '1'];
+  for (const [index, operator] of ['$match', '$project', '$sort', '$limit'].entries()) {
+    await addOperator.selectOption(operator);
+    await button(editor, '단계 추가').click();
+    await editor.getByLabel(`${index + 1}단계 Extended JSON`, { exact: true }).fill(expressions[index]);
+  }
+  await button(editor, '2단계까지 미리보기').click();
+  await results.getByRole('heading', { name: '2단계까지 미리보기', exact: true }).waitFor();
+  await results.getByText('문서 3개', { exact: true }).waitFor();
+  await button(editor, '전체 미리보기').click();
+  await results.getByText('문서 1개', { exact: true }).waitFor();
+  const projected = await results.getByLabel('Canonical Extended JSON').first().textContent();
+  assert.equal(JSON.parse(projected).rank.$numberInt, '22');
+  await button(editor, '2단계 위로 이동').click();
+  assert.equal(await editor.getByLabel('1단계 연산자', { exact: true }).inputValue(), '$project');
+  await button(editor, '전체 미리보기').click();
+  await results.getByText('집계 결과가 없습니다.', { exact: true }).waitFor();
+  await button(editor, '1단계 아래로 이동').click();
+  await editor.getByRole('checkbox', { name: '4단계 활성화', exact: true }).uncheck();
+  await button(editor, '전체 미리보기').click();
+  await results.getByText('문서 3개', { exact: true }).waitFor();
+
+  await button(editor, '저장').click();
+  const save = dialog('파이프라인 저장');
+  await save.getByLabel('파이프라인 이름', { exact: true }).fill('랭크 검토');
+  await button(save, '프로젝트에 저장').click();
+  await editor.getByText('랭크 검토 파이프라인을 저장했습니다.', { exact: true }).waitFor();
+  await button(editor, 'JSON 교환').click();
+  const exchange = dialog('파이프라인 JSON 교환');
+  const shared = await exchange.getByLabel('내보낼 파이프라인 JSON', { exact: true }).inputValue();
+  assert.deepEqual(JSON.parse(shared).stages.map(item => item.expression), expressions);
+  assert.equal(JSON.parse(shared).stages[3].enabled, false);
+  await button(exchange, '닫기').click();
+  await button(editor, '4단계 제거').click();
+  assert.equal(await stageList.getByRole('listitem').count(), 3);
+  await button(editor, 'JSON 교환').click();
+  await button(exchange, '가져오기').click();
+  const incoming = exchange.getByLabel('가져올 파이프라인 JSON', { exact: true });
+  await incoming.fill('{"format":"other"}');
+  await button(exchange, '편집기에 가져오기').click();
+  await exchange.getByRole('alert').waitFor();
+  await incoming.fill(shared);
+  await button(exchange, '편집기에 가져오기').click();
+  await exchange.waitFor({ state: 'detached' });
+  assert.equal(await stageList.getByRole('listitem').count(), 4);
+  assert.equal(await results.count(), 0);
+  await button(editor, '4단계 제거').click();
+  await button(editor, '저장된 파이프라인').click();
+  const library = dialog('저장된 파이프라인');
+  await button(library, '편집기에 불러오기').click();
+  await library.waitFor({ state: 'detached' });
+  assert.equal(await stageList.getByRole('listitem').count(), 4);
+  assert.equal(await editor.getByRole('checkbox', { name: '4단계 활성화', exact: true }).isChecked(), false);
+  assert.equal(await results.count(), 0);
+}
+
 async function main() {
   const port = await availablePort();
   const { ca, combined } = certificates();
@@ -209,7 +299,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (verified TLS, restricted access, catalog, BSON, paging, filters and indexes).');
+    console.log('MongoDB Windows E2E passed (TLS, permissions, catalog, BSON, querying, schema analysis and aggregation pipelines).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;
