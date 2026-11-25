@@ -932,13 +932,28 @@ async fn delete_mysql_profile(store: State<'_, Store>, id: String, revision: i64
 }
 
 #[tauri::command]
-async fn open_mysql(mysql: State<'_, stackport_core::MysqlManager>, profile_id: String, revision: i64,
-    password: stackport_core::MysqlPassword, confirmation: String) -> Result<stackport_core::MysqlSessionInfo, String> {
-    mysql.open(profile_id, revision, password, &confirmation).await
+async fn mysql_tunnel_options(store: State<'_, Store>, tunnels: State<'_, SshTunnelManager>, profile_id: String,
+    revision: i64) -> Result<Vec<LocalTunnelEndpoint>, String> {
+    let store = store.inner().clone();
+    let profile = worker(move || store.mysql_profile(&profile_id, revision)).await?;
+    tunnels.local_database_routes(&profile.project_id, &profile.settings.host, profile.settings.port)
+}
+
+#[tauri::command]
+async fn open_mysql(mysql: State<'_, stackport_core::MysqlManager>, tunnels: State<'_, SshTunnelManager>, profile_id: String,
+    revision: i64, password: stackport_core::MysqlPassword, confirmation: String, tunnel_id: Option<String>,
+) -> Result<stackport_core::MysqlSessionInfo, String> {
+    let route = tunnel_id.as_deref().map(|id| (tunnels.inner(), id));
+    mysql.open(profile_id, revision, password, &confirmation, route).await
 }
 
 #[tauri::command]
 fn close_mysql(mysql: State<'_, stackport_core::MysqlManager>, id: String) -> Result<(), String> { mysql.close(&id) }
+
+#[tauri::command]
+async fn wait_mysql_tunnel_end(mysql: State<'_, stackport_core::MysqlManager>, id: String) -> Result<bool, String> {
+    mysql.wait_tunnel_end(&id).await
+}
 
 #[tauri::command]
 async fn mysql_databases(mysql: State<'_, stackport_core::MysqlManager>, id: String, search: String, page: u32)
@@ -2087,8 +2102,10 @@ fn main() {
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,
+            mysql_tunnel_options,
             open_mysql,
             close_mysql,
+            wait_mysql_tunnel_end,
             mysql_databases,
             mysql_objects,
             mysql_table,

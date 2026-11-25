@@ -217,7 +217,7 @@ async fn prepare_file(
     let connection_options = OptsBuilder::from_opts(session.options.clone())
         .db_name(database)
         .max_allowed_packet(Some(MAX_ROW_BYTES));
-    let mut connection = open_request_connection(connection_options).await?;
+    let mut connection = open_request_connection(session, connection_options).await?;
     let (statement, values) = export_statement(&mut connection, source).await?;
     let mut result = connection
         .exec_iter(statement, Params::Positional(values))

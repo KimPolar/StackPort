@@ -1476,7 +1476,7 @@ function App() {
       <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile}
         onBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
-    {mysqlProfile && <div hidden={historyOpen}><MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} /></div>}
+    {mysqlProfile && <div hidden={historyOpen}><MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} onOpenTunnels={openTunnels} /></div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}

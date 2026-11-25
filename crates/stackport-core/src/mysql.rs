@@ -12,7 +12,10 @@ pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};
 pub use structure::{MysqlStructure, MysqlStructureSection};
 
-use crate::{table_query::TableQueryDialect, Result, Store, TableQueryClauses};
+use crate::{
+    ssh_tunnel::DatabaseTunnel, table_query::TableQueryDialect, LocalTunnelEndpoint, Result,
+    SshTunnelManager, Store, TableQueryClauses,
+};
 use mysql_async::{
     from_row_opt,
     prelude::{FromRow, Queryable},
@@ -29,7 +32,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
+    sync::{watch, Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore},
     time::timeout,
 };
 use uuid::Uuid;
@@ -42,6 +45,8 @@ const ROW_LIMIT: usize = 50;
 const COLUMN_LIMIT: usize = 128;
 const CELL_BYTES: usize = 512;
 const DISCONNECTED: &str = "MySQL 연결이 닫혔습니다. 다시 연결하세요.";
+const TUNNEL_STOPPED: &str =
+    "SSH 터널이 중단되어 MySQL 연결이 닫혔습니다. 터널을 시작한 뒤 다시 연결하세요.";
 
 #[derive(Deserialize)]
 #[serde(transparent)]
@@ -59,6 +64,7 @@ pub struct MysqlSessionInfo {
     engine: &'static str,
     version: String,
     database: Option<String>,
+    tunnel: Option<LocalTunnelEndpoint>,
 }
 
 #[derive(Serialize)]
@@ -128,12 +134,14 @@ struct Session {
     profile_id: String,
     project_id: String,
     environment: String,
+    tunnel: Option<DatabaseTunnel>,
+    closed: watch::Sender<bool>,
     _permit: OwnedSemaphorePermit,
 }
 
 pub struct MysqlManager {
     store: Store,
-    sessions: Mutex<HashMap<String, Arc<Session>>>,
+    sessions: Arc<Mutex<HashMap<String, Arc<Session>>>>,
     capacity: Arc<Semaphore>,
 }
 
@@ -157,7 +165,7 @@ impl MysqlManager {
     pub fn new(store: Store) -> Self {
         Self {
             store,
-            sessions: Mutex::default(),
+            sessions: Arc::default(),
             capacity: Arc::new(Semaphore::new(8)),
         }
     }
@@ -168,6 +176,7 @@ impl MysqlManager {
         revision: i64,
         password: MysqlPassword,
         confirmation: &str,
+        route: Option<(&SshTunnelManager, &str)>,
     ) -> Result<MysqlSessionInfo> {
         if password.0.len() > 4096 {
             return Err("MySQL 암호가 너무 깁니다.".into());
@@ -186,12 +195,27 @@ impl MysqlManager {
         .await
         .map_err(|_| "MySQL 연결 설정을 읽을 수 없습니다.")??;
         let settings = profile.settings;
+        let tunnel = route
+            .map(|(tunnels, id)| {
+                tunnels.database_tunnel(id, &profile.project_id, &settings.host, settings.port)
+            })
+            .transpose()?;
+        let endpoint = tunnel.as_ref().map(DatabaseTunnel::endpoint);
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 MySQL 계열 연결이 너무 많습니다.")?;
+        let (host, port, tls) = match &endpoint {
+            Some(endpoint) => (
+                "127.0.0.1".to_owned(),
+                endpoint.port,
+                // Authenticate the configured database server when dialing the local listener.
+                tls.map(|tls| tls.with_danger_tls_hostname_override(Some(settings.host))),
+            ),
+            None => (settings.host, settings.port, tls),
+        };
         let options = OptsBuilder::default()
-            .ip_or_hostname(settings.host)
-            .tcp_port(settings.port)
+            .ip_or_hostname(host)
+            .tcp_port(port)
             .user(Some(settings.username))
             .pass(Some(password.0.as_str()))
             .db_name(settings.database.clone())
@@ -204,25 +228,29 @@ impl MysqlManager {
                 "SET SESSION TRANSACTION READ ONLY",
             ]);
         drop(password);
-        let (connection, version, mode) = timeout(CONNECT, async {
-            let mut connection = Conn::new(options).await?;
-            let row = connection
-                .query_first::<Row, _>("SELECT VERSION(), @@SESSION.sql_mode")
-                .await?
-                .ok_or(ReadError::Shape)?;
-            let (version, mode): (String, String) =
-                from_row_opt(row).map_err(|_| ReadError::Shape)?;
-            Ok::<_, ReadError>((connection, version, sql::SqlMode::parse(&mode)))
+        let (connection, version, mode) = through_tunnel(tunnel.as_ref(), async {
+            timeout(CONNECT, async {
+                let mut connection = Conn::new(options).await?;
+                let row = connection
+                    .query_first::<Row, _>("SELECT VERSION(), @@SESSION.sql_mode")
+                    .await?
+                    .ok_or(ReadError::Shape)?;
+                let (version, mode): (String, String) =
+                    from_row_opt(row).map_err(|_| ReadError::Shape)?;
+                Ok::<_, ReadError>((connection, version, sql::SqlMode::parse(&mode)))
+            })
+            .await
+            .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
+            .map_err(|error| read_message(&error).to_owned())
         })
-        .await
-        .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
-        .map_err(|error| read_message(&error).to_owned())?;
+        .await?;
         let engine = if version.to_ascii_lowercase().contains("mariadb") {
             "MariaDB"
         } else {
             "MySQL"
         };
         let id = Uuid::new_v4().to_string();
+        let (closed, mut closed_listener) = watch::channel(false);
         self.sessions
             .lock()
             .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
@@ -238,27 +266,51 @@ impl MysqlManager {
                     profile_id: profile.id,
                     project_id: profile.project_id,
                     environment: settings.environment,
+                    tunnel: tunnel.clone(),
+                    closed,
                     _permit: permit,
                 }),
             );
+        if let Some(tunnel) = tunnel {
+            let sessions = Arc::downgrade(&self.sessions);
+            let session_id = id.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = tunnel.ended() => {
+                        if let Some(sessions) = sessions.upgrade() {
+                            let _ = close_session(&sessions, &session_id);
+                        }
+                    }
+                    _ = closed_listener.wait_for(|closed| *closed) => {}
+                }
+            });
+        }
         Ok(MysqlSessionInfo {
             id,
             engine,
             version: version.chars().take(128).collect(),
             database: settings.database,
+            tunnel: endpoint,
         })
     }
 
     pub fn close(&self, id: &str) -> Result<()> {
-        let session = self
-            .sessions
-            .lock()
-            .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
-            .remove(id);
-        if let Some(session) = session {
-            sql::stop_active(&session, None)?;
+        close_session(&self.sessions, id)
+    }
+
+    pub async fn wait_tunnel_end(&self, id: &str) -> Result<bool> {
+        let (tunnel, mut closed) = {
+            let session = self.session(id)?;
+            (session.tunnel.clone(), session.closed.subscribe())
+        };
+        let Some(tunnel) = tunnel else {
+            return Ok(false);
+        };
+        tokio::select! {
+            biased;
+            _ = tunnel.ended() => Ok(true),
+            _ = closed.wait_for(|closed| *closed) => Ok(false),
         }
-        Ok(())
     }
 
     pub async fn databases(
@@ -328,7 +380,11 @@ impl MysqlManager {
         let Some(mut connection) = slot.take() else {
             return Err(DISCONNECTED.into());
         };
-        match timeout(READ, query(&mut connection)).await {
+        let read = through_tunnel(session.tunnel.as_ref(), async {
+            Ok(timeout(READ, query(&mut connection)).await)
+        })
+        .await?;
+        match read {
             Ok(Ok(value)) => {
                 *slot = Some(connection);
                 Ok(value)
@@ -353,13 +409,55 @@ impl MysqlManager {
     }
 
     fn session(&self, id: &str) -> Result<Arc<Session>> {
-        self.sessions
+        let session = self
+            .sessions
             .lock()
             .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
             .get(id)
             .cloned()
-            .ok_or_else(|| DISCONNECTED.into())
+            .ok_or(DISCONNECTED)?;
+        if session
+            .tunnel
+            .as_ref()
+            .is_some_and(|tunnel| !tunnel.running())
+        {
+            return Err(TUNNEL_STOPPED.into());
+        }
+        Ok(session)
     }
+}
+
+fn close_session(sessions: &Mutex<HashMap<String, Arc<Session>>>, id: &str) -> Result<()> {
+    let session = sessions
+        .lock()
+        .map_err(|_| "MySQL 연결 목록을 읽을 수 없습니다.")?
+        .remove(id);
+    if let Some(session) = session {
+        session.closed.send_replace(true);
+        sql::stop_active(&session, None)?;
+    }
+    Ok(())
+}
+
+async fn through_tunnel<T>(
+    route: Option<&DatabaseTunnel>,
+    work: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let Some(route) = route else {
+        return work.await;
+    };
+    if !route.running() {
+        return Err(TUNNEL_STOPPED.into());
+    }
+    let result = tokio::select! {
+        biased;
+        _ = route.ended() => return Err(TUNNEL_STOPPED.into()),
+        result = work => result,
+    };
+    if !route.running() {
+        return Err(TUNNEL_STOPPED.into());
+    }
+    result
 }
 
 fn ssl_options(settings: &MysqlSettings) -> Result<SslOpts> {

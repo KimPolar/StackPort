@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
@@ -14,7 +14,8 @@ import { emptyTableQueryClauses, TableQueryControls } from "./TableQueryControls
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
-type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null };
+type Route = { id: string; name: string; port: number };
+type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null; tunnel: Route | null };
 type Page<T> = { items: T[]; has_next: boolean };
 type ObjectView = "columns" | "rows" | MysqlStructureSection;
 const objectViewLabels: Record<ObjectView, string> = {
@@ -33,7 +34,7 @@ type Sample = {
   query_sql?: string;
 };
 
-export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
+export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfile; onOpenTunnels: () => void }) {
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
@@ -41,11 +42,14 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [route, setRoute] = useState<Route | null>(null);
+  const [routeRevision, setRouteRevision] = useState(0);
   const [database, setDatabase] = useState<string | null>(null);
   const [object, setObject] = useState<MysqlObjectInfo | null>(null);
   const [view, setView] = useState<ObjectView>("columns");
   const [structurePage, setStructurePage] = useState(0);
   const [mode, setMode] = useState<"objects" | "sql" | "monitor">("objects");
+  const [sqlText, setSqlText] = useState("");
   const [schemaSearch, setSchemaSearch] = useState("");
   const [objectSearch, setObjectSearch] = useState("");
   const [schemaPage, setSchemaPage] = useState(0);
@@ -56,11 +60,17 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [revision, setRevision] = useState(0);
   const active = useRef<string | null>(null);
+  const preferredRoute = useRef<Route | null>(null);
   const mounted = useRef(false);
   const connecting = useRef(false);
   const production = settings.environment === "PROD";
   const sqlOpen = mode === "sql";
   const monitorOpen = mode === "monitor";
+
+  const routeArgs = useMemo(() => login ? { profileId: profile.id, revision: profile.revision } : null,
+    [login, profile.id, profile.revision]);
+  const routes = useNativeRead<Route[]>("mysql_tunnel_options", routeArgs, routeRevision);
+  const routeUnavailable = route !== null && !routes.data?.some(item => item.id === route.id);
 
   const schemaArgs = useMemo(() => session ? { id: session.id, search: schemaSearch, page: schemaPage } : null, [session, schemaSearch, schemaPage]);
   const objectArgs = useMemo(() => session && database ? { id: session.id, database, search: objectSearch, page: objectPage } : null,
@@ -87,13 +97,26 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
     };
   }, []);
 
+  const loseConnection = useCallback((id: string, message: string) => {
+    if (active.current !== id) return;
+    active.current = null; setSession(null); setExportTarget(null); setError(message);
+    void invoke("close_mysql", { id }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!session?.tunnel) return;
+    const { id, tunnel } = session;
+    let live = true;
+    void invoke<boolean>("wait_mysql_tunnel_end", { id }).then(stopped => {
+      if (live && stopped) loseConnection(id, `SSH 터널 ‘${tunnel.name}’이 중단되어 MySQL 연결이 닫혔습니다. 터널을 시작한 뒤 다시 연결하세요.`);
+    }).catch(cause => { if (live) loseConnection(id, String(cause)); });
+    return () => { live = false; };
+  }, [session, loseConnection]);
+
   useEffect(() => {
     const lost = [schemas.error, objects.error, structure.error, inspection.error, rows.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
-    if (!lost || !active.current) return;
-    const id = active.current;
-    active.current = null; setSession(null); setExportTarget(null); setError(lost);
-    void invoke("close_mysql", { id }).catch(() => {});
-  }, [schemas.error, objects.error, structure.error, inspection.error, rows.error]);
+    if (lost && session) loseConnection(session.id, lost);
+  }, [session, schemas.error, objects.error, structure.error, inspection.error, rows.error, loseConnection]);
 
   function chooseDatabase(name: string | null) {
     setDatabase(name);
@@ -123,14 +146,22 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (connecting.current) return;
+    if (connecting.current || routeUnavailable) return;
     connecting.current = true; setBusy(true); setError(""); setPassword("");
     try {
-      const next = await invoke<Session>("open_mysql", { profileId: profile.id, revision: profile.revision, password, confirmation });
+      const next = await invoke<Session>("open_mysql", {
+        profileId: profile.id, revision: profile.revision, password, confirmation, tunnelId: route?.id ?? null,
+      });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
-      setSession(next); setMode("objects"); setLogin(false); setExportReport(null);
-    } catch (cause) { if (mounted.current) setError(String(cause)); }
+      preferredRoute.current = next.tunnel;
+      setSession(next); setLogin(false); setExportReport(null);
+    } catch (cause) {
+      if (mounted.current) {
+        setError(String(cause));
+        if (route) setRouteRevision(value => value + 1);
+      }
+    }
     finally { connecting.current = false; if (mounted.current) setBusy(false); }
   }
 
@@ -138,6 +169,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
     const id = active.current;
     if (!id) return;
     active.current = null; setSession(null); setExportTarget(null); chooseDatabase(null); setError("");
+    setMode("objects"); setSqlText("");
     try { await invoke("close_mysql", { id }); }
     catch (cause) { if (mounted.current) setError(String(cause)); }
   }
@@ -147,11 +179,20 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
     setExportTarget(target);
   }
 
+  function openLogin() {
+    setError(""); setConfirmation(""); setRoute(preferredRoute.current); setLogin(true);
+  }
+
+  function closeLogin() {
+    setLogin(false); setPassword(""); setError("");
+  }
+
   return <section className="mysql-workspace" aria-label="MySQL 작업 공간">
     <div className="content-header">
       <div className="database-target">
         <h1><Database size={21} aria-hidden /><span>{settings.name}</span><span className={`environment ${settings.environment.toLowerCase()}`}>{settings.environment}</span></h1>
-        <p className="path">{session ? `${session.engine} · ${session.version}` : "MySQL · MariaDB"} · {networkAddressText(settings)}</p>
+        <p className="path">{session ? `${session.engine} · ${session.version}` : "MySQL · MariaDB"} · {networkAddressText(settings)}
+          {session?.tunnel && ` · SSH 터널 ${session.tunnel.name}`}</p>
       </div>
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
@@ -159,7 +200,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           <button type="button" className="secondary" aria-pressed={monitorOpen} onClick={() => setMode(monitorOpen ? "objects" : "monitor")}><Activity size={15} aria-hidden /> 서버 모니터</button>
           {!monitorOpen && <button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>}
           <button type="button" className="secondary" onClick={() => void disconnect()}>MySQL 연결 끊기</button></> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setLogin(true); }}><Plug size={15} aria-hidden /> MySQL 연결</button>}
+          <button type="button" className="primary" onClick={openLogin}><Plug size={15} aria-hidden /> MySQL 연결</button>}
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
@@ -232,22 +273,35 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           </div>
         </>}
       </section>
-      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database} onExport={beginExport} /></div>
+      <div hidden={!sqlOpen}><MysqlSqlWorkspace key={session.id} id={session.id} database={database}
+        text={sqlText} onTextChange={setSqlText} onExport={beginExport} /></div>
       </div>
     </div></div>}
     {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}
     {session && exportTarget && <MysqlResultExport id={session.id} profile={settings} target={exportTarget}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
-    {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
+    {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={closeLogin}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} · {settings.username}</p>
+        <label className="field">연결 경로<select value={route?.id ?? ""} disabled={busy} onChange={event =>
+          setRoute(routes.data?.find(item => item.id === event.target.value) ?? null)}>
+          <option value="">직접 연결</option>
+          {route && routeUnavailable && <option value={route.id} disabled>{route.name} · {routes.loading ? "확인 중" : "사용할 수 없음"}</option>}
+          {routes.data?.map(item => <option value={item.id} key={item.id}>{item.name} · 127.0.0.1:{item.port}</option>)}
+        </select></label>
+        {routeUnavailable && !routes.loading && <p className="form-note">선택한 터널을 시작한 뒤 목록을 새로 고침하세요.</p>}
+        {!routes.loading && (routeUnavailable || !routes.data?.length) && <div className="dialog-actions">
+          <button type="button" className="secondary small" disabled={busy} onClick={() => setRouteRevision(value => value + 1)}>터널 목록 새로 고침</button>
+          <button type="button" className="secondary small" disabled={busy} onClick={() => { closeLogin(); onOpenTunnels(); }}>SSH 터널 열기</button>
+        </div>}
+        {routes.error && <p className="form-error" role="alert">{routes.error}</p>}
         <label className="field">MySQL 암호<input type="password" autoComplete="off" maxLength={4096} value={password}
           disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" value={confirmation}
           autoComplete="off" disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
-        {!settings.tls && <p className="form-note">일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다.</p>}
+        {!settings.tls && <p className="form-note">{route ? "SSH 게이트웨이와 데이터베이스 사이에는 TLS가 적용되지 않습니다." : "일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다."}</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || routeUnavailable || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
       </form>
     </Dialog>}
   </section>;

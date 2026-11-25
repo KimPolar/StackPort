@@ -14,12 +14,13 @@ type Result = { columns: { name: string; data_type: string }[]; rows: (MysqlValu
 const number = new Intl.NumberFormat("ko-KR");
 const byteLimit = 128 * 1024;
 
-export function MysqlSqlWorkspace({ id, database, onExport }: {
+export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }: {
   id: string;
   database: string | null;
+  text: string;
+  onTextChange: (text: string) => void;
   onExport: (source: MysqlExportTarget) => void;
 }) {
-  const [text, setText] = useState("");
   const [hasSelection, setHasSelection] = useState(false);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
@@ -114,7 +115,7 @@ export function MysqlSqlWorkspace({ id, database, onExport }: {
       {busy && <span role="status">{cancelPending ? "중단 요청 중…" : running ? "실행 중…" : "문장 확인 중…"}</span>}
     </div>
     <CodeTextarea id="mysql-sql-editor" editorRef={editor} aria-label="MySQL SQL 문장" value={text} language="mysql" maxLength={byteLimit}
-      readOnly={busy || Boolean(draft)} placeholder="SELECT ..." onChange={event => setText(event.target.value)}
+      readOnly={busy || Boolean(draft)} placeholder="SELECT ..." onChange={event => onTextChange(event.target.value)}
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
       onKeyDown={event => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) {

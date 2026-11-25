@@ -127,7 +127,7 @@ impl MysqlManager {
             .await
             .map_err(|_| MONITOR_BUSY)?;
         let options = OptsBuilder::from_opts(session.options.clone()).db_name(None::<String>);
-        let connection = open_request_connection(options).await?;
+        let connection = open_request_connection(&session, options).await?;
         self.session(id)?;
         let monitor_id = Uuid::new_v4();
         *slot = Some(MonitorConnection {

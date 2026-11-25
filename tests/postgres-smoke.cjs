@@ -7,7 +7,7 @@ const net = require('node:net');
 const path = require('node:path');
 const { crc32 } = require('node:zlib');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
-const { Server, utils } = require('ssh2');
+const { startGateway } = require('./ssh-forward-fixture.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const bin = process.env.STACKPORT_POSTGRES_BIN;
@@ -216,55 +216,6 @@ async function startPostgres(preloadStats = true) {
     const stopped = spawnSync(path.join(bin, 'pg_ctl.exe'), ['stop', '-D', data, '-m', 'fast', '-w', '-t', '10'],
       { cwd: directory, timeout: 12_000, windowsHide: true });
     if (stopped.status !== 0) server.kill();
-  } };
-}
-
-function gatewayHostKey() {
-  // ssh2's Ed25519 generator can strip leading zero bytes from a generated public key.
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const privateKey = utils.generateKeyPairSync('ed25519').private;
-    const parsed = utils.parseKey(privateKey);
-    if (!(parsed instanceof Error)) return { privateKey, publicKey: parsed.getPublicSSH() };
-  }
-  throw new Error('Could not generate a valid SSH fixture host key.');
-}
-
-async function startGateway(target, targetHost = 'localhost') {
-  const { privateKey, publicKey } = gatewayHostKey();
-  const fingerprint = 'SHA256:' + createHash('sha256').update(publicKey).digest('base64').replace(/=+$/, '');
-  const clients = new Set();
-  let forwards = 0;
-  const server = new Server({ hostKeys: [privateKey] }, client => {
-    clients.add(client);
-    client.on('error', () => {});
-    client.once('close', () => clients.delete(client));
-    client.on('authentication', auth => {
-      if (auth.method === 'password' && auth.username === 'fixture' && auth.password === 'fixture-gateway') auth.accept();
-      else auth.reject(['password']);
-    });
-    client.on('ready', () => client.on('tcpip', (accept, reject, info) => {
-      if (info.destIP !== targetHost || info.destPort !== target) return reject();
-      const socket = net.connect(target, '127.0.0.1');
-      socket.once('error', reject);
-      socket.once('connect', () => {
-        socket.off('error', reject);
-        const channel = accept();
-        forwards++;
-        channel.on('error', () => socket.destroy());
-        socket.on('error', () => channel.destroy());
-        channel.once('close', () => socket.destroy());
-        socket.once('close', () => channel.destroy());
-        socket.pipe(channel).pipe(socket);
-      });
-    }));
-  }).listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  function dropClients() {
-    for (const client of clients) client.end();
-  }
-  return { port: server.address().port, fingerprint, forwarded: () => forwards, dropClients, close() {
-    dropClients();
-    server.close();
   } };
 }
 
@@ -2522,7 +2473,7 @@ async function main() {
   let browser;
   try {
     gateway = await startGateway(fixture.port);
-    jump = await startGateway(gateway.port, '127.0.0.1');
+    jump = await startGateway(gateway.port, ['127.0.0.1']);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
     await verify(browser, fixture, gateway, jump);
     if (backupTools) console.log('PostgreSQL backup scopes, digest, overwrite protection and isolated restore passed.');

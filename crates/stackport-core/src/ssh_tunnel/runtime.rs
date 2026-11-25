@@ -173,7 +173,7 @@ impl SshTunnelManager {
             .get(id)
             .and_then(|session| session.database_tunnel(project, host, port))
             .ok_or_else(|| {
-                "이 PostgreSQL 대상에 연결된 실행 중인 로컬 SSH 터널을 선택하세요.".into()
+                "이 데이터베이스 대상에 연결된 실행 중인 로컬 SSH 터널을 선택하세요.".into()
             })
     }
 

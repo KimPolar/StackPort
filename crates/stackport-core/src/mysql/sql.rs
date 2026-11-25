@@ -161,7 +161,7 @@ impl MysqlManager {
         let mut connection = tokio::select! {
             biased;
             _ = &mut stopped => return Err(STOPPED.into()),
-            opened = open_request_connection(options) => opened?,
+            opened = open_request_connection(&session, options) => opened?,
         };
         let outcome = tokio::select! {
             biased;
@@ -175,11 +175,17 @@ impl MysqlManager {
     }
 }
 
-pub(super) async fn open_request_connection(options: OptsBuilder) -> Result<Conn> {
-    timeout(CONNECT, Conn::new(options))
-        .await
-        .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
-        .map_err(sql_error)
+pub(super) async fn open_request_connection(
+    session: &Session,
+    options: OptsBuilder,
+) -> Result<Conn> {
+    super::through_tunnel(session.tunnel.as_ref(), async {
+        timeout(CONNECT, Conn::new(options))
+            .await
+            .map_err(|_| "MySQL 연결 시간이 초과되었습니다.")?
+            .map_err(sql_error)
+    })
+    .await
 }
 
 pub(super) fn validate_input(

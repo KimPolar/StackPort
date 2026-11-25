@@ -7,6 +7,7 @@ const net = require('node:net');
 const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
+const { startGateway } = require('./ssh-forward-fixture.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_MYSQL_BIN;
@@ -242,7 +243,130 @@ async function verify(page, server) {
   await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
+  await verifyTunnel(page, command, workspace, project, profile, server, alternate);
   assert.deepEqual(errors, []);
+}
+
+async function verifyTunnel(page, command, workspace, project, profile, server, alternate) {
+  const gateway = await startGateway(server.port, ['localhost', '127.0.0.1']);
+  let jump;
+  const running = new Set();
+  const stop = async tunnel => {
+    await command('stop_ssh_tunnel', { id: tunnel.id });
+    running.delete(tunnel.id);
+  };
+  try {
+    jump = await startGateway(gateway.port, ['127.0.0.1']);
+    const ssh = (name, port) => command('create_ssh_profile', { projectId: project.id, input: {
+      name, host: '127.0.0.1', port, username: 'fixture', environment: 'DEV',
+    } });
+    const gatewayProfile = await ssh('DB 게이트웨이', gateway.port);
+    const jumpProfile = await ssh('DB 점프', jump.port);
+    const create = (name, host) => command('create_ssh_tunnel', { projectId: project.id, input: {
+      name, ssh_profile_id: gatewayProfile.id, kind: 'local', listen_port: 0, target_host: host, target_port: server.port,
+    } });
+    const tunnel = await create('데이터베이스 보고서 터널', 'localhost');
+    const mismatchedTunnel = await create('이름 불일치 터널', '127.0.0.1');
+    const authentication = { kind: 'password', password: 'fixture-gateway' };
+    const start = entry => command('start_ssh_tunnel', {
+      tunnel: entry, profile: gatewayProfile, authentication, hops: [{ profile: jumpProfile, authentication }], confirmation: '',
+    });
+    const startRunning = async entry => {
+      assert.equal((await start(entry)).status, 'open');
+      running.add(entry.id);
+    };
+    const profileArgs = item => ({ profileId: item.id, revision: item.revision });
+    const options = item => command('mysql_tunnel_options', profileArgs(item));
+    const open = (item, route = tunnel) => command('open_mysql', {
+      ...profileArgs(item), password: secret, confirmation: 'PROD', tunnelId: route.id,
+    });
+    assert.deepEqual(await options(profile), []);
+    await assert.rejects(open(profile), /실행 중인 로컬 SSH 터널/);
+    for (const [stage, host] of [['경유 1 · DB 점프', jump], ['대상 · DB 게이트웨이', gateway]]) {
+      const trust = await start(tunnel);
+      assert.equal(trust.status, 'trust_required');
+      assert.equal(trust.stage, stage);
+      assert.ok(trust.host.keys.some(key => key.fingerprint === host.fingerprint));
+      await command('trust_ssh_host', { token: trust.host.token, fingerprint: host.fingerprint, confirmation: '' });
+    }
+    await startRunning(tunnel);
+    await startRunning(mismatchedTunnel);
+    assert.deepEqual((await options(profile)).map(route => route.id), [tunnel.id]);
+    await assert.rejects(open(profile, mismatchedTunnel), /실행 중인 로컬 SSH 터널/);
+    const wrongHost = await alternate('터널 TLS 이름 불일치', { host: '127.0.0.1' });
+    await assert.rejects(open(wrongHost, mismatchedTunnel), /TLS 인증서/);
+    await assert.rejects(open(await alternate('터널 CA 불일치', { ca_path: null })), /TLS 인증서/);
+    const other = await command('create_project', { name: engine + ' 다른 프로젝트' });
+    const otherProfile = await command('create_mysql_profile', { projectId: other.id, input: profile.settings });
+    assert.deepEqual(await options(otherProfile), []);
+    await assert.rejects(open(otherProfile), /실행 중인 로컬 SSH 터널/);
+
+    const before = gateway.forwarded();
+    const session = await open(profile);
+    assert.equal(session.tunnel.id, tunnel.id);
+    assert.ok((await command('mysql_databases', { id: session.id, search: '', page: 0 })).items.includes('visible_db'));
+    const monitorId = await command('open_mysql_monitor', { id: session.id });
+    const activity = await command('mysql_server_activity', {
+      id: session.id, monitorId, input: { filter: 'all', slow_seconds: 1, page: 0, include_sql: false },
+    });
+    assert.equal(activity.server.version, session.version);
+    const exportResult = await command('export_mysql', {
+      id: session.id, requestId: randomUUID(),
+      source: { kind: 'sql', sql: 'SELECT 19 AS tunneled_export', database: null, parameters: [] },
+      options: { destination: path.join(root, 'tunneled-export.json'), format: 'json', include_header: true, spreadsheet_safe: true },
+    });
+    assert.equal(exportResult.status, 'exported');
+    assert.equal(gateway.forwarded(), before + 3);
+    assert.ok(jump.forwarded() > 0);
+
+    const login = page.getByRole('dialog', { name: 'MySQL 계열 연결', exact: true });
+    const submit = login.getByRole('button', { name: '연결', exact: true });
+    const route = login.getByLabel('연결 경로');
+    const enterLogin = async () => {
+      await workspace.getByRole('button', { name: 'MySQL 연결', exact: true }).click();
+      await login.getByLabel('MySQL 암호').fill(secret);
+      await login.getByLabel('운영 환경 확인').fill('PROD');
+    };
+    await enterLogin();
+    await route.selectOption(tunnel.id);
+    await submit.click();
+    await workspace.getByText(/SSH 터널 데이터베이스 보고서 터널/).waitFor();
+    await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+    const editor = workspace.getByLabel('MySQL SQL 문장', { exact: true });
+    const run = workspace.getByRole('button', { name: '문장 실행', exact: true });
+    const sql = "SELECT 'ssh-jump-fixture' AS routed_value";
+    await editor.fill(sql);
+    await run.click();
+    await workspace.getByRole('table', { name: 'MySQL SQL 결과 표' }).getByText('ssh-jump-fixture', { exact: true }).waitFor();
+    assert.equal(gateway.forwarded(), before + 5);
+
+    const interrupted = assert.rejects(command('run_mysql_sql', {
+      id: session.id, requestId: randomUUID(), database: null, sql: 'SELECT SLEEP(10)', parameters: [],
+    }), /중단|통신/);
+    for (let attempt = 0; attempt < 30 && gateway.forwarded() === before + 5; attempt++) await delay(100);
+    assert.equal(gateway.forwarded(), before + 6);
+    await stop(tunnel);
+    await interrupted;
+    await workspace.getByRole('alert').filter({ hasText: /SSH 터널.*중단되어 MySQL 연결이 닫혔습니다/ }).waitFor();
+    await assert.rejects(command('mysql_databases', { id: session.id, search: '', page: 0 }), /연결이 닫혔습니다/);
+    await enterLogin();
+    await route.getByRole('option', { name: /사용할 수 없음/ }).waitFor({ state: 'attached' });
+    assert.equal(await route.inputValue(), tunnel.id);
+    assert.equal(await submit.isDisabled(), true);
+    await startRunning(tunnel);
+    await login.getByRole('button', { name: '터널 목록 새로 고침', exact: true }).click();
+    await submit.click();
+    await editor.waitFor();
+    assert.equal(await editor.inputValue(), sql);
+    await run.click();
+    await workspace.getByRole('table', { name: 'MySQL SQL 결과 표' }).getByText('ssh-jump-fixture', { exact: true }).waitFor();
+    assert.equal(gateway.forwarded(), before + 8);
+    await assert.rejects(command('mysql_databases', { id: session.id, search: '', page: 0 }), /연결이 닫혔습니다/);
+    await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
+  } finally {
+    try { for (const id of running) await stop({ id }); }
+    finally { jump?.close(); gateway.close(); }
+  }
 }
 
 async function verifyMonitor(command, id, openAs, server) {
@@ -764,7 +888,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (catalog, server activity, real lock waits, data grid, read-only SQL and export).`);
+    console.log(`${engine} Windows E2E passed (TLS, SSH jump and reconnect, catalog, server activity, locks, grid, read-only SQL and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));
