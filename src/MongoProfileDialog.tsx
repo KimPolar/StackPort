@@ -1,13 +1,14 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 export type MongoSettings = {
   name: string; uri: string; username: string | null; auth_database: string | null;
   environment: "DEV" | "STAGING" | "PROD"; tls: boolean; ca_path: string | null;
 };
 export type MongoProfile = { id: string; project_id: string; revision: number; settings: MongoSettings };
-export type MongoProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: MongoProfile };
+export type MongoProfileAction = ProfileAction<MongoProfile>;
 
 const defaults: MongoSettings = {
   name: "", uri: "", username: null, auth_database: null, environment: "DEV", tls: true, ca_path: null,
@@ -20,12 +21,12 @@ export function mongoAddress(uri: string) {
 export function MongoProfileDialog({ action, projectId, onClose, onSaved }: {
   action: MongoProfileAction; projectId: string; onClose: () => void; onSaved: (profile: MongoProfile | null) => void;
 }) {
-  const [values, setValues] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const deleting = action.kind === "delete";
-  const title = `MongoDB 연결 ${deleting ? "삭제" : action.kind === "edit" ? "수정" : "추가"}`;
+  const title = "MongoDB 연결 " + profileActionVerb[action.kind];
 
   function update<K extends keyof MongoSettings>(key: K, value: MongoSettings[K]) {
     setValues(current => ({ ...current, [key]: value }));
@@ -38,7 +39,7 @@ export function MongoProfileDialog({ action, projectId, onClose, onSaved }: {
     try {
       const input = { ...values, ca_path: values.tls ? values.ca_path || null : null,
         auth_database: values.username ? values.auth_database || null : null };
-      if (action.kind === "create") onSaved(await invoke<MongoProfile>("create_mongo_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<MongoProfile>("create_mongo_profile", { projectId, input }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
         if (action.kind === "edit") onSaved(await invoke<MongoProfile>("update_mongo_profile", { ...target, input }));
@@ -77,7 +78,7 @@ export function MongoProfileDialog({ action, projectId, onClose, onSaved }: {
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{deleting ? "삭제" : "저장"}</button>
+        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button>
       </div>
     </form>
   </Dialog>;

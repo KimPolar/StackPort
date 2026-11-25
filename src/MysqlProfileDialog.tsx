@@ -1,12 +1,13 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 export type MysqlSettings = { name: string; host: string; port: number; username: string; database: string | null;
   environment: "DEV" | "STAGING" | "PROD"; tls: boolean; ca_path: string | null;
   client_certificate_path: string | null; client_key_path: string | null };
 export type MysqlProfile = { id: string; project_id: string; revision: number; settings: MysqlSettings };
-export type MysqlProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: MysqlProfile };
+export type MysqlProfileAction = ProfileAction<MysqlProfile>;
 
 const defaults: MysqlSettings = { name: "", host: "", port: 3306, username: "", database: null, environment: "DEV", tls: true, ca_path: null,
   client_certificate_path: null, client_key_path: null };
@@ -14,13 +15,13 @@ const defaults: MysqlSettings = { name: "", host: "", port: 3306, username: "", 
 export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
   action: MysqlProfileAction; projectId: string; onSaved: (profile: MysqlProfile | null) => void; onClose: () => void;
 }) {
-  const [settings, setSettings] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [settings, setSettings] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [port, setPort] = useState(String(settings.port));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const deleting = action.kind === "delete";
-  const title = `MySQL 계열 연결 ${deleting ? "삭제" : action.kind === "edit" ? "수정" : "추가"}`;
+  const title = "MySQL 계열 연결 " + profileActionVerb[action.kind];
 
   function update<K extends keyof MysqlSettings>(key: K, value: MysqlSettings[K]) {
     setSettings(current => ({ ...current, [key]: value }));
@@ -35,7 +36,7 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
         ca_path: settings.tls ? settings.ca_path || null : null,
         client_certificate_path: settings.tls ? settings.client_certificate_path || null : null,
         client_key_path: settings.tls ? settings.client_key_path || null : null };
-      if (action.kind === "create") onSaved(await invoke<MysqlProfile>("create_mysql_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<MysqlProfile>("create_mysql_profile", { projectId, input }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
         if (action.kind === "edit") onSaved(await invoke<MysqlProfile>("update_mysql_profile", { ...target, input }));
@@ -58,7 +59,7 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
     <form aria-busy={busy} onSubmit={event => void save(event)}>
       {deleting ? <p className="confirm-copy"><strong>{action.profile.settings.name}</strong>의 저장된 연결 설정을 삭제합니다.</p> :
         <fieldset className="postgres-profile-fields" disabled={busy}>
-          <label className="field">연결 이름<input required maxLength={80} value={settings.name} onChange={event => update("name", event.target.value)} /></label>
+          <label className="field">연결 이름<input autoFocus required maxLength={80} value={settings.name} onChange={event => update("name", event.target.value)} /></label>
           <div className="postgres-profile-address">
             <label className="field">호스트 이름 또는 IP<input required value={settings.host} onChange={event => update("host", event.target.value)} /></label>
             <label className="field">포트<input type="number" min={1} max={65535} required value={port} onChange={event => setPort(event.target.value)} /></label>
@@ -94,7 +95,7 @@ export function MysqlProfileDialog({ action, projectId, onSaved, onClose }: {
         </fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{deleting ? "삭제" : "저장"}</button></div>
+        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button></div>
     </form>
   </Dialog>;
 }

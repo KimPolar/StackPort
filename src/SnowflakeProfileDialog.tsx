@@ -1,13 +1,14 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 type Settings = {
   name: string; host: string; database: string; warehouse: string | null; role: string | null;
   auth: "pat" | "oauth"; environment: "DEV" | "STAGING" | "PROD";
 };
 export type SnowflakeProfile = { id: string; project_id: string; revision: number; settings: Settings };
-export type SnowflakeProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: SnowflakeProfile };
+export type SnowflakeProfileAction = ProfileAction<SnowflakeProfile>;
 
 const defaults: Settings = {
   name: "", host: "", database: "", warehouse: null, role: null, auth: "pat", environment: "DEV",
@@ -16,13 +17,13 @@ const defaults: Settings = {
 export function SnowflakeProfileDialog({ projectId, action, onClose, onSaved }: {
   projectId: string; action: SnowflakeProfileAction; onClose: () => void; onSaved: (profile: SnowflakeProfile | null) => void;
 }) {
-  const [values, setValues] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const databaseHint = useId();
   const authLabel = useId();
-  const verb = action.kind === "create" ? "추가" : action.kind === "edit" ? "수정" : "삭제";
+  const verb = profileActionVerb[action.kind];
 
   function change<K extends keyof Settings>(key: K, value: Settings[K]) {
     setValues(current => ({ ...current, [key]: value }));
@@ -35,7 +36,7 @@ export function SnowflakeProfileDialog({ projectId, action, onClose, onSaved }: 
     setBusy(true);
     setError("");
     try {
-      if (action.kind === "create") onSaved(await invoke<SnowflakeProfile>("create_snowflake_profile", { projectId, input: values }));
+      if (!("profile" in action)) onSaved(await invoke<SnowflakeProfile>("create_snowflake_profile", { projectId, input: values }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
         if (action.kind === "edit") onSaved(await invoke<SnowflakeProfile>("update_snowflake_profile", { ...target, input: values }));
@@ -77,7 +78,7 @@ export function SnowflakeProfileDialog({ projectId, action, onClose, onSaved }: 
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{action.kind === "delete" ? "삭제" : "저장"}</button>
+        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button>
       </div>
     </form>
   </Dialog>;

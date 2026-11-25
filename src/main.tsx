@@ -10,6 +10,7 @@ import {
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { SshProfileExchange } from "./SshProfileExchange";
 import { DatabaseProfileExchange, type DatabaseExchangeMode } from "./DatabaseProfileExchange";
+import { duplicateConnectionName, profileActionVerb, profileSubmitVerb } from "./profileActions";
 import { Dialog, type GridEditExitGuard } from "./Dialog";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
 import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout";
@@ -117,8 +118,10 @@ type AuditEvent = { sequence: number; id: string; correlation_id: string; occurr
 type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 type SshTrustEvent = { sequence: number; id: string; host: string; port: number; action: "accepted" | "replaced"; previous_fingerprint: string | null; fingerprint: string; occurred_at: string };
 type SshTrustPage = { events: SshTrustEvent[]; next_cursor: number | null };
-type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
+type Modal = "project" | "profile" | "duplicateProfile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
 type NetworkEngine = "postgres" | "mysql" | "redis" | "mongo" | "sqlServer" | "oracle" | "snowflake";
+type SshProfileMode = "create" | "duplicate" | "edit" | "delete";
+type SshProfileDraft = NetworkAddress & Partial<Pick<SshProfile, "name" | "environment">>;
 
 const desktop = isTauri();
 const initialTheme = readThemePreference();
@@ -222,7 +225,7 @@ function App() {
   const snowflakeProfile = snowflakeProfiles.find(item => item.id === snowflakeId && item.project_id === projectId);
   const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile && !mongoProfile && !sqlServerProfile && !oracleProfile && !snowflakeProfile;
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
-  const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress } | null>(null);
+  const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: SshProfileMode; profile?: SshProfile; initial?: SshProfileDraft } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
@@ -268,6 +271,8 @@ function App() {
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [parameterRequest, setParameterRequest] = useState<{ target: SqlQueryTarget; parameters: SqlParameter[]; scope?: SqlHistoryScope } | null>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const sqliteProfileForm = modal === "profile" || modal === "duplicateProfile";
+  const modalSaving = useRef(false);
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [environment, setEnvironment] = useState<Profile["environment"]>("DEV");
@@ -476,6 +481,8 @@ function App() {
     setSqlServerProfiles([]); setSqlServerAction(null);
     setOracleProfiles([]); setOracleAction(null);
     setSnowflakeProfiles([]); setSnowflakeAction(null);
+    setSshProfileDialog(null);
+    setModal(current => current === "duplicateProfile" ? null : current);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -1059,6 +1066,16 @@ function App() {
     setPath(""); setEnvironment("DEV"); setModal(next);
   }
 
+  function duplicateSqliteProfile(id: string) {
+    const source = profiles.find(item => item.id === id && item.project_id === projectId);
+    if (!source) return;
+    openModal("duplicateProfile");
+    const peers = profiles.filter(item => item.project_id === source.project_id).map(item => item.name);
+    setName(duplicateConnectionName(source.name, peers));
+    setPath(source.path);
+    setEnvironment(source.environment);
+  }
+
   function applyLayout(next: WorkspaceLayout) {
     const tools = paneTools(next);
     setLoadedPages(current => tools.every(tool => current.has(tool)) ? current : new Set([...current, ...tools]));
@@ -1163,7 +1180,7 @@ function App() {
 
   function savePostgresProfile(saved: PostgresProfile | null) {
     if (!postgresAction) return;
-    const previous = postgresAction.kind === "create" ? null : postgresAction.profile.id;
+    const previous = "profile" in postgresAction ? postgresAction.profile.id : null;
     setPostgresProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (postgresAction.kind === "create" && saved) selectPostgresProfile(saved.id);
@@ -1177,7 +1194,7 @@ function App() {
 
   function saveRedisProfile(saved: RedisProfile | null) {
     if (!redisAction) return;
-    const previous = redisAction.kind === "create" ? null : redisAction.profile.id;
+    const previous = "profile" in redisAction ? redisAction.profile.id : null;
     setRedisProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (redisAction.kind === "create" && saved) selectRedisProfile(saved.id);
@@ -1187,7 +1204,7 @@ function App() {
 
   function saveMysqlProfile(saved: MysqlProfile | null) {
     if (!mysqlAction) return;
-    const previous = mysqlAction.kind === "create" ? null : mysqlAction.profile.id;
+    const previous = "profile" in mysqlAction ? mysqlAction.profile.id : null;
     setMysqlProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]
       .sort((left, right) => left.settings.name.localeCompare(right.settings.name)));
     if (mysqlAction.kind === "create" && saved) selectMysqlProfile(saved.id);
@@ -1197,7 +1214,7 @@ function App() {
 
   function saveMongoProfile(saved: MongoProfile | null) {
     if (!mongoAction) return;
-    const previous = mongoAction.kind === "create" ? null : mongoAction.profile.id;
+    const previous = "profile" in mongoAction ? mongoAction.profile.id : null;
     setMongoProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (mongoAction.kind === "create" && saved) selectMongoProfile(saved.id);
     if (!saved && previous === mongoId) setNetworkProfile(null);
@@ -1206,7 +1223,7 @@ function App() {
 
   function saveSqlServerProfile(saved: SqlServerProfile | null) {
     if (!sqlServerAction) return;
-    const previous = sqlServerAction.kind === "create" ? null : sqlServerAction.profile.id;
+    const previous = "profile" in sqlServerAction ? sqlServerAction.profile.id : null;
     setSqlServerProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (sqlServerAction.kind === "create" && saved) selectSqlServerProfile(saved.id);
     if (!saved && previous === sqlServerId) setNetworkProfile(null);
@@ -1215,7 +1232,7 @@ function App() {
 
   function saveOracleProfile(saved: OracleProfile | null) {
     if (!oracleAction) return;
-    const previous = oracleAction.kind === "create" ? null : oracleAction.profile.id;
+    const previous = "profile" in oracleAction ? oracleAction.profile.id : null;
     setOracleProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (oracleAction.kind === "create" && saved) selectOracleProfile(saved.id);
     if (!saved && previous === oracleId) setNetworkProfile(null);
@@ -1224,7 +1241,7 @@ function App() {
 
   function saveSnowflakeProfile(saved: SnowflakeProfile | null) {
     if (!snowflakeAction) return;
-    const previous = snowflakeAction.kind === "create" ? null : snowflakeAction.profile.id;
+    const previous = "profile" in snowflakeAction ? snowflakeAction.profile.id : null;
     setSnowflakeProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
     if (snowflakeAction.kind === "create" && saved) selectSnowflakeProfile(saved.id);
     if (!saved && previous === snowflakeId) setNetworkProfile(null);
@@ -1249,6 +1266,11 @@ function App() {
     if (action === "import" || action === "export") setSshExchange(action);
     else if (action === "refresh") {
       if (projectId) void reloadSshProfiles(projectId).catch(error => setError(errorText(error)));
+    } else if (action === "duplicate") {
+      if (!item) return;
+      const peers = sshProfiles.filter(profile => profile.project_id === item.project_id).map(profile => profile.name);
+      const { host, port, username, environment } = item;
+      setSshProfileDialog({ mode: "duplicate", initial: { host, port, username, environment, name: duplicateConnectionName(item.name, peers) } });
     } else setSshProfileDialog({ mode: action, profile: item });
   }
 
@@ -1413,7 +1435,8 @@ function App() {
 
   async function submitForm(event: React.FormEvent) {
     event.preventDefault();
-    if (saving) return;
+    if (modalSaving.current) return;
+    modalSaving.current = true;
     setSaving(true); setFormError("");
     try {
       if (modal === "project") {
@@ -1428,10 +1451,14 @@ function App() {
       } else if (modal === "rename" && project) {
         await call("rename_project", { id: project.id, name });
         await reloadProjects(project.id);
-      } else if (modal === "profile" && project) {
+      } else if (sqliteProfileForm && project) {
         const created = await call<Profile>("create_sqlite_profile", { projectId: project.id, name, path, environment });
-        setNetworkProfile(null);
-        await reloadProfiles(project.id, created.id);
+        if (modal === "duplicateProfile") {
+          if (selectedProject.current === project.id) setProfiles(current => [...current, created]);
+        } else {
+          setNetworkProfile(null);
+          await reloadProfiles(project.id, created.id);
+        }
       } else if (modal === "deleteProject" && project) {
         await call("delete_project", { id: project.id });
         const removedProfiles = Object.entries(sqlTabSets).filter(([, group]) => group.tabs[0]?.projectId === project.id).map(([id]) => id);
@@ -1447,7 +1474,7 @@ function App() {
       }
       setModal(null);
     } catch (e) { setFormError(errorText(e)); }
-    finally { setSaving(false); }
+    finally { modalSaving.current = false; setSaving(false); }
   }
 
   const primaryKeys = objectDetails?.columns.filter(column => column.primary_key_position > 0).sort((a, b) => a.primary_key_position - b.primary_key_position) ?? [];
@@ -1935,7 +1962,7 @@ function App() {
           onProjectSelect={setProjectId} onProjectAction={runExplorerProjectAction} onAddDatabase={() => setDatabasePicker(true)}
           onDatabaseExchange={setDatabaseExchange}
           sqlite={{ profiles, loadedId: profileId, active: sqliteWorkspace, objects, selected: sqliteWorkspace ? selectedObject?.name : undefined,
-            loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects,
+            loading, displayPath, open: selectSqliteProfile, openObject, openPinnedObject, refresh: refreshObjects, duplicate: duplicateSqliteProfile,
             restore: () => { setRestoreOpen(true); showTool("workspace"); } }}
           postgres={{ profiles: postgresProfiles, activeId: postgresId, connection: postgresConnection,
             open: selectPostgresProfile, openObject: openPostgresObject, action: setPostgresAction }}
@@ -2000,16 +2027,23 @@ function App() {
           onClick={() => { setDatabasePicker(false); open(); }}><Icon size={16} aria-hidden />{name}</button>)}
       </div>
     </Dialog>}
-    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
-      {(modal === "project" || modal === "rename" || modal === "profile" || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={modal === "profile" ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
+    {modal && <Dialog title={{ project: "새 프로젝트", profile: "SQLite 연결 추가", duplicateProfile: "SQLite 연결 복제", rename: "프로젝트 이름 변경", duplicateProject: "프로젝트 복제", archiveProject: "프로젝트 보관", deleteProject: "프로젝트 삭제", deleteProfile: "연결 삭제", backup: "SQLite 백업" }[modal]} onClose={() => setModal(null)} busy={saving}><form onSubmit={submitForm} aria-busy={saving}>
+      {(modal === "project" || modal === "rename" || sqliteProfileForm || modal === "duplicateProject") && <label className="field">이름<input autoFocus required value={name} onChange={e => setName(e.target.value)} placeholder={sqliteProfileForm ? "예: 로컬 데이터베이스" : "프로젝트 이름"} /></label>}
       {modal === "duplicateProject" && <p className="form-note"><strong>{project?.name}</strong>의 SQLite·SSH 연결 정의와 SQL 템플릿을 복제합니다. 두 프로젝트에서 같은 SQLite 파일과 SSH 대상에 접속합니다.</p>}
       {modal === "archiveProject" && <p className="confirm-copy"><strong>{project?.name}</strong>을 활성 목록에서 숨깁니다. 연결 정의와 파일은 보존되며 보관된 프로젝트 목록에서 다시 활성화할 수 있습니다.</p>}
-      {modal === "profile" && <><label className="field">SQLite 파일 경로<span className="file-input"><input required value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" /><button type="button" className="secondary" onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label><label className="field">환경<select value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label><p className="form-note">기존 파일만 열 수 있습니다. SQL은 읽기 전용이며 지원되는 셀은 별도 미리보기와 승인 후 수정할 수 있습니다.</p></>}
+      {sqliteProfileForm && <>
+        <label className="field">SQLite 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="기존 데이터베이스 파일 선택" />
+          <button type="button" className="secondary" disabled={saving} onClick={async () => { try { const chosen = await call<string | null>("choose_sqlite_file"); if (chosen) setPath(chosen); } catch (e) { setFormError(errorText(e)); } }}>찾아보기</button></span></label>
+        <label className="field">환경<select disabled={saving} value={environment} onChange={e => setEnvironment(e.target.value as Profile["environment"])}><option>DEV</option><option>STAGING</option><option>PROD</option></select></label>
+        <p className="form-note">{modal === "duplicateProfile"
+          ? "복제한 연결은 이 경로의 SQLite 파일을 사용합니다. 다른 파일을 연결하려면 경로를 바꾸세요."
+          : "기존 파일만 열 수 있습니다. SQL은 읽기 전용이며 지원되는 셀은 별도 미리보기와 승인 후 수정할 수 있습니다."}</p>
+      </>}
       {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
       {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개, SQL 초안 및 템플릿을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
-      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : modal === "duplicateProject" ? "프로젝트 복제" : modal === "archiveProject" ? "프로젝트 보관" : "저장"}</button></div>
+      <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : modal === "duplicateProject" ? "프로젝트 복제" : modal === "duplicateProfile" ? "복제" : modal === "archiveProject" ? "프로젝트 보관" : "저장"}</button></div>
     </form></Dialog>}
     {archivedProjectsOpen && <ArchivedProjectsDialog onClose={() => setArchivedProjectsOpen(false)} onRestored={id => {
       setArchivedProjectsOpen(false);
@@ -2130,32 +2164,33 @@ function App() {
 }
 
 function SshProfileDialog({ mode, profile, initial, projectId, onClose, onChanged }: {
-  mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress; projectId: string; onClose: () => void; onChanged: () => void;
+  mode: SshProfileMode; profile?: SshProfile; initial?: SshProfileDraft; projectId: string; onClose: () => void; onChanged: () => void;
 }) {
-  const [name, setName] = useState(profile?.name ?? initial?.host.slice(0, 80) ?? "");
+  const [name, setName] = useState(profile?.name ?? initial?.name ?? initial?.host.slice(0, 80) ?? "");
   const [host, setHost] = useState(profile?.host ?? initial?.host ?? "");
   const [port, setPort] = useState(String(profile?.port ?? initial?.port ?? 22));
   const [username, setUsername] = useState(profile?.username ?? initial?.username ?? "");
-  const [environment, setEnvironment] = useState<SshProfile["environment"]>(profile?.environment ?? "DEV");
+  const [environment, setEnvironment] = useState<SshProfile["environment"]>(profile?.environment ?? initial?.environment ?? "DEV");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const pending = useRef(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (busy) return;
-    setBusy(true); setError("");
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError("");
     try {
       const input = { name, host, port: Number(port), username, environment };
-      if (mode === "create") await call("create_ssh_profile", { projectId, input });
+      if (mode === "create" || mode === "duplicate") await call("create_ssh_profile", { projectId, input });
       else if (mode === "edit" && profile) await call("update_ssh_profile", { id: profile.id, revision: profile.revision, input });
       else if (mode === "delete" && profile) await call("delete_ssh_profile", { id: profile.id, revision: profile.revision });
       else throw new Error("변경할 SSH 연결을 찾을 수 없습니다.");
       onChanged();
     } catch (e) { setError(errorText(e)); }
-    finally { setBusy(false); }
+    finally { pending.current = false; setBusy(false); }
   }
 
-  const title = mode === "create" ? "SSH 연결 추가" : mode === "edit" ? "SSH 연결 수정" : "SSH 연결 삭제";
+  const title = "SSH 연결 " + profileActionVerb[mode];
   return <Dialog title={title} onClose={onClose} busy={busy}><form onSubmit={submit} aria-busy={busy}>
     {mode === "delete" ? <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의를 삭제합니다. 열린 SSH 세션과 저장된 호스트 키 신뢰 기록은 유지됩니다.</p> : <>
       <label className="field">연결 이름<input autoFocus required disabled={busy} value={name} onChange={event => setName(event.target.value)} placeholder="예: 운영 서버" /></label>
@@ -2166,7 +2201,7 @@ function SshProfileDialog({ mode, profile, initial, projectId, onClose, onChange
       <p className="form-note">연결 정보만 저장합니다. 암호나 개인 키는 입력하지 않습니다. 운영 환경 연결은 열기 전 추가 확인합니다.</p>
     </>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button><button type="submit" className={mode === "delete" ? "danger" : "primary"} disabled={busy}>{busy ? "처리 중…" : mode === "delete" ? "삭제" : "저장"}</button></div>
+    <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button><button type="submit" className={mode === "delete" ? "danger" : "primary"} disabled={busy}>{busy ? "처리 중…" : profileSubmitVerb[mode]}</button></div>
   </form></Dialog>;
 }
 

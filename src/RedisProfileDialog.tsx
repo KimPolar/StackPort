@@ -1,27 +1,28 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 export type RedisSettings = {
   name: string; host: string; port: number; database: number; username: string;
   environment: "DEV" | "STAGING" | "PROD"; tls: boolean; ca_path: string | null;
 };
 export type RedisProfile = { id: string; project_id: string; revision: number; settings: RedisSettings };
-export type RedisProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: RedisProfile };
+export type RedisProfileAction = ProfileAction<RedisProfile>;
 
 const defaults: RedisSettings = { name: "", host: "", port: 6379, database: 0, username: "", environment: "DEV", tls: true, ca_path: null };
 
 export function RedisProfileDialog({ action, projectId, onClose, onSaved }: {
   action: RedisProfileAction; projectId: string; onClose: () => void; onSaved: (profile: RedisProfile | null) => void;
 }) {
-  const [values, setValues] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [port, setPort] = useState(String(values.port));
   const [database, setDatabase] = useState(String(values.database));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const deleting = action.kind === "delete";
-  const title = deleting ? "Redis 연결 삭제" : action.kind === "edit" ? "Redis 연결 수정" : "Redis 연결 추가";
+  const title = "Redis 연결 " + profileActionVerb[action.kind];
 
   function update<K extends keyof RedisSettings>(key: K, value: RedisSettings[K]) {
     setValues(current => ({ ...current, [key]: value }));
@@ -33,7 +34,7 @@ export function RedisProfileDialog({ action, projectId, onClose, onSaved }: {
     pending.current = true; setBusy(true); setError("");
     try {
       const input = { ...values, port: Number(port), database: Number(database), ca_path: values.tls && values.ca_path ? values.ca_path : null };
-      if (action.kind === "create") onSaved(await invoke<RedisProfile>("create_redis_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<RedisProfile>("create_redis_profile", { projectId, input }));
       else if (action.kind === "edit") onSaved(await invoke<RedisProfile>("update_redis_profile", { id: action.profile.id, revision: action.profile.revision, input }));
       else { await invoke("delete_redis_profile", { id: action.profile.id, revision: action.profile.revision }); onSaved(null); }
     } catch (reason) { setError(String(reason)); }
@@ -51,7 +52,7 @@ export function RedisProfileDialog({ action, projectId, onClose, onSaved }: {
     <form aria-busy={busy} onSubmit={event => void save(event)}>
       {deleting ? <p className="confirm-copy"><strong>{action.profile.settings.name}</strong>의 저장된 연결 설정을 삭제합니다.</p> :
         <fieldset className="postgres-profile-fields" disabled={busy}>
-          <label className="field">연결 이름<input required maxLength={80} value={values.name} onChange={event => update("name", event.target.value)} /></label>
+          <label className="field">연결 이름<input autoFocus required maxLength={80} value={values.name} onChange={event => update("name", event.target.value)} /></label>
           <div className="postgres-profile-address">
             <label className="field">호스트 이름 또는 IP<input required value={values.host} onChange={event => update("host", event.target.value)} /></label>
             <label className="field">포트<input type="number" min={1} max={65535} required value={port} onChange={event => setPort(event.target.value)} /></label>
@@ -70,7 +71,7 @@ export function RedisProfileDialog({ action, projectId, onClose, onSaved }: {
         </fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{deleting ? "삭제" : "저장"}</button></div>
+        <button type="submit" className={deleting ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button></div>
     </form>
   </Dialog>;
 }

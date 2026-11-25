@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { PostgresProfile, PostgresProfileAction, PostgresSettings } from "./PostgresWorkspace";
+import { profileActionVerb, profileSubmitVerb } from "./profileActions";
 
 const initial: PostgresSettings = { name: "", host: "", port: 5432, database: "", username: "", environment: "DEV", ca_path: null };
 
@@ -14,12 +15,12 @@ export function PostgresProfileDialog({ action, projectId, onClose, onSaved }: {
   const dialog = useRef<HTMLDialogElement>(null);
   const title = useId();
   const caInput = useId();
-  const [values, setValues] = useState(action.kind === "create" ? { ...initial, ...action.initial } : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...initial, ...action.initial });
   const [port, setPort] = useState(String(values.port));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
-  const heading = action.kind === "create" ? "PostgreSQL 연결 추가" : action.kind === "edit" ? "PostgreSQL 연결 수정" : "PostgreSQL 연결 삭제";
+  const heading = "PostgreSQL 연결 " + profileActionVerb[action.kind];
   useEffect(() => { dialog.current?.showModal(); }, []);
 
   function update<K extends keyof PostgresSettings>(key: K, value: PostgresSettings[K]) {
@@ -38,7 +39,7 @@ export function PostgresProfileDialog({ action, projectId, onClose, onSaved }: {
     event.preventDefault();
     void perform(async () => {
       const input = { ...values, port: Number(port), ca_path: values.ca_path || null };
-      if (action.kind === "create") onSaved(await invoke<PostgresProfile>("create_postgres_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<PostgresProfile>("create_postgres_profile", { projectId, input }));
       else {
         const { id, revision } = action.profile;
         if (action.kind === "edit") onSaved(await invoke<PostgresProfile>("update_postgres_profile", { id, revision, input }));
@@ -68,7 +69,7 @@ export function PostgresProfileDialog({ action, projectId, onClose, onSaved }: {
         </fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={busy} onClick={() => dialog.current?.close()}>취소</button>
-        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{action.kind === "delete" ? "삭제" : "저장"}</button></div>
+        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button></div>
     </form>
   </dialog>;
 }

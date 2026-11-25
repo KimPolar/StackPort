@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 type SqlServerSettings = {
   name: string; host: string; port: number; database: string;
@@ -9,7 +10,7 @@ type SqlServerSettings = {
   environment: "DEV" | "STAGING" | "PROD";
 };
 export type SqlServerProfile = { id: string; project_id: string; revision: number; settings: SqlServerSettings };
-export type SqlServerProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: SqlServerProfile };
+export type SqlServerProfileAction = ProfileAction<SqlServerProfile>;
 
 const defaults: SqlServerSettings = {
   name: "", host: "", port: 1433, database: "master", authentication: "sql_login", username: null,
@@ -19,13 +20,13 @@ const defaults: SqlServerSettings = {
 export function SqlServerProfileDialog({ projectId, action, onClose, onSaved }: {
   projectId: string; action: SqlServerProfileAction; onClose: () => void; onSaved: (profile: SqlServerProfile | null) => void;
 }) {
-  const [values, setValues] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [port, setPort] = useState(String(values.port));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const authHint = useId();
-  const title = "SQL Server 연결 " + (action.kind === "create" ? "추가" : action.kind === "edit" ? "수정" : "삭제");
+  const title = "SQL Server 연결 " + profileActionVerb[action.kind];
 
   function change<K extends keyof SqlServerSettings>(key: K, value: SqlServerSettings[K]) {
     setValues(current => ({ ...current, [key]: value }));
@@ -40,7 +41,7 @@ export function SqlServerProfileDialog({ projectId, action, onClose, onSaved }: 
         ...values, port: Number(port), ca_path: values.ca_path || null,
         username: values.authentication === "sql_login" ? values.username : null,
       };
-      if (action.kind === "create") onSaved(await invoke<SqlServerProfile>("create_sql_server_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<SqlServerProfile>("create_sql_server_profile", { projectId, input }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
         if (action.kind === "edit") onSaved(await invoke<SqlServerProfile>("update_sql_server_profile", { ...target, input }));
@@ -88,7 +89,7 @@ export function SqlServerProfileDialog({ projectId, action, onClose, onSaved }: 
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{action.kind === "delete" ? "삭제" : "저장"}</button>
+        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button>
       </div>
     </form>
   </Dialog>;

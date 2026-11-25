@@ -1,6 +1,7 @@
 import { useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { profileActionVerb, profileSubmitVerb, type ProfileAction } from "./profileActions";
 
 type OracleSettings = {
   name: string; host: string; port: number; target: "service_name" | "sid";
@@ -8,7 +9,7 @@ type OracleSettings = {
   environment: "DEV" | "STAGING" | "PROD";
 };
 export type OracleProfile = { id: string; project_id: string; revision: number; settings: OracleSettings };
-export type OracleProfileAction = { kind: "create" } | { kind: "edit" | "delete"; profile: OracleProfile };
+export type OracleProfileAction = ProfileAction<OracleProfile>;
 export const ORACLE_TCP_NOTE = "일반 TCP에서는 전송 데이터를 TLS로 보호하지 않습니다.";
 
 const defaults: OracleSettings = {
@@ -19,13 +20,13 @@ const defaults: OracleSettings = {
 export function OracleProfileDialog({ projectId, action, onClose, onSaved }: {
   projectId: string; action: OracleProfileAction; onClose: () => void; onSaved: (profile: OracleProfile | null) => void;
 }) {
-  const [values, setValues] = useState(action.kind === "create" ? defaults : action.profile.settings);
+  const [values, setValues] = useState("profile" in action ? action.profile.settings : { ...defaults, ...action.initial });
   const [port, setPort] = useState(String(values.port));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
   const transportHint = useId();
-  const verb = action.kind === "create" ? "추가" : action.kind === "edit" ? "수정" : "삭제";
+  const verb = profileActionVerb[action.kind];
 
   function change<K extends keyof OracleSettings>(key: K, value: OracleSettings[K]) {
     setValues(current => ({ ...current, [key]: value }));
@@ -43,7 +44,7 @@ export function OracleProfileDialog({ projectId, action, onClose, onSaved }: {
     pending.current = true; setBusy(true); setError("");
     try {
       const input = { ...values, port: Number(port), ca_path: values.transport === "tcps" ? values.ca_path || null : null };
-      if (action.kind === "create") onSaved(await invoke<OracleProfile>("create_oracle_profile", { projectId, input }));
+      if (!("profile" in action)) onSaved(await invoke<OracleProfile>("create_oracle_profile", { projectId, input }));
       else {
         const target = { id: action.profile.id, revision: action.profile.revision };
         if (action.kind === "edit") onSaved(await invoke<OracleProfile>("update_oracle_profile", { ...target, input }));
@@ -90,7 +91,7 @@ export function OracleProfileDialog({ projectId, action, onClose, onSaved }: {
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={onClose}>취소</button>
-        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{action.kind === "delete" ? "삭제" : "저장"}</button>
+        <button type="submit" className={action.kind === "delete" ? "danger" : "primary"} disabled={busy}>{profileSubmitVerb[action.kind]}</button>
       </div>
     </form>
   </Dialog>;

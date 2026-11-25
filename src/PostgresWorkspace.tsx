@@ -5,6 +5,7 @@ import { PostgresBackupDialog, type PostgresBackupReport, type PostgresBackupTar
 import { PostgresRestoreDialog, type PostgresRestoreReport } from "./PostgresRestoreDialog";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
+import type { ProfileAction } from "./profileActions";
 import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type PostgresObjectKind, type PostgresRelationLink,
   type PostgresStructureSection } from "./PostgresObjectStructure";
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
@@ -31,7 +32,7 @@ import "./postgresWorkspace.css";
 export type PostgresSettings = { name: string; host: string; port: number; database: string; username: string; environment: "DEV" | "STAGING" | "PROD"; ca_path: string | null };
 export type PostgresProfile = { id: string; project_id: string; revision: number; settings: PostgresSettings };
 export type PostgresConnection = { id: string; profileId: string; revision: number };
-export type PostgresProfileAction = { kind: "create"; initial?: Partial<PostgresSettings> } | { kind: "edit" | "delete"; profile: PostgresProfile };
+export type PostgresProfileAction = ProfileAction<PostgresProfile>;
 type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string;
   tunnel: string | null; tunnel_id: string | null; grid_edit: boolean };
 type Disconnect = "closed" | "tunnel_stopped" | "tunneled_connection_closed";

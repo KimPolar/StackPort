@@ -25,7 +25,7 @@ PARTIAL = {
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
     "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL·Redis 호스트·포트·사용자·이름·환경 저장과 Redis DB 번호·TLS 설정",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
-    "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기",
+    "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기, DBMS 9종과 SSH 연결의 설정 기반 복제",
     "SP-CN-005": "선택한 SSH·데이터베이스 연결의 버전형 JSON 내보내기, 검토한 파일에서 선택한 연결만 가져오기, DB 이름 변경·로컬 파일 연결과 일괄 등록",
     "SP-CN-007": "SSH 터미널의 일회성 암호 입력",
     "SP-CN-008": "Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력",
@@ -437,6 +437,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-CN-001", "SP-CN-003", "SP-UI-011", "SP-AT-025"}:
                 evidence += "; crates/stackport-core/tests/postgres_profiles.rs"
+            if requirement_id == "SP-CN-003":
+                evidence += "; src/profileActions.ts; tests/profile-actions.test.mjs; tests/desktop-smoke.cjs"
             if requirement_id in {
                 "SP-UI-014", "SP-UI-019", "SP-SQ-001", "SP-SQ-003", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009",
                 "SP-SQ-018", "SP-SQ-022", "SP-SQ-025", "SP-SQ-026",

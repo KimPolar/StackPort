@@ -1224,7 +1224,89 @@ async function verifyDatabaseExplorer(page) {
   await tokenDialog.getByRole('button', { name: '취소', exact: true }).click();
   await tokenDialog.waitFor({ state: 'detached' });
 
+  await verifyProfileDuplication(page, explorer);
   await verifyDatabaseExchange(page, explorer);
+}
+
+async function verifyProfileDuplication(page, explorer) {
+  const rows = explorer.locator('#explorer-databases .profile-row');
+  const active = rows.filter({ hasText: '연결 20' });
+  await active.click();
+  await active.and(explorer.locator('[aria-current="true"]')).waitFor();
+  const projectId = await page.getByRole('combobox', { name: '프로젝트', exact: true }).inputValue();
+  const list = command => page.evaluate(
+    ({ command, projectId }) => window.__TAURI_INTERNALS__.invoke(command, { projectId }), { command, projectId },
+  );
+
+  const cases = [
+    ['SQLite', 'SQLite', '연결 20', 'list_profiles', '이름'],
+    ['PostgreSQL', 'PostgreSQL', '연결 4', 'list_postgres_profiles', '연결 이름'],
+    ['MySQL · MariaDB', 'MySQL 계열', '연결 11', 'list_mysql_profiles', '연결 이름'],
+    ['MongoDB', 'MongoDB', '연결 3', 'list_mongo_profiles', '연결 이름'],
+    ['Redis', 'Redis', '연결 2', 'list_redis_profiles', '연결 이름'],
+    ['SQL Server', 'SQL Server', '연결 5', 'list_sql_server_profiles', '연결 이름'],
+    ['Oracle Database', 'Oracle Database', '연결 6', 'list_oracle_profiles', '연결 이름'],
+    ['Snowflake', 'Snowflake', '연결 7', 'list_snowflake_profiles', '연결 이름'],
+  ];
+  for (const [engine, title, name, command, field] of cases) {
+    const button = explorer.getByRole('button', { name: name + ' ' + engine + ' 연결 복제', exact: true });
+    const dialog = page.getByRole('dialog', { name: title + ' 연결 복제', exact: true });
+    const nameInput = dialog.getByRole('textbox', { name: field, exact: true });
+    const before = (await list(command)).find(item => (item.settings ?? item).name === name);
+    await button.click();
+    assert.equal(await nameInput.inputValue(), name + ' 복사본');
+    if (engine === 'SQLite') assert.equal(await dialog.getByRole('textbox', { name: /SQLite 파일 경로/ }).inputValue(), before.path);
+    if (engine === 'Snowflake') {
+      assert.equal(await dialog.getByLabel('인증 방식', { exact: true }).inputValue(), 'oauth');
+      await dialog.getByRole('button', { name: '취소', exact: true }).click();
+      await dialog.waitFor({ state: 'detached' });
+      assert.deepEqual(await list(command), [before]);
+      await button.click();
+    }
+    const copyName = title + ' 사본';
+    await nameInput.fill(copyName);
+    await dialog.getByRole('combobox', { name: /환경/ }).selectOption('STAGING');
+    await dialog.getByRole('button', { name: '복제', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    await rows.getByText(copyName, { exact: true }).waitFor();
+    const saved = await list(command);
+    const original = saved.find(item => item.id === before.id);
+    const copy = saved.find(item => (item.settings ?? item).name === copyName);
+    assert.deepEqual(original, before);
+    assert.notEqual(copy.id, original.id);
+    if (copy.settings) {
+      assert.equal(copy.revision, 1);
+      assert.deepEqual(copy.settings, { ...original.settings, name: copyName, environment: 'STAGING' });
+    } else {
+      assert.equal(copy.path, original.path);
+      assert.equal(copy.environment, 'STAGING');
+    }
+    assert.equal(await active.getAttribute('aria-current'), 'true');
+  }
+
+  await explorer.getByRole('button', { name: 'SSH 연결 추가', exact: true }).click();
+  const add = page.getByRole('dialog', { name: 'SSH 연결 추가', exact: true });
+  await add.getByLabel('연결 이름').fill('SSH 원본');
+  await add.getByLabel('호스트 또는 IP').fill('admin.example.test');
+  await add.getByLabel('포트').fill('2222');
+  await add.getByLabel('사용자 이름').fill('operator');
+  await add.getByRole('combobox', { name: /환경/ }).selectOption('PROD');
+  await add.getByRole('button', { name: '저장', exact: true }).click();
+  await add.waitFor({ state: 'detached' });
+  const before = (await list('list_ssh_profiles')).find(item => item.name === 'SSH 원본');
+  await explorer.getByRole('button', { name: 'SSH 원본 SSH 연결 복제', exact: true }).click();
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결 복제', exact: true });
+  assert.equal(await ssh.getByLabel('연결 이름').inputValue(), 'SSH 원본 복사본');
+  assert.equal(await ssh.getByRole('combobox', { name: /환경/ }).inputValue(), 'PROD');
+  await ssh.getByLabel('사용자 이름').fill('reader');
+  await ssh.getByRole('button', { name: '복제', exact: true }).click();
+  await ssh.waitFor({ state: 'detached' });
+  await explorer.getByRole('button', { name: 'SSH SSH 원본 복사본 연결', exact: true }).waitFor();
+  const saved = await list('list_ssh_profiles');
+  const copy = saved.find(item => item.name === 'SSH 원본 복사본');
+  assert.notEqual(copy.id, before.id);
+  assert.deepEqual(saved.find(item => item.id === before.id), before);
+  assert.deepEqual(copy, { ...before, id: copy.id, revision: 1, name: 'SSH 원본 복사본', username: 'reader' });
 }
 
 async function verifyDatabaseExchange(page, explorer) {

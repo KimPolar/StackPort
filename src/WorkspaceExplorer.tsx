@@ -14,6 +14,7 @@ import type { SqlServerProfile, SqlServerProfileAction } from "./SqlServerProfil
 import type { OracleProfile, OracleProfileAction } from "./OracleProfileDialog";
 import type { SnowflakeProfile, SnowflakeProfileAction } from "./SnowflakeProfileDialog";
 import type { DatabaseExchangeMode } from "./DatabaseProfileExchange";
+import { duplicateProfileAction } from "./profileActions";
 import { PostgresPager } from "./PostgresPager";
 import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
@@ -25,7 +26,7 @@ import "./workspaceExplorer.css";
 type Project = { id: string; name: string };
 type SqliteProfile = { id: string; project_id: string; name: string; path: string; environment: string };
 export type ExplorerProjectAction = "create" | "rename" | "duplicate" | "archive" | "delete" | "archived" | "copy";
-export type ExplorerSshAction = "create" | "edit" | "delete" | "refresh" | "import" | "export";
+export type ExplorerSshAction = "create" | "duplicate" | "edit" | "delete" | "refresh" | "import" | "export";
 
 type ExplorerProps = {
   desktop: boolean;
@@ -39,7 +40,7 @@ type ExplorerProps = {
     profiles: SqliteProfile[]; loadedId: string; active: boolean; objects: DatabaseObject[];
     selected: string | undefined; loading: boolean; displayPath: (path: string) => string;
     open: (id: string) => void; openObject: (item: DatabaseObject) => void; openPinnedObject: (id: string, name: string) => void; refresh: () => void;
-    restore: () => void;
+    restore: () => void; duplicate: (id: string) => void;
   };
   postgres: {
     profiles: PostgresProfile[]; activeId: string; connection: PostgresConnection | null;
@@ -238,6 +239,10 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     input.current?.focus();
   }
 
+  function duplicateButton(name: string, engine: string, onClick: () => void) {
+    return desktop ? <ExplorerButton label={`${name} ${engine} 연결 복제`} Icon={Copy} onClick={onClick} /> : null;
+  }
+
   function databaseEntry(entry: (typeof databaseItems)[number]) {
     if (entry.engine === "sqlite") {
       const item = entry.item;
@@ -245,6 +250,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)} engine="SQLite"
           Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)}>
           {favoriteButton({ kind: "sqlite", profile_id: item.id }, item.name)}
+          {duplicateButton(item.name, "SQLite", () => sqlite.duplicate(item.id))}
         </ExplorerProfile>
         {item === loaded && (sqlite.active || filtering) && <div className="object-list">
           <div className="object-toolbar"><span>객체</span>
@@ -268,6 +274,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
           Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
           {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
           <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
+          {duplicateButton(item.settings.name, "PostgreSQL", () => postgres.action(duplicateProfileAction(item, postgres.profiles)))}
           <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
         </ExplorerProfile>
         {item === activePostgres && submitted && <div className="object-list explorer-postgres-results" role="group" aria-label="PostgreSQL 서버 검색 결과">
@@ -300,6 +307,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         detail={networkAddressText(item.settings)} engine="MySQL · MariaDB" label={`MySQL ${item.settings.name} 열기`}
         Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
+        {duplicateButton(item.settings.name, "MySQL · MariaDB", () => mysql.action(duplicateProfileAction(item, mysql.profiles)))}
         <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
@@ -309,6 +317,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         detail={mongoAddress(item.settings.uri)} engine="MongoDB" label={`MongoDB ${item.settings.name} 열기`}
         Icon={Database} selected={item.id === mongo.activeId} onOpen={() => mongo.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} MongoDB 연결 수정`} Icon={Pencil} onClick={() => mongo.action({ kind: "edit", profile: item })} />
+        {duplicateButton(item.settings.name, "MongoDB", () => mongo.action(duplicateProfileAction(item, mongo.profiles)))}
         <ExplorerButton label={`${item.settings.name} MongoDB 연결 삭제`} Icon={Trash2} onClick={() => mongo.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
@@ -319,6 +328,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         label={`SQL Server ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === sqlServer.activeId} onOpen={() => sqlServer.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 수정`} Icon={Pencil} onClick={() => sqlServer.action({ kind: "edit", profile: item })} />
+        {duplicateButton(item.settings.name, "SQL Server", () => sqlServer.action(duplicateProfileAction(item, sqlServer.profiles)))}
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 삭제`} Icon={Trash2} onClick={() => sqlServer.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
@@ -329,6 +339,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         label={`Oracle Database ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === oracle.activeId} onOpen={() => oracle.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} Oracle Database 연결 수정`} Icon={Pencil} onClick={() => oracle.action({ kind: "edit", profile: item })} />
+        {duplicateButton(item.settings.name, "Oracle Database", () => oracle.action(duplicateProfileAction(item, oracle.profiles)))}
         <ExplorerButton label={`${item.settings.name} Oracle Database 연결 삭제`} Icon={Trash2} onClick={() => oracle.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
@@ -339,6 +350,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         label={`Snowflake ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === snowflake.activeId} onOpen={() => snowflake.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} Snowflake 연결 수정`} Icon={Pencil} onClick={() => snowflake.action({ kind: "edit", profile: item })} />
+        {duplicateButton(item.settings.name, "Snowflake", () => snowflake.action(duplicateProfileAction(item, snowflake.profiles)))}
         <ExplorerButton label={`${item.settings.name} Snowflake 연결 삭제`} Icon={Trash2} onClick={() => snowflake.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
@@ -347,6 +359,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       detail={`${networkAddressText(item.settings)} / DB ${item.settings.database}`} engine="Redis" label={`Redis ${item.settings.name} 열기`}
       Icon={KeyRound} selected={item.id === redis.activeId} onOpen={() => redis.open(item.id)}>
       <ExplorerButton label={`${item.settings.name} Redis 연결 수정`} Icon={Pencil} onClick={() => redis.action({ kind: "edit", profile: item })} />
+      {duplicateButton(item.settings.name, "Redis", () => redis.action(duplicateProfileAction(item, redis.profiles)))}
       <ExplorerButton label={`${item.settings.name} Redis 연결 삭제`} Icon={Trash2} onClick={() => redis.action({ kind: "delete", profile: item })} />
     </ExplorerProfile>;
   }
@@ -452,6 +465,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
             detail={`${item.username}@${networkAddressText(item)}`} label={`SSH ${item.name} 연결`} Icon={TerminalSquare} onOpen={() => ssh.open(item)}>
             {favoriteButton({ kind: "ssh", profile_id: item.id }, item.name)}
             <ExplorerButton label={`${item.name} SSH 연결 수정`} Icon={Pencil} onClick={() => ssh.action("edit", item)} />
+            {duplicateButton(item.name, "SSH", () => ssh.action("duplicate", item))}
             <ExplorerButton label={`${item.name} SSH 연결 삭제`} Icon={Trash2} onClick={() => ssh.action("delete", item)} />
           </ExplorerProfile>)}
         </ExplorerGroup>
