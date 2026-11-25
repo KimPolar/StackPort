@@ -26,6 +26,7 @@ mod postgres;
 mod mysql;
 pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlSqlParameter, MysqlSqlResult};
+pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;

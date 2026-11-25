@@ -14,6 +14,12 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 MySQL 작업 공간은 계정이 볼 수 있는 데이터베이스와 테이블·뷰를 각각 검색하고 100개씩 표시합니다. 선택한 객체의 열 이름, 타입, NULL 허용 여부와 키 표시를 읽습니다. 데이터 미리보기는 50행씩 읽으며 처음·이전·다음 페이지로 이동합니다. 한 화면에 앞 128개 열과 값당 512바이트를 표시합니다. 큰 정수와 소수는 문자열로 보존하고 바이너리 값은 HEX로 표시합니다. 긴 UTF-8 값은 문자 경계를 지켜 자릅니다. [MySQL 열 메타데이터](https://dev.mysql.com/doc/refman/8.4/en/information-schema-columns-table.html)
 
+객체 상세는 **인덱스**, **제약조건**, **들어오는 외래 키**를 열 때 각각 조회합니다. 인덱스는 방식, 고유 여부, 열 또는 함수 식, 순서, 접두 길이와 고유값 추정치를 표시합니다. 서버가 제공하면 MySQL 인덱스 가시성 또는 MariaDB의 무시 상태를 표시합니다. 제약조건은 기본 키·고유 키·외래 키·CHECK를 표시하며, 복합 외래 키의 열 대응과 갱신·삭제 규칙을 선언 순서로 읽습니다. 양방향으로 참조 관계를 확인하고, 계정 메타데이터에 표시되는 참조 객체의 구조로 이동할 수 있습니다. 구역마다 최대 100개 항목씩 표시합니다. [MySQL 키 열 대응](https://dev.mysql.com/doc/refman/8.4/en/information-schema-key-column-usage-table.html) · [MariaDB 인덱스 메타데이터](https://mariadb.com/docs/server/reference/system-tables/information-schema/information-schema-tables/information-schema-statistics-table)
+
+MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에서 읽습니다. 서버가 해당 계정에 갱신·삭제 규칙을 공개하지 않으면 그 상태를 표시합니다. [MariaDB 키 열 메타데이터](https://mariadb.com/docs/server/reference/system-tables/information-schema/information-schema-tables/information-schema-key_column_usage-table) · [MariaDB CHECK 메타데이터](https://mariadb.com/docs/server/reference/system-tables/information-schema/information-schema-tables/information-schema-check_constraints-table)
+
+**생성 SQL**은 테이블 또는 뷰의 `SHOW CREATE` 결과를 표시합니다. 정의 전체를 읽은 경우 복사하거나 새 UTF-8 SQL 파일로 저장할 수 있습니다. 표시 한도는 262,144자입니다. 뷰의 정의를 읽는 데 필요한 권한이 없으면 해당 구역에 사유를 표시합니다. [MySQL SHOW CREATE VIEW](https://dev.mysql.com/doc/refman/8.4/en/show-create-view.html)
+
 **필터 및 정렬**은 화면에 표시되지 않는 열에도 적용합니다. 비교·범위·포함·NULL 조건을 최대 16개까지 AND 또는 OR로 결합하고, 정렬은 최대 8개 열의 방향과 NULL 순서를 지정합니다. 서버가 필터와 정렬을 적용한 뒤 페이지를 반환합니다. 기본 키가 있으면 정렬에 포함되지 않은 키 열을 마지막에 적용합니다. 기본 키가 없는 결과는 동률 행의 순서가 달라질 수 있으며, 조회 사이에 데이터가 변경되면 페이지 구성이 달라질 수 있습니다. 날짜만 입력해 DATETIME 또는 TIMESTAMP와 비교하면 해당 날짜의 자정을 사용합니다. 큰 정수와 고정 소수 비교는 정밀도를 유지합니다. [MySQL 비교 시 자료형 변환](https://dev.mysql.com/doc/refman/8.4/en/type-conversion.html) · [MariaDB 비교 시 자료형 변환](https://mariadb.com/docs/server/reference/sql-functions/string-functions/type-conversion)
 
 **조회 SQL**에는 입력값 대신 실제 바인딩에 사용한 매개변수를 표시합니다. **저장된 조건**에서 현재 필터 값과 정렬을 로컬 작업 공간에 보관하고 다시 적용할 수 있습니다. 메타데이터 v16은 기존 SQLite·PostgreSQL 조건의 이름, 범위와 개정 번호를 유지하면서 MySQL 계열 연결을 지원합니다.
@@ -400,6 +406,8 @@ node tests/desktop-smoke.cjs
 ```
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS와 계정 권한, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인했습니다.
+
+구조 검사는 인덱스 순서·접두 길이·가시성, 권한별 제약조건 조회, 전체 101개 제약조건의 두 페이지, 교차 데이터베이스 복합 외래 키와 자기 참조, 공개되지 않은 참조 대상, 뷰 정의 권한과 SQL 파일 저장을 다룹니다.
 
 PostgreSQL 검사는 PostgreSQL의 `bin` 폴더에 있는 `initdb.exe`, `postgres.exe`, `pg_ctl.exe`, `libpq.dll`과 OpenSSL, Python 3을 사용합니다. 실서버는 격리된 테스트 폴더에서 새로 초기화되고 루프백에만 바인딩됩니다. 테스트 스키마는 `libpq`로 TLS 연결을 열어 생성합니다. Python 실행 파일을 직접 지정하려면 `STACKPORT_TEST_PYTHON`을 설정합니다. 임시 CA와 DNS 이름이 있는 인증서로 직접 연결과 로컬 SSH 터널의 인증서 검증을 확인합니다. PostgreSQL 18.6에서 조회 제한, SQL 쓰기 차단, 매개변수 바인딩과 Latin-1 인코딩 오류, 예상·실제 실행 계획, 서버 취소·시간 제한, SQL 파일, 전체 CSV·JSON 내보내기와 중단·파일 충돌을 검사합니다. [libpq 명령 실행](https://www.postgresql.org/docs/18/libpq-exec.html)
 

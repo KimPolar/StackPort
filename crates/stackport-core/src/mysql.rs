@@ -2,11 +2,13 @@ mod export;
 mod grid;
 mod profiles;
 mod sql;
+mod structure;
 
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use sql::{MysqlSqlParameter, MysqlSqlResult};
+pub use structure::{MysqlStructure, MysqlStructureSection};
 
 use crate::{table_query::TableQueryDialect, Result, Store, TableQueryClauses};
 use mysql_async::{

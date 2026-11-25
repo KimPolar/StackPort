@@ -82,13 +82,33 @@ async function fixture() {
     assert.ok(connected, 'The isolated ' + engine + ' server did not start.');
     admin(port, `CREATE DATABASE visible_db CHARACTER SET utf8mb4;
       CREATE DATABASE hidden_db;
+      CREATE DATABASE linked_db;
       CREATE TABLE hidden_db.hidden_table (id INT);
+      CREATE TABLE hidden_db.hidden_parent (id INT PRIMARY KEY) ENGINE=InnoDB;
+      CREATE TABLE linked_db.catalog_parent (tenant_id INT, part_id INT, PRIMARY KEY(part_id, tenant_id)) ENGINE=InnoDB;
       CREATE TABLE visible_db.\`orders\`\`daily\` (id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
         title VARCHAR(80), exact_value DECIMAL(30,6), payload VARBINARY(10), optional_text LONGTEXT, long_text LONGTEXT);
       INSERT INTO visible_db.\`orders\`\`daily\` VALUES
         (18446744073709551615, CONVERT(0xED959CEAB880 USING utf8mb4), 123456789012345678901234.567890,
          0x00ff21, NULL, REPEAT(CONVERT(0xEAB880 USING utf8mb4), 190));
       CREATE VIEW visible_db.order_view AS SELECT id, title FROM visible_db.\`orders\`\`daily\`;
+      CREATE VIEW visible_db.private_definition_view AS SELECT id FROM visible_db.\`orders\`\`daily\`;
+      CREATE TABLE visible_db.catalog_child (
+        id INT PRIMARY KEY, parent_tenant INT, parent_part INT, supervisor_id INT, hidden_id INT,
+        code VARCHAR(80) CHARACTER SET utf8mb4, amount INT NOT NULL DEFAULT 0,
+        CONSTRAINT uq_tenant_code UNIQUE (parent_tenant, code),
+        CONSTRAINT ck_catalog_amount CHECK (amount >= 0),
+        CONSTRAINT fk_catalog_parent FOREIGN KEY (parent_part, parent_tenant)
+          REFERENCES linked_db.catalog_parent(part_id, tenant_id) ON UPDATE CASCADE ON DELETE SET NULL,
+        CONSTRAINT fk_catalog_self FOREIGN KEY (supervisor_id) REFERENCES visible_db.catalog_child(id),
+        CONSTRAINT fk_catalog_hidden FOREIGN KEY (hidden_id) REFERENCES hidden_db.hidden_parent(id),
+        INDEX idx_catalog_prefix (code(4) DESC, id) ${maria ? 'IGNORED' : 'INVISIBLE'}
+      ) ENGINE=InnoDB;
+      ${maria ? 'ALTER TABLE visible_db.catalog_child ADD COLUMN code_lower VARCHAR(80) AS (LOWER(code)) VIRTUAL, ADD INDEX idx_catalog_expression (code_lower);'
+        : 'CREATE INDEX idx_catalog_expression ON visible_db.catalog_child ((LOWER(code)));'}
+      CREATE TABLE visible_db.check_pages (
+        id INT, ${Array.from({ length: 101 }, (_, i) => `CONSTRAINT chk_${String(i).padStart(3, '0')} CHECK (id <> ${i})`).join(',')}
+      ) ENGINE=InnoDB;
       CREATE TABLE visible_db.sample_limit (number INT NOT NULL PRIMARY KEY);
       INSERT INTO visible_db.sample_limit VALUES ${Array.from({ length: 65 }, (_, i) => `(${i})`).join(',')};
       CREATE TABLE visible_db.grid_filter (
@@ -104,7 +124,12 @@ async function fixture() {
       );
       INSERT INTO visible_db.wide_filter(id, col_128) VALUES (1, 100), (2, 200);
       CREATE USER 'catalog_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
-      GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';`);
+      GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';
+      GRANT SELECT ON linked_db.catalog_parent TO 'catalog_reader'@'%';
+      GRANT SHOW VIEW ON visible_db.order_view TO 'catalog_reader'@'%';
+      ${maria ? `CREATE USER 'metadata_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
+        GRANT SELECT, REFERENCES ON visible_db.catalog_child TO 'metadata_reader'@'%';
+        GRANT SELECT ON linked_db.catalog_parent TO 'metadata_reader'@'%';` : ''}`);
     return { server, port, ca: tls.ca };
   } catch (cause) {
     await stopServer(server, port);
@@ -166,6 +191,17 @@ async function verify(page, server) {
   assert.equal(capped.rows.length, 50);
   assert.equal(capped.more_rows, true);
   await assert.rejects(read('hidden_db', 'hidden_table', true), /권한/);
+  await verifyStructure(command, id);
+  if (maria) {
+    const metadata = await open(await alternate('제약조건 메타데이터 권한', { username: 'metadata_reader' }));
+    const rules = await command('mysql_structure', { id: metadata.id, database: 'visible_db', table: 'catalog_child', section: 'constraints', page: 0 });
+    const foreign = rules.items.find(item => item.name === 'fk_catalog_parent');
+    assert.deepEqual([foreign?.on_update, foreign?.on_delete], ['CASCADE', 'SET NULL']);
+    assert.equal(rules.items.filter(item => item.name === 'fk_catalog_parent').length, 1);
+    const incoming = await command('mysql_structure', { id: metadata.id, database: 'linked_db', table: 'catalog_parent', section: 'references', page: 0 });
+    assert.deepEqual([incoming.items[0].on_update, incoming.items[0].on_delete], ['CASCADE', 'SET NULL']);
+    await command('close_mysql', { id: metadata.id });
+  }
   await verifyDataGrid(command, id, profile);
   await verifyExports(command, id, profile);
   await verifySql(command, id, server.port);
@@ -188,11 +224,125 @@ async function verify(page, server) {
   await grid.getByText('한글', { exact: true }).waitFor();
   await grid.getByText('00ff21', { exact: true }).waitFor();
   await grid.getByText('NULL', { exact: true }).waitFor();
+  await verifyStructureControls(page, workspace, list);
   await verifySqlEditor(page, workspace);
   await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+async function verifyStructure(command, id) {
+  const read = (table, section, database = 'visible_db', page = 0) => command('mysql_structure', { id, database, table, section, page });
+  const byName = (items, name) => {
+    const item = items.find(item => item.name === name);
+    assert.ok(item, 'Missing catalog entry: ' + name);
+    return item;
+  };
+  const indexes = await read('catalog_child', 'indexes');
+  assert.equal(indexes.section, 'indexes');
+  assert.equal(indexes.has_next, false);
+  const prefix = byName(indexes.items, 'idx_catalog_prefix');
+  assert.equal(prefix.method, 'BTREE');
+  assert.equal(prefix.visible, false);
+  assert.equal(prefix.unique, false);
+  assert.deepEqual(prefix.parts.map(part => [part.column, part.order, part.prefix]), [['code', 'D', 4], ['id', 'A', null]]);
+  const expression = byName(indexes.items, 'idx_catalog_expression').parts[0];
+  if (maria) assert.equal(expression.column, 'code_lower');
+  else {
+    assert.equal(expression.column, null);
+    assert.match(expression.expression.text, /lower\(.?code.?\)/i);
+  }
+  assert.equal(byName(indexes.items, 'uq_tenant_code').unique, true);
+
+  const { items: constraints } = await read('catalog_child', 'constraints');
+  const foreign = byName(constraints, 'fk_catalog_parent');
+  assert.equal(foreign.kind, 'FOREIGN KEY');
+  assert.deepEqual(foreign.columns, [
+    { local: 'parent_part', referenced: 'part_id' },
+    { local: 'parent_tenant', referenced: 'tenant_id' },
+  ]);
+  assert.equal(foreign.reference.database, 'linked_db');
+  assert.equal(foreign.reference.object.name, 'catalog_parent');
+  assert.equal(foreign.on_update, maria ? null : 'CASCADE');
+  assert.equal(foreign.on_delete, maria ? null : 'SET NULL');
+  assert.equal(byName(constraints, 'fk_catalog_hidden').reference.object, null);
+  assert.deepEqual(byName(constraints, 'uq_tenant_code').columns.map(column => column.local), ['parent_tenant', 'code']);
+  const check = byName(constraints, 'ck_catalog_amount');
+  assert.equal(check.kind, 'CHECK');
+  assert.match(check.expression.text, /amount.*>=\s*0/i);
+  if (!maria) assert.equal(check.enforced, true);
+  const parent = await read('catalog_parent', 'references', 'linked_db');
+  assert.equal(parent.items.length, 1);
+  assert.equal(parent.items[0].source.object.name, 'catalog_child');
+  assert.deepEqual(parent.items[0].columns, foreign.columns);
+  assert.equal(parent.items[0].on_delete, maria ? null : 'SET NULL');
+  const self = await read('catalog_child', 'references');
+  assert.deepEqual(self.items.map(item => item.name), ['fk_catalog_self']);
+  assert.deepEqual((await read('catalog_parent', 'references', 'linked_db', 1)).items, []);
+
+  const firstPage = await read('check_pages', 'constraints');
+  assert.equal(firstPage.items.length, 100);
+  assert.equal(firstPage.has_next, true);
+  assert.equal(firstPage.items[0].name, 'chk_000');
+  assert.equal(firstPage.items[99].name, 'chk_099');
+  const secondPage = await read('check_pages', 'constraints', 'visible_db', 1);
+  assert.deepEqual(secondPage.items.map(item => item.name), ['chk_100']);
+  assert.equal(secondPage.has_next, false);
+
+  const tableSql = (await read('orders`daily', 'definition')).definition;
+  assert.equal(tableSql.truncated, false);
+  assert.match(tableSql.text, /^CREATE TABLE \`orders\`\`daily\`/);
+  const viewSql = (await read('order_view', 'definition')).definition;
+  assert.match(viewSql.text, /VIEW .+order_view/i);
+  await assert.rejects(read('private_definition_view', 'definition'), /SHOW VIEW/);
+  await assert.rejects(read('hidden_table', 'definition', 'hidden_db'), /권한/);
+}
+
+async function verifyStructureControls(page, workspace, list) {
+  const detail = workspace.getByRole('region', { name: 'MySQL 객체 상세' });
+  await list.getByRole('button', { name: /catalog_child/ }).click();
+  await detail.getByRole('button', { name: '인덱스', exact: true }).click();
+  await detail.locator('summary').filter({ hasText: 'idx_catalog_prefix' }).click();
+  const index = detail.getByRole('table', { name: 'idx_catalog_prefix 인덱스 구성' });
+  await index.getByText('내림차순', { exact: true }).waitFor();
+  await index.getByRole('cell', { name: '4', exact: true }).first().waitFor();
+
+  await detail.getByRole('button', { name: '제약조건', exact: true }).click();
+  const foreign = detail.locator('details').filter({ has: page.getByText('fk_catalog_parent', { exact: true }) });
+  await foreign.locator('summary').click();
+  await foreign.getByText(maria ? '현재 계정에 공개된 갱신·삭제 규칙이 없습니다.' : 'ON UPDATE CASCADE · ON DELETE SET NULL', { exact: true }).waitFor();
+  await foreign.getByRole('button', { name: '구조 열기', exact: true }).click();
+  await detail.getByRole('heading', { name: 'catalog_parent', exact: true }).waitFor();
+  await detail.getByRole('button', { name: '들어오는 외래 키', exact: true }).click();
+  await detail.locator('summary').filter({ hasText: 'fk_catalog_parent' }).click();
+  await detail.getByRole('button', { name: '구조 열기', exact: true }).click();
+  await detail.getByRole('heading', { name: 'catalog_child', exact: true }).waitFor();
+
+  await detail.getByRole('button', { name: '생성 SQL', exact: true }).click();
+  const definition = detail.getByRole('region', { name: 'MySQL 생성 SQL', exact: true });
+  const sql = await definition.locator('pre').textContent();
+  assert.match(sql, /CREATE TABLE/);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async text => { window.catalogCopiedSql = text; } },
+    });
+  });
+  try {
+    await definition.getByRole('button', { name: 'SQL 복사', exact: true }).click();
+    await definition.getByText('생성 SQL을 복사했습니다.', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.catalogCopiedSql), sql);
+  } finally {
+    await page.evaluate(() => { delete navigator.clipboard; delete window.catalogCopiedSql; });
+  }
+  await definition.getByRole('button', { name: '정의 파일 저장', exact: true }).click();
+  const save = page.getByRole('dialog', { name: 'SQL 파일로 저장', exact: true });
+  const destination = path.join(root, 'catalog-child.sql');
+  await save.getByLabel('새 SQL 파일 경로').fill(destination);
+  await save.getByRole('button', { name: '새 파일에 저장', exact: true }).click();
+  await save.waitFor({ state: 'detached' });
+  assert.equal(fs.readFileSync(destination, 'utf8'), sql);
 }
 
 async function verifyExports(command, id, profile) {
@@ -466,7 +616,7 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], server);
-    console.log(`${engine} Windows E2E passed (catalog, data grid, read-only SQL, full CSV/JSON export and cancellation).`);
+    console.log(`${engine} Windows E2E passed (structured catalog, DDL files, data grid, read-only SQL and export).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

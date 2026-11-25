@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
+import { MysqlObjectStructure, mysqlStructureLabels, type MysqlObjectInfo, type MysqlStructure, type MysqlStructureSection } from "./MysqlObjectStructure";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import { MysqlResultExport, type MysqlExportTarget } from "./MysqlResultExport";
 import { MysqlSqlWorkspace } from "./MysqlSqlWorkspace";
@@ -14,7 +15,12 @@ import "./mysqlWorkspace.css";
 
 type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null };
 type Page<T> = { items: T[]; has_next: boolean };
-type ObjectInfo = { name: string; kind: string; engine: string | null };
+type ObjectView = "columns" | "rows" | MysqlStructureSection;
+const objectViewLabels: Record<ObjectView, string> = {
+  columns: "열 구조", ...mysqlStructureLabels, rows: "데이터 미리보기",
+};
+const tableViews: ObjectView[] = ["columns", "indexes", "constraints", "references", "definition", "rows"];
+const viewViews: ObjectView[] = ["columns", "definition", "rows"];
 type Column = { name: string; data_type: string; column_type: string; nullable: boolean; key: string };
 type Sample = {
   columns: Column[];
@@ -35,8 +41,9 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [database, setDatabase] = useState<string | null>(null);
-  const [object, setObject] = useState<ObjectInfo | null>(null);
-  const [view, setView] = useState<"columns" | "rows">("columns");
+  const [object, setObject] = useState<MysqlObjectInfo | null>(null);
+  const [view, setView] = useState<ObjectView>("columns");
+  const [structurePage, setStructurePage] = useState(0);
   const [sqlOpen, setSqlOpen] = useState(false);
   const [schemaSearch, setSchemaSearch] = useState("");
   const [objectSearch, setObjectSearch] = useState("");
@@ -60,9 +67,13 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   const rowArgs = useMemo(() => structureArgs && view === "rows" ? {
     ...structureArgs, includeRows: true, grid: { page: rowPage, clauses: tableQuery },
   } : null, [structureArgs, view, rowPage, tableQuery]);
+  const inspectionArgs = useMemo(() => session && database && object && view !== "columns" && view !== "rows" ? {
+    id: session.id, database, table: object.name, section: view, page: structurePage,
+  } : null, [session, database, object, view, structurePage]);
   const schemas = useNativeRead<Page<string>>("mysql_databases", schemaArgs, revision);
-  const objects = useNativeRead<Page<ObjectInfo>>("mysql_objects", objectArgs, revision);
+  const objects = useNativeRead<Page<MysqlObjectInfo>>("mysql_objects", objectArgs, revision);
   const structure = useNativeRead<Sample>("mysql_table", structureArgs, revision, true);
+  const inspection = useNativeRead<MysqlStructure>("mysql_structure", inspectionArgs, revision);
   const rows = useNativeRead<Sample>("mysql_table", rowArgs, revision);
 
   useEffect(() => {
@@ -74,12 +85,12 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
   }, []);
 
   useEffect(() => {
-    const lost = [schemas.error, objects.error, structure.error, rows.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
+    const lost = [schemas.error, objects.error, structure.error, inspection.error, rows.error].find(message => message.includes("MySQL 연결이 닫혔습니다"));
     if (!lost || !active.current) return;
     const id = active.current;
     active.current = null; setSession(null); setExportTarget(null); setError(lost);
     void invoke("close_mysql", { id }).catch(() => {});
-  }, [schemas.error, objects.error, structure.error, rows.error]);
+  }, [schemas.error, objects.error, structure.error, inspection.error, rows.error]);
 
   function chooseDatabase(name: string | null) {
     setDatabase(name);
@@ -88,11 +99,23 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
     setObjectPage(0);
   }
 
-  function chooseObject(next: ObjectInfo | null) {
+  function chooseObject(next: MysqlObjectInfo | null) {
     setObject(next);
-    setView("columns");
+    showView("columns");
     setTableQuery(emptyTableQueryClauses);
     setRowPage(0);
+  }
+
+  function showView(next: ObjectView) {
+    if (next !== view) {
+      setView(next);
+      setStructurePage(0);
+    }
+  }
+
+  function followRelation(targetDatabase: string, target: MysqlObjectInfo) {
+    if (targetDatabase !== database) chooseDatabase(targetDatabase);
+    chooseObject(target);
   }
 
   async function connect(event: FormEvent) {
@@ -162,7 +185,7 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
           <ul className="mysql-catalog-items">{objects.data?.items.map(item => <li key={item.name}>
             <button type="button" aria-current={object?.name === item.name || undefined} onClick={() => {
               if (object?.name !== item.name) chooseObject(item);
-              else setView("columns");
+              else showView("columns");
               setSqlOpen(false);
             }}>
               <Table2 size={14} aria-hidden /><span>{item.name}</span><small>{item.kind.endsWith("VIEW") ? "뷰" : "테이블"}</small>
@@ -177,8 +200,9 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
         {!object && <p className="result-empty">데이터베이스에서 테이블이나 뷰를 선택하세요.</p>}
         {object && <>
           <div className="mysql-views" aria-label="객체 보기" role="group">
-            <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
-            <button type="button" className="secondary small" aria-pressed={view === "rows"} onClick={() => setView("rows")}>데이터 미리보기</button>
+            {(object.kind.endsWith("VIEW") ? viewViews : tableViews).map(item =>
+              <button key={item} type="button" className="secondary small" aria-pressed={view === item}
+                onClick={() => showView(item)}>{objectViewLabels[item]}</button>)}
             {view === "rows" && database && <button type="button" className="secondary small" disabled={!rows.data}
               onClick={() => beginExport({ kind: "table", database, table: object.name, clauses: tableQuery })}>
               <Download size={14} aria-hidden /> 결과 내보내기</button>}
@@ -187,6 +211,12 @@ export function MysqlWorkspace({ profile }: { profile: MysqlProfile }) {
             <ReadNotice loading={structure.loading} error={structure.error} />
             {structure.data && <TableStructure data={structure.data} />}
           </>}
+          {inspectionArgs && <section aria-label={objectViewLabels[view]} aria-busy={inspection.loading}>
+            <ReadNotice loading={inspection.loading} error={inspection.error} />
+            {inspection.data && <MysqlObjectStructure data={inspection.data} target={`${database}.${object.name}`} onFollow={followRelation} />}
+            {view !== "definition" && <Pager page={structurePage} loading={inspection.loading}
+              hasNext={inspection.data != null && inspection.data.section !== "definition" && inspection.data.has_next} onPage={setStructurePage} />}
+          </section>}
           <div hidden={view !== "rows"}>
             {database && structure.data?.filter_columns && <TableQueryControls
               key={JSON.stringify([session.id, database, object.name])} columns={structure.data.filter_columns} busy={rows.loading}

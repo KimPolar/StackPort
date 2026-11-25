@@ -8,7 +8,7 @@ export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone 
   target: string;
   document: SqlDocument;
   onClose: () => void;
-  onBusy: (busy: boolean) => void;
+  onBusy?: (busy: boolean) => void;
   onDone: (document: SqlDocument, path: string) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -24,7 +24,7 @@ export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone 
   async function run(action: () => Promise<void>) {
     if (pending.current) return;
     pending.current = true;
-    onBusy(true);
+    onBusy?.(true);
     setBusy(true);
     setError("");
     try {
@@ -34,7 +34,7 @@ export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone 
     } finally {
       pending.current = false;
       setBusy(false);
-      onBusy(false);
+      onBusy?.(false);
     }
   }
 

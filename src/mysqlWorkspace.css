@@ -15,6 +15,20 @@
 .mysql-catalog-items span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .mysql-pager, .mysql-views { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; }
 .mysql-pager span { color: var(--text-muted); font-size: 12px; }
+.mysql-views button[aria-pressed="true"] { color: var(--text-accent); border-color: var(--border); background: var(--surface-selected); }
+.mysql-inspection-list { border-top: 1px solid var(--border); }
+.mysql-inspection-item { border-bottom: 1px solid var(--border); min-width: 0; }
+.mysql-inspection-item > summary { padding: 9px 12px; cursor: pointer; overflow-wrap: anywhere; }
+.mysql-inspection-item > summary small { color: var(--text-muted); margin-inline-start: 8px; }
+.mysql-inspection-item > div { padding: 0 12px 10px; min-width: 0; }
+.mysql-inspection-item p { margin: 8px 0 0; }
+.mysql-key-columns { margin: 8px 0 0; padding-inline-start: 22px; overflow-wrap: anywhere; }
+.mysql-related { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; overflow-wrap: anywhere; font-size: 13px; }
+.mysql-related small { color: var(--text-muted); }
+.mysql-inspection-expression { margin: 6px 0; padding: 10px; max-height: 54dvh; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.mysql-definition { padding: 0 10px 10px; }
+.mysql-definition .mysql-views { padding-inline: 0; }
+.mysql-definition p { margin: 8px 0; overflow-wrap: anywhere; }
 .mysql-table-note { margin: 0; padding: 4px 10px; }
 .mysql-export-report { display: flex; justify-content: space-between; align-items: start; gap: 12px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 .mysql-export-report :is(code, span) { display: block; margin-top: 4px; overflow-wrap: anywhere; }
