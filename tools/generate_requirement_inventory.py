@@ -99,10 +99,10 @@ PARTIAL = {
     "SP-DB-029": "PostgreSQL 접속마다 독립적인 세션, 읽기 전용 쿼리 후 롤백과 세션 상태 정리",
     "SP-DT-001": "SQLite·PostgreSQL의 100행, MySQL·MariaDB의 50행 단위 결과 페이지, PostgreSQL 열 페이지",
     "SP-DT-002": "PostgreSQL 일반 힙 테이블 그리드에서 원문 텍스트·bytea HEX 페이지와 JSON·JSONB 들여쓰기·XML 트리·정적 PNG 보기",
-    "SP-DT-003": "SQLite·PostgreSQL의 행 추가·삭제 및 다중 셀 수정, 탭 구분 복사·붙여넣기, 현재 페이지의 여러 행 수정 및 같은 열 채우기",
-    "SP-DT-004": "SQLite·PostgreSQL의 그리드 변경 미리보기·적용·취소와 초안 닫기 확인, 여러 행의 개별 변경 표시 및 전후 비교",
-    "SP-DT-005": "SQLite·PostgreSQL 기본 키 검증과 키 없는 테이블 편집 차단",
-    "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자·기본값 구분과 자동 생성 키, 탭 구분 복사·붙여넣기의 NULL·빈 문자열 구분, SQLite의 열별 입력 형식과 PostgreSQL의 서버 타입 검증",
+    "SP-DT-003": "SQLite·PostgreSQL의 행 추가·삭제 및 다중 셀 수정, 탭 구분 복사·붙여넣기, 현재 페이지의 여러 행 수정 및 같은 열 채우기, MySQL·MariaDB 한 행의 다중 셀 수정",
+    "SP-DT-004": "SQLite·PostgreSQL의 그리드 변경 미리보기·적용·취소와 초안 닫기 확인, 여러 행의 개별 변경 표시 및 전후 비교, MySQL 계열 한 행 전후 비교·적용·취소·초안 닫기 확인",
+    "SP-DT-005": "SQLite·PostgreSQL 기본 키 검증과 키 없는 테이블 편집 차단, MySQL 계열 복합 기본 키의 InnoDB 테이블 편집",
+    "SP-DT-006": "SQLite·PostgreSQL의 NULL·빈 문자열·숫자·기본값 구분과 자동 생성 키, 탭 구분 복사·붙여넣기의 NULL·빈 문자열 구분, SQLite의 열별 입력 형식과 PostgreSQL의 서버 타입 검증, MySQL 계열 NULL·빈 문자열·서버 기본값 구분",
     "SP-DT-007": "SQLite 문자열·정수·실수·NULL 셀 편집, PostgreSQL의 숫자·날짜·UUID·JSON 등 지원 타입 바인딩",
     "SP-DT-008": "PostgreSQL 일반 힙 테이블의 긴 텍스트·JSON·XML·bytea 부분 조회, 범위 내 구조·PNG 미리보기와 원본 새 파일 저장",
     "SP-DT-010": "SQLite·PostgreSQL·MySQL·MariaDB 테이블·뷰의 비교·날짜 범위·포함·NULL 필터, AND/OR, 매개변수 SQL 표시, 연결·객체별 조건 저장과 재적용",
@@ -110,10 +110,10 @@ PARTIAL = {
     "SP-DT-013": "SQLite·PostgreSQL 연결·객체별 열 표시·왼쪽 고정·순서·폭·타입별 색상·숫자 자릿수·ISO 날짜 형식과 보기 프로필 저장, PostgreSQL 열 페이지에 고정 열 반복",
     "SP-DT-017": "MySQL·MariaDB 테이블·뷰 데이터의 처음·이전·다음 페이지 이동",
     "SP-DT-018": "SQLite 편집 셀의 문자열·정수·실수·NULL 형식별 입력",
-    "SP-DT-020": "SQLite·PostgreSQL의 셀 변경과 PostgreSQL 다중 셀 행 변경의 시작·성공·실패 감사 기록",
-    "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지",
-    "SP-DT-022": "SQLite·PostgreSQL 다중 셀·행 수정의 트랜잭션·전체 롤백·저장 값 검증, 여러 행 붙여넣기 롤백 및 PostgreSQL 커밋 결과 미확정 표시",
-    "SP-DT-024": "SQLite·PostgreSQL 제약·형식·충돌 실패 시 롤백과 오류 표시",
+    "SP-DT-020": "SQLite·PostgreSQL의 셀 변경과 PostgreSQL 다중 셀 행 변경의 시작·성공·실패 감사 기록, MySQL 계열 다중 셀 적용 시작·성공·실패·결과 미확정 기록",
+    "SP-DT-021": "SQLite 행 전체 지문과 PostgreSQL 행 버전을 이용한 동시 수정 감지, MySQL 계열 조회 가능 열 지문과 구조 재확인",
+    "SP-DT-022": "SQLite·PostgreSQL 다중 셀·행 수정의 트랜잭션·전체 롤백·저장 값 검증, 여러 행 붙여넣기 롤백 및 PostgreSQL 커밋 결과 미확정 표시, MySQL 계열 한 행 다중 셀 트랜잭션과 커밋 결과 미확정 표시",
+    "SP-DT-024": "SQLite·PostgreSQL 제약·형식·충돌 실패 시 롤백과 오류 표시, MySQL 계열 제약·길이·경고·충돌 실패 시 롤백",
     "SP-SQ-001": "SQLite·PostgreSQL 연결별 다중 SQL 탭과 방언별 구문 강조, 줄 번호·커서 위치, 찾기·바꾸기, 파일 열기와 탭별 초안 및 닫기 확인, MySQL 계열 단일 편집기와 구문 강조",
     "SP-SQ-002": "현재 SQLite 연결의 main 스키마, 테이블·뷰·열·기본 함수와 키워드, 쿼리 별칭 및 CTE 이름 후보, Ctrl+Space·점 입력과 되돌리기",
     "SP-SQ-003": "SQLite 준비 단계의 문법·객체·타입·읽기 전용 진단과 문서 범위 이동, PostgreSQL 실행 전 서버 파싱 오류의 문서 위치 이동",
@@ -182,7 +182,7 @@ PARTIAL = {
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, Redis 키 편집·삭제와 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
-    "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경, Redis PROD 키 편집·삭제, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인",
+    "SP-SEC-015": "SQLite·PostgreSQL PROD 그리드 변경, Redis PROD 키 편집·삭제, SFTP PROD 삭제·편집본 원래 경로 저장 시 추가 확인, MySQL 계열 PROD 그리드 적용 전 확인",
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
@@ -190,7 +190,7 @@ PARTIAL = {
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
     "SP-AT-018": "실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증",
-    "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백",
+    "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
@@ -475,6 +475,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mysql/tls.rs; src/MysqlProfileDialog.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-SQ-014", "SP-SQ-015", "SP-AT-011"}:
                 evidence += "; crates/stackport-core/src/mysql/plan.rs; src/MysqlQueryPlan.tsx; tests/mysql-smoke.cjs"
+            if requirement_id in {"SP-DT-003", "SP-DT-004", "SP-DT-005", "SP-DT-006", "SP-DT-020", "SP-DT-021", "SP-DT-022", "SP-DT-024", "SP-SEC-015", "SP-AT-010"}:
+                evidence += "; crates/stackport-core/src/mysql/edit.rs; src/MysqlGridEditDialog.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-SQ-001", "SP-SQ-007", "SP-SQ-008", "SP-SQ-009", "SP-SQ-010", "SP-SQ-014"}:
                 evidence += "; crates/stackport-core/src/mysql/sql.rs; src/MysqlSqlWorkspace.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-NS-011", "SP-NS-018", "SP-SEC-011", "SP-SEC-015", "SP-AT-018"}:

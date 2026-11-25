@@ -119,6 +119,19 @@ async function fixture() {
       INSERT INTO visible_db.sample_limit VALUES ${Array.from({ length: 65 }, (_, i) => `(${i})`).join(',')};
       CREATE TABLE visible_db.monitor_case (id INT PRIMARY KEY, watch_counter INT NOT NULL) ENGINE=InnoDB;
       INSERT INTO visible_db.monitor_case VALUES (1, 0);
+      CREATE TABLE visible_db.grid_edit_records (
+        tenant VARCHAR(24) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+        id BIGINT UNSIGNED, title VARCHAR(20) NOT NULL, quantity INT NOT NULL DEFAULT 7,
+        note VARCHAR(20), payload BLOB, generated_value INT AS (quantity * 2) STORED,
+        PRIMARY KEY (tenant, id), CHECK (quantity > 0)
+      ) ENGINE=InnoDB;
+      INSERT INTO visible_db.grid_edit_records(tenant, id, title, quantity, note, payload) VALUES
+        ('native', 18446744073709551615, 'before-native', 9, 'old', REPEAT('a', 900)),
+        ('native', 18446744073709551614, 'neighbor', 8, '', NULL), ('ui', 1, 'before-ui', 3, 'note-ui', NULL);
+      CREATE TABLE visible_db.grid_edit_no_key (title VARCHAR(20)) ENGINE=InnoDB;
+      INSERT INTO visible_db.grid_edit_no_key VALUES ('no key');
+      CREATE TABLE visible_db.grid_edit_myisam (id INT PRIMARY KEY, title VARCHAR(20)) ENGINE=MyISAM;
+      INSERT INTO visible_db.grid_edit_myisam VALUES (1, 'nontransactional');
       CREATE TABLE visible_db.grid_filter (
         id BIGINT UNSIGNED, part INT, \`tag\`\`text\` VARCHAR(60), amount DECIMAL(30,6),
         booked DATE, touched DATETIME(6), elapsed TIME(6), weight DOUBLE, ratio FLOAT, PRIMARY KEY (part, id)
@@ -135,6 +148,7 @@ async function fixture() {
       CREATE USER 'monitor_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE SSL;
       CREATE USER 'certificate_reader'@'%' IDENTIFIED BY '${secret}' REQUIRE X509;
       GRANT SELECT ON visible_db.* TO 'catalog_reader'@'%';
+      GRANT UPDATE ON visible_db.grid_edit_records TO 'catalog_reader'@'%';
       GRANT SELECT ON visible_db.* TO 'monitor_reader'@'%';
       GRANT SELECT ON visible_db.* TO 'certificate_reader'@'%';
       GRANT PROCESS ON *.* TO 'monitor_reader'@'%';
@@ -190,6 +204,7 @@ async function verify(page, server) {
   assert.equal(session.engine, engine);
   assert.equal(session.database, 'visible_db');
   const id = session.id;
+  await verifyGridWrites(command, id, profile, server.port);
   await verifyPlans(command, id);
   const schemas = await command('mysql_databases', { id, search: '', page: 0 });
   assert.ok(schemas.items.includes('visible_db'));
@@ -251,9 +266,117 @@ async function verify(page, server) {
   await verifyGridControls(page, workspace, list);
   await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
   await grid.waitFor({ state: 'detached' });
+  await verifyGridWriteControls(page, workspace, server.port);
   await verifyTunnel(page, command, workspace, project, profile, server, alternate);
   await verifyClientIdentity(page, command, project, server, alternate);
   assert.deepEqual(errors, []);
+}
+
+async function verifyGridWrites(command, reader, profile, port) {
+  const session = await command('open_mysql', {
+    profileId: profile.id, revision: profile.revision, password: secret, confirmation: 'PROD', gridEdit: true,
+  });
+  assert.equal(session.grid_edit, true);
+  const { id } = session;
+  const table = 'grid_edit_records';
+  const database = 'visible_db';
+  const load = (name = table, connection = id) => command('mysql_table', { id: connection, database, table: name, includeRows: true });
+  const stamp = async () => (await load()).edit.rows.find(row => row.keys[1] === '18446744073709551615');
+  const text = (column, value) => ({ column, value: { kind: 'text', value } });
+  const preview = (stamp, changes, connection = id) => command('preview_mysql_grid_edit', { id: connection, database, table, stamp, changes });
+  const apply = (token, confirmation = 'PROD') => command('apply_mysql_grid_edit', { id, token, confirmation });
+  const stored = () => admin(port, "SELECT title, quantity, IFNULL(note, '<null>'), LENGTH(payload) FROM visible_db.grid_edit_records WHERE tenant='native' AND id=18446744073709551615;").trimEnd();
+  try {
+    const data = await load();
+    assert.deepEqual(data.edit.keys, ['tenant', 'id']);
+    assert.deepEqual(data.edit.columns, ['title', 'quantity', 'note']);
+    assert.equal((await load(table, reader)).edit, undefined);
+    assert.equal((await load('grid_edit_no_key')).edit, undefined);
+    assert.equal((await load('grid_edit_myisam')).edit, undefined);
+    assert.equal((await load('order_view')).edit, undefined);
+    const original = await stamp();
+    await assert.rejects(preview(original, [text('title', 'no-opt-in')], reader), /그리드 편집을 허용/);
+    await assert.rejects(command('run_mysql_sql', { id, requestId: randomUUID(), database,
+      sql: "UPDATE grid_edit_records SET quantity=1", parameters: [] }), /읽기 전용/);
+    await assert.rejects(preview(original, [text('tenant', 'new-key')]), /편집할 수 없습니다/);
+    await assert.rejects(preview(original, [text('generated_value', '1')]), /편집할 수 없습니다/);
+    const cancelled = await preview(original, [text('title', 'cancelled')]);
+    await command('discard_mysql_grid_edit', { id, token: cancelled.token });
+    await assert.rejects(apply(cancelled.token), /만료/);
+    assert.equal(stored(), 'before-native\t9\told\t900');
+
+    const diff = await preview(original, [text('title', 'changed-native'), { column: 'quantity', value: { kind: 'default' } },
+      { column: 'note', value: { kind: 'null' } }]);
+    assert.deepEqual(diff.changes.map(cell => [cell.column, cell.before.text, cell.after.kind]),
+      [['title', 'before-native', 'text'], ['quantity', '9', 'default'], ['note', 'old', 'null']]);
+    await assert.rejects(apply(diff.token, ''), /PROD/);
+    assert.equal(stored(), 'before-native\t9\told\t900');
+    assert.deepEqual(await apply(diff.token), { status: 'applied', affected_rows: 1, audit_warning: false });
+    await assert.rejects(apply(diff.token), /만료/);
+    assert.equal(stored(), 'changed-native\t7\t<null>\t900');
+    assert.equal(admin(port, "SELECT title FROM visible_db.grid_edit_records WHERE tenant='native' AND id=18446744073709551614;").trimEnd(), 'neighbor');
+
+    const conflict = await preview(await stamp(), [text('title', 'after-conflict')]);
+    admin(port, "UPDATE visible_db.grid_edit_records SET payload=CONCAT(REPEAT('a', 899),'z') WHERE tenant='native' AND id=18446744073709551615;");
+    await assert.rejects(apply(conflict.token), /행 또는 테이블 구조가 바뀌었습니다/);
+    assert.equal(stored(), 'changed-native\t7\t<null>\t900');
+    const changedSchema = await preview(await stamp(), [text('title', 'stale-definition')]);
+    admin(port, 'ALTER TABLE visible_db.grid_edit_records MODIFY title VARCHAR(22) NOT NULL;');
+    try { await assert.rejects(apply(changedSchema.token), /행 또는 테이블 구조가 바뀌었습니다/); }
+    finally { admin(port, 'ALTER TABLE visible_db.grid_edit_records MODIFY title VARCHAR(20) NOT NULL;'); }
+    const bad = await preview(await stamp(), [text('title', 'rollback-title'), text('quantity', '-1')]);
+    await assert.rejects(apply(bad.token), /제약/);
+    assert.equal(stored(), 'changed-native\t7\t<null>\t900');
+    const overflow = await preview(await stamp(), [text('title', 'x'.repeat(21)), text('quantity', '13')]);
+    await assert.rejects(apply(overflow.token), /형식, 범위 또는 길이|경고/);
+    assert.equal(stored(), 'changed-native\t7\t<null>\t900');
+    const empty = await preview(await stamp(), [text('note', '')]);
+    await apply(empty.token);
+    assert.equal(stored(), 'changed-native\t7\t\t900');
+    const events = (await command('list_audit_events', {})).events.filter(event => event.operation === 'mysql.grid.update');
+    assert.deepEqual(events.filter(event => event.correlation_id === diff.token).map(event => event.outcome).sort(), ['started', 'succeeded']);
+    assert.ok(events.some(event => event.correlation_id === bad.token && event.outcome === 'failed'));
+    assert.doesNotMatch(JSON.stringify(events), /changed-native|rollback-title|after-conflict/);
+  } finally { await command('close_mysql', { id }); }
+}
+
+async function verifyGridWriteControls(page, workspace, port) {
+  await workspace.getByRole('button', { name: 'MySQL 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'MySQL 계열 연결', exact: true });
+  const optIn = login.getByLabel('이 연결에서 데이터 그리드 편집 허용');
+  assert.equal(await optIn.isChecked(), false);
+  await optIn.check();
+  await login.getByLabel('MySQL 암호').fill(secret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  const objects = workspace.getByRole('region', { name: 'MySQL 테이블과 뷰' });
+  await objects.getByRole('button', { name: /grid_edit_records/ }).click();
+  await workspace.getByRole('button', { name: '데이터 미리보기', exact: true }).click();
+  const grid = workspace.getByRole('table', { name: 'MySQL 데이터 미리보기', exact: true });
+  const enter = () => grid.getByRole('row').filter({ hasText: 'before-ui' }).getByRole('button', { name: /행 편집/ }).click();
+  await enter();
+  const edit = page.getByRole('dialog', { name: 'MySQL 행 편집', exact: true });
+  await edit.getByLabel('title 변경 방식').selectOption('text');
+  await edit.getByLabel('title 새 값').fill('cancelled-ui');
+  await page.keyboard.press('Escape');
+  await edit.getByText('적용하지 않은 변경이 있습니다.', { exact: true }).waitFor();
+  await edit.getByRole('button', { name: '변경 버리기', exact: true }).click();
+  await enter();
+  await edit.getByLabel('title 변경 방식').selectOption('text');
+  await edit.getByLabel('title 새 값').fill('saved-ui');
+  await edit.getByLabel('quantity 변경 방식').selectOption('default');
+  await edit.getByRole('button', { name: '변경 미리보기', exact: true }).click();
+  const diff = edit.getByRole('table', { name: '변경 전후', exact: true });
+  await diff.getByText('saved-ui', { exact: true }).waitFor();
+  await diff.getByText('서버 기본값', { exact: true }).waitFor();
+  const apply = edit.getByRole('button', { name: '변경 적용', exact: true });
+  assert.equal(await apply.isDisabled(), true);
+  await edit.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await edit.waitFor({ state: 'detached' });
+  await grid.getByText('saved-ui', { exact: true }).waitFor();
+  assert.equal(admin(port, "SELECT title, quantity FROM visible_db.grid_edit_records WHERE tenant='ui' AND id=1;").trimEnd(), 'saved-ui\t7');
+  await workspace.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
 }
 
 function identitySettings(server) {

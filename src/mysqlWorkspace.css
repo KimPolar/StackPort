@@ -71,5 +71,17 @@
 .mysql-plan th .mysql-plan-mark { color: var(--warning-text); }
 .mysql-plan tr[data-highlight="true"] { background: var(--warning-surface); }
 .mysql-plan td meter { display: block; width: 95px; max-width: 100%; }
+.dialog.mysql-edit-dialog { width: min(700px, calc(100vw - 32px)); }
+.mysql-edit-dialog .mysql-table { margin-bottom: 14px; }
+.mysql-edit-keys { display: flex; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 14px; font-size: 12px; }
+.mysql-edit-keys > div { display: flex; gap: 6px; min-width: 0; }
+.mysql-edit-keys dt, .mysql-edit-field small { color: var(--text-muted); }
+.mysql-edit-keys dd { margin: 0; overflow-wrap: anywhere; }
+.mysql-edit-fields { min-width: 0; max-height: 50vh; overflow: auto; margin: 0; padding: 0; border: 0; }
+.mysql-edit-field { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, .6fr); gap: 8px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--divider); }
+.mysql-edit-field > div { display: grid; gap: 4px; font-size: 13px; overflow-wrap: anywhere; }
+.mysql-edit-field .field { margin: 0; }
+.mysql-edit-input { grid-column: 1 / -1; }
+.mysql-edit-discard { color: var(--warning-text); font-size: 13px; }
 @media (max-width: 760px) { .mysql-layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 560px) { .mysql-parameter { grid-template-columns: minmax(0, 1fr); } }

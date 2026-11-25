@@ -27,6 +27,7 @@ mod mysql;
 pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::MysqlPlan;
+pub use mysql::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
 pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};

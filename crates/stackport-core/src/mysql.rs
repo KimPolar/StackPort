@@ -1,3 +1,4 @@
+mod edit;
 mod export;
 mod grid;
 mod monitor;
@@ -7,6 +8,7 @@ mod sql;
 mod structure;
 mod tls;
 
+pub use edit::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use plan::MysqlPlan;
@@ -66,6 +68,7 @@ pub struct MysqlSessionInfo {
     version: String,
     database: Option<String>,
     tunnel: Option<LocalTunnelEndpoint>,
+    grid_edit: bool,
 }
 
 #[derive(Serialize)]
@@ -96,9 +99,15 @@ pub struct MysqlColumn {
     column_type: String,
     nullable: bool,
     key: String,
+    #[serde(skip)]
+    extra: String,
+    #[serde(skip)]
+    default_value: Option<String>,
+    #[serde(skip)]
+    collation: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct MysqlCell {
     text: String,
     encoding: &'static str,
@@ -117,6 +126,8 @@ pub struct MysqlTable {
     filter_columns: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     query_sql: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edit: Option<edit::PageEdit>,
 }
 
 #[derive(Default, Deserialize)]
@@ -131,6 +142,8 @@ struct Session {
     sql_mode: sql::SqlMode,
     running_sql: Mutex<Option<sql::RunningSql>>,
     monitor: AsyncMutex<Option<monitor::MonitorConnection>>,
+    grid_edit: bool,
+    pending_edit: AsyncMutex<Option<edit::PendingEdit>>,
     engine: &'static str,
     profile_id: String,
     project_id: String,
@@ -178,6 +191,7 @@ impl MysqlManager {
         password: MysqlPassword,
         confirmation: &str,
         route: Option<(&SshTunnelManager, &str)>,
+        grid_edit: bool,
     ) -> Result<MysqlSessionInfo> {
         if password.0.len() > 4096 {
             return Err("MySQL 암호가 너무 깁니다.".into());
@@ -262,6 +276,8 @@ impl MysqlManager {
                     sql_mode: mode,
                     running_sql: Mutex::default(),
                     monitor: AsyncMutex::new(None),
+                    grid_edit,
+                    pending_edit: AsyncMutex::new(None),
                     engine,
                     connection: AsyncMutex::new(Some(connection)),
                     profile_id: profile.id,
@@ -292,6 +308,7 @@ impl MysqlManager {
             version: version.chars().take(128).collect(),
             database: settings.database,
             tunnel: endpoint,
+            grid_edit,
         })
     }
 
@@ -355,6 +372,7 @@ impl MysqlManager {
     ) -> Result<MysqlTable> {
         require_identifier(&database)?;
         require_identifier(&name)?;
+        let grid_edit = include_rows && self.session(id)?.grid_edit;
         self.read(id, |connection| {
             Box::pin(async move {
                 read_table(
@@ -362,6 +380,7 @@ impl MysqlManager {
                     &database,
                     &name,
                     include_rows.then(|| grid.unwrap_or_default()),
+                    grid_edit,
                 )
                 .await
             })
@@ -541,19 +560,32 @@ async fn read_table(
     database: &str,
     name: &str,
     grid: Option<MysqlGridQuery>,
+    grid_edit: bool,
 ) -> ReadResult<MysqlTable> {
     let mut columns = read_columns(connection, database, name).await?;
     let more_columns = columns.len() > COLUMN_LIMIT;
-    let (mut rows, query_sql, stable_order, filter_columns) = if let Some(grid) = grid {
-        let (rows, sql, stable_order) =
-            sample_rows(connection, database, name, &columns, grid).await?;
-        (rows, Some(sql), stable_order, Vec::new())
+    let (mut rows, query_sql, stable_order, filter_columns, edit) = if let Some(grid) = grid {
+        let target = if grid_edit {
+            edit::read_target(connection, database, name, &columns).await?
+        } else {
+            None
+        };
+        let sampled =
+            sample_rows(connection, database, name, &columns, grid, target.as_ref()).await?;
+        (
+            sampled.rows,
+            Some(sampled.sql),
+            sampled.stable_order,
+            Vec::new(),
+            sampled.edit,
+        )
     } else {
         (
             Vec::new(),
             None,
             false,
             columns.iter().map(|column| column.name.clone()).collect(),
+            None,
         )
     };
     columns.truncate(COLUMN_LIMIT);
@@ -567,6 +599,7 @@ async fn read_table(
         stable_order,
         filter_columns,
         query_sql,
+        edit,
     })
 }
 
@@ -575,10 +608,20 @@ async fn read_columns(
     database: &str,
     name: &str,
 ) -> ReadResult<Vec<MysqlColumn>> {
-    type ColumnRow = (String, String, String, String, String);
+    type ColumnRow = (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    );
     let columns: Vec<ColumnRow> = query(
         connection,
-        "SELECT COLUMN_NAME, DATA_TYPE, IF(ORDINAL_POSITION <= 128, COLUMN_TYPE, ''), IS_NULLABLE, COLUMN_KEY
+        "SELECT COLUMN_NAME, DATA_TYPE, IF(ORDINAL_POSITION <= 128, COLUMN_TYPE, ''), IS_NULLABLE, COLUMN_KEY,
+          EXTRA, COLUMN_DEFAULT, COLLATION_NAME
         FROM information_schema.COLUMNS WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
           AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY) ORDER BY ORDINAL_POSITION",
         (database, name),
@@ -590,12 +633,17 @@ async fn read_columns(
     Ok(columns
         .into_iter()
         .map(
-            |(name, data_type, column_type, nullable, key)| MysqlColumn {
-                name,
-                data_type,
-                column_type,
-                nullable: nullable == "YES",
-                key,
+            |(name, data_type, column_type, nullable, key, extra, default_value, collation)| {
+                MysqlColumn {
+                    name,
+                    data_type,
+                    column_type,
+                    nullable: nullable == "YES",
+                    key,
+                    extra,
+                    default_value,
+                    collation,
+                }
             },
         )
         .collect())
@@ -629,20 +677,12 @@ async fn table_source(
     columns: &[MysqlColumn],
     clauses: &TableQueryClauses,
 ) -> ReadResult<(String, Vec<Value>, bool)> {
-    let keys: Vec<(String,)> = query(
-        connection,
-        "SELECT COLUMN_NAME FROM information_schema.STATISTICS
-        WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
-          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY)
-          AND INDEX_NAME = 'PRIMARY' ORDER BY SEQ_IN_INDEX",
-        (database, name),
-    )
-    .await?;
+    let keys = primary_columns(connection, database, name).await?;
     // Some server settings hide generated primary keys from column metadata.
     let stable_order = !keys.is_empty()
         && keys
             .iter()
-            .all(|(key,)| columns.iter().any(|column| &column.name == key));
+            .all(|key| columns.iter().any(|column| &column.name == key));
     let by_name: HashMap<_, _> = columns
         .iter()
         .map(|column| (column.name.as_str(), column))
@@ -653,9 +693,7 @@ async fn table_source(
             TableQueryDialect::Mysql,
             "sp_source",
             by_name.keys().copied(),
-            keys.iter()
-                .filter(|_| stable_order)
-                .map(|(name,)| name.as_str()),
+            keys.iter().filter(|_| stable_order).map(String::as_str),
             |name, value, operand| {
                 grid::filter_binding(by_name[name], value, operand, &mut parameters)
             },
@@ -669,17 +707,74 @@ async fn table_source(
     Ok((source, parameters, stable_order))
 }
 
+async fn primary_columns(
+    connection: &mut Conn,
+    database: &str,
+    name: &str,
+) -> ReadResult<Vec<String>> {
+    let keys: Vec<(String,)> = query(
+        connection,
+        "SELECT COLUMN_NAME FROM information_schema.STATISTICS
+        WHERE CAST(TABLE_SCHEMA AS BINARY) = CAST(? AS BINARY)
+          AND CAST(TABLE_NAME AS BINARY) = CAST(? AS BINARY)
+          AND INDEX_NAME = 'PRIMARY' ORDER BY SEQ_IN_INDEX",
+        (database, name),
+    )
+    .await?;
+    Ok(keys.into_iter().map(|(name,)| name).collect())
+}
+
+struct SampleRows {
+    rows: Vec<Vec<Option<MysqlCell>>>,
+    sql: String,
+    stable_order: bool,
+    edit: Option<edit::PageEdit>,
+}
+
 async fn sample_rows(
     connection: &mut Conn,
     database: &str,
     name: &str,
     columns: &[MysqlColumn],
     grid: MysqlGridQuery,
-) -> ReadResult<(Vec<Vec<Option<MysqlCell>>>, String, bool)> {
+    target: Option<&edit::Target>,
+) -> ReadResult<SampleRows> {
     let (source, mut parameters, stable_order) =
         table_source(connection, database, name, columns, &grid.clauses).await?;
     let columns = &columns[..columns.len().min(COLUMN_LIMIT)];
-    let expressions = columns
+    let mut expressions = cell_projection(columns);
+    if target.is_some() {
+        expressions.push_str(",\n       ");
+        expressions.push_str(&edit::row_digest(columns));
+    }
+    let sql = format!("SELECT {expressions}\n{source}\nLIMIT 51 OFFSET ?");
+    parameters.push(Value::UInt(u64::from(grid.page) * ROW_LIMIT as u64));
+    let result = connection
+        .exec::<Row, _, _>(&sql, Params::Positional(parameters))
+        .await?;
+    let mut rows = Vec::with_capacity(result.len());
+    let mut edits = target.map(edit::Target::page);
+    for row in result {
+        let mut values = row.unwrap();
+        let digest = if target.is_some() { values.pop() } else { None };
+        let cells = read_cells(&values, columns)?;
+        if let (Some(target), Some(edits)) = (target, edits.as_mut()) {
+            if rows.len() < ROW_LIMIT {
+                edits.rows.push(target.stamp(&cells, digest)?);
+            }
+        }
+        rows.push(cells);
+    }
+    Ok(SampleRows {
+        rows,
+        sql,
+        stable_order,
+        edit: edits,
+    })
+}
+
+fn cell_projection(columns: &[MysqlColumn]) -> String {
+    columns
         .iter()
         .map(|column| {
             let identifier = format!("sp_source.{}", quoted(&column.name));
@@ -691,36 +786,27 @@ async fn sample_rows(
             format!("LEFT({bytes}, {CELL_BYTES}), OCTET_LENGTH({bytes})")
         })
         .collect::<Vec<_>>()
-        .join(",\n       ");
-    let sql = format!("SELECT {expressions}\n{source}\nLIMIT 51 OFFSET ?");
-    parameters.push(Value::UInt(u64::from(grid.page) * ROW_LIMIT as u64));
-    let rows = connection
-        .exec::<Row, _, _>(&sql, Params::Positional(parameters))
-        .await?;
-    let rows = rows
-        .into_iter()
-        .map(|row| {
-            let values = row.unwrap();
-            if values.len() != columns.len() * 2 {
-                return Err(ReadError::Shape);
+        .join(",\n       ")
+}
+
+fn read_cells(values: &[Value], columns: &[MysqlColumn]) -> ReadResult<Vec<Option<MysqlCell>>> {
+    if values.len() != columns.len() * 2 {
+        return Err(ReadError::Shape);
+    }
+    values
+        .chunks_exact(2)
+        .zip(columns)
+        .map(|(pair, column)| match pair {
+            [Value::NULL, Value::NULL] => Ok(None),
+            [Value::Bytes(data), Value::UInt(size)] => {
+                Ok(Some(cell(data, *size, is_binary(&column.data_type))))
             }
-            values
-                .chunks_exact(2)
-                .zip(columns)
-                .map(|(pair, column)| match pair {
-                    [Value::NULL, Value::NULL] => Ok(None),
-                    [Value::Bytes(data), Value::UInt(size)] => {
-                        Ok(Some(cell(data, *size, is_binary(&column.data_type))))
-                    }
-                    [Value::Bytes(data), Value::Int(size)] if *size >= 0 => {
-                        Ok(Some(cell(data, *size as u64, is_binary(&column.data_type))))
-                    }
-                    _ => Err(ReadError::Shape),
-                })
-                .collect()
+            [Value::Bytes(data), Value::Int(size)] if *size >= 0 => {
+                Ok(Some(cell(data, *size as u64, is_binary(&column.data_type))))
+            }
+            _ => Err(ReadError::Shape),
         })
-        .collect::<ReadResult<_>>()?;
-    Ok((rows, sql, stable_order))
+        .collect()
 }
 
 fn cell(data: &[u8], bytes: u64, binary: bool) -> MysqlCell {

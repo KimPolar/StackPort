@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Activity, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
+import { MysqlGridEditDialog, type MysqlEditOutcome, type MysqlEditTarget, type MysqlRowStamp } from "./MysqlGridEditDialog";
 import { MysqlObjectStructure, mysqlStructureLabels, type MysqlObjectInfo, type MysqlStructure, type MysqlStructureSection } from "./MysqlObjectStructure";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import { MysqlResultExport, type MysqlExportTarget } from "./MysqlResultExport";
@@ -15,7 +16,7 @@ import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
 type Route = { id: string; name: string; port: number };
-type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null; tunnel: Route | null };
+type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null; tunnel: Route | null; grid_edit: boolean };
 type Page<T> = { items: T[]; has_next: boolean };
 type ObjectView = "columns" | "rows" | MysqlStructureSection;
 const objectViewLabels: Record<ObjectView, string> = {
@@ -32,6 +33,7 @@ type Sample = {
   stable_order: boolean;
   filter_columns?: string[];
   query_sql?: string;
+  edit?: { rows: (MysqlRowStamp | null)[]; keys: string[]; columns: string[] };
 };
 
 export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfile; onOpenTunnels: () => void }) {
@@ -40,6 +42,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
   const [login, setLogin] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [gridEdit, setGridEdit] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [route, setRoute] = useState<Route | null>(null);
@@ -58,6 +61,8 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [exportTarget, setExportTarget] = useState<MysqlExportTarget | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
+  const [editTarget, setEditTarget] = useState<MysqlEditTarget | null>(null);
+  const [editReport, setEditReport] = useState<MysqlEditOutcome | null>(null);
   const [revision, setRevision] = useState(0);
   const active = useRef<string | null>(null);
   const preferredRoute = useRef<Route | null>(null);
@@ -150,12 +155,12 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
     connecting.current = true; setBusy(true); setError(""); setPassword("");
     try {
       const next = await invoke<Session>("open_mysql", {
-        profileId: profile.id, revision: profile.revision, password, confirmation, tunnelId: route?.id ?? null,
+        profileId: profile.id, revision: profile.revision, password, confirmation, tunnelId: route?.id ?? null, gridEdit,
       });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
       preferredRoute.current = next.tunnel;
-      setSession(next); setLogin(false); setExportReport(null);
+      setSession(next); setLogin(false); setExportReport(null); setEditReport(null);
     } catch (cause) {
       if (mounted.current) {
         setError(String(cause));
@@ -179,8 +184,23 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
     setExportTarget(target);
   }
 
+  function beginEdit(data: Sample, row: number) {
+    const stamp = data.edit?.rows[row];
+    if (!session || !database || !object || !data.edit || !stamp) return;
+    const allowed = new Set(data.edit.columns);
+    const fields = data.columns.flatMap((column, index) => allowed.has(column.name) ? [{ ...column, cell: data.rows[row][index] ?? null }] : []);
+    setEditReport(null);
+    setEditTarget({ id: session.id, database, table: object.name, keys: data.edit.keys, stamp, fields });
+  }
+
+  function finishEdit(outcome: MysqlEditOutcome) {
+    setEditTarget(null);
+    setEditReport(outcome);
+    setRevision(value => value + 1);
+  }
+
   function openLogin() {
-    setError(""); setConfirmation(""); setRoute(preferredRoute.current); setLogin(true);
+    setError(""); setConfirmation(""); setGridEdit(false); setRoute(preferredRoute.current); setLogin(true);
   }
 
   function closeLogin() {
@@ -195,7 +215,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
           {session?.tunnel && ` · SSH 터널 ${session.tunnel.name}`}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> 읽기 전용</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
         {session ? <><button type="button" className="secondary" aria-pressed={sqlOpen} onClick={() => setMode(sqlOpen ? "objects" : "sql")}><Code2 size={15} aria-hidden /> SQL 편집기</button>
           <button type="button" className="secondary" aria-pressed={monitorOpen} onClick={() => setMode(monitorOpen ? "objects" : "monitor")}><Activity size={15} aria-hidden /> 서버 모니터</button>
           {!monitorOpen && <button type="button" className="secondary" onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} aria-hidden /> 새로 고침</button>}
@@ -204,6 +224,13 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
+    {editReport && <div className="mysql-export-report" role={editReport.status === "unknown" ? "alert" : "status"}>
+      <div>{editReport.status === "unknown" ? "서버의 커밋 결과를 확인할 수 없습니다. 다시 적용하기 전에 현재 행을 확인하세요."
+        : editReport.affected_rows ? "행 변경을 적용했습니다." : "이미 같은 값입니다."}
+        {editReport.status === "applied" && editReport.audit_warning && <span>변경을 적용했지만 작업 기록을 저장하지 못했습니다.</span>}
+      </div>
+      <button type="button" className="secondary small" onClick={() => setEditReport(null)}>확인</button>
+    </div>}
     {exportReport && <div className="mysql-export-report" role="status">
       <div>{exportReport.format} 저장 완료 · {exportReport.rows.toLocaleString("ko-KR")}행 · {exportReport.size_bytes.toLocaleString("ko-KR")} B
         {exportReport.protected_fields > 0 && ` · 수식 보호 ${exportReport.protected_fields.toLocaleString("ko-KR")}개`}
@@ -268,7 +295,7 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
               target={{ engine: "mysql", profile_id: profile.id, revision: profile.revision, schema: database, object: object.name }}
               apply={clauses => { setTableQuery(clauses); setRowPage(0); }} />}
             <ReadNotice loading={rows.loading} error={rows.error} />
-            {rows.data && <RowPage data={rows.data} page={rowPage} />}
+            {rows.data && <RowPage data={rows.data} page={rowPage} onEdit={row => rows.data && beginEdit(rows.data, row)} />}
             <Pager page={rowPage} loading={rows.loading} hasNext={rows.data?.more_rows === true} onPage={setRowPage} rowNavigation />
           </div>
         </>}
@@ -280,6 +307,8 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
     {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}
     {session && exportTarget && <MysqlResultExport id={session.id} profile={settings} target={exportTarget}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
+    {editTarget && <MysqlGridEditDialog target={editTarget} environment={settings.environment}
+      unavailable={session?.id !== editTarget.id} onApplied={finishEdit} onClose={() => setEditTarget(null)} />}
     {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={closeLogin}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} · {settings.username}</p>
@@ -300,6 +329,8 @@ export function MysqlWorkspace({ profile, onOpenTunnels }: { profile: MysqlProfi
           disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" value={confirmation}
           autoComplete="off" disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
+        <label className="postgres-edit-opt-in"><input type="checkbox" checked={gridEdit} disabled={busy}
+          onChange={event => setGridEdit(event.target.checked)} /> 이 연결에서 데이터 그리드 편집 허용</label>
         {!settings.tls && <p className="form-note">{route ? "SSH 게이트웨이와 데이터베이스 사이에는 TLS가 적용되지 않습니다." : "일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다."}</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || routeUnavailable || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
@@ -346,7 +377,7 @@ function TableStructure({ data }: { data: Sample }) {
   </>;
 }
 
-function RowPage({ data, page }: { data: Sample; page: number }) {
+function RowPage({ data, page, onEdit }: { data: Sample; page: number; onEdit: (row: number) => void }) {
   const offset = page * 50;
   return <>
     <p className="form-note mysql-table-note" role="status">
@@ -354,7 +385,9 @@ function RowPage({ data, page }: { data: Sample; page: number }) {
       {data.more_columns && " · 앞 128개 열"}
     </p>
     {!data.stable_order && <p className="form-note mysql-table-note">기본 키가 없는 결과는 페이지를 이동할 때 행 순서가 달라질 수 있습니다.</p>}
-    {data.rows.length > 0 && <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기" />}
+    {data.rows.length > 0 && <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기"
+      rowAction={data.edit ? row => data.edit?.rows[row] && <button type="button" className="secondary small"
+        aria-label={`${offset + row + 1}행 편집`} onClick={() => onEdit(row)}>편집</button> : undefined} />}
     {data.query_sql && <details className="table-query-sql">
       <summary>조회 SQL</summary>
       <p className="form-note">조건 값과 행 위치는 매개변수(?)로 전달합니다.</p>

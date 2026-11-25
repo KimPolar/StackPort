@@ -941,10 +941,10 @@ async fn mysql_tunnel_options(store: State<'_, Store>, tunnels: State<'_, SshTun
 
 #[tauri::command]
 async fn open_mysql(mysql: State<'_, stackport_core::MysqlManager>, tunnels: State<'_, SshTunnelManager>, profile_id: String,
-    revision: i64, password: stackport_core::MysqlPassword, confirmation: String, tunnel_id: Option<String>,
+    revision: i64, password: stackport_core::MysqlPassword, confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
 ) -> Result<stackport_core::MysqlSessionInfo, String> {
     let route = tunnel_id.as_deref().map(|id| (tunnels.inner(), id));
-    mysql.open(profile_id, revision, password, &confirmation, route).await
+    mysql.open(profile_id, revision, password, &confirmation, route, grid_edit.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -966,6 +966,23 @@ async fn mysql_objects(mysql: State<'_, stackport_core::MysqlManager>, id: Strin
 #[tauri::command]
 async fn mysql_table(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String, include_rows: bool, grid: Option<stackport_core::MysqlGridQuery>)
     -> Result<stackport_core::MysqlTable, String> { mysql.table(&id, database, table, include_rows, grid).await }
+
+#[tauri::command]
+async fn preview_mysql_grid_edit(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String,
+    stamp: stackport_core::MysqlRowStamp, changes: Vec<stackport_core::MysqlEditChange>) -> Result<stackport_core::MysqlEditPreview, String> {
+    mysql.preview_grid_edit(&id, database, table, stamp, changes).await
+}
+
+#[tauri::command]
+async fn apply_mysql_grid_edit(mysql: State<'_, stackport_core::MysqlManager>, id: String, token: String, confirmation: String,
+) -> Result<stackport_core::MysqlEditOutcome, String> {
+    mysql.apply_grid_edit(&id, &token, &confirmation).await
+}
+
+#[tauri::command]
+async fn discard_mysql_grid_edit(mysql: State<'_, stackport_core::MysqlManager>, id: String, token: String) -> Result<(), String> {
+    mysql.discard_grid_edit(&id, &token).await
+}
 
 #[tauri::command]
 async fn mysql_structure(mysql: State<'_, stackport_core::MysqlManager>, id: String, database: String, table: String,
@@ -2128,6 +2145,9 @@ fn main() {
             mysql_databases,
             mysql_objects,
             mysql_table,
+            preview_mysql_grid_edit,
+            apply_mysql_grid_edit,
+            discard_mysql_grid_edit,
             mysql_structure,
             open_mysql_monitor,
             close_mysql_monitor,

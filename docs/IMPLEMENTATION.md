@@ -32,6 +32,10 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **조회 SQL**에는 입력값 대신 실제 바인딩에 사용한 매개변수를 표시합니다. **저장된 조건**에서 현재 필터 값과 정렬을 로컬 작업 공간에 보관하고 다시 적용할 수 있습니다. 메타데이터 v16은 기존 SQLite·PostgreSQL 조건의 이름, 범위와 개정 번호를 유지하면서 MySQL 계열 연결을 지원합니다.
 
+연결할 때 **이 연결에서 데이터 그리드 편집 허용**을 선택하면, 표시 가능한 기본 키가 있는 InnoDB 테이블의 **데이터 미리보기**에서 한 행의 여러 셀을 편집할 수 있습니다. 복합 기본 키는 위치를 찾는 데 사용합니다. 일반 텍스트·수치·날짜·시간 값, 빈 문자열, NULL, 서버 기본값을 구분하며 기본 키와 생성 열은 읽기 전용입니다. **변경 미리보기**에서 현재 값과 입력값을 비교하고, 운영 환경에서는 `PROD`를 다시 입력해 적용합니다.
+
+적용 시 별도 쓰기 트랜잭션에서 대상을 잠그고, 조회 가능한 열 전체의 지문과 테이블 구조를 다시 확인합니다. 제약 위반, 값 변환 경고, 동시 변경이 있으면 적용을 중단합니다. 감사 기록에는 대상과 결과를 남기며, 커밋 결과를 확인할 수 없으면 데이터 그리드를 갱신합니다. SQL 편집기는 연결에서 그리드 편집을 허용한 경우에도 읽기 전용입니다. [MySQL 트랜잭션](https://dev.mysql.com/doc/refman/8.4/en/commit.html) · [MariaDB 행 잠금](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
+
 **MySQL SQL 편집기**는 현재 데이터베이스에서 문서 또는 선택 영역의 조회 문장 하나를 실행합니다. 줄 번호, MySQL 구문 강조와 찾기·바꾸기를 사용합니다. `SELECT`, `WITH` 조회, `SHOW`, `DESCRIBE`, `EXPLAIN`을 허용하며 파일 입출력, 잠금 변경과 실행 주석은 차단합니다. 문자열·식별자·주석 밖의 `?`에는 문자열, 64비트 정수, 실수 또는 NULL을 바인딩합니다. 입력값을 숨길 수 있으며 실행 전 매개변수는 메모리에만 보관합니다. 서버 SQL 모드로 문장을 다시 확인하고 읽기 전용 트랜잭션에서 준비된 문장으로 실행합니다. [MySQL 준비된 문장](https://dev.mysql.com/doc/refman/8.4/en/sql-prepared-statements.html) · [MySQL 주석 규칙](https://dev.mysql.com/doc/refman/8.4/en/comments.html)
 
 **실행 계획**은 선택 영역이나 전체 편집기의 단일 SELECT 또는 WITH 조회에 대한 예상 계획을 표시합니다. **실행 분석**은 확인을 받은 뒤 읽기 전용 트랜잭션에서 문장을 실제 실행합니다. MySQL의 TREE와 MariaDB의 JSON 결과에서 단계, 테이블·인덱스, 서버가 제공하는 비용과 예상 행, 실제 행·루프·시간을 읽어 단계 트리와 텍스트로 표시합니다. MySQL은 회당 시간, MariaDB는 누적 시간을 표시하며 가장 오래 걸린 리프 단계에 표시를 붙입니다. 계획 결과와 데이터 결과를 오갈 수 있습니다. 서버 식은 바인딩 값 노출을 막기 위해 계획 표시에서 제외합니다. 요청을 중단해도 서버 실행이 끝났는지는 확인되지 않을 수 있습니다. [MySQL EXPLAIN](https://dev.mysql.com/doc/refman/8.4/en/explain.html) · [MariaDB ANALYZE FORMAT=JSON](https://mariadb.com/docs/server/reference/sql-statements/administrative-sql-statements/analyze-and-explain-statements/analyze-format-json)
@@ -416,6 +420,8 @@ node tests/desktop-smoke.cjs
 ```
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
+
+같은 테스트에서 복합 기본 키 행의 여러 셀을 미리 보고 적용하거나 취소합니다. 조회 미리보기 범위를 벗어난 값 변경, 테이블 구조 변경, 제약·길이 오류가 적용을 막는지 확인합니다.
 
 구조 검사는 인덱스 순서·접두 길이·가시성, 권한별 제약조건 조회, 전체 101개 제약조건의 두 페이지, 교차 데이터베이스 복합 외래 키와 자기 참조, 공개되지 않은 참조 대상, 뷰 정의 권한과 SQL 파일 저장을 다룹니다.
 
