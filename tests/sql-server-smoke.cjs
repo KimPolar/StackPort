@@ -66,6 +66,7 @@ async function verify(page, hiddenObject, exportFolder) {
     assert.deepEqual((await schemas('')).items, ['archive', 'catalog']);
     assert.deepEqual((await schemas('%')).items, []);
     await verifySqlExecution(command, id);
+    await verifySqlParameters(command, id);
     const objects = await command('sql_server_objects', { id, schema: 'catalog', search: '', page: 0 });
     assert.deepEqual(objects.items.map(row => [row.kind, row.name]), [['table', 'metadata_only'], ['table', 'order]daily'], ['view', 'recent']]);
     const table = objects.items.find(row => row.name === 'order]daily');
@@ -332,6 +333,25 @@ async function verifySqlEditor(workspace, command, observerId) {
   await editorPane.getByRole('button', { name: '선택 실행', exact: true }).click();
   await grid.getByText('second result', { exact: true }).waitFor();
 
+  const parameterSql = "SELECT N'outside selection' AS marker;\nSELECT @P3 AS entered, @P7 AS amount;";
+  await editor.fill(parameterSql);
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await editorPane.getByRole('button', { name: '매개변수 실행', exact: true }).click();
+  const dialog = workspace.page().getByRole('dialog', { name: 'SQL Server 매개변수', exact: true });
+  const secretField = dialog.getByRole('textbox', { name: '@P3 값', exact: true });
+  await secretField.fill('한글 🚀');
+  await dialog.getByRole('checkbox', { name: '@P3 값 숨기기' }).check();
+  assert.equal(await dialog.getByLabel('@P3 값', { exact: true }).getAttribute('type'), 'password');
+  await dialog.getByRole('combobox', { name: '@P7 형식' }).selectOption('decimal');
+  await dialog.getByRole('textbox', { name: '@P7 값', exact: true }).fill('-0.000123400');
+  await dialog.getByRole('button', { name: '매개변수로 실행', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await grid.getByText('한글 🚀', { exact: true }).waitFor();
+  await grid.getByText('-0.000123400', { exact: true }).waitFor();
+  assert.equal(await results.getByRole('combobox', { name: '결과 집합' }).count(), 0);
+  assert.equal(await editor.inputValue(), parameterSql);
+
   await editor.fill(`INSERT [archive].[execution_fixture] VALUES (15);
 WAITFOR DELAY '00:00:08'; INSERT [archive].[execution_fixture] VALUES (14);`);
   await editorPane.getByRole('button', { name: '전체 실행', exact: true }).click();
@@ -371,6 +391,46 @@ WAITFOR DELAY '00:00:08'; INSERT [archive].[execution_fixture] VALUES (14);`);
   assert.equal(await editor.inputValue(), check);
   await grid.getByText('after cancel', { exact: true }).waitFor();
   await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
+}
+
+async function verifySqlParameters(command, id) {
+  const input = (sql, parameters) => ({ sql, first_line: 1, cursor_line: null, parameters });
+  const run = (target, requestId = randomUUID()) => command('run_sql_server_query', { id, requestId, input: target });
+  const prepare = target => command('sql_server_query_parameters', { input: target });
+  const param = (index, kind, value, masked = false) => ({ index, kind, value, masked });
+  const content = "한글 🚀 ' ; -- literal";
+  const sql = `SELECT @P3 AS value, @P1 AS big, @P12 AS exact, @P20 AS tiny, @P7 AS bytes, @P8 AS flag, @P6 AS missing, @P10 AS approximate;
+SELECT @P3 AS again; -- @P64`;
+  assert.deepEqual(await prepare(input(sql)), [1, 3, 6, 7, 8, 10, 12, 20]);
+  const requestId = randomUUID();
+  const outcome = await run(input(sql, [
+    param(3, 'text', content, true), param(1, 'integer', '-9223372036854775808'),
+    param(12, 'decimal', '99999999999999999999999999999999999999'),
+    param(20, 'decimal', '0.12345678901234567890123456789012345678'),
+    param(7, 'blob', '00ff'), param(8, 'boolean', 'true'), param(6, 'null'), param(10, 'real', '1.25'),
+  ]), requestId);
+  assert.equal(outcome.status, 'succeeded', JSON.stringify(outcome.error));
+  const [row] = outcome.result_sets[0].rows;
+  assert.deepEqual(row.map(value => value?.text ?? null), [
+    content, '-9223372036854775808', '9'.repeat(38), '0.12345678901234567890123456789012345678', '00FF', 'true', null, '1.25',
+  ]);
+  assert.equal(row[4].encoding, 'hex');
+  assert.equal(outcome.result_sets[1].rows[0][0].text, content);
+  const audit = (await command('list_audit_events', {})).events.find(event => event.correlation_id === requestId);
+  assert.equal(audit.outcome, 'succeeded');
+  assert.doesNotMatch(JSON.stringify(audit), /literal|9223372036854775808|SELECT/);
+
+  const secret = 'private-parameter-error-value';
+  const failed = await run(input("DECLARE @message nvarchar(2048) = @P1; THROW 50010, @message, 1;", [param(1, 'text', secret, true)]));
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.error.code, 50010);
+  assert.doesNotMatch(JSON.stringify(failed), /private-parameter-error-value/);
+  assert.match(failed.error.message, /서버 오류 상세를 숨겼습니다/);
+  await assert.rejects(run(input('SELECT @P1;', [param(2, 'text', 'outside scope')])), /매개변수 값을 다시 확인/);
+  await assert.rejects(run(input('SELECT @P1;', [param(1, 'integer', '9223372036854775808')])), /64비트 정수/);
+  await assert.rejects(run(input('SELECT @P1;\nGO\nSELECT @P1;', [param(1, 'integer', '1')])), /배치 하나/);
+  const ordinary = await run(input('DECLARE @P1 int = 42; SELECT @P1 AS local_variable;'));
+  assert.equal(ordinary.result_sets[0].rows[0][0].text, '42');
 }
 
 async function verifyExportCommands(command, id, profile, folder, { table, view, hidden, metadataOnly, wide, oversized, variant }) {
@@ -576,7 +636,7 @@ async function main() {
     for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
     fs.rmdirSync(exportFolder);
   }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation, T-SQL execution and rollback).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation, T-SQL execution, rollback, and typed parameter binding).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

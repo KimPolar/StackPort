@@ -1,12 +1,14 @@
 mod batches;
+mod parameters;
 
 use super::{connect, Manager, Session, SqlClient, TIMEOUT};
 use crate::{insert_audit, AuditRecord, Result};
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
-use futures_util::TryStreamExt;
+use futures_util::{future::ready, TryStream, TryStreamExt};
+use parameters::{Bindings, ParameterInput};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Write, sync::atomic::Ordering, time::Duration};
-use tiberius::{error::Error, ColumnData, FromSql, QueryItem};
+use tiberius::{error::Error, ColumnData, CommandItem, FromSql, QueryItem};
 use tokio::{
     task::spawn_blocking,
     time::{sleep_until, timeout, Instant},
@@ -29,6 +31,23 @@ pub struct QueryInput {
     sql: String,
     first_line: u32,
     cursor_line: Option<u32>,
+    parameters: Option<Vec<ParameterInput>>,
+}
+
+impl QueryInput {
+    fn batches(&self) -> Result<Vec<batches::Batch<'_>>> {
+        if self.sql.len() > SQL_LIMIT
+            || self.sql.contains('\0')
+            || !(1..=1_000_000).contains(&self.first_line)
+        {
+            return Err("SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
+        }
+        batches::split(&self.sql, self.first_line, self.cursor_line)
+    }
+
+    pub fn parameter_indexes(&self) -> Result<Vec<u16>> {
+        parameters::indexes(&self.batches()?)
+    }
 }
 
 #[derive(Serialize)]
@@ -144,13 +163,12 @@ impl Manager {
         input: QueryInput,
     ) -> Result<QueryOutcome> {
         let query_id = query_id(request_id)?;
-        if input.sql.len() > SQL_LIMIT
-            || input.sql.contains('\0')
-            || !(1..=1_000_000).contains(&input.first_line)
-        {
-            return Err("SQL은 NUL 문자 없이 256 KiB 이내로 입력하세요.".into());
-        }
-        let batches = batches::split(&input.sql, input.first_line, input.cursor_line)?;
+        let batches = input.batches()?;
+        let bindings = input
+            .parameters
+            .as_deref()
+            .map(|values| Bindings::new(&batches, values))
+            .transpose()?;
         let session = self.session(id)?;
         let stop = CancellationToken::new();
         {
@@ -168,7 +186,7 @@ impl Manager {
         }
         let registration = Registration(&session);
         let start = Instant::now();
-        let mut outcome = execute(&session, &stop, &batches).await?;
+        let mut outcome = execute(&session, &stop, &batches, bindings.as_ref()).await?;
         drop(registration);
         outcome.elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -214,6 +232,7 @@ async fn execute(
     session: &Session,
     stop: &CancellationToken,
     batches: &[batches::Batch<'_>],
+    bindings: Option<&Bindings<'_>>,
 ) -> Result<QueryOutcome> {
     let mut outcome = QueryOutcome {
         status: Status::Succeeded,
@@ -259,7 +278,14 @@ async fn execute(
             let mut in_flight = false;
             let run = async {
                 in_flight = true;
-                stream_batch(&mut client, batch.sql, &mut outcome, &mut preview_budget).await
+                stream_batch(
+                    &mut client,
+                    batch.sql,
+                    bindings,
+                    &mut outcome,
+                    &mut preview_budget,
+                )
+                .await
             };
             // Check interruption before sending each batch, including GO repetitions.
             outcome.status = tokio::select! {
@@ -272,7 +298,7 @@ async fn execute(
                         Ok(()) => { outcome.completed_batches += 1; continue 'repeat; }
                         Err(error) => {
                             outcome.status = Status::Failed;
-                            outcome.error = Some(sql_error(error, batch.first_line));
+                            outcome.error = Some(sql_error(error, batch.first_line, bindings.is_some_and(|binding| binding.masked)));
                             break 'script;
                         }
                     }
@@ -319,10 +345,32 @@ async fn finish_transaction(client: &mut SqlClient) -> tiberius::Result<Transact
 async fn stream_batch(
     client: &mut SqlClient,
     sql: &str,
+    bindings: Option<&Bindings<'_>>,
     outcome: &mut QueryOutcome,
     budget: &mut usize,
 ) -> tiberius::Result<()> {
-    let mut stream = client.simple_query(sql).await?;
+    if let Some(bindings) = bindings {
+        let stream = bindings
+            .command(sql)
+            .exec(client)
+            .await?
+            .try_filter_map(|item| {
+                ready(Ok(match item {
+                    CommandItem::Metadata(meta) => Some(QueryItem::Metadata(meta)),
+                    CommandItem::Row(row) => Some(QueryItem::Row(row)),
+                    _ => None,
+                }))
+            });
+        return read_preview(stream, outcome, budget).await;
+    }
+    read_preview(client.simple_query(sql).await?, outcome, budget).await
+}
+
+async fn read_preview(
+    mut stream: impl TryStream<Ok = QueryItem, Error = Error> + Unpin,
+    outcome: &mut QueryOutcome,
+    budget: &mut usize,
+) -> tiberius::Result<()> {
     let mut active = None;
     while let Some(item) = stream.try_next().await? {
         match item {
@@ -375,7 +423,7 @@ async fn stream_batch(
     Ok(())
 }
 
-fn sql_error(error: Error, first_line: u32) -> QueryError {
+fn sql_error(error: Error, first_line: u32, masked: bool) -> QueryError {
     if let Error::Server(error) = error {
         let procedure = (!error.procedure().is_empty()).then(|| error.procedure().to_owned());
         let line = match (error.line(), procedure.is_some()) {
@@ -384,10 +432,14 @@ fn sql_error(error: Error, first_line: u32) -> QueryError {
             (line, false) => Some(first_line.saturating_add(line - 1)),
         };
         QueryError {
-            message: text_cell(error.message()).text,
+            message: if masked {
+                "숨긴 매개변수가 포함된 실행의 서버 오류 상세를 숨겼습니다.".into()
+            } else {
+                text_cell(error.message()).text
+            },
             code: Some(error.code()),
             line,
-            procedure,
+            procedure: if masked { None } else { procedure },
         }
     } else {
         QueryError {

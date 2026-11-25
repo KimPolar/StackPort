@@ -1024,6 +1024,11 @@ async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, ob
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+fn sql_server_query_parameters(input: sql_server::QueryInput) -> Result<Vec<u16>, String> {
+    input.parameter_indexes()
+}
+
+#[tauri::command]
 async fn run_sql_server_query(manager: State<'_, sql_server::Manager>, id: String, request_id: String,
     input: sql_server::QueryInput) -> Result<sql_server::QueryOutcome, String> {
     manager.run_query(&id, &request_id, input).await
@@ -2506,6 +2511,7 @@ fn main() {
             sql_server_structure,
             sql_server_definition,
             sql_server_data,
+            sql_server_query_parameters,
             run_sql_server_query,
             cancel_sql_server_query,
             export_sql_server,

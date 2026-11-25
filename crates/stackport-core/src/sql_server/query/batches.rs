@@ -89,7 +89,7 @@ fn go(line: &str) -> Result<Option<usize>> {
 }
 
 #[derive(Default)]
-struct Lex {
+pub(super) struct Lex {
     quote_end: Option<u8>,
     comments: usize,
 }
@@ -100,6 +100,10 @@ impl Lex {
     }
 
     fn scan(&mut self, line: &str) -> bool {
+        self.scan_variables(line, |_| {})
+    }
+
+    pub(super) fn scan_variables(&mut self, line: &str, mut variable: impl FnMut(&str)) -> bool {
         let bytes = line.as_bytes();
         let mut index = 0;
         let mut has_sql = self.quote_end.is_some();
@@ -124,6 +128,19 @@ impl Lex {
                 }
             } else if rest.starts_with(b"--") {
                 break;
+            } else if identifier_byte(byte) {
+                let end = index
+                    + rest
+                        .iter()
+                        .copied()
+                        .take_while(|byte| identifier_byte(*byte))
+                        .count();
+                if byte == b'@' {
+                    variable(&line[index..end]);
+                }
+                index = end;
+                has_sql = true;
+                continue;
             } else if !byte.is_ascii_whitespace() {
                 has_sql = true;
                 self.quote_end = match byte {
@@ -136,6 +153,10 @@ impl Lex {
         }
         has_sql
     }
+}
+
+fn identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || !byte.is_ascii() || matches!(byte, b'_' | b'$' | b'#' | b'@')
 }
 
 #[cfg(test)]

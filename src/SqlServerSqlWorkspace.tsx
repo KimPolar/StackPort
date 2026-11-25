@@ -1,10 +1,18 @@
 import { useId, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Play, Square } from "lucide-react";
+import { Braces, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
+import { Dialog } from "./Dialog";
+import { SqlServerParameterFields, type SqlParameter, type SqlServerParameterValue } from "./SqlParameterFields";
 
 type Scope = "document" | "batch" | "selection";
+type QueryInput = {
+  sql: string;
+  first_line: number;
+  cursor_line: number | null;
+  parameters?: (SqlServerParameterValue & { index: number })[];
+};
 type ResultSet = {
   columns: { name: string; data_type: string }[];
   rows: (DatabasePreviewValue | null)[][];
@@ -45,34 +53,61 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
   const [resultIndex, setResultIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [parameterRequest, setParameterRequest] = useState<{ input: QueryInput; parameters: SqlParameter[] } | null>(null);
   const [error, setError] = useState("");
   const editor = useRef<HTMLTextAreaElement>(null);
   const active = useRef<string | null>(null);
   const editorId = useId();
   const noteId = useId();
-  const ready = !busy && Boolean(text.trim());
+  const ready = !busy && !preparing && !parameterRequest && Boolean(text.trim());
   const result = outcome?.result_sets[resultIndex];
 
-  async function run(scope: Scope) {
+  function queryInput(scope: Scope): QueryInput | null {
     const field = editor.current;
-    if (!field || active.current || !field.value.trim()) return;
+    if (!field || !field.value.trim()) return null;
     const { value, selectionStart, selectionEnd, selectionDirection } = field;
     const selected = scope === "selection";
     const sql = selected ? value.slice(selectionStart, selectionEnd) : value;
-    if (!sql.trim()) return;
+    if (!sql.trim()) return null;
     const line = (offset: number) => value.slice(0, offset).split("\n").length;
+    return {
+      sql,
+      first_line: selected ? line(selectionStart) : 1,
+      cursor_line: scope === "batch" ? line(selectionDirection === "backward" ? selectionStart : selectionEnd) : null,
+    };
+  }
+
+  function run(scope: Scope) {
+    if (parameterRequest) return;
+    const input = queryInput(scope);
+    if (input) void execute(input);
+  }
+
+  async function prepareParameters() {
+    if (active.current || parameterRequest) return;
+    const input = queryInput(hasSelection ? "selection" : "batch");
+    if (!input) return;
+    active.current = crypto.randomUUID();
+    setPreparing(true); setError("");
+    try {
+      const indexes = await invoke<number[]>("sql_server_query_parameters", { input });
+      setParameterRequest({ input, parameters: indexes.map(index => ({ index, name: `@P${index}` })) });
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      active.current = null;
+      setPreparing(false);
+    }
+  }
+
+  async function execute(input: QueryInput) {
+    if (active.current) return;
     const requestId = crypto.randomUUID();
     active.current = requestId;
     setBusy(true); setStopping(false); setError(""); setOutcome(null); setResultIndex(0);
     try {
-      setOutcome(await invoke<Outcome>("run_sql_server_query", {
-        id, requestId,
-        input: {
-          sql,
-          first_line: selected ? line(selectionStart) : 1,
-          cursor_line: scope === "batch" ? line(selectionDirection === "backward" ? selectionStart : selectionEnd) : null,
-        },
-      }));
+      setOutcome(await invoke<Outcome>("run_sql_server_query", { id, requestId, input }));
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -107,12 +142,14 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
       </button>
       <button type="button" className="secondary small" disabled={!ready} onClick={() => void run("batch")}>현재 배치 실행</button>
       <button type="button" className="secondary small" disabled={!ready || !hasSelection} onClick={() => void run("selection")}>선택 실행</button>
+      <button type="button" className="secondary small" disabled={!ready} title="현재 배치 또는 선택 영역의 @P1~@P64에 값 입력"
+        onClick={() => void prepareParameters()}><Braces size={14} aria-hidden /> 매개변수 실행</button>
       {busy && <button type="button" className="secondary small" disabled={stopping} onClick={() => void stop()}>
         <Square size={14} aria-hidden /> 실행 중단
       </button>}
-      <span role="status">{stopping ? "중단 요청 중…" : busy ? "실행 중…" : ""}</span>
+      <span role="status">{stopping ? "중단 요청 중…" : busy ? "실행 중…" : preparing ? "매개변수 확인 중…" : ""}</span>
     </div>
-    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlLimit} readOnly={busy}
+    <CodeTextarea id={editorId} editorRef={editor} value={text} language="tsql" maxLength={sqlLimit} readOnly={busy || preparing || Boolean(parameterRequest)}
       aria-label="SQL Server SQL 문장" aria-describedby={noteId} placeholder="SELECT …"
       onChange={event => setText(event.target.value)}
       onSelect={event => setHasSelection(event.currentTarget.selectionStart !== event.currentTarget.selectionEnd)}
@@ -124,6 +161,12 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
       }}
       footer={<span>Ctrl + Enter · 현재 배치 또는 선택 실행</span>} />
     <p className="form-note mysql-table-note" id={noteId}>로그인 계정의 권한으로 실행합니다. 커밋된 변경은 유지되고 열린 트랜잭션은 실행 연결이 닫힐 때 롤백됩니다.</p>
+    {parameterRequest && <Dialog title="SQL Server 매개변수" busy={false} onClose={() => setParameterRequest(null)}>
+      <SqlServerParameterFields parameters={parameterRequest.parameters} dismiss={() => setParameterRequest(null)} submit={values => {
+        setParameterRequest(null);
+        void execute({ ...parameterRequest.input, parameters: parameterRequest.parameters.map(({ index }, position) => ({ index, ...values[position] })) });
+      }} />
+    </Dialog>}
     {error && <p className="error-banner" role="alert">{error}</p>}
     {outcome && <section aria-label="SQL Server 실행 결과">
       <div className="panel-heading"><h3>실행 결과</h3><span>{number.format(outcome.elapsed_ms)} ms</span></div>
