@@ -1,6 +1,9 @@
 use rusqlite::Connection;
 use stackport_core::{RedisSettings, Store};
 
+#[path = "support/legacy_presets.rs"]
+mod legacy_presets;
+
 #[test]
 fn upgrades_v13_and_copies_redis_profiles_with_the_project() {
     let directory = tempfile::tempdir().unwrap();
@@ -9,6 +12,7 @@ fn upgrades_v13_and_copies_redis_profiles_with_the_project() {
     let project = store.create_project("Redis 프로젝트").unwrap();
     drop(store);
     let db = Connection::open(&path).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&db, false);
     db.execute_batch("DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; PRAGMA user_version=13;")
         .unwrap();
     drop(db);

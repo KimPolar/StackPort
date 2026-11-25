@@ -4,6 +4,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { seedSqlServer } = require('./sql-server-fixture.cjs');
+const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 
 const port = Number(process.env.STACKPORT_SQL_SERVER_PORT);
 const ca = process.env.STACKPORT_SQL_SERVER_CA;
@@ -62,7 +63,7 @@ async function verify(page, hiddenObject) {
     const objects = await command('sql_server_objects', { id, schema: 'catalog', search: '', page: 0 });
     assert.deepEqual(objects.items.map(row => [row.kind, row.name]), [['table', 'metadata_only'], ['table', 'order]daily'], ['view', 'recent']]);
     const table = objects.items.find(row => row.name === 'order]daily');
-    const data = (object, page) => command('sql_server_data', { id, object, page });
+    const data = (object, page, clauses) => command('sql_server_data', { id, object, page, clauses });
     const columns = await command('sql_server_columns', { id, object: table.id });
     assert.equal(columns.items.find(row => row.name === 'exact_value').data_type, 'decimal(30,6)');
     assert.equal(columns.items.find(row => row.name === 'seq').identity, true);
@@ -86,6 +87,28 @@ async function verify(page, hiddenObject) {
     await assert.rejects(data(view.id, 1), /기본 키/);
     await assert.rejects(data(hiddenObject, 0), /공개되지/);
     await assert.rejects(data(objects.items[0].id, 0), /조회 권한/);
+    const typed = {
+      filters: [comparison('exact_value', 'eq', '123456789012345678901234.567890'),
+        range('logged_at', '2026-09-18T04:12:33.123455', '2026-09-18T04:12:33.123457')],
+      conjunction: 'all',
+      sort: [sort('payload', 'asc', 'last'), sort('id', 'asc')],
+    };
+    const sorted = await data(table.id, 0, typed);
+    assert.equal(sorted.rows[0][0].text, '9223372036854775807');
+    assert.equal(sorted.rows[1][0].text, '9223372036854775747');
+    assert.equal(sorted.has_next, true);
+    assert.match(sorted.query_sql, /CASE WHEN sp_source.\[payload\] IS NULL/);
+    assert.doesNotMatch(sorted.query_sql, /123456789012345678901234/);
+    assert.equal((await data(table.id, 1, typed)).rows.length, 11);
+    const keyless = await data(view.id, 0, { filters: [], conjunction: 'all', sort: [sort('id', 'asc')] });
+    assert.equal(keyless.rows[0][0].text, '9223372036854775806');
+    assert.equal(keyless.has_next, false);
+    const matched = await data(table.id, 0, {
+      filters: [{ column: 'title', condition: { kind: 'contains', value: 'row 6' } },
+        { column: 'payload', condition: { kind: 'is_not_null' } }],
+      conjunction: 'any', sort: [],
+    });
+    assert.equal(matched.rows.length, 3);
   } finally { await command('close_sql_server', { id }); }
   await assert.rejects(command('sql_server_schemas', { id, search: '', page: 0 }), /닫혔습니다/);
 
@@ -112,6 +135,7 @@ async function verify(page, hiddenObject) {
   await grid.getByText('9223372036854775807', { exact: true }).waitFor();
   await detail.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
   await grid.getByText('9223372036854775757', { exact: true }).waitFor();
+  await verifyGridFilter(page, detail, grid, 'id', '9223372036854775807');
   await detail.getByRole('button', { name: '열 구조', exact: true }).click();
   await detail.getByRole('table', { name: 'SQL Server 열 구조', exact: true }).getByText('decimal(30,6)', { exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'recent 뷰', exact: true }).click();
@@ -128,7 +152,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], hidden); }
   finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, metadata visibility, native values and paging).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, metadata visibility, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

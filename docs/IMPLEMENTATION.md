@@ -6,7 +6,7 @@
 
 React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다. 네트워크·파일 처리와 장시간 SQL은 웹 UI에서 직접 수행하지 않고 별도 작업 스레드로 넘깁니다. 브라우저에는 네이티브 명령이나 임의 TCP 프록시를 제공하지 않습니다. 게이트웨이 인증 및 접근 제어는 아직 구현하지 않았습니다.
 
-**MongoDB**는 탐색기의 **데이터베이스 연결 추가**에서 등록합니다. URI·사용자·인증 데이터베이스·환경·선택한 PEM CA 경로를 메타데이터 v17에 저장합니다. 암호는 접속할 때 입력하고, 운영 연결에는 `PROD` 확인이 필요합니다. TLS가 기본이며, 별도 CA를 지정하지 않으면 Rust 드라이버의 기본 신뢰 루트를 사용합니다. `mongodb+srv` 형식도 등록할 수 있으며 TLS가 필요합니다. [MongoDB Rust 드라이버 TLS](https://www.mongodb.com/docs/drivers/rust/current/security/tls/)
+**MongoDB**는 탐색기의 **데이터베이스 연결 추가**에서 등록합니다. URI·사용자·인증 데이터베이스·환경·선택한 PEM CA 경로를 작업 공간 메타데이터에 저장합니다. 암호는 접속할 때 입력하고, 운영 연결에는 `PROD` 확인이 필요합니다. TLS가 기본이며, 별도 CA를 지정하지 않으면 Rust 드라이버의 기본 신뢰 루트를 사용합니다. `mongodb+srv` 형식도 등록할 수 있으며 TLS가 필요합니다. [MongoDB Rust 드라이버 TLS](https://www.mongodb.com/docs/drivers/rust/current/security/tls/)
 
 MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·뷰를 검색합니다. 문서는 필터·표시 필드·정렬을 서버에 전달해 20개씩 읽고, BSON 타입을 보존하는 Canonical Extended JSON으로 표시합니다. BSON과 표시 문자열 모두 문서당 64 KiB까지 미리 볼 수 있고, 페이지의 표시 문자열 합계는 384 KiB까지입니다. 큰 문서는 표시 필드를 줄여 다시 조회할 수 있습니다. 컬렉션 인덱스는 앞 50개까지 키·고유 여부·TTL을 읽습니다. [MongoDB Rust 드라이버 데이터베이스와 컬렉션](https://www.mongodb.com/docs/drivers/rust/current/database-collection/)
 
@@ -21,6 +21,8 @@ Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마�
 **Snowflake**는 공식 SQL API에 Windows의 인증서 검증을 사용하는 HTTPS로 연결합니다. 계정 식별자 또는 계정 호스트, 데이터베이스, 선택한 웨어하우스와 역할, 인증 방식과 환경을 프로젝트에 저장합니다. PAT 또는 OAuth 액세스 토큰은 연결할 때 입력하며 운영 프로필에는 PROD 확인이 필요합니다. 업무 화면에 연결된 실제 역할과 웨어하우스를 표시합니다. [Snowflake SQL API](https://docs.snowflake.com/en/developer-guide/sql-api/intro) · [Snowflake 인증 방식](https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/authentication)
 
 Snowflake 작업 공간은 현재 역할로 볼 수 있는 데이터베이스의 스키마, 테이블, 뷰, 구체화 뷰를 검색합니다. 열 구조는 이름, 데이터 타입, NULL 허용 여부와 IDENTITY를 표시합니다. 미리보기는 최대 50행과 64열을 읽습니다. NUMBER의 정밀도를 문자열로 보존하고, 긴 문자와 바이너리 값은 앞 256문자 또는 256바이트를 표시합니다. [Snowflake TABLES](https://docs.snowflake.com/en/sql-reference/info-schema/tables) · [Snowflake COLUMNS](https://docs.snowflake.com/en/sql-reference/info-schema/columns)
+
+SQL Server·Oracle·Snowflake에서 열 타입에 맞는 비교와 범위, 문자열 포함, NULL 조건을 서버에서 적용합니다. 여러 열을 정렬하고 NULL 위치를 지정할 수 있습니다. 조회 SQL에는 매개변수 자리가 표시되고 입력값은 별도로 바인딩합니다. SQL Server와 Oracle은 기본 키로 정렬의 동점을 처리해 50행씩 이동할 수 있습니다. 기본 키가 없는 객체와 Snowflake 객체는 서버가 조건을 적용한 결과의 첫 50행을 표시합니다. 필터와 정렬은 연결·객체별로 저장하고 다시 적용할 수 있습니다.
 
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
@@ -489,13 +491,15 @@ SQL Server 검사는 `tests/sql-server-smoke.cjs`를 사용합니다. `STACKPORT
 
 SQL Server 2022 CU28과 2025 CU11에서 Windows 앱의 SQL 로그인, 필수 TLS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰, 열 타입, 복합 기본 키 페이징, 큰 정수·소수·HEX·유니코드 보존을 확인했습니다. 2025 CU11에서는 TDS 8.0 엄격한 TLS 연결과 미등록 CA 차단도 확인했습니다. Windows 통합 인증은 도메인 환경에서의 실서버 확인이 남았습니다.
 
+SQL Server 2022와 Oracle Database 26ai Free의 Windows 검사에서 큰 소수와 시각 조건, 문자열 포함, 여러 열·NULL 정렬, 조건이 적용된 페이지 이동과 저장된 조건의 재적용을 확인합니다.
+
 Oracle 검사는 `tests/oracle-smoke.cjs`를 사용합니다. `STACKPORT_ORACLE_PORT`와 `STACKPORT_ORACLE_TCPS_PORT`에 시험용 루프백 TCP·TCPS 포트, `STACKPORT_ORACLE_CA`에 `localhost` 서버 인증서의 PEM CA 경로, `STACKPORT_ORACLE_SYS_PASSWORD`에 폐기 가능한 인스턴스의 관리자 암호를 지정합니다. `STACKPORT_ORACLE_SERVICE` 기본값은 `FREEPDB1`입니다. `STACKPORT_TEST_PYTHON`으로 지정한 Python에 `oracledb`가 필요하며, 실행할 때마다 별도 테이블스페이스와 제한 계정을 생성합니다.
 
 Oracle AI Database 26ai Free 23.26.4.0.0에서 Windows 앱의 서비스 이름·SID 로그인, 네이티브 TCPS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰·구체화 뷰, NUMBER·유니코드·RAW·LOB 표시와 복합 기본 키 페이징을 확인했습니다.
 
-시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다.
+시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다. TCP로 필터·정렬 등 데이터 탐색만 검증하는 환경에서는 `STACKPORT_ORACLE_TEST_TCP_ONLY=1`로 TCPS 검사를 생략할 수 있습니다.
 
-Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소를 검증합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
+Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소를 검증합니다. 코어 테스트에서 정밀 소수와 문자열 필터의 바인딩, 정렬과 행 제한의 적용 순서를 확인합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
 
 실제 계정에 대한 Windows 검사는 `tests/snowflake-smoke.cjs`를 사용합니다. 시험용 계정의 `STACKPORT_SNOWFLAKE_TEST_ACCOUNT`, `STACKPORT_SNOWFLAKE_TEST_DATABASE`, `STACKPORT_SNOWFLAKE_TEST_SCHEMA`, `STACKPORT_SNOWFLAKE_TEST_OBJECT`, `STACKPORT_SNOWFLAKE_TEST_TOKEN`을 지정합니다. 객체에는 미리보기에 사용할 행이 한 개 이상 있어야 합니다. 필요하면 `STACKPORT_SNOWFLAKE_TEST_WAREHOUSE`, `STACKPORT_SNOWFLAKE_TEST_ROLE`, OAuth 사용 시 `STACKPORT_SNOWFLAKE_TEST_AUTH=oauth`를 지정합니다. 격리된 Windows 앱의 디버깅 주소는 `STACKPORT_CDP_URL`로 지정합니다.
 

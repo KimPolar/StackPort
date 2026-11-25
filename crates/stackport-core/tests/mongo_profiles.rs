@@ -1,6 +1,9 @@
 use rusqlite::Connection;
 use stackport_core::{MongoSettings, Store};
 
+#[path = "support/legacy_presets.rs"]
+mod legacy_presets;
+
 #[test]
 fn preserves_version_sixteen_projects_and_validates_mongodb_profiles() {
     let directory = tempfile::tempdir().unwrap();
@@ -9,6 +12,7 @@ fn preserves_version_sixteen_projects_and_validates_mongodb_profiles() {
     let project = store.create_project("기존 연결").unwrap();
     drop(store);
     let old = Connection::open(&path).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&old, true);
     old.execute_batch("DROP TABLE native_db_profiles; PRAGMA user_version=16;")
         .unwrap();
     drop(old);

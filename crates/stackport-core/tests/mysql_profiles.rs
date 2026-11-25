@@ -1,6 +1,9 @@
 use rusqlite::Connection;
 use stackport_core::{MysqlSettings, Store};
 
+#[path = "support/legacy_presets.rs"]
+mod legacy_presets;
+
 #[test]
 fn migrates_v14_and_keeps_mysql_profiles_project_scoped() {
     let directory = tempfile::tempdir().unwrap();
@@ -9,6 +12,7 @@ fn migrates_v14_and_keeps_mysql_profiles_project_scoped() {
     let project = store.create_project("MySQL 검증").unwrap();
     drop(store);
     let db = Connection::open(&path).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&db, false);
     db.execute_batch("DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; PRAGMA user_version=14;")
         .unwrap();
     drop(db);

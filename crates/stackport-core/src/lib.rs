@@ -143,9 +143,10 @@ mod mongo;
 pub mod sql_server;
 pub mod oracle;
 pub mod snowflake;
+mod native_table_filter;
 mod tls;
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -480,13 +481,13 @@ impl Store {
                 if current < 15 {
                     tx.execute_batch(mysql::SCHEMA).map_err(db_error)?;
                 }
-                if current < 11 {
-                    tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
-                } else if current < 16 {
-                    table_query_presets::migrate_v15(&tx)?;
-                }
                 if current < 17 {
                     tx.execute_batch(db_profiles::SCHEMA).map_err(db_error)?;
+                }
+                if current < 11 {
+                    tx.execute_batch(table_query_presets::SCHEMA).map_err(db_error)?;
+                } else if current < 18 {
+                    table_query_presets::migrate(&tx, current >= 16)?;
                 }
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;

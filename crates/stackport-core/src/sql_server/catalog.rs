@@ -1,7 +1,13 @@
 use super::{query_error, required_text, Manager};
-use crate::Result;
+use crate::{
+    native_table_filter as input,
+    table_query::{
+        bounded_filter_text, FilterOperand, FilterValue, SortDirection, TableQueryDialect,
+    },
+    Result, TableQueryClauses,
+};
 use serde::Serialize;
-use tiberius::Row;
+use tiberius::{Row, ToSql};
 
 const CATALOG_LIMIT: usize = 50;
 const ROW_LIMIT: usize = 50;
@@ -40,6 +46,7 @@ pub struct DataPage {
     has_next: bool,
     more_columns: bool,
     stable_order: bool,
+    query_sql: String,
 }
 
 #[derive(Serialize)]
@@ -127,7 +134,13 @@ impl Manager {
         Ok(CatalogPage { items, has_next })
     }
 
-    pub async fn data(&self, id: &str, object: i32, page: u32) -> Result<DataPage> {
+    pub async fn data(
+        &self,
+        id: &str,
+        object: i32,
+        page: u32,
+        clauses: TableQueryClauses,
+    ) -> Result<DataPage> {
         let target = self.object(id, object).await?;
         let CatalogPage {
             items: columns,
@@ -144,32 +157,54 @@ impl Manager {
         let keys = keys
             .iter()
             .map(|row| {
-                let direction = if get::<bool>(row, 1)? { "DESC" } else { "ASC" };
-                Ok(format!("{} {direction}", ident(required_text(row, 0)?)))
+                let direction = if get::<bool>(row, 1)? {
+                    SortDirection::Desc
+                } else {
+                    SortDirection::Asc
+                };
+                Ok((required_text(row, 0)?, direction))
             })
             .collect::<Result<Vec<_>>>()?;
         let stable_order = !keys.is_empty();
+        let mut parameters = Vec::new();
+        clauses.validate_sort(|name| {
+            columns
+                .iter()
+                .any(|column| column.name == name && sortable(&column.native_type))
+        })?;
+        let suffix = clauses.suffix_with_key_order(
+            TableQueryDialect::SqlServer,
+            "sp_source",
+            columns.iter().map(|column| column.name.as_str()),
+            keys,
+            |name, value, operation| {
+                let column = columns
+                    .iter()
+                    .find(|column| column.name == name)
+                    .ok_or(input::UNSUPPORTED)?;
+                filter_binding(&column.native_type, value, operation, &mut parameters)
+            },
+        )?;
         let select = columns
             .iter()
             .map(value_expression)
             .collect::<Vec<_>>()
             .join(", ");
         let table = format!("{}.{}", ident(&target.schema), ident(&target.name));
-        let result = if stable_order {
-            let sql = format!(
-                "SELECT {select} FROM {table} ORDER BY {}
-                OFFSET @P1 ROWS FETCH NEXT {} ROWS ONLY",
-                keys.join(", "),
-                ROW_LIMIT + 1
-            );
-            self.rows(id, &sql, &[&offset(page, ROW_LIMIT)]).await?
+        let mut bindings: Vec<&dyn ToSql> =
+            parameters.iter().map(|value| value as &dyn ToSql).collect();
+        let skip = offset(page, ROW_LIMIT);
+        let query_sql = if stable_order {
+            bindings.push(&skip);
+            format!("SELECT {select}\nFROM {table} AS sp_source{suffix}\nOFFSET @P{} ROWS FETCH NEXT {} ROWS ONLY",
+                bindings.len(), ROW_LIMIT + 1)
         } else {
             if page != 0 {
                 return Err("기본 키가 없어 첫 페이지를 다시 열어야 합니다.".into());
             }
-            let sql = format!("SELECT TOP ({ROW_LIMIT}) {select} FROM {table}");
-            self.rows(id, &sql, &[]).await?
+            format!("SELECT TOP ({ROW_LIMIT}) {select}\nFROM {table} AS sp_source{suffix}")
         };
+        let result = self.rows(id, &query_sql, &bindings).await?;
         let has_next = result.len() > ROW_LIMIT;
         let rows = result
             .iter()
@@ -188,8 +223,120 @@ impl Manager {
             has_next,
             more_columns,
             stable_order,
+            query_sql,
         })
     }
+}
+
+fn sortable(native: &str) -> bool {
+    matches!(
+        native,
+        "char"
+            | "varchar"
+            | "nchar"
+            | "nvarchar"
+            | "tinyint"
+            | "smallint"
+            | "int"
+            | "bigint"
+            | "numeric"
+            | "decimal"
+            | "money"
+            | "smallmoney"
+            | "float"
+            | "real"
+            | "bit"
+            | "date"
+            | "time"
+            | "datetime"
+            | "smalldatetime"
+            | "datetime2"
+            | "datetimeoffset"
+            | "uniqueidentifier"
+            | "binary"
+            | "varbinary"
+            | "timestamp"
+            | "rowversion"
+    )
+}
+
+fn filter_binding(
+    native: &str,
+    value: &FilterValue,
+    operation: FilterOperand,
+    parameters: &mut Vec<String>,
+) -> Result<String> {
+    let text = value.text();
+    bounded_filter_text(text)?;
+    let parameter = format!("@P{}", parameters.len() + 1);
+    let character = matches!(native, "char" | "varchar" | "nchar" | "nvarchar");
+    if matches!(operation, FilterOperand::Contains) {
+        if !character && !matches!(native, "text" | "ntext") {
+            return Err("포함 조건은 문자열 열에 사용할 수 있습니다.".into());
+        }
+        parameters.push(text.into());
+        return Ok(parameter);
+    }
+    let trimmed = text.trim();
+    let (bound, expression) = match native {
+        "char" | "varchar" | "nchar" | "nvarchar" => (text.into(), parameter),
+        "tinyint" | "smallint" | "int" | "bigint" | "decimal" | "numeric" | "money"
+        | "smallmoney" => {
+            let (precision, scale) = input::decimal_shape(trimmed)?;
+            (
+                trimmed.into(),
+                format!("CONVERT(decimal({precision},{scale}), {parameter})"),
+            )
+        }
+        "float" | "real" => {
+            let float = input::finite_float(trimmed)?;
+            let target = if native == "real" {
+                if !(float as f32).is_finite() {
+                    return Err(input::INVALID.into());
+                }
+                "real"
+            } else {
+                "float(53)"
+            };
+            (trimmed.into(), format!("CONVERT({target}, {parameter})"))
+        }
+        "date" => (
+            input::date(trimmed)?.into(),
+            format!("CONVERT(date, {parameter}, 23)"),
+        ),
+        "time" => (
+            input::time(trimmed, 7)?,
+            format!("CONVERT(time(7), {parameter}, 126)"),
+        ),
+        "datetime" | "smalldatetime" | "datetime2" | "datetimeoffset" => {
+            let (mut timestamp, offset) = input::timestamp(trimmed, 7, native == "datetimeoffset")?;
+            if let Some(offset) = offset {
+                timestamp.push_str(&offset);
+            }
+            let format = if native == "datetimeoffset" { 127 } else { 126 };
+            (
+                timestamp,
+                format!("CONVERT({native}, {parameter}, {format})"),
+            )
+        }
+        "bit" => (
+            if input::boolean(trimmed)? {
+                "1".into()
+            } else {
+                "0".into()
+            },
+            format!("CONVERT(bit, {parameter})"),
+        ),
+        "uniqueidentifier" => (
+            uuid::Uuid::parse_str(trimmed)
+                .map_err(|_| "UUID 필터 값을 확인하세요.")?
+                .to_string(),
+            format!("CONVERT(uniqueidentifier, {parameter})"),
+        ),
+        _ => return Err(input::UNSUPPORTED.into()),
+    };
+    parameters.push(bound);
+    Ok(expression)
 }
 
 fn offset(page: u32, limit: usize) -> i64 {

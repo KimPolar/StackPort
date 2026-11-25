@@ -1,13 +1,74 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use stackport_core::{
-    PostgresProfileInput, QueryOutcome, QueryPage, Store, TableQuery, TableQueryClauses,
-    TableQueryPresetWrite, TableQueryTarget,
+    MysqlSettings, PostgresProfileInput, QueryOutcome, QueryPage, Store, TableQuery,
+    TableQueryClauses, TableQueryPresetWrite, TableQueryTarget,
 };
+
+#[path = "support/legacy_presets.rs"]
+mod legacy_presets;
 
 const QUOTED_OBJECT: &str = "measure\"ments";
 const QUOTED_COLUMN: &str = "observed\"at";
 const LITERAL: &str = "a' OR 1=1 -- %_";
+
+#[test]
+fn v17_mysql_preset_keeps_its_scope_and_revision_after_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workspace.sqlite");
+    let store = Store::open(&path).unwrap();
+    let project = store.create_project("data").unwrap();
+    let profile = store
+        .create_mysql_profile(
+            &project.id,
+            MysqlSettings {
+                name: "Reports".into(),
+                host: "db.invalid".into(),
+                port: 3306,
+                database: Some("reports".into()),
+                username: "reader".into(),
+                environment: "DEV".into(),
+                tls: true,
+                ca_path: None,
+                client_certificate_path: None,
+                client_key_path: None,
+            },
+        )
+        .unwrap();
+    drop(store);
+    let db = Connection::open(&path).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&db, true);
+    db.pragma_update(None, "user_version", 17).unwrap();
+    let clauses = json!({"conjunction": "all", "filters": [],
+        "sort": [{"column": "name", "direction": "desc", "nulls": "last"}]});
+    db.execute(
+        "INSERT INTO table_query_presets
+         VALUES ('legacy', NULL, NULL, ?1, json_array('db.invalid', 3306, 'reader'),
+                 'reports', 'items', 'Legacy', ?2, 3)",
+        params![profile.id, clauses.to_string()],
+    )
+    .unwrap();
+    drop(db);
+
+    let store = Store::open(&path).unwrap();
+    let target = TableQueryTarget::Mysql {
+        profile_id: profile.id,
+        revision: profile.revision,
+        schema: "reports".into(),
+        object: "items".into(),
+    };
+    let saved = store
+        .list_table_query_presets(&target)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(
+        (saved.id.as_str(), saved.name.as_str(), saved.revision),
+        ("legacy", "Legacy", 3)
+    );
+    let restored = store.read_table_query_preset(&target, "legacy", 3).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), clauses);
+}
 
 fn browse(store: &Store, profile: &str, request: Value, page: u32) -> Result<QueryPage, String> {
     let request: TableQuery = serde_json::from_value(request).unwrap();

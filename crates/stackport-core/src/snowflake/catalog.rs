@@ -1,5 +1,9 @@
 use super::{api::Row, profiles::valid_identifier, Manager, Session};
-use crate::Result;
+use crate::{
+    native_table_filter as input,
+    table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
+    Result, TableQueryClauses,
+};
 use serde::Serialize;
 
 const CATALOG_ROWS: usize = 50;
@@ -55,6 +59,7 @@ pub struct DataPage {
     has_next: bool,
     stable_order: bool,
     more_columns: bool,
+    query_sql: String,
 }
 
 #[derive(Serialize)]
@@ -149,7 +154,13 @@ impl Manager {
         visible_columns(&session, &schema, &name).await
     }
 
-    pub async fn data(&self, id: &str, object: String, page: u32) -> Result<DataPage> {
+    pub async fn data(
+        &self,
+        id: &str,
+        object: String,
+        page: u32,
+        clauses: TableQueryClauses,
+    ) -> Result<DataPage> {
         if page != 0 {
             return Err("Snowflake 미리보기는 최대 50행까지 제공합니다.".into());
         }
@@ -160,8 +171,10 @@ impl Manager {
         if columns.items.is_empty() {
             return Err("Snowflake 객체에 표시할 열이 없거나 조회 권한이 없습니다.".into());
         }
-        let sql = preview_sql(&session.database, &schema, &name, &columns.items);
-        let rows = session.api.query(&sql, &[], DATA_ROWS).await?;
+        let (query_sql, parameters) =
+            preview_query(&session.database, &schema, &name, &columns.items, &clauses)?;
+        let bindings: Vec<_> = parameters.iter().map(String::as_str).collect();
+        let rows = session.api.query(&query_sql, &bindings, DATA_ROWS).await?;
         let rows = rows
             .into_iter()
             .map(|row| parse_preview_row(row, &columns.items))
@@ -172,6 +185,7 @@ impl Manager {
             has_next: false,
             stable_order: false,
             more_columns: columns.has_next,
+            query_sql,
         })
     }
 }
@@ -264,9 +278,9 @@ impl Column {
         matches!(self.native_type.as_str(), "BINARY" | "VARBINARY")
     }
 
-    fn preview_expression(&self, alias: &str) -> String {
-        let name = quote(&self.name);
-        let expression = match self.native_type.as_str() {
+    fn preview_expression(&self) -> String {
+        let name = format!("sp_source.{}", quote(&self.name));
+        match self.native_type.as_str() {
             "BINARY" | "VARBINARY" => name,
             "DATE" => format!("TO_VARCHAR({name}, 'YYYY-MM-DD')"),
             "TIME" => format!("TO_VARCHAR({name}, 'HH24:MI:SS.FF9')"),
@@ -276,30 +290,137 @@ impl Column {
             }
             "VECTOR" => format!("TO_VARCHAR({name}::ARRAY)"),
             _ => format!("TO_VARCHAR({name})"),
-        };
-        format!("{expression} AS {alias}")
+        }
     }
 }
 
-fn preview_sql(database: &str, schema: &str, name: &str, columns: &[Column]) -> String {
+fn preview_query(
+    database: &str,
+    schema: &str,
+    name: &str,
+    columns: &[Column],
+    clauses: &TableQueryClauses,
+) -> Result<(String, Vec<String>)> {
     let table = [database, schema, name].map(quote).join(".");
-    let mut inner = Vec::with_capacity(columns.len());
-    let mut outer = Vec::with_capacity(columns.len() * 2);
-    for (index, column) in columns.iter().enumerate() {
-        let alias = format!("C{index}");
-        inner.push(column.preview_expression(&alias));
-        if column.binary() {
-            outer.push(format!("HEX_ENCODE(SUBSTR({alias}, 1, {CELL_LIMIT}))"));
+    let mut projection = Vec::with_capacity(columns.len() * 2);
+    for column in columns {
+        let expression = column.preview_expression();
+        projection.push(if column.binary() {
+            format!("HEX_ENCODE(SUBSTR({expression}, 1, {CELL_LIMIT}))")
         } else {
-            outer.push(format!("LEFT({alias}, {CELL_LIMIT})"));
-        }
-        outer.push(format!("OCTET_LENGTH({alias})"));
+            format!("LEFT({expression}, {CELL_LIMIT})")
+        });
+        projection.push(format!("OCTET_LENGTH({expression})"));
     }
-    format!(
-        "SELECT {} FROM (SELECT {} FROM {table} LIMIT {DATA_ROWS}) AS SAMPLE_ROWS",
-        outer.join(", "),
-        inner.join(", ")
+    let mut parameters = Vec::new();
+    clauses.validate_sort(|name| {
+        columns
+            .iter()
+            .any(|column| column.name == name && sortable(&column.native_type))
+    })?;
+    let suffix = clauses.suffix(
+        TableQueryDialect::Snowflake,
+        "sp_source",
+        columns.iter().map(|column| column.name.as_str()),
+        [],
+        |name, value, operation| {
+            let column = columns
+                .iter()
+                .find(|column| column.name == name)
+                .ok_or(input::UNSUPPORTED)?;
+            filter_binding(&column.native_type, value, operation, &mut parameters)
+        },
+    )?;
+    Ok((
+        format!(
+            "SELECT {}\nFROM {table} AS sp_source{suffix}\nLIMIT {DATA_ROWS}",
+            projection.join(", ")
+        ),
+        parameters,
+    ))
+}
+
+fn sortable(native: &str) -> bool {
+    matches!(
+        native,
+        "TEXT"
+            | "VARCHAR"
+            | "CHAR"
+            | "STRING"
+            | "NUMBER"
+            | "FIXED"
+            | "DECIMAL"
+            | "NUMERIC"
+            | "FLOAT"
+            | "REAL"
+            | "DOUBLE"
+            | "DOUBLE PRECISION"
+            | "DECFLOAT"
+            | "BOOLEAN"
+            | "DATE"
+            | "TIME"
+            | "TIMESTAMP_NTZ"
+            | "TIMESTAMP_LTZ"
+            | "TIMESTAMP_TZ"
+            | "BINARY"
+            | "VARBINARY"
     )
+}
+
+fn filter_binding(
+    native: &str,
+    value: &FilterValue,
+    operation: FilterOperand,
+    parameters: &mut Vec<String>,
+) -> Result<String> {
+    let text = value.text();
+    bounded_filter_text(text)?;
+    let character = matches!(native, "TEXT" | "VARCHAR" | "CHAR" | "STRING");
+    if matches!(operation, FilterOperand::Contains) && !character {
+        return Err("포함 조건은 문자열 열에 사용할 수 있습니다.".into());
+    }
+    let trimmed = text.trim();
+    let (bound, expression) = match native {
+        "TEXT" | "VARCHAR" | "CHAR" | "STRING" => (text.into(), "?".into()),
+        "NUMBER" | "FIXED" | "DECIMAL" | "NUMERIC" => {
+            let (precision, scale) = input::decimal_shape(trimmed)?;
+            (
+                trimmed.into(),
+                format!("TO_DECIMAL(?, {precision}, {scale})"),
+            )
+        }
+        "FLOAT" | "REAL" | "DOUBLE" | "DOUBLE PRECISION" => {
+            input::finite_float(trimmed)?;
+            (trimmed.into(), "TO_DOUBLE(?)".into())
+        }
+        "DECFLOAT" => {
+            input::decimal_shape(trimmed)?;
+            (trimmed.into(), "TO_DECFLOAT(?)".into())
+        }
+        "BOOLEAN" => (input::boolean(trimmed)?.to_string(), "TO_BOOLEAN(?)".into()),
+        "DATE" => (
+            input::date(trimmed)?.into(),
+            "TO_DATE(?, 'YYYY-MM-DD')".into(),
+        ),
+        "TIME" => (
+            input::time(trimmed, 9)?,
+            "TO_TIME(?, 'HH24:MI:SS.FF9')".into(),
+        ),
+        "TIMESTAMP_NTZ" | "TIMESTAMP_LTZ" | "TIMESTAMP_TZ" => {
+            let (mut timestamp, offset) = input::timestamp(trimmed, 9, native != "TIMESTAMP_NTZ")?;
+            let expression = if let Some(offset) = offset {
+                timestamp.push(' ');
+                timestamp.push_str(&offset);
+                "TO_TIMESTAMP_TZ(?, 'YYYY-MM-DD\"T\"HH24:MI:SS.FF9 TZH:TZM')"
+            } else {
+                "TO_TIMESTAMP_NTZ(?, 'YYYY-MM-DD\"T\"HH24:MI:SS.FF9')"
+            };
+            (timestamp, expression.into())
+        }
+        _ => return Err(input::UNSUPPORTED.into()),
+    };
+    parameters.push(bound);
+    Ok(expression)
 }
 
 fn parse_preview_row(row: Row, columns: &[Column]) -> Result<Vec<Option<Cell>>> {
@@ -355,10 +476,18 @@ mod tests {
         ];
         let target = serde_json::to_string(&["Case.Schema", "T\"able"]).unwrap();
         let [schema, name] = object_names(&target).unwrap();
-        let sql = preview_sql("DB", &schema, &name, &columns);
-        assert!(sql.contains("TO_VARCHAR(\"n\"\"ame\") AS C0"));
-        assert!(sql.contains("\"DB\".\"Case.Schema\".\"T\"\"able\" LIMIT 50"));
-        assert!(sql.contains("HEX_ENCODE(SUBSTR(C2, 1, 256))"));
+        let (sql, bindings) = preview_query(
+            "DB",
+            &schema,
+            &name,
+            &columns,
+            &TableQueryClauses::default(),
+        )
+        .unwrap();
+        assert!(bindings.is_empty());
+        assert!(sql.contains("LEFT(TO_VARCHAR(sp_source.\"n\"\"ame\"), 256)"));
+        assert!(sql.contains("\"DB\".\"Case.Schema\".\"T\"\"able\" AS sp_source\nLIMIT 50"));
+        assert!(sql.contains("HEX_ENCODE(SUBSTR(sp_source.\"blob\", 1, 256))"));
         let number = "123456789012345678901234567890.12345678";
         let row = [
             Some(number),
@@ -382,6 +511,40 @@ mod tests {
             ("hex", 9, true)
         );
         assert!(row[3].is_none());
+    }
+
+    #[test]
+    fn preview_binds_exact_filters_and_sorts_before_the_limit() {
+        let amount = "9007199254740993.123456789";
+        let literal = "a' OR 1=1 -- %_";
+        let clauses = serde_json::from_value(serde_json::json!({
+            "conjunction": "any",
+            "filters": [
+                {"column": "amount", "condition": {"kind": "eq",
+                    "value": {"kind": "text", "value": amount}}},
+                {"column": "label", "condition": {"kind": "contains", "value": literal}}
+            ],
+            "sort": [
+                {"column": "amount", "direction": "desc", "nulls": "last"},
+                {"column": "label", "direction": "asc", "nulls": "first"}
+            ]
+        }))
+        .unwrap();
+        let (sql, values) = preview_query(
+            "DB",
+            "PUBLIC",
+            "ITEMS",
+            &[column("amount", "NUMBER"), column("label", "TEXT")],
+            &clauses,
+        )
+        .unwrap();
+        assert_eq!(values, [amount, literal]);
+        assert!(!sql.contains(literal) && !sql.contains(amount));
+        assert!(sql.contains("TO_DECIMAL(?, 25, 9)"));
+        assert!(sql.contains(" OR CONTAINS(sp_source.\"label\", ?)"));
+        assert!(sql.ends_with(
+            "ORDER BY sp_source.\"amount\" DESC NULLS LAST, sp_source.\"label\" ASC NULLS FIRST\nLIMIT 50"
+        ));
     }
 
     fn column(name: &str, data_type: &str) -> Column {

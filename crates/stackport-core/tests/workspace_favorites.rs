@@ -5,6 +5,9 @@ use stackport_core::{
 };
 use std::sync::{Arc, Barrier};
 
+#[path = "support/legacy_presets.rs"]
+mod legacy_presets;
+
 #[test]
 fn scoped_favorites_survive_restart_copy_and_profile_deletion() {
     let directory = tempfile::tempdir().unwrap();
@@ -197,6 +200,7 @@ fn version_twelve_favorites_keep_their_scope_and_identity() {
         .unwrap();
     drop(store);
     let db = Connection::open(&metadata).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&db, false);
     db.execute_batch(
         "CREATE TABLE favorites_before_upgrade AS
            SELECT project_id, scope, kind, sqlite_id, postgres_id, ssh_id, object_name
@@ -266,6 +270,7 @@ fn version_eleven_keeps_query_presets_and_gets_a_verified_backup() {
         .unwrap();
     drop(store);
     let db = Connection::open(&metadata).unwrap();
+    legacy_presets::restore_legacy_preset_schema(&db, false);
     db.execute_batch("DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; PRAGMA user_version=11;")
         .unwrap();
     drop(db);

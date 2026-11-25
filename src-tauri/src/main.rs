@@ -1005,8 +1005,8 @@ async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String,
     -> Result<sql_server::CatalogPage<sql_server::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
-async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32)
-    -> Result<sql_server::DataPage, String> { manager.data(&id, object, page).await }
+async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32, clauses: Option<TableQueryClauses>)
+    -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
 async fn list_oracle_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<oracle::Profile>, String> {
@@ -1056,8 +1056,8 @@ async fn oracle_columns(manager: State<'_, oracle::Manager>, id: String, object:
     -> Result<oracle::CatalogPage<oracle::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
-async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32)
-    -> Result<oracle::DataPage, String> { manager.data(&id, object, page).await }
+async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32, clauses: Option<TableQueryClauses>)
+    -> Result<oracle::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
 async fn list_snowflake_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<snowflake::Profile>, String> {
@@ -1107,8 +1107,8 @@ async fn snowflake_columns(manager: State<'_, snowflake::Manager>, id: String, o
     -> Result<snowflake::CatalogPage<snowflake::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
-async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, object: String, page: u32)
-    -> Result<snowflake::DataPage, String> { manager.data(&id, object, page).await }
+async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, object: String, page: u32, clauses: Option<TableQueryClauses>)
+    -> Result<snowflake::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {

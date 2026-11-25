@@ -1,6 +1,10 @@
 use super::{query_error, Manager};
-use crate::Result;
-use oracledb::{Connection, Row, ToDbValue};
+use crate::{
+    native_table_filter as input,
+    table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
+    Result, TableQueryClauses,
+};
+use oracledb::{Connection, OracleNumber, Row, ToDbValue};
 use serde::Serialize;
 
 const PAGE_LIMIT: i64 = 50;
@@ -44,6 +48,7 @@ pub struct DataPage {
     has_next: bool,
     more_columns: bool,
     stable_order: bool,
+    query_sql: String,
 }
 
 #[derive(Serialize)]
@@ -119,9 +124,17 @@ impl Manager {
         .await
     }
 
-    pub async fn data(&self, id: &str, object: i64, page: u32) -> Result<DataPage> {
-        self.read(id, move |connection| data(connection, object, page))
-            .await
+    pub async fn data(
+        &self,
+        id: &str,
+        object: i64,
+        page: u32,
+        clauses: TableQueryClauses,
+    ) -> Result<DataPage> {
+        self.read(id, move |connection| {
+            data(connection, object, page, clauses)
+        })
+        .await
     }
 }
 
@@ -161,7 +174,12 @@ fn columns(connection: &Connection, object: &Object) -> Result<CatalogPage<Colum
     Ok(CatalogPage { items, has_next })
 }
 
-fn data(connection: &Connection, id: i64, page: u32) -> Result<DataPage> {
+fn data(
+    connection: &Connection,
+    id: i64,
+    page: u32,
+    clauses: TableQueryClauses,
+) -> Result<DataPage> {
     let target = find_object(connection, id)?;
     let CatalogPage {
         items: columns,
@@ -181,9 +199,28 @@ fn data(connection: &Connection, id: i64, page: u32) -> Result<DataPage> {
     )?;
     let keys = keys
         .iter()
-        .map(|row| row.get::<&str>(0).map(ident).map_err(query_error))
+        .map(|row| row.get::<&str>(0).map_err(query_error))
         .collect::<Result<Vec<_>>>()?;
     let stable_order = !keys.is_empty();
+    let mut parameters = Vec::new();
+    clauses.validate_sort(|name| {
+        columns
+            .iter()
+            .any(|column| column.name == name && sortable(&column.native_type))
+    })?;
+    let suffix = clauses.suffix(
+        TableQueryDialect::Oracle,
+        "sp_source",
+        columns.iter().map(|column| column.name.as_str()),
+        keys,
+        |name, value, operation| {
+            let column = columns
+                .iter()
+                .find(|column| column.name == name)
+                .ok_or(input::UNSUPPORTED)?;
+            filter_binding(&column.native_type, value, operation, &mut parameters)
+        },
+    )?;
     let table = format!("{}.{}", ident(&target.schema), ident(&target.name));
     let select = columns
         .iter()
@@ -191,16 +228,25 @@ fn data(connection: &Connection, id: i64, page: u32) -> Result<DataPage> {
         .map(|(index, column)| value_expression(column, index))
         .collect::<Vec<_>>()
         .join(", ");
-    let result = if stable_order {
-        let sql = format!("SELECT {select} FROM {table} ORDER BY {} OFFSET :skip ROWS FETCH NEXT :limit ROWS ONLY", keys.join(", "));
-        rows(connection, &sql, &[&offset(page), &(PAGE_LIMIT + 1)])?
+    let skip = offset(page);
+    let limit = if stable_order {
+        PAGE_LIMIT + 1
+    } else {
+        PAGE_LIMIT
+    };
+    let mut bindings: Vec<_> = parameters.iter().map(Parameter::bound).collect();
+    let limit_clause = if stable_order {
+        bindings.push(&skip);
+        "OFFSET :sp_skip ROWS FETCH NEXT :sp_limit ROWS ONLY"
     } else {
         if page != 0 {
             return Err("기본 키가 없어 첫 페이지를 다시 열어야 합니다.".into());
         }
-        let sql = format!("SELECT {select} FROM {table} WHERE ROWNUM <= :limit");
-        rows(connection, &sql, &[&PAGE_LIMIT])?
+        "FETCH FIRST :sp_limit ROWS ONLY"
     };
+    bindings.push(&limit);
+    let query_sql = format!("SELECT {select}\nFROM {table} sp_source{suffix}\n{limit_clause}");
+    let result = rows(connection, &query_sql, &bindings)?;
     let has_next = result.len() > PAGE_LIMIT as usize;
     let rows = result
         .iter()
@@ -219,7 +265,112 @@ fn data(connection: &Connection, id: i64, page: u32) -> Result<DataPage> {
         has_next,
         more_columns,
         stable_order,
+        query_sql,
     })
+}
+
+enum Parameter {
+    Text(String),
+    Number(OracleNumber),
+    Float(f64),
+}
+
+impl Parameter {
+    fn bound(&self) -> &dyn ToDbValue {
+        match self {
+            Self::Text(value) => value,
+            Self::Number(value) => value,
+            Self::Float(value) => value,
+        }
+    }
+}
+
+fn sortable(native: &str) -> bool {
+    matches!(
+        native,
+        "CHAR"
+            | "VARCHAR2"
+            | "NCHAR"
+            | "NVARCHAR2"
+            | "NUMBER"
+            | "FLOAT"
+            | "BINARY_FLOAT"
+            | "BINARY_DOUBLE"
+            | "DATE"
+            | "RAW"
+    ) || native.starts_with("TIMESTAMP")
+}
+
+fn filter_binding(
+    native: &str,
+    value: &FilterValue,
+    operation: FilterOperand,
+    parameters: &mut Vec<Parameter>,
+) -> Result<String> {
+    let text = value.text();
+    bounded_filter_text(text)?;
+    let parameter = format!(":sp_filter_{}", parameters.len() + 1);
+    let character = matches!(native, "CHAR" | "VARCHAR2" | "NCHAR" | "NVARCHAR2");
+    if character || matches!(operation, FilterOperand::Contains) {
+        if !character && !matches!(native, "CLOB" | "NCLOB") {
+            return Err("포함 조건은 문자열 열에 사용할 수 있습니다.".into());
+        }
+        if text.is_empty() {
+            return Err("Oracle의 빈 문자열은 NULL 조건으로 조회하세요.".into());
+        }
+        parameters.push(Parameter::Text(text.into()));
+        return Ok(if matches!(native, "NCHAR" | "NVARCHAR2" | "NCLOB") {
+            format!("TO_NCHAR({parameter})")
+        } else {
+            parameter
+        });
+    }
+    let trimmed = text.trim();
+    let (bound, expression) = match native {
+        "NUMBER" | "FLOAT" => {
+            input::decimal_shape(trimmed)?;
+            let exact = trimmed
+                .parse::<OracleNumber>()
+                .map_err(|_| input::INVALID)?;
+            (Parameter::Number(exact), parameter)
+        }
+        "BINARY_FLOAT" | "BINARY_DOUBLE" => {
+            let value = input::finite_float(trimmed)?;
+            if native == "BINARY_FLOAT" {
+                if !(value as f32).is_finite() {
+                    return Err(input::INVALID.into());
+                }
+                (
+                    Parameter::Float(value),
+                    format!("TO_BINARY_FLOAT({parameter})"),
+                )
+            } else {
+                (
+                    Parameter::Float(value),
+                    format!("TO_BINARY_DOUBLE({parameter})"),
+                )
+            }
+        }
+        "DATE" => (
+            Parameter::Text(input::timestamp(trimmed, 0, false)?.0),
+            format!("TO_DATE({parameter}, 'YYYY-MM-DD\"T\"HH24:MI:SS')"),
+        ),
+        native if native.starts_with("TIMESTAMP") => {
+            let zoned = native.ends_with("TIME ZONE");
+            let (mut timestamp, offset) = input::timestamp(trimmed, 9, zoned)?;
+            let expression = if let Some(offset) = offset {
+                timestamp.push(' ');
+                timestamp.push_str(&offset);
+                format!("TO_TIMESTAMP_TZ({parameter}, 'YYYY-MM-DD\"T\"HH24:MI:SS.FF9 TZH:TZM')")
+            } else {
+                format!("TO_TIMESTAMP({parameter}, 'YYYY-MM-DD\"T\"HH24:MI:SS.FF9')")
+            };
+            (Parameter::Text(timestamp), expression)
+        }
+        _ => return Err(input::UNSUPPORTED.into()),
+    };
+    parameters.push(bound);
+    Ok(expression)
 }
 
 fn offset(page: u32) -> i64 {

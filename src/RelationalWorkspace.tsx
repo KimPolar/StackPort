@@ -4,6 +4,7 @@ import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { PostgresPager } from "./PostgresPager";
+import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
@@ -16,6 +17,7 @@ type Column = { name: string; data_type: string; nullable: boolean; identity: bo
 type DataPage = {
   columns: Column[]; rows: (DatabasePreviewValue | null)[][]; has_next: boolean;
   stable_order: boolean; more_columns: boolean;
+  query_sql: string;
 };
 
 type Adapter = { engine: string; prefix: "sql_server" | "oracle" | "snowflake" };
@@ -84,7 +86,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} engine={engine} prefix={prefix} />}
+    {session && <Browse key={session.id} session={session} profile={profile} engine={engine} prefix={prefix} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
@@ -107,7 +109,7 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
   </section>;
 }
 
-function Browse({ session, engine, prefix }: { session: Session } & Adapter) {
+function Browse({ session, profile, engine, prefix }: { session: Session; profile: Profile } & Adapter) {
   const [schema, setSchema] = useState("");
   const [object, setObject] = useState<ServerObject | null>(null);
   const [revision, setRevision] = useState(0);
@@ -123,7 +125,7 @@ function Browse({ session, engine, prefix }: { session: Session } & Adapter) {
         revision={revision} id={item => String(item.id)} name={item => item.name} selected={object ? String(object.id) : ""}
         detail={item => objectKind[item.kind]} onSelect={setObject} />}
     </div>
-    {object ? <ObjectDetail key={object.id} id={session.id} object={object} revision={revision} refresh={refresh} engine={engine} prefix={prefix} /> :
+    {object ? <ObjectDetail key={object.id} id={session.id} profile={profile} object={object} revision={revision} refresh={refresh} engine={engine} prefix={prefix} /> :
       <section className="results-card"><div className="panel-heading"><h2>객체 조회</h2>
         <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
       </div><p className="result-empty">스키마에서 테이블 또는 뷰를 선택하세요.</p></section>}
@@ -156,15 +158,20 @@ function Catalog<T>({ title, command, args, revision, id, name, selected, detail
   </section>;
 }
 
-function ObjectDetail({ id, object, revision, refresh, engine, prefix }: {
-  id: string; object: ServerObject; revision: number; refresh: () => void;
+function ObjectDetail({ id, profile, object, revision, refresh, engine, prefix }: {
+  id: string; profile: Profile; object: ServerObject; revision: number; refresh: () => void;
 } & Adapter) {
   const [view, setView] = useState<"data" | "columns">("data");
   const [page, setPage] = useState(0);
+  const [clauses, setClauses] = useState<TableQueryClauses>(emptyTableQueryClauses);
+  const dataErrorId = useId();
   const target = useMemo(() => ({ id, object: object.id }), [id, object.id]);
-  const pageArgs = useMemo(() => view === "data" ? { ...target, page } : null, [target, page, view]);
+  const presetTarget = useMemo(() => ({
+    engine: prefix, profile_id: profile.id, revision: profile.revision, schema: object.schema, object: object.name,
+  }), [prefix, profile.id, profile.revision, object.schema, object.name]);
+  const pageArgs = useMemo(() => view === "data" ? { ...target, page, clauses } : null, [target, page, view, clauses]);
   const data = useNativeRead<DataPage>(prefix + "_data", pageArgs, revision);
-  const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", view === "columns" ? target : null, revision);
+  const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", target, revision);
   return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"} aria-busy={data.loading || columns.loading}>
     <div className="panel-heading"><h2>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
       <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
@@ -173,12 +180,22 @@ function ObjectDetail({ id, object, revision, refresh, engine, prefix }: {
       <button type="button" className="secondary small" aria-pressed={view === "data"} onClick={() => setView("data")}>데이터</button>
       <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
     </div>
+    <div hidden={view !== "data"}>
+      <TableQueryControls columns={columns.data?.items.map(column => column.name) ?? []}
+        busy={data.loading || columns.loading} target={presetTarget} errorId={data.error ? dataErrorId : undefined}
+        apply={settings => { setPage(0); setClauses(settings); }} />
+    </div>
     {view === "data" ? <>
-      <ReadStatus {...data} empty={data.data?.rows.length === 0} />
+      <ReadStatus {...data} errorId={dataErrorId} empty={data.data?.rows.length === 0} />
       {data.data && <>
         {!data.data.stable_order && <p className="form-note mysql-table-note">{prefix === "snowflake"
           ? "미리보기는 최대 50행을 표시합니다." : "기본 키가 없어 최대 50행을 한 번에 표시합니다."}</p>}
         {data.data.more_columns && <p className="form-note mysql-table-note">앞 64개 열을 표시합니다.</p>}
+        {data.data.query_sql && <details className="table-query-sql">
+          <summary>조회 SQL</summary>
+          <p className="form-note">필터 값은 별도 매개변수로 전달됩니다.</p>
+          <pre><code>{data.data.query_sql}</code></pre>
+        </details>}
         {data.data.rows.length > 0 && <DatabasePreviewGrid columns={data.data.columns} rows={data.data.rows} label={engine + " 데이터 미리보기"} />}
       </>}
       <PostgresPager label="데이터" page={page} next={data.data?.has_next === true} change={setPage} />
@@ -197,8 +214,8 @@ function ObjectDetail({ id, object, revision, refresh, engine, prefix }: {
   </section>;
 }
 
-function ReadStatus({ error, loading, empty }: { error: string; loading: boolean; empty: boolean }) {
+function ReadStatus({ error, loading, empty, errorId }: { error: string; loading: boolean; empty: boolean; errorId?: string }) {
   if (loading) return <p className="result-empty" role="status">조회 중…</p>;
-  if (error) return <p className="form-error mysql-table-note" role="alert">{error}</p>;
+  if (error) return <p className="form-error mysql-table-note" role="alert" id={errorId}>{error}</p>;
   return empty ? <p className="result-empty">조회 결과가 없습니다.</p> : null;
 }

@@ -5,7 +5,7 @@ import type { TableQueryClauses } from "./TableQueryControls";
 
 export type TableQueryTarget =
   | { engine: "sqlite"; profile_id: string; object: string }
-  | { engine: "postgres" | "mysql"; profile_id: string; revision: number; schema: string; object: string };
+  | { engine: "postgres" | "mysql" | "sql_server" | "oracle" | "snowflake"; profile_id: string; revision: number; schema: string; object: string };
 type Preset = { id: string; name: string; revision: number };
 type Write =
   | { kind: "create"; name: string; clauses: TableQueryClauses }

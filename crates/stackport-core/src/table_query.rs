@@ -67,7 +67,7 @@ struct Sort {
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum SortDirection {
+pub(crate) enum SortDirection {
     Asc,
     Desc,
 }
@@ -84,6 +84,9 @@ pub(crate) enum TableQueryDialect {
     Sqlite,
     Postgres,
     Mysql,
+    SqlServer,
+    Oracle,
+    Snowflake,
 }
 
 pub(crate) enum FilterOperand {
@@ -95,7 +98,10 @@ impl TableQueryDialect {
     fn identifier(&self, name: &str) -> String {
         match self {
             Self::Mysql => crate::mysql::quoted(name),
-            Self::Sqlite | Self::Postgres => quote_identifier(name),
+            Self::SqlServer => format!("[{}]", name.replace(']', "]]")),
+            Self::Sqlite | Self::Postgres | Self::Oracle | Self::Snowflake => {
+                quote_identifier(name)
+            }
         }
     }
 
@@ -106,6 +112,11 @@ impl TableQueryDialect {
                 format!("pg_catalog.strpos({column}::pg_catalog.text, {parameter}) > 0")
             }
             Self::Mysql => format!("LOCATE({parameter}, {column}) > 0"),
+            Self::SqlServer => {
+                format!("CHARINDEX({parameter}, CONVERT(nvarchar(max), {column})) > 0")
+            }
+            Self::Oracle => format!("INSTR({column}, {parameter}) > 0"),
+            Self::Snowflake => format!("CONTAINS({column}, {parameter})"),
         }
     }
 
@@ -116,6 +127,12 @@ impl TableQueryDialect {
                 format!("{column} IS NULL DESC, {column} {direction}")
             }
             (Self::Mysql, NullOrder::Last) => format!("{column} IS NULL ASC, {column} {direction}"),
+            (Self::SqlServer, NullOrder::First) => {
+                format!("CASE WHEN {column} IS NULL THEN 0 ELSE 1 END ASC, {column} {direction}")
+            }
+            (Self::SqlServer, NullOrder::Last) => {
+                format!("CASE WHEN {column} IS NULL THEN 1 ELSE 0 END ASC, {column} {direction}")
+            }
             (_, NullOrder::First) => format!("{column} {direction} NULLS FIRST"),
             (_, NullOrder::Last) => format!("{column} {direction} NULLS LAST"),
         }
@@ -212,6 +229,38 @@ impl TableQueryClauses {
         qualifier: &str,
         columns: impl IntoIterator<Item = &'a str>,
         primary_keys: impl IntoIterator<Item = &'a str>,
+        bind: impl FnMut(&str, &FilterValue, FilterOperand) -> Result<String>,
+    ) -> Result<String> {
+        self.suffix_with_key_order(
+            dialect,
+            qualifier,
+            columns,
+            primary_keys
+                .into_iter()
+                .map(|name| (name, SortDirection::Asc)),
+            bind,
+        )
+    }
+
+    pub(crate) fn validate_sort(&self, sortable: impl Fn(&str) -> bool) -> Result<()> {
+        self.validate_count()?;
+        for column in &self.sort {
+            if !sortable(&column.column) {
+                return Err(format!(
+                    "{} 열의 형식은 정렬을 지원하지 않습니다.",
+                    column.column
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn suffix_with_key_order<'a>(
+        &self,
+        dialect: TableQueryDialect,
+        qualifier: &str,
+        columns: impl IntoIterator<Item = &'a str>,
+        primary_keys: impl IntoIterator<Item = (&'a str, SortDirection)>,
         mut bind: impl FnMut(&str, &FilterValue, FilterOperand) -> Result<String>,
     ) -> Result<String> {
         self.validate_count()?;
@@ -248,17 +297,17 @@ impl TableQueryClauses {
             if !seen.insert(sort.column.as_str()) {
                 return Err("같은 열을 두 번 정렬할 수 없습니다.".into());
             }
-            let direction = match sort.direction {
-                SortDirection::Asc => "ASC",
-                SortDirection::Desc => "DESC",
-            };
-            order.push(dialect.order(&column, direction, &sort.nulls));
+            order.push(dialect.order(&column, sort.direction.sql(), &sort.nulls));
         }
         // An available primary key resolves ties in the requested sort and
         // also gives plain table browsing a predictable default order.
-        for key in primary_keys {
+        for (key, direction) in primary_keys {
             if !seen.contains(key) {
-                order.push(format!("{qualifier}.{} ASC", dialect.identifier(key)));
+                order.push(format!(
+                    "{qualifier}.{} {}",
+                    dialect.identifier(key),
+                    direction.sql()
+                ));
             }
         }
         if !order.is_empty() {
@@ -266,6 +315,15 @@ impl TableQueryClauses {
             sql.push_str(&order.join(", "));
         }
         Ok(sql)
+    }
+}
+
+impl SortDirection {
+    fn sql(&self) -> &'static str {
+        match self {
+            Self::Asc => "ASC",
+            Self::Desc => "DESC",
+        }
     }
 }
 
