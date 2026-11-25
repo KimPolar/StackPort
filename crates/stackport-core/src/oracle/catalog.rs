@@ -1,6 +1,7 @@
 use super::{query_error, Manager};
 use crate::{
     native_table_filter as input,
+    relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
     table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
     Result, TableQueryClauses,
 };
@@ -94,22 +95,47 @@ impl Manager {
         search: String,
         page: u32,
     ) -> Result<CatalogPage<Object>> {
-        validate_search(&search)?;
-        if schema.is_empty() || schema.len() > 128 || schema.contains('\0') {
-            return Err("Oracle 스키마 이름을 확인하세요.".into());
-        }
+        self.search_objects(id, RelationalObjectSearch::in_schema(schema, search, page))
+            .await
+    }
+
+    pub async fn search_objects(
+        &self,
+        id: &str,
+        input: RelationalObjectSearch,
+    ) -> Result<CatalogPage<Object>> {
+        validate_search(&input.term)?;
+        input.validate_scope(|schema| {
+            !schema.is_empty() && schema.len() <= 128 && !schema.contains('\0')
+        })?;
         self.read(id, move |connection| {
+            let scope = input.schema.as_ref().map_or("", |_| "AND o.owner = :owner");
+            let kind = match input.kind {
+                Some(ObjectKind::Table) => format!("AND ({OBJECT_KIND}) = 'TABLE'"),
+                Some(ObjectKind::View) => "AND o.object_type = 'VIEW'".to_owned(),
+                Some(ObjectKind::MaterializedView) => format!("AND ({OBJECT_KIND}) = 'MATERIALIZED VIEW'"),
+                None => String::new(),
+            };
+            let condition = match input.field {
+                SearchField::Name => "INSTR(UPPER(o.object_name), UPPER(NVL(:term, o.object_name))) > 0",
+                SearchField::Column => "EXISTS (SELECT 1 FROM all_tab_cols c
+                    WHERE c.owner = o.owner AND c.table_name = o.object_name AND c.hidden_column = 'NO'
+                    AND INSTR(UPPER(c.column_name), UPPER(:term)) > 0)",
+            };
             let sql = format!(
                 "SELECT o.object_id, o.owner, o.object_name, {OBJECT_KIND}
-                FROM all_objects o WHERE {OBJECTS} AND o.owner = :owner
-                AND INSTR(UPPER(o.object_name), UPPER(NVL(:term, o.object_name))) > 0
-                ORDER BY o.object_name, o.object_id OFFSET :skip ROWS FETCH NEXT :limit ROWS ONLY"
+                FROM all_objects o WHERE {OBJECTS} {scope} {kind} AND {condition}
+                ORDER BY o.owner, o.object_name, o.object_id
+                OFFSET :skip ROWS FETCH NEXT :limit ROWS ONLY"
             );
-            let rows = rows(
-                connection,
-                &sql,
-                &[&schema, &search, &offset(page), &(PAGE_LIMIT + 1)],
-            )?;
+            let mut parameters: Vec<&dyn ToDbValue> = Vec::with_capacity(4);
+            if let Some(schema) = &input.schema {
+                parameters.push(schema);
+            }
+            let skip = offset(input.page);
+            let limit = PAGE_LIMIT + 1;
+            parameters.extend([&input.term as &dyn ToDbValue, &skip, &limit]);
+            let rows = rows(connection, &sql, &parameters)?;
             Ok(catalog_page(
                 rows.iter().map(decode_object).collect::<Result<_>>()?,
             ))

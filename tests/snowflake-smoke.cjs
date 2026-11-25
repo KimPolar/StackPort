@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { openFromObjectSearch } = require('./relational-object-search.cjs');
 
 const account = process.env.STACKPORT_SNOWFLAKE_TEST_ACCOUNT;
 const database = process.env.STACKPORT_SNOWFLAKE_TEST_DATABASE;
@@ -40,8 +41,11 @@ async function verify(page) {
     const objects = workspace.getByRole('region', { name: 'Snowflake 테이블과 뷰 목록' });
     await objects.getByRole('searchbox').fill(object);
     await objects.getByRole('button', { name: '검색' }).click();
-    await objects.getByText(object, { exact: true }).click();
-    const detail = workspace.getByRole('region', { name: 'Snowflake 객체 상세' });
+    const catalogObject = objects.getByText(object, { exact: true });
+    const kind = await catalogObject.locator('..').locator('small').innerText();
+    const detail = await openFromObjectSearch(page, workspace, 'Snowflake', {
+      schema, name: object, kind, term: object, scope: schema,
+    });
     const preview = detail.getByRole('table', { name: 'Snowflake 데이터 미리보기' });
     await preview.locator('tbody tr').first().waitFor();
     await detail.getByRole('button', { name: '열 구조', exact: true }).click();
@@ -57,7 +61,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try {
     await verify(browser.contexts()[0].pages()[0]);
-    console.log('Snowflake Windows E2E passed (live login, catalog, preview and columns).');
+    console.log('Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns).');
   } finally {
     await browser.close();
   }

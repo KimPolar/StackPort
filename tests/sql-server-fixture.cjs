@@ -30,10 +30,13 @@ async function seedSqlServer({ port, ca, database, account, password }) {
     await execute(`CREATE LOGIN [${account}] WITH PASSWORD=N'${password}', CHECK_POLICY=OFF`);
     await execute(`USE [${database}]`);
     await execute('CREATE SCHEMA [catalog]');
+    await execute('CREATE SCHEMA [archive]');
     await execute('CREATE SCHEMA [private]');
     await execute(`
-CREATE TABLE [private].[hidden_data] (id int NOT NULL);
+CREATE TABLE [private].[hidden_data] (id int NOT NULL, [%_literal] int);
 CREATE TABLE [catalog].[metadata_only] (id int NOT NULL);
+CREATE TABLE [archive].[order]]daily] ([%_literal] int, [%Xliteral] int);
+CREATE TABLE [archive].[wildcard_decoy] ([%Xliteral] int);
 CREATE TABLE [catalog].[order]]daily] (
     id bigint NOT NULL,
     seq int IDENTITY(1,1) NOT NULL,
@@ -57,7 +60,18 @@ END;
 `);
     await execute('CREATE VIEW [catalog].[recent] AS SELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2');
     await execute(`
+DECLARE @i int = 1;
+WHILE @i <= 51
+BEGIN
+    DECLARE @name nvarchar(128) = N'report_' + RIGHT(N'00' + CONVERT(nvarchar(2), @i), 2);
+    DECLARE @ddl nvarchar(max) = N'CREATE VIEW [archive].' + QUOTENAME(@name) + N' AS SELECT 2 AS match_a, 3 AS match_b';
+    EXEC sys.sp_executesql @ddl;
+    SET @i += 1;
+END;
+`);
+    await execute(`
 CREATE USER [${account}] FOR LOGIN [${account}];
+GRANT SELECT ON SCHEMA::[archive] TO [${account}];
 GRANT SELECT ON [catalog].[order]]daily] TO [${account}];
 GRANT SELECT ON [catalog].[recent] TO [${account}];
 GRANT VIEW DEFINITION ON [catalog].[metadata_only] TO [${account}];

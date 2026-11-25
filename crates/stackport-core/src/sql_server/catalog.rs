@@ -1,6 +1,7 @@
 use super::{query_error, required_text, Manager};
 use crate::{
     native_table_filter as input,
+    relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
     table_query::{
         bounded_filter_text, FilterOperand, FilterValue, SortDirection, TableQueryDialect,
     },
@@ -82,20 +83,51 @@ impl Manager {
         search: &str,
         page: u32,
     ) -> Result<CatalogPage<Object>> {
-        validate_search(search)?;
-        if !super::profiles::valid_identifier(schema) {
-            return Err("SQL Server 스키마 이름을 확인하세요.".into());
-        }
+        self.search_objects(
+            id,
+            RelationalObjectSearch::in_schema(schema.into(), search.into(), page),
+        )
+        .await
+    }
+
+    pub async fn search_objects(
+        &self,
+        id: &str,
+        input: RelationalObjectSearch,
+    ) -> Result<CatalogPage<Object>> {
+        validate_search(&input.term)?;
+        input.validate_scope(super::profiles::valid_identifier)?;
+        let schema = input.schema.as_deref();
+        let term = input.term.as_str();
+        let kind = match input.kind {
+            Some(ObjectKind::Table) => "AND o.type = 'U'",
+            Some(ObjectKind::View) => "AND o.type = 'V'",
+            Some(ObjectKind::MaterializedView) => {
+                return Err("SQL Server 탐색기는 테이블과 뷰를 검색합니다.".into())
+            }
+            None => "",
+        };
+        let condition = match input.field {
+            SearchField::Name => "(@P2 = N'' OR CHARINDEX(@P2, o.name) > 0)",
+            SearchField::Column => {
+                "EXISTS (SELECT 1 FROM sys.columns AS c
+                WHERE c.object_id = o.object_id AND c.is_hidden = 0 AND CHARINDEX(@P2, c.name) > 0)"
+            }
+        };
         let sql = format!(
             "SELECT o.object_id, s.name, o.name, RTRIM(o.type)
             FROM sys.objects AS o INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
-            WHERE {USER_OBJECT} AND s.name = @P1 AND (@P2 = N'' OR CHARINDEX(@P2, o.name) > 0)
-            ORDER BY o.name, o.object_id
+            WHERE {USER_OBJECT} AND (@P1 IS NULL OR s.name = @P1) {kind} AND {condition}
+            ORDER BY s.name, o.name, o.object_id
             OFFSET @P3 ROWS FETCH NEXT {} ROWS ONLY",
             CATALOG_LIMIT + 1
         );
         let rows = self
-            .rows(id, &sql, &[&schema, &search, &offset(page, CATALOG_LIMIT)])
+            .rows(
+                id,
+                &sql,
+                &[&schema, &term, &offset(input.page, CATALOG_LIMIT)],
+            )
             .await?;
         Ok(catalog_page(
             rows.iter().map(decode_object).collect::<Result<_>>()?,

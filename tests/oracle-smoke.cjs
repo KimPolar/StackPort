@@ -5,6 +5,7 @@ const path = require('node:path');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
+const { openFromObjectSearch } = require('./relational-object-search.cjs');
 
 const port = Number(process.env.STACKPORT_ORACLE_PORT);
 const service = process.env.STACKPORT_ORACLE_SERVICE || 'FREEPDB1';
@@ -79,6 +80,19 @@ async function verify(page, hiddenObject) {
       ['Daily Summary', 'materialized_view'], ['Order Daily', 'table'], ['Recent View', 'view'],
     ]);
     const table = objects.items[1].id;
+    const search = (overrides = {}) => command('oracle_search_objects', { id, input: {
+      schema: null, field: 'name', kind: null, term: 'order daily', page: 0, ...overrides,
+    } });
+    assert.deepEqual((await search()).items.map(row => [row.schema, row.kind]), [
+      [owner, 'table'], [reader, 'view'],
+    ]);
+    assert.deepEqual((await search({ schema: owner })).items.map(row => row.id), [table]);
+    assert.deepEqual((await search({ schema: owner, kind: 'view' })).items, []);
+    assert.deepEqual((await search({ schema: owner, kind: 'materialized_view', term: '' })).items
+      .map(row => row.name), ['Daily Summary']);
+    assert.deepEqual((await search({ term: 'hidden_data' })).items, []);
+    assert.deepEqual((await search({ field: 'column', term: '%_' })).items
+      .map(row => [row.schema, row.name]), [[reader, 'Order Daily']]);
     const data = (object, page, clauses) => command('oracle_data', { id, object, page, clauses });
     const columns = await command('oracle_columns', { id, object: table });
     assert.equal(columns.items.find(column => column.name === 'EXACT_VALUE').data_type, 'NUMBER(30,6)');
@@ -133,9 +147,10 @@ async function verify(page, hiddenObject) {
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
-  await workspace.getByRole('button', { name: owner, exact: true }).click();
-  await workspace.getByRole('button', { name: 'Order Daily 테이블', exact: true }).click();
-  const detail = workspace.getByRole('region', { name: engine + ' 객체 상세', exact: true });
+  const detail = await openFromObjectSearch(page, workspace, engine, {
+    schema: owner, name: 'Order Daily', kind: '테이블', term: 'logged_at', field: 'column',
+  });
+  await detail.getByRole('button', { name: '데이터', exact: true }).click();
   const grid = detail.getByRole('table', { name: engine + ' 데이터 미리보기', exact: true });
   await grid.getByText('9223372036854775747', { exact: true }).waitFor();
   await detail.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
@@ -165,7 +180,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], object); }
   finally { await browser.close(); }
-  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, permissions, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, permissions, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

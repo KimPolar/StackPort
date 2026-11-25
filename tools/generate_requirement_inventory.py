@@ -89,7 +89,7 @@ PARTIAL = {
     "SP-DB-017": "PostgreSQL 트리거의 생성 SQL로 실행 시점 확인 및 활성 상태 열람",
     "SP-DB-018": "SQLite 인덱스 구성과 고유·부분 여부, PostgreSQL 인덱스 구성·유효 상태·크기, MySQL·MariaDB 인덱스 열·식·순서·접두 길이·가시성·고유값 추정치 열람",
     "SP-DB-020": "PostgreSQL 현재 역할의 객체 단위 유효 권한과 행 수준 보안 설정 열람",
-    "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색과 구조 이동",
+    "SP-DB-021": "PostgreSQL 데이터베이스·스키마에서 이름·종류·열 이름·객체 및 열 주석·지원 SQL 정의 검색. SQL Server·Oracle·Snowflake의 데이터베이스·스키마별 객체명·열명·종류 검색과 결과 이동. Snowflake 실제 계정 검증 대기",
     "SP-DB-022": "SQLite·PostgreSQL·MySQL·MariaDB 구조·데이터 조회 및 필터·정렬된 전체 결과 CSV·JSON 내보내기, PostgreSQL 조회 SQL 열기, MySQL·MariaDB 참조 객체 열기와 생성 SQL 저장",
     "SP-DB-023": "PostgreSQL 연결의 버전·데이터베이스·사용자·인코딩·시간대와 서버 가동 시간·연결 수·누적 통계, MySQL·MariaDB 버전·문자셋·시간대·기본 스토리지와 연결·문장·트래픽·잠금 지표",
     "SP-DB-024": "PostgreSQL 독립 읽기 전용 모니터의 세션·실행 SQL·잠금 차단 PID·느린 실행 필터·지표와 pg_stat_statements 누적 통계, MySQL·MariaDB 세션·느린 실행·InnoDB 잠금 대기와 차단 세션",
@@ -419,6 +419,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mysql/structure.rs; src/MysqlObjectStructure.tsx; tests/mysql-smoke.cjs"
             if requirement_id == "SP-DB-021":
                 evidence += "; crates/stackport-core/src/postgres/search.rs; src/PostgresSearchDialog.tsx"
+                evidence += "; crates/stackport-core/src/relational_object_search.rs; crates/stackport-core/src/snowflake/catalog.rs; src/RelationalWorkspace.tsx; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs"
             if requirement_id in {"SP-DB-024", "SP-SQ-016"}:
                 evidence += "; crates/stackport-core/src/postgres/statement_stats.rs; src/PostgresStatementStats.tsx"
             if requirement_id in {"SP-DB-023", "SP-DB-024", "SP-DB-025"}:

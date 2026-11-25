@@ -143,6 +143,8 @@ mod mongo;
 pub mod sql_server;
 pub mod oracle;
 pub mod snowflake;
+mod relational_object_search;
+pub use relational_object_search::RelationalObjectSearch;
 mod native_table_filter;
 mod tls;
 

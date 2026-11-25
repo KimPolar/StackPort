@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Database, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { PostgresPager } from "./PostgresPager";
@@ -13,6 +13,9 @@ type Session = { id: string; database: string; version: string; context?: string
 type CatalogPage<T> = { items: T[]; has_next: boolean };
 type ServerObject = { id: number | string; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
 const objectKind = { table: "테이블", view: "뷰", materialized_view: "구체화 뷰" };
+type ObjectView = "data" | "columns";
+type SearchField = "name" | "column";
+type SearchInput = { schema: string | null; field: SearchField; kind: ServerObject["kind"] | null; term: string; page: number };
 type Column = { name: string; data_type: string; nullable: boolean; identity: boolean };
 type DataPage = {
   columns: Column[]; rows: (DatabasePreviewValue | null)[][]; has_next: boolean;
@@ -112,29 +115,125 @@ export function RelationalWorkspace({ profile, engine, prefix, database, passwor
 function Browse({ session, profile, engine, prefix }: { session: Session; profile: Profile } & Adapter) {
   const [schema, setSchema] = useState("");
   const [object, setObject] = useState<ServerObject | null>(null);
+  const [view, setView] = useState<ObjectView>("data");
   const [revision, setRevision] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchTrigger = useRef<HTMLButtonElement>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const focusAfterSearch = useRef<"trigger" | "object" | null>(null);
   const schemaArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const objectArgs = useMemo(() => ({ id: session.id, schema }), [session.id, schema]);
   const refresh = () => setRevision(current => current + 1);
 
+  useEffect(() => {
+    if (searchOpen || focusAfterSearch.current === null) return;
+    const destination = focusAfterSearch.current === "object" ? detailHeading : searchTrigger;
+    destination.current?.focus();
+    focusAfterSearch.current = null;
+  }, [searchOpen]);
+
+  function openSearchResult(hit: ServerObject, nextView: ObjectView) {
+    setSchema(hit.schema);
+    setObject(hit);
+    setView(nextView);
+    focusAfterSearch.current = "object";
+    setSearchOpen(false);
+  }
+
   return <div className="mysql-layout">
+    {searchOpen && <ObjectSearchDialog session={session} schema={schema} engine={engine} prefix={prefix}
+      onOpen={openSearchResult} onClose={() => {
+        focusAfterSearch.current = "trigger";
+        setSearchOpen(false);
+      }} />}
     <div className="mysql-catalog">
       <Catalog<string> title="스키마" engine={engine} command={prefix + "_schemas"} args={schemaArgs} revision={revision} id={name => name}
-        name={name => name} selected={schema} onSelect={name => { setSchema(name); setObject(null); }} />
+        name={name => name} selected={schema} onSelect={name => { setSchema(name); setObject(null); }}
+        actions={<button ref={searchTrigger} type="button" className="secondary small" onClick={() => setSearchOpen(true)}>
+          <Search size={14} aria-hidden /> 객체 검색
+        </button>} />
       {schema && <Catalog<ServerObject> key={schema} title="테이블과 뷰" engine={engine} command={prefix + "_objects"} args={objectArgs}
         revision={revision} id={item => String(item.id)} name={item => item.name} selected={object ? String(object.id) : ""}
-        detail={item => objectKind[item.kind]} onSelect={setObject} />}
+        detail={item => objectKind[item.kind]} onSelect={next => {
+          if (next.id !== object?.id) setView("data");
+          setObject(next);
+        }} />}
     </div>
-    {object ? <ObjectDetail key={object.id} id={session.id} profile={profile} object={object} revision={revision} refresh={refresh} engine={engine} prefix={prefix} /> :
+    {object ? <ObjectDetail key={object.id} id={session.id} profile={profile} object={object} revision={revision} refresh={refresh}
+      headingRef={detailHeading} view={view} setView={setView} engine={engine} prefix={prefix} /> :
       <section className="results-card"><div className="panel-heading"><h2>객체 조회</h2>
         <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
       </div><p className="result-empty">스키마에서 테이블 또는 뷰를 선택하세요.</p></section>}
   </div>;
 }
 
-function Catalog<T>({ title, command, args, revision, id, name, selected, detail, onSelect, engine }: {
+function ObjectSearchDialog({ session, schema, engine, prefix, onOpen, onClose }: Adapter & {
+  session: Session; schema: string;
+  onOpen: (object: ServerObject, view: ObjectView) => void; onClose: () => void;
+}) {
+  const [scope, setScope] = useState("");
+  const [field, setField] = useState<SearchField>("name");
+  const [kind, setKind] = useState<ServerObject["kind"] | "">("");
+  const [term, setTerm] = useState("");
+  const [input, setInput] = useState<SearchInput | null>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const errorId = useId();
+  const args = useMemo(() => input && { id: session.id, input }, [session.id, input]);
+  const results = useNativeRead<CatalogPage<ServerObject>>(prefix + "_search_objects", args);
+  const needsTerm = field === "column" || !kind;
+
+  function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (results.loading || (needsTerm && !term.trim())) return;
+    setInput({ schema: scope || null, field, kind: kind || null, term: term.trim(), page: 0 });
+  }
+
+  return <Dialog title={engine + " 객체 검색"} className="postgres-search-dialog" onClose={onClose} busy={false} initialFocus={searchInput}>
+    <form onSubmit={search} aria-describedby={results.error ? errorId : undefined}>
+      <label className="field">검색 범위<select value={scope} onChange={event => setScope(event.target.value)}>
+        <option value="">데이터베이스 전체 · {session.database}</option>
+        {schema && <option value={schema}>현재 스키마 · {schema}</option>}
+      </select></label>
+      <div className="postgres-search-fields">
+        <label className="field">검색 기준<select value={field} onChange={event => setField(event.target.value as SearchField)}>
+          <option value="name">객체 이름</option>
+          <option value="column">열 이름</option>
+        </select></label>
+        <label className="field">객체 종류<select value={kind} onChange={event => setKind(event.target.value as typeof kind)}>
+          <option value="">모든 종류</option>
+          <option value="table">{objectKind.table}</option>
+          <option value="view">{objectKind.view}</option>
+          {prefix !== "sql_server" && <option value="materialized_view">{objectKind.materialized_view}</option>}
+        </select></label>
+      </div>
+      <div className="postgres-search-fields postgres-search-submit">
+        <label className="field">검색어<input ref={searchInput} type="search" value={term} required={needsTerm} pattern=".*\S.*"
+          maxLength={128} onChange={event => setTerm(event.target.value)} /></label>
+        <button type="submit" className="primary" disabled={results.loading}>검색</button>
+      </div>
+    </form>
+    <div className="postgres-object-results" aria-busy={results.loading}>
+      <ReadStatus {...results} errorId={errorId} empty={false} />
+      {results.data && input && <>
+        {results.data.items.length ? <ul aria-label="일치하는 객체">
+          {results.data.items.map(item => <li key={item.id}>
+            <button type="button" className="secondary" onClick={() => onOpen(item, input.field === "column" ? "columns" : "data")}>
+              <strong>{item.schema}.{item.name}</strong>
+              <small>{objectKind[item.kind]}</small>
+            </button>
+          </li>)}
+        </ul> : <p className="form-note" role="status">검색 조건에 맞는 객체가 없습니다.</p>}
+      </>}
+      {input && !results.loading && <PostgresPager label="검색 결과" page={input.page} next={results.data?.has_next ?? false}
+        change={page => setInput({ ...input, page })} />}
+    </div>
+  </Dialog>;
+}
+
+function Catalog<T>({ title, command, args, revision, id, name, selected, detail, onSelect, engine, actions }: {
   title: string; command: string; args: Record<string, unknown>; revision: number; engine: string;
   id: (item: T) => string; name: (item: T) => string; selected: string; detail?: (item: T) => string; onSelect: (item: T) => void;
+  actions?: ReactNode;
 }) {
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -143,7 +242,7 @@ function Catalog<T>({ title, command, args, revision, id, name, selected, detail
   const result = useNativeRead<CatalogPage<T>>(command, input, revision);
 
   return <section className="results-card" aria-label={`${engine} ${title} 목록`} aria-busy={result.loading}>
-    <div className="panel-heading"><h2>{title}</h2></div>
+    <div className="panel-heading"><h2>{title}</h2>{actions}</div>
     <form className="mysql-search" onSubmit={event => { event.preventDefault(); setSearch(draft); setPage(0); }}>
       <input type="search" aria-label={`${title} 검색`} value={draft} onChange={event => setDraft(event.target.value)} maxLength={128} />
       <button type="submit" className="secondary small">검색</button>
@@ -158,10 +257,10 @@ function Catalog<T>({ title, command, args, revision, id, name, selected, detail
   </section>;
 }
 
-function ObjectDetail({ id, profile, object, revision, refresh, engine, prefix }: {
+function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view, setView, engine, prefix }: {
   id: string; profile: Profile; object: ServerObject; revision: number; refresh: () => void;
+  headingRef: RefObject<HTMLHeadingElement | null>; view: ObjectView; setView: (view: ObjectView) => void;
 } & Adapter) {
-  const [view, setView] = useState<"data" | "columns">("data");
   const [page, setPage] = useState(0);
   const [clauses, setClauses] = useState<TableQueryClauses>(emptyTableQueryClauses);
   const dataErrorId = useId();
@@ -173,7 +272,7 @@ function ObjectDetail({ id, profile, object, revision, refresh, engine, prefix }
   const data = useNativeRead<DataPage>(prefix + "_data", pageArgs, revision);
   const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", target, revision);
   return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"} aria-busy={data.loading || columns.loading}>
-    <div className="panel-heading"><h2>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
+    <div className="panel-heading"><h2 ref={headingRef} tabIndex={-1}>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
       <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
     </div>
     <div className="mysql-views" role="group" aria-label="객체 보기">

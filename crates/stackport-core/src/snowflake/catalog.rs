@@ -1,6 +1,7 @@
 use super::{api::Row, profiles::valid_identifier, Manager, Session};
 use crate::{
     native_table_filter as input,
+    relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
     table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
     Result, TableQueryClauses,
 };
@@ -32,14 +33,6 @@ pub struct Object {
     schema: String,
     name: String,
     kind: ObjectKind,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ObjectKind {
-    Table,
-    View,
-    MaterializedView,
 }
 
 #[derive(Serialize)]
@@ -109,26 +102,24 @@ impl Manager {
         search: String,
         page: u32,
     ) -> Result<CatalogPage<Object>> {
-        if !valid_identifier(&schema) {
-            return Err("Snowflake 스키마 이름을 확인하세요.".into());
-        }
+        self.search_objects(id, RelationalObjectSearch::in_schema(schema, search, page))
+            .await
+    }
+
+    pub async fn search_objects(
+        &self,
+        id: &str,
+        input: RelationalObjectSearch,
+    ) -> Result<CatalogPage<Object>> {
         let session = self.session(id)?;
         let _operation = session.operation()?;
-        let offset = page_offset(page)?;
-        let condition = search_clause(&search, "TABLE_NAME")?;
-        let mut bindings = vec![schema.as_str()];
-        if !condition.is_empty() {
-            bindings.push(search.trim());
-        }
-        let information = format!("{}.INFORMATION_SCHEMA", quote(&session.database));
-        let sql = format!("SELECT TABLE_NAME, TABLE_TYPE FROM {information}.TABLES \
-                           WHERE TABLE_SCHEMA = ?{condition} ORDER BY TABLE_NAME LIMIT {limit} OFFSET {offset}",
-            limit = CATALOG_ROWS + 1);
+        let (sql, bindings) = object_search_query(&session.database, &input)?;
         let rows = session.api.query(&sql, &bindings, CATALOG_ROWS + 1).await?;
         let objects = rows
             .into_iter()
             .map(|row| {
-                let [name, kind] = exact(row)?;
+                let [schema, name, kind] = exact(row)?;
+                let schema = identifier(schema)?;
                 let name = identifier(name)?;
                 let kind = match kind.as_deref().ok_or(INVALID_RESULT)? {
                     "VIEW" => ObjectKind::View,
@@ -138,7 +129,7 @@ impl Manager {
                 let id = serde_json::to_string(&[&schema, &name]).map_err(|_| INVALID_RESULT)?;
                 Ok(Object {
                     id,
-                    schema: schema.clone(),
+                    schema,
                     name,
                     kind,
                 })
@@ -188,6 +179,48 @@ impl Manager {
             query_sql,
         })
     }
+}
+
+fn object_search_query<'a>(
+    database: &str,
+    input: &'a RelationalObjectSearch,
+) -> Result<(String, Vec<&'a str>)> {
+    input.validate_scope(valid_identifier)?;
+    let offset = page_offset(input.page)?;
+    let information = format!("{}.INFORMATION_SCHEMA", quote(database));
+    let mut bindings = Vec::with_capacity(2);
+    let scope = if let Some(schema) = input.schema.as_deref() {
+        bindings.push(schema);
+        " AND t.TABLE_SCHEMA = ?"
+    } else {
+        ""
+    };
+    let kind = match input.kind {
+        Some(ObjectKind::Table) => " AND t.TABLE_TYPE NOT IN ('VIEW', 'MATERIALIZED VIEW')",
+        Some(ObjectKind::View) => " AND t.TABLE_TYPE = 'VIEW'",
+        Some(ObjectKind::MaterializedView) => " AND t.TABLE_TYPE = 'MATERIALIZED VIEW'",
+        None => "",
+    };
+    let condition = match input.field {
+        SearchField::Name => search_clause(&input.term, "t.TABLE_NAME")?,
+        SearchField::Column => {
+            let term = search_clause(&input.term, "c.COLUMN_NAME")?;
+            format!(
+                " AND EXISTS (SELECT 1 FROM {information}.COLUMNS AS c \
+                WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME{term})"
+            )
+        }
+    };
+    if !condition.is_empty() {
+        bindings.push(input.term.trim());
+    }
+    let sql = format!(
+        "SELECT t.TABLE_SCHEMA, t.TABLE_NAME, t.TABLE_TYPE FROM {information}.TABLES AS t \
+         WHERE TRUE{scope}{kind}{condition} ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME \
+         LIMIT {limit} OFFSET {offset}",
+        limit = CATALOG_ROWS + 1
+    );
+    Ok((sql, bindings))
 }
 
 async fn visible_columns(
@@ -465,6 +498,41 @@ fn parse_preview_row(row: Row, columns: &[Column]) -> Result<Vec<Option<Cell>>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn object_search_uses_bound_terms_and_correlates_columns_by_schema() {
+        let literal = "x%_'";
+        let schema = "Mixed.Case";
+        let input = serde_json::from_value(serde_json::json!({
+            "schema": schema,
+            "field": "column",
+            "kind": "view",
+            "term": literal,
+            "page": 1
+        }))
+        .unwrap();
+        let (sql, values) = object_search_query("db\"name", &input).unwrap();
+        assert_eq!(values, [schema, literal]);
+        assert!(!sql.contains(literal) && !sql.contains(schema));
+        assert!(sql.contains("\"db\"\"name\".INFORMATION_SCHEMA.TABLES"));
+        assert!(sql.contains("t.TABLE_SCHEMA = ? AND t.TABLE_TYPE = 'VIEW'"));
+        assert!(sql.contains("c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME"));
+        assert!(sql.contains("CONTAINS(UPPER(c.COLUMN_NAME), UPPER(?))"));
+        assert!(sql.ends_with("ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME LIMIT 51 OFFSET 50"));
+
+        let all_schemas = RelationalObjectSearch {
+            schema: None,
+            term: "Order Daily".into(),
+            field: SearchField::Name,
+            kind: Some(ObjectKind::MaterializedView),
+            page: 0,
+        };
+        let (sql, values) = object_search_query("DB", &all_schemas).unwrap();
+        assert_eq!(values, ["Order Daily"]);
+        assert!(sql.contains("t.TABLE_TYPE = 'MATERIALIZED VIEW'"));
+        assert!(sql.contains("CONTAINS(UPPER(t.TABLE_NAME), UPPER(?))"));
+        assert!(!sql.contains("t.TABLE_SCHEMA = ?") && !sql.contains(".COLUMNS"));
+    }
 
     #[test]
     fn preview_quotes_server_identifiers_and_keeps_exact_native_values() {

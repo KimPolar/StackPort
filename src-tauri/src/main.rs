@@ -3,7 +3,7 @@
 mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
-use stackport_core::{database_exchange, oracle, snowflake, sql_server};
+use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -1001,6 +1001,10 @@ async fn sql_server_objects(manager: State<'_, sql_server::Manager>, id: String,
     -> Result<sql_server::CatalogPage<sql_server::Object>, String> { manager.objects(&id, &schema, &search, page).await }
 
 #[tauri::command]
+async fn sql_server_search_objects(manager: State<'_, sql_server::Manager>, id: String, input: RelationalObjectSearch)
+    -> Result<sql_server::CatalogPage<sql_server::Object>, String> { manager.search_objects(&id, input).await }
+
+#[tauri::command]
 async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String, object: i32)
     -> Result<sql_server::CatalogPage<sql_server::Column>, String> { manager.columns(&id, object).await }
 
@@ -1052,6 +1056,10 @@ async fn oracle_objects(manager: State<'_, oracle::Manager>, id: String, schema:
     -> Result<oracle::CatalogPage<oracle::Object>, String> { manager.objects(&id, schema, search, page).await }
 
 #[tauri::command]
+async fn oracle_search_objects(manager: State<'_, oracle::Manager>, id: String, input: RelationalObjectSearch)
+    -> Result<oracle::CatalogPage<oracle::Object>, String> { manager.search_objects(&id, input).await }
+
+#[tauri::command]
 async fn oracle_columns(manager: State<'_, oracle::Manager>, id: String, object: i64)
     -> Result<oracle::CatalogPage<oracle::Column>, String> { manager.columns(&id, object).await }
 
@@ -1101,6 +1109,10 @@ async fn snowflake_schemas(manager: State<'_, snowflake::Manager>, id: String, s
 #[tauri::command]
 async fn snowflake_objects(manager: State<'_, snowflake::Manager>, id: String, schema: String, search: String, page: u32)
     -> Result<snowflake::CatalogPage<snowflake::Object>, String> { manager.objects(&id, schema, search, page).await }
+
+#[tauri::command]
+async fn snowflake_search_objects(manager: State<'_, snowflake::Manager>, id: String, input: RelationalObjectSearch)
+    -> Result<snowflake::CatalogPage<snowflake::Object>, String> { manager.search_objects(&id, input).await }
 
 #[tauri::command]
 async fn snowflake_columns(manager: State<'_, snowflake::Manager>, id: String, object: String)
@@ -2404,6 +2416,7 @@ fn main() {
             close_sql_server,
             sql_server_schemas,
             sql_server_objects,
+            sql_server_search_objects,
             sql_server_columns,
             sql_server_data,
             list_oracle_profiles,
@@ -2414,6 +2427,7 @@ fn main() {
             close_oracle,
             oracle_schemas,
             oracle_objects,
+            oracle_search_objects,
             oracle_columns,
             oracle_data,
             list_snowflake_profiles,
@@ -2424,6 +2438,7 @@ fn main() {
             close_snowflake,
             snowflake_schemas,
             snowflake_objects,
+            snowflake_search_objects,
             snowflake_columns,
             snowflake_data,
             create_mysql_profile,

@@ -5,6 +5,7 @@ const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwrigh
 const { chooseDatabase } = require('./database-picker.cjs');
 const { seedSqlServer } = require('./sql-server-fixture.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
+const { openFromObjectSearch } = require('./relational-object-search.cjs');
 
 const port = Number(process.env.STACKPORT_SQL_SERVER_PORT);
 const ca = process.env.STACKPORT_SQL_SERVER_CA;
@@ -58,11 +59,29 @@ async function verify(page, hiddenObject) {
   const { id } = session;
   try {
     const schemas = search => command('sql_server_schemas', { id, search, page: 0 });
-    assert.deepEqual((await schemas('')).items, ['catalog']);
+    assert.deepEqual((await schemas('')).items, ['archive', 'catalog']);
     assert.deepEqual((await schemas('%')).items, []);
     const objects = await command('sql_server_objects', { id, schema: 'catalog', search: '', page: 0 });
     assert.deepEqual(objects.items.map(row => [row.kind, row.name]), [['table', 'metadata_only'], ['table', 'order]daily'], ['view', 'recent']]);
     const table = objects.items.find(row => row.name === 'order]daily');
+    const search = (overrides = {}) => command('sql_server_search_objects', { id, input: {
+      schema: null, field: 'name', kind: null, term: 'order]daily', page: 0, ...overrides,
+    } });
+    assert.deepEqual((await search()).items.map(row => [row.schema, row.name]), [
+      ['archive', 'order]daily'], ['catalog', 'order]daily'],
+    ]);
+    assert.deepEqual((await search({ schema: 'catalog' })).items.map(row => row.id), [table.id]);
+    assert.deepEqual((await search({ term: 'hidden_data' })).items, []);
+    assert.deepEqual((await search({ field: 'column', term: '%_' })).items.map(row => row.schema), ['archive']);
+    assert.deepEqual((await search({ field: 'column', term: '%_', schema: 'catalog' })).items, []);
+    const paged = { schema: 'archive', term: 'match_', field: 'column', kind: 'view' };
+    const matchingViews = await search(paged);
+    assert.equal(matchingViews.items.length, 50);
+    assert.equal(matchingViews.items.at(-1).name, 'report_50');
+    assert.equal(matchingViews.has_next, true);
+    const remaining = await search({ ...paged, page: 1 });
+    assert.deepEqual(remaining.items.map(row => row.name), ['report_51']);
+    assert.equal(remaining.has_next, false);
     const data = (object, page, clauses) => command('sql_server_data', { id, object, page, clauses });
     const columns = await command('sql_server_columns', { id, object: table.id });
     assert.equal(columns.items.find(row => row.name === 'exact_value').data_type, 'decimal(30,6)');
@@ -128,9 +147,10 @@ async function verify(page, hiddenObject) {
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
-  await workspace.getByRole('button', { name: 'catalog', exact: true }).click();
-  await workspace.getByRole('button', { name: 'order]daily 테이블', exact: true }).click();
-  const detail = workspace.getByRole('region', { name: 'SQL Server 객체 상세', exact: true });
+  const detail = await openFromObjectSearch(page, workspace, 'SQL Server', {
+    schema: 'catalog', name: 'order]daily', kind: '테이블', term: 'logged_at', field: 'column',
+  });
+  await detail.getByRole('button', { name: '데이터', exact: true }).click();
   const grid = detail.getByRole('table', { name: 'SQL Server 데이터 미리보기', exact: true });
   await grid.getByText('9223372036854775807', { exact: true }).waitFor();
   await detail.getByRole('button', { name: '다음 데이터 페이지', exact: true }).click();
@@ -152,7 +172,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], hidden); }
   finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, metadata visibility, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, permissions, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });
