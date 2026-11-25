@@ -3,7 +3,7 @@
 mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
-use stackport_core::sql_server;
+use stackport_core::{oracle, sql_server};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -1007,6 +1007,57 @@ async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String,
 #[tauri::command]
 async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32)
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page).await }
+
+#[tauri::command]
+async fn list_oracle_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<oracle::Profile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_oracle_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_oracle_profile(store: State<'_, Store>, project_id: String, input: oracle::ProfileSettings) -> Result<oracle::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_oracle_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_oracle_profile(store: State<'_, Store>, id: String, revision: i64, input: oracle::ProfileSettings) -> Result<oracle::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_oracle_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_oracle_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_oracle_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_oracle(manager: State<'_, oracle::Manager>, profile_id: String, revision: i64,
+    password: oracle::Password, confirmation: String) -> Result<oracle::SessionInfo, String> {
+    manager.open(profile_id, revision, password, confirmation).await
+}
+
+#[tauri::command]
+async fn close_oracle(manager: State<'_, oracle::Manager>, id: String) -> Result<(), String> {
+    manager.close(&id)
+}
+
+#[tauri::command]
+async fn oracle_schemas(manager: State<'_, oracle::Manager>, id: String, search: String, page: u32)
+    -> Result<oracle::CatalogPage<String>, String> { manager.schemas(&id, search, page).await }
+
+#[tauri::command]
+async fn oracle_objects(manager: State<'_, oracle::Manager>, id: String, schema: String, search: String, page: u32)
+    -> Result<oracle::CatalogPage<oracle::Object>, String> { manager.objects(&id, schema, search, page).await }
+
+#[tauri::command]
+async fn oracle_columns(manager: State<'_, oracle::Manager>, id: String, object: i64)
+    -> Result<oracle::CatalogPage<oracle::Column>, String> { manager.columns(&id, object).await }
+
+#[tauri::command]
+async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32)
+    -> Result<oracle::DataPage, String> { manager.data(&id, object, page).await }
 
 #[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
@@ -2141,6 +2192,7 @@ fn main() {
             app.manage(stackport_core::MysqlManager::new(store.clone()));
             app.manage(stackport_core::MongoManager::new(store.clone()));
             app.manage(sql_server::Manager::new(store.clone()));
+            app.manage(oracle::Manager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -2260,6 +2312,16 @@ fn main() {
             sql_server_objects,
             sql_server_columns,
             sql_server_data,
+            list_oracle_profiles,
+            create_oracle_profile,
+            update_oracle_profile,
+            delete_oracle_profile,
+            open_oracle,
+            close_oracle,
+            oracle_schemas,
+            oracle_objects,
+            oracle_columns,
+            oracle_data,
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,

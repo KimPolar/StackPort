@@ -1134,7 +1134,7 @@ async function verifyDatabaseExplorer(page) {
   assert.equal(await group.getAttribute('aria-description'), '연결 0개');
   await page.locator('#workspace-panes').getByRole('button', { name: '데이터베이스 연결 추가', exact: true }).click();
   const picker = page.getByRole('dialog', { name: '데이터베이스 연결 추가', exact: true });
-  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'MongoDB', 'Redis', 'SQL Server']) {
+  for (const engine of ['SQLite', 'PostgreSQL', 'MySQL · MariaDB', 'MongoDB', 'Redis', 'SQL Server', 'Oracle Database']) {
     await picker.getByRole('button', { name: engine, exact: true }).waitFor();
   }
   await page.keyboard.press('Escape');
@@ -1147,6 +1147,7 @@ async function verifyDatabaseExplorer(page) {
     ['MongoDB', 'MongoDB 연결 추가', '연결 3'],
     ['Redis', 'Redis 연결 추가', '연결 2'],
     ['SQL Server', 'SQL Server 연결 추가', '연결 5'],
+    ['Oracle Database', 'Oracle Database 연결 추가', '연결 6'],
   ]) {
     await chooseDatabase(page, engine);
     const form = page.getByRole('dialog', { name: dialog, exact: true });
@@ -1160,6 +1161,7 @@ async function verifyDatabaseExplorer(page) {
       await form.getByLabel('연결 이름').fill(name);
       await form.getByLabel('호스트 이름 또는 IP').fill('localhost');
       if (engine === 'PostgreSQL') await form.getByLabel('데이터베이스 이름').fill('postgres');
+      if (engine === 'Oracle Database') await form.getByLabel('서비스 이름', { exact: true }).fill('FREEPDB1');
       if (engine === 'SQL Server') await form.getByLabel('로그인 이름').fill('fixture');
       else if (engine !== 'Redis') await form.getByLabel('사용자 이름').fill('fixture');
     }
@@ -1167,10 +1169,10 @@ async function verifyDatabaseExplorer(page) {
     await form.waitFor({ state: 'detached' });
   }
   const rows = explorer.locator('#explorer-databases .profile-row');
-  await rows.nth(5).waitFor();
-  assert.equal(await group.getAttribute('aria-description'), '연결 6개');
-  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 3', '연결 4', '연결 5', '연결 11', '연결 20']);
-  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'MongoDB', 'PostgreSQL', 'SQL Server', 'MySQL · MariaDB', 'SQLite']);
+  await rows.nth(6).waitFor();
+  assert.equal(await group.getAttribute('aria-description'), '연결 7개');
+  assert.deepEqual(await rows.locator('strong').allTextContents(), ['연결 2', '연결 3', '연결 4', '연결 5', '연결 6', '연결 11', '연결 20']);
+  assert.deepEqual(await rows.locator('.explorer-profile-engine').allTextContents(), ['Redis', 'MongoDB', 'PostgreSQL', 'SQL Server', 'Oracle Database', 'MySQL · MariaDB', 'SQLite']);
   await group.click();
   await rows.first().waitFor({ state: 'hidden' });
   const search = explorer.getByRole('searchbox', { name: '탐색기 검색', exact: true });
@@ -1180,7 +1182,14 @@ async function verifyDatabaseExplorer(page) {
   await search.press('Escape');
   assert.equal(await group.getAttribute('aria-expanded'), 'false');
   await group.click();
-  await rows.nth(5).waitFor();
+  await rows.nth(6).waitFor();
+  await explorer.getByRole('button', { name: 'SQL Server 연결 5 열기', exact: true }).click();
+  const sqlServer = page.getByRole('region', { name: 'SQL Server 작업 공간', exact: true });
+  await sqlServer.getByRole('button', { name: 'SQL Server 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'SQL Server 연결', exact: true });
+  await login.getByLabel('SQL Server 암호').waitFor();
+  await login.getByRole('button', { name: '취소', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

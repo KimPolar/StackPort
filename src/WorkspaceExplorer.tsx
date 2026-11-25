@@ -11,6 +11,7 @@ import { postgresObjectLabels } from "./PostgresObjectStructure";
 import type { MysqlProfile, MysqlProfileAction } from "./MysqlProfileDialog";
 import { mongoAddress, type MongoProfile, type MongoProfileAction } from "./MongoProfileDialog";
 import type { SqlServerProfile, SqlServerProfileAction } from "./SqlServerProfileDialog";
+import type { OracleProfile, OracleProfileAction } from "./OracleProfileDialog";
 import { PostgresPager } from "./PostgresPager";
 import { usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
@@ -46,6 +47,7 @@ type ExplorerProps = {
   mysql: { profiles: MysqlProfile[]; activeId: string; open: (id: string) => void; action: (action: MysqlProfileAction) => void };
   mongo: { profiles: MongoProfile[]; activeId: string; open: (id: string) => void; action: (action: MongoProfileAction) => void };
   sqlServer: { profiles: SqlServerProfile[]; activeId: string; open: (id: string) => void; action: (action: SqlServerProfileAction) => void };
+  oracle: { profiles: OracleProfile[]; activeId: string; open: (id: string) => void; action: (action: OracleProfileAction) => void };
   ssh: { profiles: SshProfile[]; open: (item: SshProfile) => void; action: (mode: ExplorerSshAction, item?: SshProfile) => void };
   onProjectSelect: (id: string) => void;
   onProjectAction: (action: ExplorerProjectAction) => void;
@@ -125,7 +127,7 @@ function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
 }
 
 export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favorites, favoriteScope, onFavoriteScope,
-  sqlite, postgres, redis, mysql, mongo, sqlServer, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
+  sqlite, postgres, redis, mysql, mongo, sqlServer, oracle, ssh, onProjectSelect, onProjectAction, onAddDatabase }: ExplorerProps) {
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
@@ -170,6 +172,8 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     item.settings.name, mongoAddress(item.settings.uri), item.settings.environment, "MongoDB 데이터베이스"));
   const sqlServerMatches = sqlServer.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "SQL Server MSSQL 데이터베이스"));
+  const oracleMatches = oracle.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
+    item.settings.name, item.settings.host, item.settings.port, item.settings.service, item.settings.environment, "Oracle Database 데이터베이스"));
   const databaseItems = [
     ...visibleSqlite.map(item => ({ engine: "sqlite" as const, name: item.name, item })),
     ...visiblePostgres.map(item => ({ engine: "postgres" as const, name: item.settings.name, item })),
@@ -177,9 +181,10 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     ...(desktop ? redisMatches.map(item => ({ engine: "redis" as const, name: item.settings.name, item })) : []),
     ...(desktop ? mongoMatches.map(item => ({ engine: "mongo" as const, name: item.settings.name, item })) : []),
     ...(desktop ? sqlServerMatches.map(item => ({ engine: "sqlServer" as const, name: item.settings.name, item })) : []),
+    ...(desktop ? oracleMatches.map(item => ({ engine: "oracle" as const, name: item.settings.name, item })) : []),
   ].sort((left, right) => left.name.localeCompare(right.name, "ko", { numeric: true }));
   const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length
-    + mongoMatches.length + sqlServerMatches.length + sshMatches.length;
+    + mongoMatches.length + sqlServerMatches.length + oracleMatches.length + sshMatches.length;
   const pinned = new Set(favorites.items.filter(item => item.scope === favoriteScope).map(item => favoriteKey(item.target)));
 
   function favoriteEntry(target: FavoriteTarget) {
@@ -305,6 +310,16 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         selected={item.id === sqlServer.activeId} onOpen={() => sqlServer.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 수정`} Icon={Pencil} onClick={() => sqlServer.action({ kind: "edit", profile: item })} />
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 삭제`} Icon={Trash2} onClick={() => sqlServer.action({ kind: "delete", profile: item })} />
+      </ExplorerProfile>;
+    }
+    if (entry.engine === "oracle") {
+      const item = entry.item;
+      return <ExplorerProfile key={`oracle:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+        detail={`${networkAddressText(item.settings)} / ${item.settings.service}`} engine="Oracle Database"
+        label={`Oracle Database ${item.settings.name} 열기`} Icon={Database}
+        selected={item.id === oracle.activeId} onOpen={() => oracle.open(item.id)}>
+        <ExplorerButton label={`${item.settings.name} Oracle Database 연결 수정`} Icon={Pencil} onClick={() => oracle.action({ kind: "edit", profile: item })} />
+        <ExplorerButton label={`${item.settings.name} Oracle Database 연결 삭제`} Icon={Trash2} onClick={() => oracle.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     const item = entry.item;

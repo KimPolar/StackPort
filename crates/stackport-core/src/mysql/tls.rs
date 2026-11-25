@@ -10,6 +10,10 @@ use std::{
 const FILE_LIMIT: u64 = 256 * 1024;
 
 pub(super) fn options(settings: &MysqlSettings) -> Result<SslOpts> {
+    // The Oracle dependency also enables AWS-LC. mysql_async needs a process default when both providers are enabled.
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
     let mut roots = RootCertStore::empty();
     let mut certificates = Vec::new();
     // The driver uses its bundled roots by default. Keep the platform's configured roots.

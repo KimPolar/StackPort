@@ -14,6 +14,10 @@ MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·
 
 SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개된 스키마, 테이블, 뷰를 검색합니다. 열 이름·타입·NULL·IDENTITY를 표시하며, 미리보기는 앞 64개 열을 읽습니다. 테이블은 기본 키의 열 순서와 정렬 방향으로 50행씩 읽습니다. 기본 키가 없으면 한 번에 최대 50행을 표시합니다. 큰 정수와 소수는 문자열로, 바이너리는 HEX로 보존하며 값은 처음 256문자 또는 256바이트까지 표시합니다. 잘린 문자열의 크기는 UTF-16으로 변환한 전체 값의 바이트 수입니다. [SQL Server 메타데이터 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration)
 
+**Oracle Database**는 Oracle의 Rust Thin 드라이버 프리릴리스 버전을 고정해 사용합니다. Windows 실행 파일에서 별도 Oracle Instant Client 설치 없이 호스트·포트·서비스 이름 또는 SID를 지정해 접속합니다. 기본 전송 방식인 TCPS는 호스트 이름과 인증서를 검증하며 드라이버에 포함된 신뢰 루트와 선택한 PEM CA를 사용합니다. 일반 TCP도 선택할 수 있습니다. 암호는 연결할 때 입력하고 운영 환경에서는 `PROD`를 확인합니다. [Oracle Rust Thin 드라이버](https://oracle.github.io/rust-oracledb/)
+
+Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
+
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
@@ -436,6 +440,12 @@ SQL Server 검사는 `tests/sql-server-smoke.cjs`를 사용합니다. `STACKPORT
 서버가 TDS 8.0을 제공하면 `STACKPORT_SQL_SERVER_TEST_STRICT=1`을 지정해 엄격한 TLS 연결도 검사합니다.
 
 SQL Server 2022 CU28과 2025 CU11에서 Windows 앱의 SQL 로그인, 필수 TLS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰, 열 타입, 복합 기본 키 페이징, 큰 정수·소수·HEX·유니코드 보존을 확인했습니다. 2025 CU11에서는 TDS 8.0 엄격한 TLS 연결과 미등록 CA 차단도 확인했습니다. Windows 통합 인증은 도메인 환경에서의 실서버 확인이 남았습니다.
+
+Oracle 검사는 `tests/oracle-smoke.cjs`를 사용합니다. `STACKPORT_ORACLE_PORT`와 `STACKPORT_ORACLE_TCPS_PORT`에 시험용 루프백 TCP·TCPS 포트, `STACKPORT_ORACLE_CA`에 `localhost` 서버 인증서의 PEM CA 경로, `STACKPORT_ORACLE_SYS_PASSWORD`에 폐기 가능한 인스턴스의 관리자 암호를 지정합니다. `STACKPORT_ORACLE_SERVICE` 기본값은 `FREEPDB1`입니다. `STACKPORT_TEST_PYTHON`으로 지정한 Python에 `oracledb`가 필요하며, 실행할 때마다 별도 테이블스페이스와 제한 계정을 생성합니다.
+
+Oracle AI Database 26ai Free 23.26.4.0.0에서 Windows 앱의 서비스 이름·SID 로그인, 네이티브 TCPS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰·구체화 뷰, NUMBER·유니코드·RAW·LOB 표시와 복합 기본 키 페이징을 확인했습니다.
+
+시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다.
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 

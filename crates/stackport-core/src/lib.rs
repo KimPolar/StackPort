@@ -139,6 +139,7 @@ mod redis;
 mod db_profiles;
 mod mongo;
 pub mod sql_server;
+pub mod oracle;
 mod tls;
 
 const SCHEMA_VERSION: i64 = 17;
