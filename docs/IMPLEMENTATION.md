@@ -26,6 +26,12 @@ SQL Server·Oracle·Snowflake에서 열 타입에 맞는 비교와 범위, 문�
 
 세 엔진의 스키마 패널에서 **객체 검색**을 열면 연결된 데이터베이스 전체 또는 현재 스키마를 대상으로 객체 이름과 열 이름을 검색할 수 있습니다. 테이블·뷰·지원되는 구체화 뷰 중 종류를 선택할 수 있습니다. 검색어의 `%`와 `_`도 문자 그대로 찾습니다. 현재 계정 또는 역할에 공개된 객체가 스키마와 함께 50개씩 표시되며, 객체 이름으로 찾으면 데이터 화면을, 열 이름으로 찾으면 열 구조를 엽니다. [SQL Server 카탈로그 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-objects-transact-sql) · [Oracle ALL_OBJECTS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_OBJECTS.html) · [Snowflake Information Schema](https://docs.snowflake.com/en/sql-reference/info-schema)
 
+**정의 SQL**에서 SQL Server 뷰의 저장된 모듈 정의, Oracle 테이블·뷰·구체화 뷰의 `DBMS_METADATA.GET_DDL`, Snowflake 테이블·뷰·구체화 뷰의 `GET_DDL` 결과를 확인할 수 있습니다. SQL Server에서 권한이 없거나 뷰가 암호화된 경우, Oracle에서 계정에 객체 메타데이터가 공개되지 않은 경우 원문 대신 사유를 표시합니다. Snowflake 보안 뷰의 정의는 소유 역할에 공개됩니다. [SQL Server sys.sql_modules](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-sql-modules-transact-sql) · [Oracle DBMS_METADATA 권한](https://docs.oracle.com/en/database/oracle/oracle-database/26/arpls/DBMS_METADATA.html) · [Snowflake GET_DDL](https://docs.snowflake.com/en/sql-reference/functions/get_ddl)
+
+정의 SQL은 UTF-8 기준 1 MiB까지 표시하고 복사합니다. 새 `.sql` 파일에 저장할 때 원문의 줄바꿈과 문자를 그대로 기록하며 같은 경로의 기존 파일을 보호합니다. MySQL과 MariaDB의 생성 SQL도 같은 복사·저장 화면을 사용합니다.
+
+Oracle Free 컨테이너에서 정의 SQL을 조회하려면 XML DB가 포함된 Full 이미지가 필요합니다. Lite 이미지에서는 소유 객체의 `GET_DDL`을 호출할 때 서버가 XDB 라이브러리 오류를 반환하는 것을 확인했습니다. Oracle 정의 조회는 최대 60초까지 기다리고 완료 후 기존 연결의 호출 제한을 복원합니다. [Oracle Free 컨테이너 이미지 기능 비교](https://container-registry.oracle.com/ords/ocr/ba/database/free)
+
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
@@ -497,15 +503,17 @@ SQL Server 2022와 Oracle Database 26ai Free의 Windows 검사에서 큰 소수�
 
 같은 검사에서 두 스키마에 있는 동명 객체, 권한이 없는 객체 제외, 열 검색의 리터럴 `%_`, 검색 결과에서 키보드로 열 구조 이동, Escape로 검색 버튼에 포커스 복귀를 확인합니다. SQL Server의 열 이름 검색은 한 객체에 일치하는 열이 여러 개여도 한 건으로 표시하고, 51개 결과의 두 페이지를 검사합니다.
 
+정의 SQL 검사는 SQL Server 뷰의 권한 제한·암호화, Oracle의 소유 객체 정의와 타 스키마 메타데이터 제한, 두 엔진에서의 원문 복사 및 UTF-8 파일 저장을 확인합니다.
+
 Oracle 검사는 `tests/oracle-smoke.cjs`를 사용합니다. `STACKPORT_ORACLE_PORT`와 `STACKPORT_ORACLE_TCPS_PORT`에 시험용 루프백 TCP·TCPS 포트, `STACKPORT_ORACLE_CA`에 `localhost` 서버 인증서의 PEM CA 경로, `STACKPORT_ORACLE_SYS_PASSWORD`에 폐기 가능한 인스턴스의 관리자 암호를 지정합니다. `STACKPORT_ORACLE_SERVICE` 기본값은 `FREEPDB1`입니다. `STACKPORT_TEST_PYTHON`으로 지정한 Python에 `oracledb`가 필요하며, 실행할 때마다 별도 테이블스페이스와 제한 계정을 생성합니다.
 
 Oracle AI Database 26ai Free 23.26.4.0.0에서 Windows 앱의 서비스 이름·SID 로그인, 네이티브 TCPS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰·구체화 뷰, NUMBER·유니코드·RAW·LOB 표시와 복합 기본 키 페이징을 확인했습니다.
 
 시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다. TCP로 필터·정렬 등 데이터 탐색만 검증하는 환경에서는 `STACKPORT_ORACLE_TEST_TCP_ONLY=1`로 TCPS 검사를 생략할 수 있습니다.
 
-Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소를 검증합니다. 코어 테스트에서 정밀 소수와 문자열 필터의 바인딩, 정렬과 행 제한의 적용 순서, 스키마·객체·열 검색 SQL과 값 바인딩을 확인합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
+Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소, 완전한 객체 경로가 지정된 정의 SQL 응답과 크기 제한을 검증합니다. 코어 테스트에서 정밀 소수와 문자열 필터의 바인딩, 정렬과 행 제한의 적용 순서, 스키마·객체·열 검색 SQL과 값 바인딩을 확인합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
 
-실제 계정에 대한 Windows 검사는 `tests/snowflake-smoke.cjs`를 사용합니다. 시험용 계정의 `STACKPORT_SNOWFLAKE_TEST_ACCOUNT`, `STACKPORT_SNOWFLAKE_TEST_DATABASE`, `STACKPORT_SNOWFLAKE_TEST_SCHEMA`, `STACKPORT_SNOWFLAKE_TEST_OBJECT`, `STACKPORT_SNOWFLAKE_TEST_TOKEN`을 지정합니다. 객체에는 미리보기에 사용할 행이 한 개 이상 있어야 합니다. 필요하면 `STACKPORT_SNOWFLAKE_TEST_WAREHOUSE`, `STACKPORT_SNOWFLAKE_TEST_ROLE`, OAuth 사용 시 `STACKPORT_SNOWFLAKE_TEST_AUTH=oauth`를 지정합니다. 격리된 Windows 앱의 디버깅 주소는 `STACKPORT_CDP_URL`로 지정합니다.
+실제 계정에 대한 Windows 검사는 `tests/snowflake-smoke.cjs`를 사용합니다. 시험용 계정의 `STACKPORT_SNOWFLAKE_TEST_ACCOUNT`, `STACKPORT_SNOWFLAKE_TEST_DATABASE`, `STACKPORT_SNOWFLAKE_TEST_SCHEMA`, `STACKPORT_SNOWFLAKE_TEST_OBJECT`, `STACKPORT_SNOWFLAKE_TEST_TOKEN`을 지정합니다. 객체에는 미리보기에 사용할 행이 한 개 이상 있어야 합니다. 필요하면 `STACKPORT_SNOWFLAKE_TEST_WAREHOUSE`, `STACKPORT_SNOWFLAKE_TEST_ROLE`, OAuth 사용 시 `STACKPORT_SNOWFLAKE_TEST_AUTH=oauth`를 지정합니다. 현재 역할에 객체 정의가 공개된 경우 `STACKPORT_SNOWFLAKE_TEST_DEFINITION=1`로 원문 복사와 파일 저장을 검증합니다. 격리된 Windows 앱의 디버깅 주소는 `STACKPORT_CDP_URL`로 지정합니다.
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다.
 

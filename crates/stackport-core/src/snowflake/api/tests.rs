@@ -1,5 +1,5 @@
 use super::*;
-use crate::snowflake::Auth;
+use crate::snowflake::{Auth, Manager, Session};
 use flate2::{write::GzEncoder, Compression};
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose};
 use rustls::{pki_types::PrivatePkcs8KeyDer, ServerConfig};
@@ -76,6 +76,63 @@ async fn reads_async_status_and_gzipped_partitions_over_verified_https() {
         ]
     );
     server.await.unwrap();
+}
+
+#[tokio::test]
+async fn fetches_a_complete_qualified_definition_over_https() {
+    let (fixture, api) = fixture(Auth::Pat, true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let manager =
+        Manager::new(crate::Store::open(directory.path().join("workspace.sqlite")).unwrap());
+    let permit = Arc::clone(&manager.capacity).try_acquire_owned().unwrap();
+    manager.sessions.lock().unwrap().insert(
+        "definition".into(),
+        Arc::new(Session {
+            api,
+            database: "Db".into(),
+            operations: tokio::sync::Semaphore::new(1),
+            _permit: permit,
+        }),
+    );
+    let text = "create or replace view \"Db\".\"S'Me\".\"a\\b\"\"c\" as\r\nselect '한글';\n";
+    let task = tokio::spawn(async move {
+        let (_, body, stream) = fixture.request("PROGRAMMATIC_ACCESS_TOKEN").await;
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let sql = body["statement"].as_str().unwrap();
+        assert!(sql.contains(r#"GET_DDL('TABLE', '"Db"."S''Me"."a\\b""c"', TRUE)"#));
+        assert!(body.get("bindings").is_none());
+        assert!(sql.contains("OCTET_LENGTH(body) <= 1048576"));
+        let result = |row: Value| {
+            encoded(json!({
+                "statementHandle": HANDLE,
+                "resultSetMetaData": { "numRows": 1, "partitionInfo": [{ "rowCount": 1 }] },
+                "data": [row]
+            }))
+        };
+        reply(
+            stream,
+            "200 OK",
+            "",
+            &result(json!([text, text.len().to_string()])),
+        )
+        .await;
+        let (_, _, stream) = fixture.request("PROGRAMMATIC_ACCESS_TOKEN").await;
+        reply(stream, "200 OK", "", &result(json!([null, "1048577"]))).await;
+    });
+    let object = serde_json::to_string(&["S'Me", "a\\b\"c"]).unwrap();
+    assert_eq!(
+        manager
+            .definition("definition", object.clone())
+            .await
+            .unwrap(),
+        text
+    );
+    assert!(manager
+        .definition("definition", object)
+        .await
+        .unwrap_err()
+        .contains("1 MiB"));
+    task.await.unwrap();
 }
 
 #[tokio::test]

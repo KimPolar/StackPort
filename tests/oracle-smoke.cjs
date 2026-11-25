@@ -6,6 +6,7 @@ const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwrigh
 const { chooseDatabase } = require('./database-picker.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
+const { verifyDefinitionPanel } = require('./relational-definition.cjs');
 
 const port = Number(process.env.STACKPORT_ORACLE_PORT);
 const service = process.env.STACKPORT_ORACLE_SERVICE || 'FREEPDB1';
@@ -17,6 +18,7 @@ const run = randomBytes(6).toString('hex').toUpperCase();
 const owner = 'SP_OWNER_' + run;
 const reader = 'SP_READER_' + run;
 const password = 'StackPortReader84Za';
+const ownerPassword = 'StackPortOwner84Za';
 const engine = 'Oracle Database';
 
 async function verify(page, hiddenObject) {
@@ -80,6 +82,9 @@ async function verify(page, hiddenObject) {
       ['Daily Summary', 'materialized_view'], ['Order Daily', 'table'], ['Recent View', 'view'],
     ]);
     const table = objects.items[1].id;
+    const definition = object => command('oracle_definition', { id, object });
+    await assert.rejects(definition(table), /메타데이터 권한/);
+    await assert.rejects(definition(hiddenObject), /공개되지/);
     const search = (overrides = {}) => command('oracle_search_objects', { id, input: {
       schema: null, field: 'name', kind: null, term: 'order daily', page: 0, ...overrides,
     } });
@@ -138,6 +143,17 @@ async function verify(page, hiddenObject) {
     assert.equal(found.rows[0][1].text, '9223372036854775747');
   } finally { await command('close_oracle', { id }); }
   await assert.rejects(command('oracle_schemas', { id, search: '', page: 0 }), /닫혔습니다/);
+  const owned = await open(await other({ name: '소유자 정의 확인', username: owner }), ownerPassword);
+  try {
+    const objects = await command('oracle_objects', { id: owned.id, schema: owner, search: '', page: 0 });
+    const definition = async name => command('oracle_definition', { id: owned.id,
+      object: objects.items.find(object => object.name === name).id });
+    const table = await definition('Order Daily');
+    assert.match(table, /CREATE TABLE\s+"SP_OWNER_[A-F0-9]+"\."Order Daily"/);
+    assert.match(table, /PRIMARY KEY\s*\("TENANT",\s*"ID"\)/);
+    assert.match(await definition('Recent View'), /VIEW\s+"SP_OWNER_[A-F0-9]+"\."Recent View"/);
+    assert.match(await definition('Daily Summary'), /CREATE MATERIALIZED VIEW\s+"SP_OWNER_[A-F0-9]+"\."Daily Summary"/);
+  } finally { await command('close_oracle', { id: owned.id }); }
 
   const workspace = page.getByRole('region', { name: engine + ' 작업 공간', exact: true });
   await workspace.getByRole('button', { name: engine + ' 연결', exact: true }).click();
@@ -160,6 +176,14 @@ async function verify(page, hiddenObject) {
   await detail.getByRole('table', { name: engine + ' 열 구조', exact: true }).getByText('NUMBER(30,6)', { exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'Daily Summary 구체화 뷰', exact: true }).click();
   await grid.getByText('61', { exact: true }).waitFor();
+  await detail.getByRole('button', { name: '정의 SQL', exact: true }).click();
+  await detail.getByRole('alert').filter({ hasText: '메타데이터 권한' }).waitFor();
+  const ownView = await openFromObjectSearch(page, workspace, engine, {
+    schema: reader, name: 'Order Daily', kind: '뷰', term: '%_', field: 'column',
+  });
+  const ownDefinition = await verifyDefinitionPanel(page, ownView, engine);
+  assert.match(ownDefinition, /"X%_Y"/);
+  assert.match(ownDefinition, /"한글 정의"/);
   await workspace.getByRole('button', { name: engine + ' 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
@@ -180,7 +204,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], object); }
   finally { await browser.close(); }
-  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, permissions, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

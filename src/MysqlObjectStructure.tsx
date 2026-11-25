@@ -1,6 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { SqlFileDialog } from "./SqlFileDialog";
-import { emptySqlDocument } from "./SqlTabs";
+import type { ReactNode } from "react";
+import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 
 export type MysqlObjectInfo = { name: string; kind: string; engine: string | null };
 export type MysqlStructureSection = "indexes" | "constraints" | "references" | "definition";
@@ -27,7 +26,7 @@ const constraintLabels: Record<string, string> = {
 type Follow = (database: string, object: MysqlObjectInfo) => void;
 
 export function MysqlObjectStructure({ data, target, onFollow }: { data: MysqlStructure; target: string; onFollow: Follow }) {
-  if (data.section === "definition") return <Definition definition={data.definition} target={target} />;
+  if (data.section === "definition") return <ObjectDefinitionPanel {...data.definition} target={target} engine="MySQL" title="생성 SQL" />;
   if (data.items.length === 0) return <p className="result-empty">현재 계정에 표시된 항목이 없습니다.</p>;
   return <div className="mysql-inspection-list">
     {data.section === "indexes" && data.items.map(index => <Detail key={index.name} title={index.name}
@@ -85,33 +84,6 @@ function Related({ relation, label, onFollow }: { relation: Relation; label: str
     {object ? <button type="button" className="secondary small" onClick={() => onFollow(relation.database, object)}>구조 열기</button>
       : <small>현재 계정에서 구조를 열 수 없습니다.</small>}
   </div>;
-}
-
-function Definition({ definition, target }: { definition: Fragment; target: string }) {
-  const [save, setSave] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  async function copy() {
-    setNotice(""); setError("");
-    try {
-      await navigator.clipboard.writeText(definition.text);
-      setNotice("생성 SQL을 복사했습니다.");
-    } catch {
-      setError("생성 SQL을 복사할 수 없습니다.");
-    }
-  }
-  return <section className="mysql-definition" aria-label="MySQL 생성 SQL">
-    {!definition.truncated && <div className="mysql-views">
-      <button type="button" className="secondary small" onClick={() => void copy()}>SQL 복사</button>
-      <button type="button" className="secondary small" onClick={() => setSave(true)}>정의 파일 저장</button>
-    </div>}
-    <pre className="mysql-inspection-expression" tabIndex={0} aria-label="생성 SQL 원문"><code>{definition.text}</code></pre>
-    {definition.truncated && <p className="form-note">생성 SQL의 앞 262,144자까지 표시합니다.</p>}
-    {notice && <p className="form-note" role="status">{notice}</p>}
-    {error && <p className="form-error" role="alert">{error}</p>}
-    {save && <SqlFileDialog mode="save" target={target} document={{ ...emptySqlDocument, text: definition.text }}
-      onClose={() => setSave(false)} onDone={(_, path) => { setSave(false); setNotice(`SQL 파일 저장 완료 · ${path}`); }} />}
-  </section>;
 }
 
 function fragmentText(fragment: Fragment) {

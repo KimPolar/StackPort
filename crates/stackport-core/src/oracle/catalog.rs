@@ -2,15 +2,19 @@ use super::{query_error, Manager};
 use crate::{
     native_table_filter as input,
     relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
+    sql_file::{validate_definition, MAX_BYTES},
     table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
     Result, TableQueryClauses,
 };
 use oracledb::{Connection, OracleNumber, Row, ToDbValue};
 use serde::Serialize;
+use std::time::Duration;
 
 const PAGE_LIMIT: i64 = 50;
 const COLUMN_LIMIT: i64 = 64;
 const VALUE_LIMIT: i64 = 256;
+const DEFINITION_CALL_TIMEOUT: Duration = Duration::from_secs(45);
+const DEFINITION_DEADLINE: Duration = Duration::from_secs(60);
 const OBJECTS: &str = "o.oracle_maintained = 'N' AND o.subobject_name IS NULL
     AND o.object_type IN ('TABLE','VIEW')";
 // A grantee can see the underlying table in ALL_OBJECTS even when its materialized-view row is hidden.
@@ -150,6 +154,23 @@ impl Manager {
         .await
     }
 
+    pub async fn definition(&self, id: &str, object: i64) -> Result<String> {
+        self.read_with_deadline(id, DEFINITION_DEADLINE, move |connection| {
+            let previous_timeout = connection.call_timeout().map_err(query_error)?;
+            connection
+                .set_call_timeout(Some(DEFINITION_CALL_TIMEOUT))
+                .map_err(query_error)?;
+            let result = read_definition(connection, object);
+            let restored = connection
+                .set_call_timeout(previous_timeout)
+                .map_err(query_error);
+            let text = result?;
+            restored?;
+            Ok(text)
+        })
+        .await
+    }
+
     pub async fn data(
         &self,
         id: &str,
@@ -161,6 +182,37 @@ impl Manager {
             data(connection, object, page, clauses)
         })
         .await
+    }
+}
+
+fn read_definition(connection: &Connection, object: i64) -> Result<String> {
+    let target = find_object(connection, object)?;
+    let kind = match target.kind {
+        "table" => "TABLE",
+        "view" => "VIEW",
+        "materialized_view" => "MATERIALIZED_VIEW",
+        _ => return Err("이 Oracle 객체의 정의 SQL은 조회할 수 없습니다.".into()),
+    };
+    // A character prefix beyond the byte limit lets us reject oversized DDL without fetching it all.
+    let limit = MAX_BYTES as i64 + 1;
+    // Reusing this cursor across object types can make the thin driver return no row.
+    let row = connection
+        .statement("SELECT SUBSTR(SYS.DBMS_METADATA.GET_DDL(:kind, :name, :owner), 1, :max_chars) FROM SYS.DUAL")
+        .map_err(definition_error)?
+        .exclude_from_cache()
+        .build()
+        .map_err(definition_error)?
+        .query_row(&[&kind, &target.name, &target.schema, &limit])
+        .map_err(definition_error)?;
+    let text = row.get::<String>(0).map_err(definition_error)?;
+    validate_definition(&text)?;
+    Ok(text)
+}
+
+fn definition_error(error: oracledb::Error) -> String {
+    match error.db_error_code() {
+        Some(1031 | 31603) => "Oracle 정의 SQL을 읽을 권한이 없거나 객체가 변경되었습니다. 현재 계정의 메타데이터 권한을 확인하세요.".into(),
+        _ => query_error(error),
     }
 }
 

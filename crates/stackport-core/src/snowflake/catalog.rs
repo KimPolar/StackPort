@@ -2,6 +2,7 @@ use super::{api::Row, profiles::valid_identifier, Manager, Session};
 use crate::{
     native_table_filter as input,
     relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
+    sql_file::{validate_definition, DEFINITION_TOO_LARGE, MAX_BYTES},
     table_query::{bounded_filter_text, FilterOperand, FilterValue, TableQueryDialect},
     Result, TableQueryClauses,
 };
@@ -145,6 +146,27 @@ impl Manager {
         visible_columns(&session, &schema, &name).await
     }
 
+    pub async fn definition(&self, id: &str, object: String) -> Result<String> {
+        let session = self.session(id)?;
+        let _operation = session.operation()?;
+        let [schema, name] = object_names(&object)?;
+        let sql = definition_query(&session.database, &schema, &name);
+        let rows = session.api.query(&sql, &[], 1).await?;
+        let [text, bytes] = exact(rows.into_iter().next().ok_or(INVALID_RESULT)?)?;
+        let bytes = bytes
+            .as_deref()
+            .and_then(|size| size.parse::<usize>().ok())
+            .ok_or(INVALID_RESULT)?;
+        if bytes > MAX_BYTES {
+            return Err(DEFINITION_TOO_LARGE.into());
+        }
+        let text = text
+            .filter(|text| text.len() == bytes)
+            .ok_or(INVALID_RESULT)?;
+        validate_definition(&text)?;
+        Ok(text)
+    }
+
     pub async fn data(
         &self,
         id: &str,
@@ -179,6 +201,16 @@ impl Manager {
             query_sql,
         })
     }
+}
+
+fn definition_query(database: &str, schema: &str, name: &str) -> String {
+    // GET_DDL requires literal arguments. Quote first as an identifier, then as a string.
+    let target = [database, schema, name].map(quote).join(".");
+    let literal = target.replace('\\', "\\\\").replace('\'', "''");
+    format!(
+        "SELECT IFF(OCTET_LENGTH(body) <= {MAX_BYTES}, body, NULL), OCTET_LENGTH(body)
+        FROM (SELECT GET_DDL('TABLE', '{literal}', TRUE) AS body)"
+    )
 }
 
 fn object_search_query<'a>(

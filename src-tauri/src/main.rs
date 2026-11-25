@@ -16,7 +16,7 @@ use stackport_core::{
     RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult,
     SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
-    open_sql_file, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
+    open_sql_file, save_sql_definition, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
@@ -1009,6 +1009,11 @@ async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String,
     -> Result<sql_server::CatalogPage<sql_server::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
+async fn sql_server_definition(manager: State<'_, sql_server::Manager>, id: String, object: i32) -> Result<String, String> {
+    manager.definition(&id, object).await
+}
+
+#[tauri::command]
 async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32, clauses: Option<TableQueryClauses>)
     -> Result<sql_server::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
@@ -1064,6 +1069,11 @@ async fn oracle_columns(manager: State<'_, oracle::Manager>, id: String, object:
     -> Result<oracle::CatalogPage<oracle::Column>, String> { manager.columns(&id, object).await }
 
 #[tauri::command]
+async fn oracle_definition(manager: State<'_, oracle::Manager>, id: String, object: i64) -> Result<String, String> {
+    manager.definition(&id, object).await
+}
+
+#[tauri::command]
 async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i64, page: u32, clauses: Option<TableQueryClauses>)
     -> Result<oracle::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
@@ -1117,6 +1127,11 @@ async fn snowflake_search_objects(manager: State<'_, snowflake::Manager>, id: St
 #[tauri::command]
 async fn snowflake_columns(manager: State<'_, snowflake::Manager>, id: String, object: String)
     -> Result<snowflake::CatalogPage<snowflake::Column>, String> { manager.columns(&id, object).await }
+
+#[tauri::command]
+async fn snowflake_definition(manager: State<'_, snowflake::Manager>, id: String, object: String) -> Result<String, String> {
+    manager.definition(&id, object).await
+}
 
 #[tauri::command]
 async fn snowflake_data(manager: State<'_, snowflake::Manager>, id: String, object: String, page: u32, clauses: Option<TableQueryClauses>)
@@ -2062,6 +2077,11 @@ async fn write_sql_document(destination: String, document: SqlDocument) -> Resul
 }
 
 #[tauri::command]
+async fn write_sql_definition(destination: String, definition: String) -> Result<usize, String> {
+    worker(move || save_sql_definition(&destination, &definition)).await
+}
+
+#[tauri::command]
 async fn list_sql_templates(store: State<'_, Store>, project_id: String) -> Result<Vec<SqlTemplateSummary>, String> {
     let store = store.inner().clone();
     worker(move || store.list_sql_templates(&project_id)).await
@@ -2418,6 +2438,7 @@ fn main() {
             sql_server_objects,
             sql_server_search_objects,
             sql_server_columns,
+            sql_server_definition,
             sql_server_data,
             list_oracle_profiles,
             create_oracle_profile,
@@ -2429,6 +2450,7 @@ fn main() {
             oracle_objects,
             oracle_search_objects,
             oracle_columns,
+            oracle_definition,
             oracle_data,
             list_snowflake_profiles,
             create_snowflake_profile,
@@ -2440,6 +2462,7 @@ fn main() {
             snowflake_objects,
             snowflake_search_objects,
             snowflake_columns,
+            snowflake_definition,
             snowflake_data,
             create_mysql_profile,
             update_mysql_profile,
@@ -2579,6 +2602,7 @@ fn main() {
             choose_sql_document_path,
             read_sql_document,
             write_sql_document,
+            write_sql_definition,
             list_sql_templates,
             list_table_query_presets,
             read_table_query_preset,

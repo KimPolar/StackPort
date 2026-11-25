@@ -6,6 +6,7 @@ const { chooseDatabase } = require('./database-picker.cjs');
 const { seedSqlServer } = require('./sql-server-fixture.cjs');
 const { comparison, range, sort, verifyGridFilter } = require('./relational-grid.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
+const { verifyDefinitionPanel } = require('./relational-definition.cjs');
 
 const port = Number(process.env.STACKPORT_SQL_SERVER_PORT);
 const ca = process.env.STACKPORT_SQL_SERVER_CA;
@@ -102,6 +103,14 @@ async function verify(page, hiddenObject) {
     assert.equal(last.rows[0][0].text, '9223372036854775757');
     assert.equal(last.has_next, false);
     const view = objects.items.find(row => row.kind === 'view');
+    const definition = object => command('sql_server_definition', { id, object });
+    assert.equal(await definition(view.id),
+      'CREATE VIEW [catalog].[recent] AS\r\nSELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2\r\n-- 한글 정의');
+    await assert.rejects(definition(table.id), /뷰를 찾을 수 없/);
+    await assert.rejects(definition(hiddenObject), /공개되지/);
+    await assert.rejects(definition(remaining.items[0].id), /VIEW DEFINITION/);
+    const sealed = (await search({ schema: 'archive', term: 'sealed_report', kind: 'view' })).items[0];
+    await assert.rejects(definition(sealed.id), /암호화/);
     assert.equal((await data(view.id, 0)).stable_order, false);
     await assert.rejects(data(view.id, 1), /기본 키/);
     await assert.rejects(data(hiddenObject, 0), /공개되지/);
@@ -160,6 +169,7 @@ async function verify(page, hiddenObject) {
   await detail.getByRole('table', { name: 'SQL Server 열 구조', exact: true }).getByText('decimal(30,6)', { exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'recent 뷰', exact: true }).click();
   await detail.getByText('기본 키가 없어 최대 50행을 한 번에 표시합니다.', { exact: true }).waitFor();
+  assert.match(await verifyDefinitionPanel(page, detail, 'SQL Server'), /AS\r\nSELECT/);
   await workspace.getByRole('button', { name: 'SQL Server 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
@@ -172,7 +182,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try { await verify(browser.contexts()[0].pages()[0], hidden); }
   finally { await browser.close(); }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, permissions, native values, filters, sorting, saved conditions and paging).`);
+  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, login, scoped object search, view definitions, permissions, native values, filters, sorting, saved conditions and paging).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

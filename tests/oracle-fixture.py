@@ -39,7 +39,7 @@ with oracledb.connect(user='sys', password=os.environ['STACKPORT_ORACLE_SYS_PASS
         cur.execute(f'GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW TO {owner}')
         cur.execute(f'CREATE USER {reader} IDENTIFIED BY "{reader_password}"')
         cur.execute(f'GRANT CREATE SESSION TO {reader}')
-        cur.execute(f'CREATE VIEW {reader}."Order Daily" AS SELECT 1 "X%_Y", 2 "X%XY" FROM dual')
+        cur.execute(f'CREATE VIEW {reader}."Order Daily" AS SELECT 1 "X%_Y", 2 "X%XY", 3 "한글 정의" FROM dual')
         cur.execute(f'CREATE VIEW {reader}.wildcard_decoy AS SELECT 1 "X%XY" FROM dual')
 
 with oracledb.connect(user=owner, password=owner_password, params=dsn) as connection:

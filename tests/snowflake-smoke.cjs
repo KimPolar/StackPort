@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
 const { openFromObjectSearch } = require('./relational-object-search.cjs');
+const { verifyDefinitionPanel } = require('./relational-definition.cjs');
 
 const account = process.env.STACKPORT_SNOWFLAKE_TEST_ACCOUNT;
 const database = process.env.STACKPORT_SNOWFLAKE_TEST_DATABASE;
@@ -11,6 +12,7 @@ const warehouse = process.env.STACKPORT_SNOWFLAKE_TEST_WAREHOUSE;
 const role = process.env.STACKPORT_SNOWFLAKE_TEST_ROLE;
 const token = process.env.STACKPORT_SNOWFLAKE_TEST_TOKEN;
 const auth = process.env.STACKPORT_SNOWFLAKE_TEST_AUTH || 'pat';
+const testDefinition = process.env.STACKPORT_SNOWFLAKE_TEST_DEFINITION === '1';
 
 async function verify(page) {
   page.setDefaultTimeout(55_000);
@@ -50,6 +52,7 @@ async function verify(page) {
     await preview.locator('tbody tr').first().waitFor();
     await detail.getByRole('button', { name: '열 구조', exact: true }).click();
     await detail.getByRole('table', { name: 'Snowflake 열 구조' }).getByRole('rowheader').first().waitFor();
+    if (testDefinition) await verifyDefinitionPanel(page, detail, 'Snowflake');
   } finally {
     await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
   }
@@ -61,7 +64,7 @@ async function main() {
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try {
     await verify(browser.contexts()[0].pages()[0]);
-    console.log('Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns).');
+    console.log(`Snowflake Windows E2E passed (live login, scoped object search, catalog, preview and columns${testDefinition ? ', and object definition' : ''}).`);
   } finally {
     await browser.close();
   }

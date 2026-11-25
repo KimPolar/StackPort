@@ -3,20 +3,23 @@ import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { SqlDocument } from "./SqlTabs";
 
-export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone }: {
-  mode: "open" | "save";
+type SqlFileOptions = {
   target: string;
-  document: SqlDocument;
   onClose: () => void;
   onBusy?: (busy: boolean) => void;
-  onDone: (document: SqlDocument, path: string) => void;
-}) {
+} & (
+  | { mode: "open" | "save"; document: SqlDocument; onDone: (document: SqlDocument, path: string) => void }
+  | { mode: "save_definition"; definition: string; onDone: (path: string) => void }
+);
+
+export function SqlFileDialog(options: SqlFileOptions) {
+  const { mode, target, onClose, onBusy } = options;
   const dialog = useRef<HTMLDialogElement>(null);
   const pending = useRef(false);
   const [path, setPath] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const save = mode === "save";
+  const save = mode !== "open";
   const title = save ? "SQL 파일로 저장" : "SQL 파일 열기";
 
   useEffect(() => { dialog.current?.showModal(); }, []);
@@ -43,12 +46,15 @@ export function SqlFileDialog({ mode, target, document, onClose, onBusy, onDone 
     const destination = path.trim();
     if (!destination) return;
     void run(async () => {
-      if (save) {
-        await invoke("write_sql_document", { destination, document });
-        onDone(document, destination);
+      if (options.mode === "save_definition") {
+        await invoke("write_sql_definition", { destination, definition: options.definition });
+        options.onDone(destination);
+      } else if (options.mode === "save") {
+        await invoke("write_sql_document", { destination, document: options.document });
+        options.onDone(options.document, destination);
       } else {
         const loaded = await invoke<SqlDocument>("read_sql_document", { source: destination });
-        onDone(loaded, destination);
+        options.onDone(loaded, destination);
       }
     });
   }

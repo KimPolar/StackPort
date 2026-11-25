@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Database, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
+import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 import { PostgresPager } from "./PostgresPager";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
 import { networkAddressText } from "./quickConnect";
@@ -13,7 +14,7 @@ type Session = { id: string; database: string; version: string; context?: string
 type CatalogPage<T> = { items: T[]; has_next: boolean };
 type ServerObject = { id: number | string; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
 const objectKind = { table: "테이블", view: "뷰", materialized_view: "구체화 뷰" };
-type ObjectView = "data" | "columns";
+type ObjectView = "data" | "columns" | "definition";
 type SearchField = "name" | "column";
 type SearchInput = { schema: string | null; field: SearchField; kind: ServerObject["kind"] | null; term: string; page: number };
 type Column = { name: string; data_type: string; nullable: boolean; identity: boolean };
@@ -271,20 +272,25 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
   const pageArgs = useMemo(() => view === "data" ? { ...target, page, clauses } : null, [target, page, view, clauses]);
   const data = useNativeRead<DataPage>(prefix + "_data", pageArgs, revision);
   const columns = useNativeRead<CatalogPage<Column>>(prefix + "_columns", target, revision);
-  return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"} aria-busy={data.loading || columns.loading}>
+  const canReadDefinition = prefix !== "sql_server" || object.kind === "view";
+  const definition = useNativeRead<string>(prefix + "_definition", view === "definition" && canReadDefinition ? target : null, revision);
+  return <section className="results-card mysql-detail" aria-label={engine + " 객체 상세"}
+    aria-busy={data.loading || columns.loading || definition.loading}>
     <div className="panel-heading"><h2 ref={headingRef} tabIndex={-1}>{object.name}</h2><span>{object.schema} · {objectKind[object.kind]}</span>
       <button type="button" className="secondary small" onClick={refresh}><RefreshCw size={14} aria-hidden /> 새로 고침</button>
     </div>
     <div className="mysql-views" role="group" aria-label="객체 보기">
       <button type="button" className="secondary small" aria-pressed={view === "data"} onClick={() => setView("data")}>데이터</button>
       <button type="button" className="secondary small" aria-pressed={view === "columns"} onClick={() => setView("columns")}>열 구조</button>
+      {canReadDefinition && <button type="button" className="secondary small" aria-pressed={view === "definition"}
+        onClick={() => setView("definition")}>정의 SQL</button>}
     </div>
     <div hidden={view !== "data"}>
       <TableQueryControls columns={columns.data?.items.map(column => column.name) ?? []}
         busy={data.loading || columns.loading} target={presetTarget} errorId={data.error ? dataErrorId : undefined}
         apply={settings => { setPage(0); setClauses(settings); }} />
     </div>
-    {view === "data" ? <>
+    {view === "data" && <>
       <ReadStatus {...data} errorId={dataErrorId} empty={data.data?.rows.length === 0} />
       {data.data && <>
         {!data.data.stable_order && <p className="form-note mysql-table-note">{prefix === "snowflake"
@@ -298,7 +304,8 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
         {data.data.rows.length > 0 && <DatabasePreviewGrid columns={data.data.columns} rows={data.data.rows} label={engine + " 데이터 미리보기"} />}
       </>}
       <PostgresPager label="데이터" page={page} next={data.data?.has_next === true} change={setPage} />
-    </> : <>
+    </>}
+    {view === "columns" && <>
       <ReadStatus {...columns} empty={columns.data?.items.length === 0} />
       {columns.data?.has_next && <p className="form-note mysql-table-note">앞 64개 열을 표시합니다.</p>}
       {!!columns.data?.items.length && <div className="mysql-table" tabIndex={0} role="region" aria-label={engine + " 열 구조 스크롤"}>
@@ -309,6 +316,11 @@ function ObjectDetail({ id, profile, object, revision, refresh, headingRef, view
           <td>{column.identity ? "예" : "—"}</td>
         </tr>)}</tbody></table>
       </div>}
+    </>}
+    {view === "definition" && <>
+      <ReadStatus {...definition} empty={false} />
+      {definition.data && <ObjectDefinitionPanel text={definition.data} target={object.schema + "." + object.name}
+        engine={engine} />}
     </>}
   </section>;
 }

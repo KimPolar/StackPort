@@ -173,6 +173,19 @@ impl Manager {
         T: Send + 'static,
         F: FnOnce(&Connection) -> Result<T> + Send + 'static,
     {
+        self.read_with_deadline(id, READ_TIMEOUT, operation).await
+    }
+
+    async fn read_with_deadline<T, F>(
+        &self,
+        id: &str,
+        deadline: Duration,
+        operation: F,
+    ) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+    {
         let session = self
             .sessions
             .lock()
@@ -192,7 +205,7 @@ impl Manager {
             drop(session);
             result
         });
-        match timeout(READ_TIMEOUT, job).await {
+        match timeout(deadline, job).await {
             Ok(result) => result.map_err(|_| "Oracle 조회 작업을 마치지 못했습니다.")?,
             Err(_) => {
                 self.close(id)?;

@@ -58,7 +58,8 @@ BEGIN
     SET @i += 1;
 END;
 `);
-    await execute('CREATE VIEW [catalog].[recent] AS SELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2');
+    await execute('CREATE VIEW [catalog].[recent] AS\r\nSELECT id, seq, exact_value FROM [catalog].[order]]daily] WHERE seq <= 2\r\n-- 한글 정의');
+    await execute('CREATE VIEW [archive].[sealed_report] WITH ENCRYPTION AS SELECT 1 AS id');
     await execute(`
 DECLARE @i int = 1;
 WHILE @i <= 51
@@ -74,6 +75,8 @@ CREATE USER [${account}] FOR LOGIN [${account}];
 GRANT SELECT ON SCHEMA::[archive] TO [${account}];
 GRANT SELECT ON [catalog].[order]]daily] TO [${account}];
 GRANT SELECT ON [catalog].[recent] TO [${account}];
+GRANT VIEW DEFINITION ON [catalog].[recent] TO [${account}];
+GRANT VIEW DEFINITION ON [archive].[sealed_report] TO [${account}];
 GRANT VIEW DEFINITION ON [catalog].[metadata_only] TO [${account}];
 `);
     const rows = await execute("SELECT OBJECT_ID(N'private.hidden_data')");

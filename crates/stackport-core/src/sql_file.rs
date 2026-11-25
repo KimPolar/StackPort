@@ -6,8 +6,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::{fs::File, io::Read, path::Path};
 
-const MAX_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 1024 * 1024;
 const TOO_LARGE: &str = "편집기에서 열거나 저장하는 SQL 파일은 1 MiB 이하여야 합니다.";
+pub(crate) const DEFINITION_TOO_LARGE: &str =
+    "1 MiB를 초과하는 정의 SQL은 표시하거나 저장할 수 없습니다.";
 
 #[derive(Deserialize, Serialize)]
 pub struct SqlDocument {
@@ -90,4 +92,19 @@ pub fn save_sql_file(destination: &str, document: &SqlDocument) -> Result<usize>
     )
     .ok_or(TOO_LARGE)?;
     write_new_file(destination, Some("sql"), ".stackport-sql-", &bytes)
+}
+
+pub(crate) fn validate_definition(text: &str) -> Result<()> {
+    if text.len() > MAX_BYTES {
+        return Err(DEFINITION_TOO_LARGE.into());
+    }
+    if text.trim().is_empty() || text.contains('\0') {
+        return Err("유효한 정의 SQL이 없습니다.".into());
+    }
+    Ok(())
+}
+
+pub fn save_sql_definition(destination: &str, text: &str) -> Result<usize> {
+    validate_definition(text)?;
+    write_new_file(destination, Some("sql"), ".stackport-sql-", text.as_bytes())
 }

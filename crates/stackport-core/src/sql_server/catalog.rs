@@ -2,6 +2,7 @@ use super::{query_error, required_text, Manager};
 use crate::{
     native_table_filter as input,
     relational_object_search::{ObjectKind, RelationalObjectSearch, SearchField},
+    sql_file::{validate_definition, DEFINITION_TOO_LARGE, MAX_BYTES},
     table_query::{
         bounded_filter_text, FilterOperand, FilterValue, SortDirection, TableQueryDialect,
     },
@@ -150,6 +151,27 @@ impl Manager {
     pub async fn columns(&self, id: &str, object: i32) -> Result<CatalogPage<Column>> {
         self.object(id, object).await?;
         self.column_page(id, object).await
+    }
+
+    pub async fn definition(&self, id: &str, object: i32) -> Result<String> {
+        // SQL Server stores the definition as UTF-16. The UTF-8 size is checked after decoding.
+        let wire_limit = (MAX_BYTES * 2) as i64;
+        let rows = self.rows(id,
+            "SELECT CASE WHEN DATALENGTH(m.definition) <= @P2 THEN m.definition END, DATALENGTH(m.definition)
+             FROM sys.objects AS o LEFT JOIN sys.sql_modules AS m ON m.object_id = o.object_id
+             WHERE o.object_id = @P1 AND o.type = 'V' AND o.is_ms_shipped = 0",
+            &[&object, &wire_limit]).await?;
+        let row = rows
+            .first()
+            .ok_or("SQL Server 뷰를 찾을 수 없거나 현재 계정에 공개되지 않았습니다.")?;
+        let bytes = row.try_get::<i64, _>(1).map_err(query_error)?;
+        if bytes.is_some_and(|bytes| bytes > wire_limit) {
+            return Err(DEFINITION_TOO_LARGE.into());
+        }
+        let text = row.try_get::<&str, _>(0).map_err(query_error)?
+            .ok_or("SQL Server 뷰 정의가 공개되지 않았습니다. VIEW DEFINITION 권한과 뷰 암호화 설정을 확인하세요.")?;
+        validate_definition(text)?;
+        Ok(text.to_owned())
     }
 
     async fn column_page(&self, id: &str, object: i32) -> Result<CatalogPage<Column>> {

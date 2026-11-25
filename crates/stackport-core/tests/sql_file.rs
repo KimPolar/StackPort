@@ -1,4 +1,6 @@
-use stackport_core::{open_sql_file, save_sql_file, SqlDocument, TextLineEnding};
+use stackport_core::{
+    open_sql_file, save_sql_definition, save_sql_file, SqlDocument, TextLineEnding,
+};
 use std::fs;
 
 #[test]
@@ -22,6 +24,27 @@ fn opens_utf8_sql_and_creates_an_independent_copy() {
     assert_eq!(save_sql_file(copy_path, &document).unwrap(), expected.len());
     assert_eq!(fs::read_to_string(source).unwrap(), original);
     assert_eq!(fs::read_to_string(copy).unwrap(), expected);
+}
+
+#[test]
+fn saves_server_definition_byte_for_byte_and_keeps_existing_files() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("정의.sql");
+    let destination = path.to_str().unwrap();
+    let text = "CREATE VIEW [보고서] AS\r\nSELECT '첫 줄\r\n둘째 줄\n셋째 줄';\n";
+    assert_eq!(save_sql_definition(destination, text).unwrap(), text.len());
+    assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+    assert!(save_sql_definition(destination, "SELECT 2;")
+        .unwrap_err()
+        .contains("같은 이름"));
+    assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+    let invalid = folder.path().join("invalid.sql");
+    let invalid_path = invalid.to_str().unwrap();
+    assert!(save_sql_definition(invalid_path, "SELECT '\0';").is_err());
+    assert!(save_sql_definition(invalid_path, &"한".repeat(400_000))
+        .unwrap_err()
+        .contains("1 MiB"));
+    assert!(!invalid.exists());
 }
 
 #[test]
