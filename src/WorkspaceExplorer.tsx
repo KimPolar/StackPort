@@ -66,15 +66,15 @@ function ExplorerButton({ label, Icon, onClick, disabled, pressed, busy }: {
   </button>;
 }
 
-function ExplorerGroup({ id, name, Icon, count, filtering, actions, children, unit = "연결" }: {
-  id: string; name: string; Icon: LucideIcon; count: number; filtering: boolean; actions: ReactNode; children: ReactNode; unit?: string;
+function ExplorerGroup({ id, name, label = name, Icon, count, filtering, actions, children, unit = "연결" }: {
+  id: string; name: string; label?: string; Icon: LucideIcon; count: number; filtering: boolean; actions: ReactNode; children: ReactNode; unit?: string;
 }) {
   const [expanded, setExpanded] = useState(true);
   const open = filtering || expanded;
   return <section className="explorer-group" hidden={filtering && !count}>
     <div className="explorer-group-heading">
       {filtering ? <div className="explorer-group-title"><Icon size={14} aria-hidden /><strong>{name}</strong><span>{count}</span></div> :
-        <button type="button" className="explorer-group-title" aria-label={name}
+        <button type="button" className="explorer-group-title" aria-label={label}
           aria-description={`${unit} ${count}개`} aria-expanded={open} aria-controls={id} onClick={() => setExpanded(!expanded)}>
           {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
           <strong>{name}</strong><span aria-hidden>{count}</span>
@@ -364,7 +364,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
               }} />
           </ExplorerProfile>)}
         </ExplorerGroup>}
-        <ExplorerGroup id="explorer-databases" name="데이터베이스" Icon={Database} count={databaseItems.length} filtering={filtering} actions={<>
+        <ExplorerGroup id="explorer-databases" name="데이터베이스" label="데이터베이스 연결 목록" Icon={Database} count={databaseItems.length} filtering={filtering} actions={<>
           <ExplorerButton label="SQLite 백업 복원" Icon={RotateCcw} onClick={sqlite.restore} />
           <ExplorerButton label="데이터베이스 연결 추가" Icon={Plus} onClick={onAddDatabase} />
         </>}>

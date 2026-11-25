@@ -1129,7 +1129,8 @@ async function verifyDatabaseExplorer(page) {
   await project.getByRole('button', { name: '저장', exact: true }).click();
   const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기', exact: true });
   await explorer.getByText('저장된 데이터베이스 연결이 없습니다.', { exact: true }).waitFor();
-  const group = explorer.getByRole('button', { name: '데이터베이스', exact: true });
+  const group = explorer.getByRole('button', { name: '데이터베이스 연결 목록', exact: true });
+  assert.equal(await page.getByRole('button', { name: '데이터베이스', exact: true }).count(), 1);
   assert.equal(await group.getAttribute('aria-description'), '연결 0개');
   await page.locator('#workspace-panes').getByRole('button', { name: '데이터베이스 연결 추가', exact: true }).click();
   const picker = page.getByRole('dialog', { name: '데이터베이스 연결 추가', exact: true });
