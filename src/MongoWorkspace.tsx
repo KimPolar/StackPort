@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
@@ -8,11 +8,12 @@ import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
+import { MongoNamespaceDialog, type MongoNamespaceReport } from "./MongoNamespaceDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
-type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean };
+type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean; allow_namespaces: boolean };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
 type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; ttl_eligible: boolean; hidden: boolean };
@@ -29,13 +30,15 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
   const [allowIndexes, setAllowIndexes] = useState(false);
+  const [allowNamespaces, setAllowNamespaces] = useState(false);
   const [error, setError] = useState("");
   const active = useRef<string | null>(null);
   const pending = useRef(false);
   const mounted = useRef(false);
   const { settings } = profile;
   const production = settings.environment === "PROD";
-  const permission = [session?.allow_edits && "문서 편집", session?.allow_indexes && "인덱스 관리"].filter(Boolean).join("·");
+  const permission = [session?.allow_edits && "문서 편집", session?.allow_indexes && "인덱스 관리",
+    session?.allow_namespaces && "컬렉션·뷰 관리"].filter(Boolean).join(" · ");
 
   useEffect(() => {
     mounted.current = true;
@@ -50,7 +53,9 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
     if (pending.current) return;
     pending.current = true; setBusy(true); setError(""); setPassword("");
     try {
-      const next = await invoke<Session>("open_mongo", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowIndexes });
+      const next = await invoke<Session>("open_mongo", {
+        profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowIndexes, allowNamespaces,
+      });
       if (!mounted.current) { await invoke("close_mongo", { id: next.id }); return; }
       active.current = next.id; setSession(next); setLogin(false);
     } catch (cause) { if (mounted.current) setError(String(cause)); }
@@ -73,7 +78,9 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> {permission ? `${permission} 허용` : "읽기 전용"}</span>
         {session ? <button type="button" className="secondary" onClick={disconnect}>MongoDB 연결 끊기</button> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowIndexes(false); setLogin(true); }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
+          <button type="button" className="primary" onClick={() => {
+            setError(""); setConfirmation(""); setAllowEdits(false); setAllowIndexes(false); setAllowNamespaces(false); setLogin(true);
+          }}><Plug size={15} aria-hidden /> MongoDB 연결</button>}
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
@@ -89,6 +96,8 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
           onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 문서 편집 허용</label>
         <label className="mongo-edit-permission"><input type="checkbox" checked={allowIndexes} disabled={busy}
           onChange={event => setAllowIndexes(event.target.checked)} /> 이 연결에서 인덱스 관리 허용</label>
+        <label className="mongo-edit-permission"><input type="checkbox" checked={allowNamespaces} disabled={busy}
+          onChange={event => setAllowNamespaces(event.target.checked)} /> 이 연결에서 컬렉션·뷰 관리 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP는 암호와 데이터를 평문으로 전송합니다.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
@@ -101,17 +110,33 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
+  const [creating, setCreating] = useState(false);
+  const [creation, setCreation] = useState<MongoNamespaceReport | null>(null);
   const databaseArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const collectionArgs = useMemo(() => ({ id: session.id, database }), [session.id, database]);
   const mutableCollection = collection?.kind === "collection" && !collection.name.startsWith("system.");
 
+  function created(result: MongoNamespaceReport) {
+    setCreating(false);
+    setDatabase(result.database);
+    setCollection({ name: result.name, kind: result.kind });
+    setRevision(value => value + 1);
+    setCreation(result);
+  }
+
   return <div className="mongo-layout">
     <div className="mongo-catalog">
       <Catalog<string> title="데이터베이스" command="mongo_databases" args={databaseArgs} revision={revision}
-        name={item => item} selected={database} onOpen={item => { setDatabase(item); setCollection(null); }} />
+        name={item => item} selected={database} onOpen={item => { setDatabase(item); setCollection(null); }}
+        action={session.allow_namespaces && <button type="button" className="secondary small"
+          onClick={() => { setCreation(null); setCreating(true); }}>컬렉션·뷰 만들기</button>} />
       {database && <Catalog<Collection> key={database} title="컬렉션과 뷰" command="mongo_collections" args={collectionArgs} revision={revision}
         name={item => item.name} detail={item => item.kind === "view" ? "뷰" : item.kind === "timeseries" ? "시계열" : "컬렉션"}
         selected={collection?.name ?? null} onOpen={setCollection} />}
+      {creation && <p className="form-note mongo-note" role="status">
+        {creation.database}.{creation.name} {creation.kind === "view" ? "뷰" : "컬렉션"} 생성 완료.
+        {creation.audit_warning && " 완료 감사 기록을 저장하지 못했습니다."}
+      </p>}
     </div>
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
@@ -119,12 +144,14 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
         allowEdits={session.allow_edits && mutableCollection} allowIndexes={session.allow_indexes && mutableCollection}
         environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
+    {creating && <MongoNamespaceDialog id={session.id} initialDatabase={database ?? ""} initialSource={collection?.name ?? ""}
+      environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
   </div>;
 }
 
-function Catalog<T>({ title, command, args, revision, name, detail, selected, onOpen }: {
+function Catalog<T>({ title, command, args, revision, name, detail, selected, onOpen, action }: {
   title: string; command: string; args: Record<string, unknown>; revision: number;
-  name: (item: T) => string; detail?: (item: T) => string; selected: string | null; onOpen: (item: T) => void;
+  name: (item: T) => string; detail?: (item: T) => string; selected: string | null; onOpen: (item: T) => void; action?: ReactNode;
 }) {
   const [draft, setDraft] = useState("");
   const [search, setSearch] = useState("");
@@ -133,7 +160,7 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   const result = useNativeRead<Page<T>>(command, input, revision);
 
   return <section className="results-card" aria-label={`MongoDB ${title} 목록`}>
-    <div className="panel-heading"><h2>{title}</h2></div>
+    <div className="panel-heading"><h2>{title}</h2>{action}</div>
     <form className="mongo-search" onSubmit={event => { event.preventDefault(); setSearch(draft); setPage(0); }}>
       <input type="search" aria-label={`${title} 검색`} value={draft} onChange={event => setDraft(event.target.value)} maxLength={128} />
       <button type="submit" className="secondary small">검색</button>

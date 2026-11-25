@@ -3,6 +3,7 @@ mod document_snapshot;
 mod document_structure;
 mod find_builder;
 mod index_admin;
+mod namespace_admin;
 mod pipeline;
 mod pipeline_store;
 mod profiles;
@@ -13,6 +14,7 @@ pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, Mo
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
+pub use namespace_admin::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
@@ -63,6 +65,7 @@ pub struct MongoSessionInfo {
     database: Option<String>,
     allow_edits: bool,
     allow_indexes: bool,
+    allow_namespaces: bool,
 }
 
 #[derive(Serialize)]
@@ -91,6 +94,7 @@ struct Session {
     client: Client,
     editor: Option<Arc<document_edit::DocumentEditor>>,
     index_admin: Option<Arc<index_admin::IndexAdmin>>,
+    namespace_admin: Option<Arc<namespace_admin::NamespaceAdmin>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -117,6 +121,7 @@ impl MongoManager {
         confirmation: &str,
         allow_edits: bool,
         allow_indexes: bool,
+        allow_namespaces: bool,
     ) -> Result<MongoSessionInfo> {
         let store = self.store.clone();
         let profile =
@@ -125,6 +130,7 @@ impl MongoManager {
                 .map_err(|_| "MongoDB 연결 설정을 읽을 수 없습니다.")??;
         let editor = allow_edits.then(|| Arc::new(document_edit::DocumentEditor::new(profile.clone())));
         let index_admin = allow_indexes.then(|| Arc::new(index_admin::IndexAdmin::new(profile.clone())));
+        let namespace_admin = allow_namespaces.then(|| Arc::new(namespace_admin::NamespaceAdmin::new(profile.clone())));
         let settings = profile.settings;
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
@@ -174,7 +180,7 @@ impl MongoManager {
             options.max_pool_size = Some(4);
             options.retry_reads = Some(false);
             options.retry_writes = Some(false);
-            if allow_edits || allow_indexes {
+            if allow_edits || allow_indexes || allow_namespaces {
                 if options.write_concern.as_ref().is_some_and(|setting| setting.w == Some(Acknowledgment::Nodes(0))) {
                     return Err("MongoDB 변경에는 서버가 결과를 확인하는 쓰기 설정(w=1 이상)이 필요합니다.".into());
                 }
@@ -201,10 +207,11 @@ impl MongoManager {
                     client,
                     editor,
                     index_admin,
+                    namespace_admin,
                     _permit: permit,
                 },
             );
-        Ok(MongoSessionInfo { id, database, allow_edits, allow_indexes })
+        Ok(MongoSessionInfo { id, database, allow_edits, allow_indexes, allow_namespaces })
     }
 
     pub async fn close(&self, id: &str) -> Result<()> {

@@ -59,4 +59,5 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     client.admin.command('createUser', 'document_editor', pwd='stackport-mongo-edit-test',
                          roles=[{'role': 'readWrite', 'db': 'visible'}])
     client.admin.command('createUser', 'index_editor', pwd='stackport-mongo-index-test',
-                         roles=[{'role': 'readWrite', 'db': 'visible'}, {'role': 'dbAdmin', 'db': 'visible'}])
+                         roles=[{'role': 'readWrite', 'db': 'visible'}, {'role': 'dbAdmin', 'db': 'visible'},
+                                {'role': 'readWrite', 'db': 'namespace_new'}])

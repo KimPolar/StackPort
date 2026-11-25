@@ -933,8 +933,10 @@ async fn delete_mongo_profile(store: State<'_, Store>, id: String, revision: i64
 
 #[tauri::command]
 async fn open_mongo(mongo: State<'_, stackport_core::MongoManager>, profile_id: String, revision: i64,
-    password: stackport_core::MongoPassword, confirmation: String, allow_edits: Option<bool>, allow_indexes: Option<bool>) -> Result<stackport_core::MongoSessionInfo, String> {
-    mongo.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or_default(), allow_indexes.unwrap_or_default()).await
+    password: stackport_core::MongoPassword, confirmation: String, allow_edits: Option<bool>, allow_indexes: Option<bool>,
+    allow_namespaces: Option<bool>) -> Result<stackport_core::MongoSessionInfo, String> {
+    mongo.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or_default(), allow_indexes.unwrap_or_default(),
+        allow_namespaces.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -965,6 +967,20 @@ async fn discard_mongo_index_review(mongo: State<'_, stackport_core::MongoManage
 #[tauri::command]
 async fn apply_mongo_index_change(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, approval: String, confirmation: String)
     -> Result<stackport_core::MongoIndexReport, String> { mongo.apply_index_change(&id, &token, &approval, &confirmation).await }
+
+#[tauri::command]
+async fn review_mongo_namespace_create(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, name: String,
+    input: stackport_core::MongoNamespaceCreate) -> Result<stackport_core::MongoNamespaceReview, String> {
+    mongo.review_namespace_create(&id, database, name, input).await
+}
+
+#[tauri::command]
+async fn discard_mongo_namespace_review(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
+    -> Result<(), String> { mongo.discard_namespace_review(&id, &token).await }
+
+#[tauri::command]
+async fn apply_mongo_namespace_create(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, confirmation: String)
+    -> Result<stackport_core::MongoNamespaceReport, String> { mongo.apply_namespace_create(&id, &token, &confirmation).await }
 
 #[tauri::command]
 async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, query: stackport_core::MongoQuery)
@@ -2709,6 +2725,9 @@ fn main() {
             review_mongo_index_change,
             discard_mongo_index_review,
             apply_mongo_index_change,
+            review_mongo_namespace_create,
+            discard_mongo_namespace_review,
+            apply_mongo_namespace_create,
             mongo_documents,
             count_mongo_documents,
             build_mongo_find_filter,

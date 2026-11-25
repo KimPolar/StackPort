@@ -42,11 +42,11 @@
 .mongo-document-list p, .mongo-note { margin: 8px 12px; }
 .mongo-edit-permission { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
 .mongo-edit-permission + .mongo-edit-permission { margin-top: 8px; }
-.dialog.mongo-index-dialog { width: min(680px, calc(100vw - 32px)); }
-.mongo-index-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
+.dialog.mongo-index-dialog, .dialog.mongo-namespace-dialog { width: min(680px, calc(100vw - 32px)); }
+.mongo-index-fields, .mongo-namespace-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .mongo-index-keys { display: grid; gap: 8px; padding: 0; list-style: none; }
 .mongo-index-keys li { padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
-.mongo-index-definition { max-height: 28dvh; overflow: auto; padding: 8px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; }
+.mongo-index-definition, .mongo-command-definition { max-height: 28dvh; overflow: auto; padding: 8px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; }
 .mongo-index-impact { padding-inline-start: 20px; font-size: 13px; }
 .mongo-index-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mongo-index-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; }

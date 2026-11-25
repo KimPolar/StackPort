@@ -132,7 +132,7 @@ fn allowed_operator(operator: &str) -> bool {
 
 fn validate_stage(operator: &str, value: &Bson, remaining: &mut usize) -> Result<()> {
     if !allowed_operator(operator) {
-        return Err("집계 미리보기에서 지원하는 읽기 전용 단계만 사용할 수 있습니다.".into());
+        return Err("지원하는 읽기 전용 집계 단계만 사용할 수 있습니다.".into());
     }
     *remaining = remaining
         .checked_sub(1)
@@ -169,10 +169,16 @@ fn validate_nested_pipeline(value: &Bson, remaining: &mut usize) -> Result<()> {
     Ok(())
 }
 
-fn validate_expression(value: &Bson, depth: usize) -> Result<()> {
-    const SCRIPTING: &str = "집계 미리보기에서 서버 JavaScript를 사용할 수 없습니다.";
+pub(super) fn validate_view_pipeline(value: &Bson) -> Result<()> {
+    validate_expression(value, 0)?;
+    let mut remaining = MAX_STAGES;
+    validate_nested_pipeline(value, &mut remaining)
+}
+
+pub(super) fn validate_expression(value: &Bson, depth: usize) -> Result<()> {
+    const SCRIPTING: &str = "서버 JavaScript를 사용할 수 없습니다.";
     if depth > 20 {
-        return Err("집계 단계 JSON이 너무 깊게 중첩되어 있습니다.".into());
+        return Err("MongoDB JSON이 너무 깊게 중첩되어 있습니다.".into());
     }
     match value {
         Bson::Document(document) => {

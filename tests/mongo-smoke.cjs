@@ -82,8 +82,8 @@ async function verify(page, port, ca) {
   const [profile] = await command('list_mongo_profiles', { projectId: project.id });
   assert.doesNotMatch(JSON.stringify(profile), new RegExp(secret));
   const alternate = changes => command('create_mongo_profile', { projectId: project.id, input: { ...profile.settings, ...changes } });
-  const open = (item, password = secret, confirmation = 'PROD', allowEdits = false, allowIndexes = false) =>
-    command('open_mongo', { profileId: item.id, revision: item.revision, password, confirmation, allowEdits, allowIndexes });
+  const open = (item, password = secret, confirmation = 'PROD', allowEdits = false, allowIndexes = false, allowNamespaces = false) =>
+    command('open_mongo', { profileId: item.id, revision: item.revision, password, confirmation, allowEdits, allowIndexes, allowNamespaces });
   await assert.rejects(open(profile, secret, ''), /PROD/);
   await assert.rejects(open(profile, 'wrong-mongo-password'), /암호|TLS/);
   const badHostname = await alternate({ name: '인증서 호스트 이름 불일치', uri: profile.settings.uri.replace('localhost', '127.0.0.1') });
@@ -94,6 +94,10 @@ async function verify(page, port, ca) {
   const id = session.id;
   try {
     assert.equal(session.allow_edits, false);
+    assert.equal(session.allow_namespaces, false);
+    await assert.rejects(command('review_mongo_namespace_create', {
+      id, database: 'visible', name: 'forbidden', input: { kind: 'collection', validator: '', level: 'strict', action: 'error' },
+    }), /컬렉션·뷰 관리를 허용/);
     await assert.rejects(command('review_mongo_index_change', {
       id, database: 'visible', collection: 'records', input: { kind: 'drop', name: 'expiry' },
     }), /인덱스 관리를 허용/);
@@ -235,6 +239,15 @@ async function verify(page, port, ca) {
   const indexProfile = await alternate({ name: '인덱스 검증', username: 'index_editor' });
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
+  await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true));
+  const limitedNamespace = await open(profile, secret, 'PROD', false, false, true);
+  try {
+    const denied = await command('review_mongo_namespace_create', { id: limitedNamespace.id, database: 'visible',
+      name: 'denied_collection', input: { kind: 'collection', validator: '', level: 'strict', action: 'error' } });
+    await assert.rejects(command('apply_mongo_namespace_create', { id: limitedNamespace.id, token: denied.token, confirmation: 'PROD' }), /생성할 권한/);
+  } finally {
+    await command('close_mongo', { id: limitedNamespace.id });
+  }
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
   await explorer.getByRole('button', { name: 'MongoDB 편집 검증 열기', exact: true }).click();
@@ -247,9 +260,11 @@ async function verify(page, port, ca) {
   await indexLogin.getByLabel('MongoDB 암호').fill(indexSecret);
   await indexLogin.getByLabel('운영 환경 확인').fill('PROD');
   await indexLogin.getByRole('checkbox', { name: '이 연결에서 인덱스 관리 허용', exact: true }).check();
+  await indexLogin.getByRole('checkbox', { name: '이 연결에서 컬렉션·뷰 관리 허용', exact: true }).check();
   await indexLogin.getByRole('button', { name: '연결', exact: true }).click();
   await indexLogin.waitFor({ state: 'detached' });
   await verifyIndexEditor(page, workspace, detail);
+  await verifyNamespaceEditor(page, workspace, detail);
   const audit = await command('list_audit_events', { before: null });
   const edits = audit.events.filter(event => event.operation.startsWith('mongo.document.'));
   for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
@@ -261,7 +276,85 @@ async function verify(page, port, ca) {
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.drop' && event.outcome === 'succeeded'));
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'succeeded'));
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'failed'));
+  for (const operation of ['mongo.namespace.create_collection', 'mongo.namespace.create_view']) {
+    assert.ok(audit.events.some(event => event.operation === operation && event.outcome === 'succeeded'));
+  }
   assert.deepEqual(errors, []);
+}
+
+async function verifyNamespaceCommands(command, openAdmin) {
+  const first = await openAdmin();
+  const second = await openAdmin();
+  const database = 'namespace_new';
+  const collection = 'validated_items';
+  const available = async id => (await command('mongo_databases', { id, search: database, page: 0 })).items;
+  const review = (id, name, input) => command('review_mongo_namespace_create', { id, database, name, input });
+  const apply = (id, token, confirmation = 'PROD') => command('apply_mongo_namespace_create', { id, token, confirmation });
+  const definition = { kind: 'collection', validator: '{"$jsonSchema":{"required":["qty"],"properties":{"qty":{"bsonType":"int"}}}}',
+    level: 'strict', action: 'error' };
+  const insert = async (id, input) => {
+    const draft = await command('begin_mongo_document_edit', { id, database, collection, change: { kind: 'insert' } });
+    const prepared = await command('review_mongo_document_edit', { id, token: draft.token, input });
+    return command('apply_mongo_document_edit', { id, token: prepared.token, confirmation: 'PROD', approval: '' });
+  };
+  try {
+    assert.equal(first.allow_namespaces, true);
+    assert.equal(first.allow_indexes, false);
+    assert.deepEqual(await available(first.id), []);
+    await assert.rejects(review(first.id, 'invalid', { kind: 'view', source: 'missing', pipeline: '[]' }), /원본 이름/);
+    const before = await review(first.id, collection, definition);
+    const competitor = await review(second.id, collection, definition);
+    assert.match(before.definition, /\$jsonSchema/);
+    assert.deepEqual(await available(first.id), []);
+    await assert.rejects(apply(second.id, before.token), /만료되었거나/);
+    await assert.rejects(apply(first.id, before.token, ''), /PROD/);
+    assert.deepEqual(await apply(first.id, before.token), { database, name: collection, kind: 'collection', audit_warning: false });
+    assert.deepEqual(await available(first.id), [database]);
+    await assert.rejects(apply(first.id, before.token), /만료되었거나/);
+    await assert.rejects(apply(second.id, competitor.token), /이미 있습니다/);
+    await assert.rejects(insert(first.id, '{"_id":"invalid","qty":"3"}'), /유효성 검사/);
+    await insert(first.id, '{"_id":"keep","qty":{"$numberInt":"4"}}');
+    await insert(first.id, '{"_id":"reject-by-view","qty":{"$numberInt":"1"}}');
+    const view = { kind: 'view', source: collection, pipeline: '[{"$match":{"qty":{"$gte":3}}}]' };
+    const preview = await review(first.id, 'filtered_items', view);
+    assert.match(preview.definition, /"viewOn": "validated_items"/);
+    assert.equal((await apply(first.id, preview.token)).kind, 'view');
+    const { items } = await command('mongo_documents', { id: first.id, database, collection: 'filtered_items', query: {} });
+    assert.deepEqual(items.map(item => JSON.parse(item.json)._id), ['keep']);
+  } finally {
+    await Promise.all([first, second].map(session => command('close_mongo', { id: session.id })));
+  }
+}
+
+async function verifyNamespaceEditor(page, workspace, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  await button(workspace, '컬렉션·뷰 만들기').click();
+  const dialog = page.getByRole('dialog', { name: 'MongoDB 컬렉션·뷰 만들기', exact: true });
+  await dialog.getByLabel('컬렉션 이름', { exact: true }).fill('ui_collection');
+  await dialog.getByLabel('유효성 규칙 (선택, Extended JSON)').fill('{"$jsonSchema":{"required":["title"]}}');
+  await button(dialog, '생성 검토').click();
+  await dialog.getByLabel('생성 명령', { exact: true }).filter({ hasText: '$jsonSchema' }).waitFor();
+  const apply = button(dialog, '생성 적용');
+  assert.equal(await apply.isDisabled(), true);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  await detail.getByRole('heading', { name: 'ui_collection', exact: true }).waitFor();
+  await button(workspace, 'ui_collection 컬렉션').waitFor();
+
+  await button(workspace, '컬렉션·뷰 만들기').click();
+  await dialog.getByLabel('생성 유형', { exact: true }).selectOption('view');
+  await dialog.getByLabel('뷰 이름', { exact: true }).fill('ui_view');
+  await dialog.getByLabel('원본 컬렉션 또는 뷰 이름', { exact: true }).fill('records');
+  await dialog.getByLabel('뷰 파이프라인 (Extended JSON 배열)').fill('[{"$match":{"rank":22}}]');
+  await button(dialog, '생성 검토').click();
+  await dialog.getByLabel('생성 명령', { exact: true }).filter({ hasText: '$match' }).waitFor();
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  await detail.getByRole('heading', { name: 'ui_view', exact: true }).waitFor();
+  await button(workspace, 'ui_view 뷰').waitFor();
+  await detail.locator('summary').filter({ hasText: '"22"' }).waitFor();
 }
 
 async function verifyIndexCommands(command, openAdmin) {
