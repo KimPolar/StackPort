@@ -928,8 +928,9 @@ async fn delete_redis_profile(store: State<'_, Store>, id: String, revision: i64
 #[tauri::command]
 async fn open_redis(redis: State<'_, stackport_core::RedisManager>, profile_id: String, revision: i64,
     password: stackport_core::RedisPassword, confirmation: String, allow_edits: Option<bool>,
+    allow_publish: Option<bool>,
 ) -> Result<stackport_core::RedisSessionInfo, String> {
-    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false)).await
+    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false), allow_publish.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -949,6 +950,42 @@ async fn redis_server_snapshot(
     id: String,
 ) -> Result<stackport_core::RedisServerSnapshot, String> {
     redis.server_snapshot(&id).await
+}
+
+#[tauri::command]
+async fn redis_start_subscription(
+    redis: State<'_, stackport_core::RedisManager>,
+    id: String, name: String, pattern: bool, password: stackport_core::RedisPassword, confirmation: String,
+) -> Result<String, String> {
+    redis.start_subscription(&id, name, pattern, password, &confirmation).await
+}
+
+#[tauri::command]
+async fn redis_subscription_snapshot(
+    redis: State<'_, stackport_core::RedisManager>, id: String, subscription: String,
+) -> Result<stackport_core::RedisSubscriptionSnapshot, String> {
+    redis.subscription_snapshot(&id, &subscription).await
+}
+
+#[tauri::command]
+async fn redis_clear_subscription_history(
+    redis: State<'_, stackport_core::RedisManager>, id: String, subscription: String,
+) -> Result<(), String> {
+    redis.clear_subscription_history(&id, &subscription).await
+}
+
+#[tauri::command]
+async fn redis_stop_subscription(
+    redis: State<'_, stackport_core::RedisManager>, id: String, subscription: String,
+) -> Result<(), String> {
+    redis.stop_subscription(&id, &subscription).await
+}
+
+#[tauri::command]
+async fn redis_publish_message(
+    redis: State<'_, stackport_core::RedisManager>, id: String, channel: String, message: String, confirmed: bool, confirmation: String,
+) -> Result<stackport_core::RedisPublishReport, String> {
+    redis.publish_message(&id, channel, message, confirmed, &confirmation).await
 }
 
 #[tauri::command]
@@ -1940,6 +1977,11 @@ fn main() {
             redis_keys,
             redis_value,
             redis_server_snapshot,
+            redis_start_subscription,
+            redis_subscription_snapshot,
+            redis_clear_subscription_history,
+            redis_stop_subscription,
+            redis_publish_message,
             preview_redis_edit,
             discard_redis_edit,
             apply_redis_edit,

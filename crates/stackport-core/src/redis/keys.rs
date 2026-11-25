@@ -51,7 +51,7 @@ struct RedisKey {
     display: RedisBytes,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct RedisBytes {
     text: String,
     encoding: &'static str,

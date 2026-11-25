@@ -29,6 +29,7 @@ pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupT
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
 pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisServerSnapshot, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus};
+pub use redis::{RedisPublishReport, RedisSubscriptionSnapshot};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};
 pub use postgres::PostgresDisconnect;
@@ -960,6 +961,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.cell.update" => "sqlite-cell-update-confirmed",
         "redis.key.edit" | "redis.key.edit.unconfirmed" if record.environment == Some("PROD") => "redis-key-edit-prod-reviewed-transaction",
         "redis.key.edit" | "redis.key.edit.unconfirmed" => "redis-key-edit-reviewed-transaction",
+        "redis.pubsub.publish" | "redis.pubsub.publish.unconfirmed" => "redis-pubsub-publish-confirmed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",

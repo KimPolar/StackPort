@@ -93,18 +93,29 @@ async function proxy(port) {
   fs.writeFileSync(path.join(root, 'server.ext'), 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n');
   run(['x509', '-req', '-in', 'server.csr', '-CA', ca, '-CAkey', caKey, '-CAcreateserial', '-days', '2', '-out', cert, '-extfile', 'server.ext']);
   const clients = new Set();
-  let interruptExec = false;
+  const subscribers = new Set();
+  let interruptCommand = null;
+  let blockSubscriptions = false;
   const listener = tls.createServer({ cert: fs.readFileSync(cert), key: fs.readFileSync(key), minVersion: 'TLSv1.2' }, client => {
     clients.add(client);
     const target = net.connect(port, '127.0.0.1');
     client.on('error', () => target.destroy());
     target.on('error', () => client.destroy());
-    client.on('close', () => { clients.delete(client); target.destroy(); });
+    client.on('close', () => { clients.delete(client); subscribers.delete(client); target.destroy(); });
     target.on('close', () => client.destroy());
     const relay = new Transform({
       transform(chunk, _encoding, callback) {
-        if (interruptExec && chunk.includes(Buffer.from('$4\r\nEXEC\r\n'))) {
-          interruptExec = false;
+        if (chunk.includes(Buffer.from('$9\r\nSUBSCRIBE\r\n')) || chunk.includes(Buffer.from('$10\r\nPSUBSCRIBE\r\n'))) {
+          if (blockSubscriptions) {
+            client.destroy();
+            target.destroy();
+            callback();
+            return;
+          }
+          subscribers.add(client);
+        }
+        if (interruptCommand && chunk.includes(interruptCommand)) {
+          interruptCommand = null;
           client.destroy();
           target.destroy();
           callback();
@@ -115,7 +126,12 @@ async function proxy(port) {
   }).listen(0, '127.0.0.1');
   await once(listener, 'listening');
   const dropClients = () => { for (const client of clients) client.destroy(); };
-  return { port: listener.address().port, ca, dropClients, interruptNextExec: () => { interruptExec = true; },
+  return { port: listener.address().port, ca, dropClients,
+    pauseSubscriptions: () => { blockSubscriptions = true; for (const client of subscribers) client.destroy(); },
+    resumeSubscriptions: () => { blockSubscriptions = false; },
+    subscriptionCount: () => subscribers.size,
+    interruptNextExec: () => { interruptCommand = Buffer.from('$4\r\nEXEC\r\n'); },
+    interruptNextPublish: () => { interruptCommand = Buffer.from('$7\r\nPUBLISH\r\n'); },
     close: () => { dropClients(); listener.close(); } };
 }
 
@@ -144,8 +160,8 @@ async function verify(browser, serverPort, secure) {
   const [profile] = await command('list_redis_profiles', { projectId: project.id });
   assert.ok(!JSON.stringify(profile).includes(secret));
   assert.equal(profile.settings.database, 3);
-  const open = (item, password = secret, confirmation = 'PROD', allowEdits) => command('open_redis', {
-    profileId: item.id, revision: item.revision, password, confirmation, allowEdits,
+  const open = (item, password = secret, confirmation = 'PROD', allowEdits, allowPublish) => command('open_redis', {
+    profileId: item.id, revision: item.revision, password, confirmation, allowEdits, allowPublish,
   });
   const alternate = (name, change) => command('create_redis_profile', { projectId: project.id, input: { ...profile.settings, ...change, name } });
   await assert.rejects(open(profile, secret, ''), /PROD/);
@@ -220,6 +236,7 @@ async function verify(browser, serverPort, secure) {
   assert.doesNotMatch(JSON.stringify(withLog.slow_log), /example-private-slowlog-payload|db0:only|127\.0\.0\.1/);
   await command('close_redis', { id: logSession.id });
   await verifyReplica({ command, open, alternate, serverPort });
+  await verifyPubSub({ command, open, profile, writer, secure, serverPort });
   await verifyEdits({ command, open, profile, writer, serverPort, secure });
 
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
@@ -255,6 +272,7 @@ async function verify(browser, serverPort, secure) {
   await page.getByRole('button', { name: 'Redis 캐시 검증 열기', exact: true }).click();
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).waitFor();
   await verifyEditDialog(page, workspace);
+  await verifyPubSubDialog(page, workspace, secure);
   assert.deepEqual(errors, []);
 }
 
@@ -282,6 +300,7 @@ async function verifyEditDialog(page, workspace) {
   await login.getByLabel('Redis 암호').fill(secret);
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByLabel('이 연결에서 키 편집 허용').check();
+  await login.getByLabel('이 연결에서 메시지 발행 허용').check();
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await findKey(page, workspace, 'edit:string', 'string');
@@ -300,6 +319,95 @@ async function verifyEditDialog(page, workspace) {
   await editor.waitFor({ state: 'detached' });
   await detail.getByRole('status').getByText('Redis 변경 완료', { exact: true }).waitFor();
   await detail.getByRole('table', { name: 'Redis 값', exact: true }).getByText('화면에서 적용한 값', { exact: true }).waitFor();
+}
+
+async function eventually(read, passes) {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const value = await read();
+    if (passes(value)) return value;
+    await delay(50);
+  }
+  assert.fail('The expected Redis Pub/Sub state did not arrive.');
+}
+
+async function verifyPubSub({ command, open, profile, writer, secure, serverPort }) {
+  const start = (id, name, pattern = false, password = secret, confirmation = 'PROD') => command('redis_start_subscription', {
+    id, name, pattern, password, confirmation,
+  });
+  const publish = (id, message, confirmed = true, confirmation = 'PROD') => command('redis_publish_message', {
+    id, channel: 'events:operator', message, confirmed, confirmation,
+  });
+  const reader = await open(profile);
+  await assert.rejects(start(reader.id, 'events:operator'), /권한/);
+  await assert.rejects(publish(reader.id, 'read-only-should-fail'), /발행을 허용/);
+  await command('close_redis', { id: reader.id });
+
+  const { id } = await open(writer, secret, 'PROD', false, true);
+  await assert.rejects(start(id, 'events:*', true, secret, ''), /PROD/);
+  await assert.rejects(start(id, 'events:*', true, 'wrong-password'), /사용자 또는 암호/);
+  await assert.rejects(start(id, 'outside:*', true), /권한/);
+  const subscription = await start(id, 'events:*', true);
+  await assert.rejects(start(id, 'events:second'), /기존 Redis 구독/);
+  const snapshot = () => command('redis_subscription_snapshot', { id, subscription });
+  assert.equal((await snapshot()).status, 'subscribed');
+  await assert.rejects(publish(id, 'unconfirmed-should-fail', false), /발행 내용을 확인/);
+  await assert.rejects(publish(id, 'prod-should-fail', true, ''), /PROD/);
+  const delivered = await publish(id, 'private-fixture-message');
+  assert.deepEqual(delivered, { receivers: 1, audit_warning: false });
+  cli(serverPort, [['PUBLISH', 'events:binary', Buffer.from([0, 255, 97])]]);
+  const received = await eventually(snapshot, result => result.messages.length === 2);
+  assert.deepEqual(received.messages.map(item => [item.channel.text, item.payload.text, item.payload.encoding]),
+    [['events:operator', 'private-fixture-message', 'utf8'], ['events:binary', '00ff61', 'hex']]);
+  cli(serverPort, Array.from({ length: 102 }, (_, index) => ['PUBLISH', 'events:history', 'history-' + index]));
+  const bounded = await eventually(snapshot, result => result.messages.at(-1)?.payload.text === 'history-101');
+  assert.equal(bounded.messages.length, 100);
+  assert.equal(bounded.evicted, 4);
+  await command('redis_clear_subscription_history', { id, subscription });
+  assert.deepEqual((await snapshot()).messages, []);
+  secure.pauseSubscriptions();
+  await eventually(snapshot, result => result.status === 'reconnecting' && result.interruptions === 1);
+  assert.equal((await publish(id, 'during-interruption')).receivers, 0);
+  secure.resumeSubscriptions();
+  await eventually(snapshot, result => result.status === 'subscribed' && result.interruptions === 1);
+  assert.equal((await publish(id, 'after-reconnect')).receivers, 1);
+  const resumed = await eventually(snapshot, result => result.messages.length === 1);
+  assert.equal(resumed.messages[0].payload.text, 'after-reconnect');
+  await command('redis_stop_subscription', { id, subscription });
+  await assert.rejects(snapshot(), /구독이 종료/);
+  await eventually(async () => secure.subscriptionCount(), count => count === 0);
+
+  secure.interruptNextPublish();
+  await assert.rejects(publish(id, 'interrupted-publish'), /발행 결과를 확인할 수 없습니다/);
+  const events = (await command('list_audit_events', { before: null })).events.filter(event => event.operation.startsWith('redis.pubsub.publish'));
+  assert.ok(events.some(event => event.outcome === 'succeeded' && event.environment === 'PROD'));
+  assert.ok(events.some(event => event.operation === 'redis.pubsub.publish.unconfirmed' && event.outcome === 'started'));
+  assert.doesNotMatch(JSON.stringify(events), /events:operator|private-fixture-message|interrupted-publish|stackport-redis-fixture-password/);
+}
+
+async function verifyPubSubDialog(page, workspace, secure) {
+  await workspace.getByRole('button', { name: 'Pub/Sub', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Redis Pub/Sub', exact: true });
+  await dialog.getByLabel('구독 채널', { exact: true }).fill('events:screen');
+  await dialog.getByLabel('구독 연결 암호').fill(secret);
+  await dialog.getByLabel('구독 운영 환경 확인').fill('PROD');
+  await dialog.getByRole('button', { name: '구독 시작', exact: true }).click();
+  await dialog.getByText('구독 중', { exact: true }).waitFor();
+  await dialog.getByLabel('발행 채널').fill('events:screen');
+  await dialog.getByLabel('발행 메시지').fill('화면에서 보낸 메시지');
+  await dialog.getByRole('button', { name: '발행 미리 보기', exact: true }).click();
+  await dialog.getByRole('heading', { name: '발행 내용 확인', exact: true }).waitFor();
+  const send = dialog.getByRole('button', { name: '메시지 발행', exact: true });
+  assert.equal(await send.isDisabled(), true);
+  await dialog.getByLabel('발행 운영 환경 확인').fill('PROD');
+  await send.click();
+  await dialog.getByText(/발행 완료.*수신 1건/).waitFor();
+  const history = dialog.getByRole('region', { name: 'Redis 수신 메시지 목록', exact: true });
+  await history.getByText('화면에서 보낸 메시지', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '기록 비우기', exact: true }).click();
+  await history.waitFor({ state: 'detached' });
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  await eventually(async () => secure.subscriptionCount(), count => count === 0);
 }
 
 async function verifyEdits({ command, open, profile, writer, serverPort, secure }) {
@@ -406,7 +514,7 @@ async function main() {
         '+sscan', '+xlen', '+xrange', '+watch', '+unwatch', '+multi', '+exec', '+discard'],
       ['ACL', 'SETUSER', 'fixture_writer', 'on', '>' + secret, '~*',
         '+@read', '-keys', '+info', '+select', '+dbsize', '+memory|usage', '+watch', '+unwatch', '+multi', '+exec', '+discard',
-        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+slowlog|get'],
+        '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+slowlog|get', 'resetchannels', '&events:*', '+subscribe', '+psubscribe', '+publish'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '0'],
       ['SET', 'slowlog:fixture', 'example-private-slowlog-payload'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '-1'],
@@ -414,7 +522,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure);
-    console.log('Windows Redis E2E passed (ACL, TLS, server monitor, cursor browsing, six typed edits, expiry, conflicts and unknown writes).');
+    console.log('Windows Redis E2E passed (ACL, TLS, server monitor, Pub/Sub reconnect and review, cursor browsing and six typed edits).');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
     throw error;

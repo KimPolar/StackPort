@@ -20,6 +20,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 **서버 모니터**는 연결된 단독 서버의 `INFO`로 메모리·클라이언트·초당 작업·복제 상태와 DB별 키 수·만료 설정·평균 TTL을 읽습니다. `SLOWLOG GET` 권한이 있으면 최근 20건의 명령 이름, 시각, 실행 시간을 볼 수 있습니다. 명령 인수, 클라이언트 주소와 이름은 화면이나 작업 기록에 전달하지 않습니다. 슬로로그 권한이 제한된 계정도 다른 서버 통계를 계속 볼 수 있습니다. [Redis INFO](https://redis.io/docs/latest/commands/info/) · [Redis SLOWLOG GET](https://redis.io/docs/latest/commands/slowlog-get/)
 
+**Pub/Sub**는 별도 연결에서 채널 이름 하나 또는 패턴 하나를 구독합니다. Redis 논리 DB와 관계없이 서버 전체의 채널에 연결합니다. 연결이 끊기면 재접속을 시도하며, 실패할 때마다 다음 연결까지 대기 시간을 1초에서 늘려 최대 15초까지 기다립니다. 중단된 동안의 메시지는 다시 받지 못합니다. 구독 암호와 최근 100개의 수신 기록은 구독 세션 동안 메모리에 보관합니다. 메시지의 첫 512바이트를 텍스트 또는 HEX로 표시하고, 기록을 비우거나 구독을 종료할 수 있습니다. [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/)
+
+**메시지 발행**은 연결할 때 별도로 허용합니다. 채널과 UTF-8 메시지(최대 64 KiB)를 검토하고, 운영 환경에서는 `PROD`를 다시 입력한 뒤 한 번 보냅니다. 작업 기록에는 연결·환경·결과와 서버가 보고한 수신자 수를 남깁니다. 채널·메시지·암호는 기록에 저장하지 않습니다. 발행 응답 전에 연결이 끊기면 결과 미확인 상태를 표시합니다. [Redis PUBLISH](https://redis.io/docs/latest/commands/publish/)
+
 탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.

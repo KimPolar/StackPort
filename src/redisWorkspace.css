@@ -1,4 +1,6 @@
 .redis-workspace { min-width: 0; }
+.redis-workspace .content-header { flex-wrap: wrap; }
+.redis-workspace .header-actions { flex-wrap: wrap; flex-shrink: 1; min-width: 0; }
 .redis-server { margin: 0 0 12px; color: var(--text-muted); font-size: 13px; }
 .redis-layout {
   display: grid;
@@ -45,3 +47,19 @@
 .redis-monitor .panel-heading h3 { font-size: 14px; margin: 0; }
 .redis-monitor .redis-values { max-height: 28dvh; font-variant-numeric: tabular-nums; }
 .redis-monitor .redis-values small { margin-left: 6px; }
+.redis-edit-permission + .redis-edit-permission { margin-top: 8px; }
+.dialog.redis-pubsub { width: min(860px, calc(100vw - 32px)); }
+.redis-pubsub-body { display: grid; gap: 12px; padding: 0 21px 21px; }
+.redis-pubsub-body > p { margin: 0; overflow-wrap: anywhere; }
+.redis-pubsub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; align-items: start; }
+.redis-pubsub .results-card { min-width: 0; }
+.redis-pubsub .panel-heading h3 { font-size: 14px; margin: 0; }
+.redis-pubsub .panel-heading > span { color: var(--text-muted); font-size: 12px; }
+.redis-pubsub .results-card form, .redis-pubsub-active { padding: 12px; }
+.redis-pubsub-active > p, .redis-pubsub h4 { margin: 0 0 8px; overflow-wrap: anywhere; }
+.redis-pubsub textarea { resize: vertical; }
+.redis-pubsub .edit-preview pre { max-height: 145px; overflow: auto; }
+.redis-pubsub .edit-preview strong { overflow-wrap: anywhere; }
+.redis-pubsub-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.redis-pubsub .redis-values { max-height: 30dvh; font-variant-numeric: tabular-nums; }
+.redis-pubsub .redis-pubsub-retention { margin: 0; padding: 7px 12px; }

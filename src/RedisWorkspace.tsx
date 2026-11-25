@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Database, Pencil, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
 import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditKind, type RedisEditReport } from "./RedisEditDialog";
 import { RedisServerMonitor } from "./RedisServerMonitor";
+import { RedisPubSubDialog } from "./RedisPubSubDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./redisWorkspace.css";
 
@@ -16,7 +17,7 @@ type KeyPage = { keys: Key[]; cursor: string; total: number | null };
 type Position = { kind: "index"; index: number } | { kind: "scan"; cursor: string } | { kind: "stream"; after: string };
 type Value = { kind: string; ttl_ms: number | null; memory_bytes: number | null; length: number | null;
   columns: string[]; rows: RedisBytes[][]; next: Position | null };
-type Session = { id: string; engine: string; version: string; allow_edits: boolean };
+type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean };
 const number = new Intl.NumberFormat("ko-KR");
 
 export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onBusy: (busy: boolean) => void }) {
@@ -24,9 +25,11 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [session, setSession] = useState<Session | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
+  const [pubsubOpen, setPubsubOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
+  const [allowPublish, setAllowPublish] = useState(false);
   const [editor, setEditor] = useState<{ key: Key; kind: RedisEditKind } | null>(null);
   const [editReport, setEditReport] = useState<RedisEditReport | null>(null);
   const [pending, setPending] = useState(false);
@@ -63,7 +66,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (!(message.includes("연결이 닫혔습니다") || message.includes("연결이 끊겼습니다"))) return false;
     const id = active.current;
     if (id) {
-      active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setError(message);
+      active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false); setError(message);
       void invoke("close_redis", { id }).catch(() => {});
     }
     return true;
@@ -84,7 +87,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (connecting.current) return;
     connecting.current = true; setPending(true); setError(""); setPassword("");
     try {
-      const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits });
+      const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowPublish });
       if (!mounted.current) { await invoke("close_redis", { id: opened.id }); return; }
       active.current = opened.id;
       setSession(opened); setConnectOpen(false); resetKeys();
@@ -96,7 +99,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     const id = active.current;
     if (!id) return;
     active.current = null;
-    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setError("");
+    setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false); setError("");
     try { await invoke("close_redis", { id }); }
     catch (reason) { if (mounted.current) setError(String(reason)); }
   }
@@ -116,11 +119,13 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         <p className="path">Redis · {networkAddressText(settings)} / DB {settings.database}</p>
       </div>
       <div className="header-actions">
-        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.allow_edits ? "키 편집 허용" : "읽기 전용"}</span>
+        <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.allow_edits ? "키 편집 허용" : "키 읽기 전용"}</span>
         {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setMonitorOpen(true)}>
           <Activity size={15} aria-hidden /> 서버 모니터</button>}
+        {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setPubsubOpen(true)}>
+          <Radio size={15} aria-hidden /> Pub/Sub</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setConnectOpen(true); }}>
+          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowPublish(false); setConnectOpen(true); }}>
             <Plug size={15} aria-hidden /> Redis 연결</button>}
       </div>
     </div>
@@ -181,6 +186,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
           maxLength={4096} onChange={event => setPassword(event.target.value)} /></label>
         <label className="redis-edit-permission"><input type="checkbox" checked={allowEdits} disabled={pending}
           onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 키 편집 허용</label>
+        <label className="redis-edit-permission"><input type="checkbox" checked={allowPublish} disabled={pending}
+          onChange={event => setAllowPublish(event.target.checked)} /> 이 연결에서 메시지 발행 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP 연결로 암호와 데이터를 평문으로 전송합니다.</p>}
         {production && <label className="field">운영 환경 확인<input value={confirmation} required disabled={pending}
           autoComplete="off" placeholder="PROD" onChange={event => setConfirmation(event.target.value)} /></label>}
@@ -195,6 +202,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     {monitorOpen && session && <RedisServerMonitor id={session.id} selectedDatabase={settings.database}
       target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`}
       onFailure={handleFailure} onClose={() => setMonitorOpen(false)} />}
+    {pubsubOpen && session && <RedisPubSubDialog id={session.id} allowPublish={session.allow_publish} environment={settings.environment}
+      target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
   </section>;
 }
 

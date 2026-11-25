@@ -61,6 +61,10 @@ impl Wire {
             .map_err(|_| Failure::Transport)?;
         self.0.flush().await.map_err(|_| Failure::Transport)?;
         drop(request);
+        self.receive().await
+    }
+
+    pub(super) async fn receive(&mut self) -> Result<Reply, Failure> {
         let mut budget = Budget {
             bytes: MAX_REPLY,
             items: MAX_ITEMS,

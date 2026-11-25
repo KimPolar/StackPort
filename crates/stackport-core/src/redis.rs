@@ -2,12 +2,14 @@ mod edit;
 mod keys;
 mod monitor;
 mod profiles;
+mod pubsub;
 mod resp;
 
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub use monitor::RedisServerSnapshot;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{RedisProfile, RedisSettings};
+pub use pubsub::{RedisPublishReport, RedisSubscriptionSnapshot};
 
 use crate::{insert_audit, tls, AuditRecord, Result, Store};
 use resp::{Failure, Socket, Wire, Work};
@@ -47,12 +49,15 @@ pub struct RedisSessionInfo {
     engine: &'static str,
     version: String,
     allow_edits: bool,
+    allow_publish: bool,
 }
 
 struct Session {
     state: AsyncMutex<Option<edit::State>>,
     profile: RedisProfile,
     allow_edits: bool,
+    allow_publish: bool,
+    subscription: AsyncMutex<Option<pubsub::Subscription>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -78,6 +83,7 @@ impl RedisManager {
         password: RedisPassword,
         confirmation: &str,
         allow_edits: bool,
+        allow_publish: bool,
     ) -> Result<RedisSessionInfo> {
         if password.0.len() > 4096 {
             return Err("Redis 암호가 너무 깁니다.".into());
@@ -85,15 +91,7 @@ impl RedisManager {
         let store = self.store.clone();
         let profile = tokio::task::spawn_blocking(move || {
             let profile = store.redis_profile(&id, revision)?;
-            let settings = &profile.settings;
-            let tls = if settings.tls {
-                Some(tls::verified_connector(
-                    settings.ca_path.as_deref(),
-                    "Redis",
-                )?)
-            } else {
-                None
-            };
+            let tls = connector(&profile.settings)?;
             Ok::<_, String>((profile, tls))
         })
         .await
@@ -106,7 +104,7 @@ impl RedisManager {
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| "열린 Redis 연결이 너무 많습니다.")?;
-        let (engine, version, wire) = timeout(CONNECT_TIMEOUT, establish(settings, tls, password))
+        let (engine, version, wire) = timeout(CONNECT_TIMEOUT, establish(settings, tls, &password))
             .await
             .map_err(|_| "Redis 연결 시간이 초과되었습니다.")??;
         let id = Uuid::new_v4().to_string();
@@ -119,6 +117,8 @@ impl RedisManager {
                     state: AsyncMutex::new(Some(edit::State::new(wire))),
                     profile,
                     allow_edits,
+                    allow_publish,
+                    subscription: AsyncMutex::new(None),
                     _permit: permit,
                 }),
             );
@@ -127,6 +127,7 @@ impl RedisManager {
             engine,
             version,
             allow_edits,
+            allow_publish,
         })
     }
 
@@ -302,11 +303,13 @@ impl RedisManager {
 async fn establish(
     settings: &RedisSettings,
     connector: Option<native_tls::TlsConnector>,
-    password: RedisPassword,
+    password: &RedisPassword,
 ) -> Result<(&'static str, String, Wire)> {
     let socket = TcpStream::connect((settings.host.as_str(), settings.port))
         .await
         .map_err(|_| "Redis 호스트 또는 포트에 연결할 수 없습니다.")?;
+    let keepalive = socket2::TcpKeepalive::new().with_time(Duration::from_secs(30));
+    let _ = socket2::SockRef::from(&socket).set_tcp_keepalive(&keepalive);
     let socket: Box<dyn Socket> = if let Some(connector) = connector {
         let connector = tokio_native_tls::TlsConnector::from(connector);
         Box::new(
@@ -329,7 +332,6 @@ async fn establish(
     } else if !password.0.is_empty() {
         verify_status(&mut wire, &[b"AUTH", password.0.as_bytes()], b"OK").await?;
     }
-    drop(password);
     let cluster = info(&mut wire, b"cluster").await?;
     if info_field(&cluster, "cluster_enabled") != Some("0") {
         return Err(
@@ -354,6 +356,10 @@ async fn establish(
         verify_status(&mut wire, &[b"SELECT", database.as_bytes()], b"OK").await?;
     }
     Ok((engine, version.chars().take(64).collect(), wire))
+}
+
+fn connector(settings: &RedisSettings) -> Result<Option<native_tls::TlsConnector>> {
+    settings.tls.then(|| tls::verified_connector(settings.ca_path.as_deref(), "Redis")).transpose()
 }
 
 async fn verify_status(wire: &mut Wire, args: &[&[u8]], status: &[u8]) -> Result<()> {
