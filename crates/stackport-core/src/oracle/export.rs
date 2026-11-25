@@ -1,7 +1,6 @@
 use super::{
     catalog::{data_suffix, find_object, ident, read_columns},
-    connect, connection_config, query_error, Column, ExportOptions, ExportOutcome, Manager,
-    Password, Session,
+    connect, query_error, Column, ExportOptions, ExportOutcome, Manager, Session,
 };
 use crate::{
     insert_audit,
@@ -28,18 +27,9 @@ const MAX_ROW_BYTES: usize = 32 * 1024 * 1024;
 const ROW_TOO_LARGE: &str = "Oracle 내보내기에서 한 행의 값이 32 MiB를 초과합니다.";
 const STATE_ERROR: &str = "Oracle 내보내기 상태를 읽을 수 없습니다.";
 
+#[derive(Default)]
 pub(super) struct State {
-    password: Option<Password>,
     active: Option<ActiveExport>,
-}
-
-impl State {
-    pub(super) fn new(password: Password) -> Self {
-        Self {
-            password: Some(password),
-            active: None,
-        }
-    }
 }
 
 struct ActiveExport {
@@ -85,8 +75,7 @@ impl Drop for Registration {
 
 impl Session {
     pub(super) fn stop_export(&self) -> Result<()> {
-        let mut state = self.export.lock().map_err(|_| STATE_ERROR)?;
-        state.password = None;
+        let state = self.export.lock().map_err(|_| STATE_ERROR)?;
         if let Some(active) = state.active.as_ref().filter(|active| !active.publishing) {
             active.job.stop.store(true, Ordering::Release);
         }
@@ -212,11 +201,7 @@ fn collect(
     job.check()?;
     let file = ExportFile::open(&options.destination, options.format())?;
     let settings = &session.profile.settings;
-    let config = {
-        let state = session.export.lock().map_err(|_| STATE_ERROR)?;
-        let password = state.password.as_ref().ok_or(super::CLOSED)?;
-        connection_config(settings, password)?
-    };
+    let config = session.operation_config()?;
     job.check()?;
     let (connection, wallet) = connect(settings, config)?;
     let result = write_rows(&connection, object, clauses, file, job);
@@ -444,7 +429,7 @@ fn read_lob(mut lob: Lob, limit: usize, job: &Job) -> Result<Vec<u8>> {
     }
 }
 
-fn read_lob_chunk(lob: &mut Lob, buffer: &mut [u8]) -> io::Result<usize> {
+pub(super) fn read_lob_chunk(lob: &mut Lob, buffer: &mut [u8]) -> io::Result<usize> {
     match lob.read(buffer) {
         Err(error)
             if error.kind() == io::ErrorKind::InvalidData

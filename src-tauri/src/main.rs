@@ -1116,6 +1116,17 @@ async fn oracle_data(manager: State<'_, oracle::Manager>, id: String, object: i6
     -> Result<oracle::DataPage, String> { manager.data(&id, object, page, clauses.unwrap_or_default()).await }
 
 #[tauri::command]
+async fn run_oracle_query(manager: State<'_, oracle::Manager>, id: String, request_id: String,
+    input: oracle::QueryInput) -> Result<oracle::QueryOutcome, String> {
+    manager.run_query(&id, &request_id, input).await
+}
+
+#[tauri::command]
+fn cancel_oracle_query(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_query(&id, &request_id)
+}
+
+#[tauri::command]
 async fn export_oracle(manager: State<'_, oracle::Manager>, id: String, request_id: String, object: i64,
     clauses: TableQueryClauses, options: oracle::ExportOptions) -> Result<oracle::ExportOutcome, String> {
     manager.export(&id, request_id, object, clauses, options).await
@@ -2529,6 +2540,8 @@ fn main() {
             oracle_columns,
             oracle_definition,
             oracle_data,
+            run_oracle_query,
+            cancel_oracle_query,
             export_oracle,
             oracle_export_progress,
             cancel_oracle_export,

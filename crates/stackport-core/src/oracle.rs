@@ -1,12 +1,14 @@
 mod catalog;
 mod export;
 mod profiles;
+mod query;
 
 pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Profile, ProfileSettings, Target, Transport};
+pub use query::{QueryInput, QueryOutcome};
 
 use crate::{Result, Store};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -59,7 +61,9 @@ struct Session {
     connection: Arc<AsyncMutex<Connection>>,
     closed: AtomicBool,
     profile: Profile,
+    password: Mutex<Option<Password>>,
     export: Mutex<export::State>,
+    query: Mutex<Option<query::ActiveQuery>>,
     _wallet: Option<TempDir>,
     _permit: OwnedSemaphorePermit,
 }
@@ -111,7 +115,9 @@ impl Manager {
                 connection: Arc::new(AsyncMutex::new(connection)),
                 closed: AtomicBool::new(false),
                 profile,
-                export: Mutex::new(export::State::new(password)),
+                password: Mutex::new(Some(password)),
+                export: Mutex::new(export::State::default()),
+                query: Mutex::new(None),
                 _wallet: wallet,
                 _permit: permit,
             };
@@ -141,6 +147,12 @@ impl Manager {
             .remove(id);
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
+            session.stop_query();
+            session
+                .password
+                .lock()
+                .map_err(|_| "Oracle 인증 상태를 읽을 수 없습니다.")?
+                .take();
             session.stop_export()?;
             tokio::task::spawn_blocking(move || drop(session));
         }
@@ -194,6 +206,16 @@ impl Manager {
                 Err("Oracle 조회 시간이 초과되어 연결이 닫혔습니다. 다시 연결하세요.".into())
             }
         }
+    }
+}
+
+impl Session {
+    fn operation_config(&self) -> Result<Config> {
+        let password = self
+            .password
+            .lock()
+            .map_err(|_| "Oracle 인증 상태를 읽을 수 없습니다.")?;
+        connection_config(&self.profile.settings, password.as_ref().ok_or(CLOSED)?)
     }
 }
 

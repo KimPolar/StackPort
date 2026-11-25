@@ -54,6 +54,15 @@ test("highlights T-SQL batch boundaries, Unicode literals, identifiers and neste
   ]);
 });
 
+test("highlights Oracle alternative and national strings and PL/SQL keywords", () => {
+  const text = "BEGIN\nSELECT q'[; FROM ''한글]' AS s, nq'! / !', N'한', \"FROM\", :값 FROM dual;\nEND;";
+  assert.deepEqual(marked(text, "oracle"), [
+    ["keyword", "BEGIN"], ["keyword", "SELECT"], ["string", "q'[; FROM ''한글]'"], ["keyword", "AS"],
+    ["string", "nq'! / !'"], ["string", "N'한'"], ["identifier", '"FROM"'], ["parameter", ":값"],
+    ["keyword", "FROM"], ["keyword", "dual"], ["keyword", "END"],
+  ]);
+});
+
 test("clips multiline tokens to the visible line and falls back at rendering limits", () => {
   const text = "/* 첫 줄\n둘😀째 */ SELECT 12";
   const tokens = editorSyntaxTokens(text, "sqlite");

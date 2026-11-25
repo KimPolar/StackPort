@@ -52,8 +52,8 @@
 .mysql-table small { color: var(--text-muted); }
 .mysql-sql-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
 .relational-workspace-views { padding: 0; margin-bottom: 12px; }
-.sql-server-query select { max-width: 100%; }
-.sql-server-query .error-banner { overflow-wrap: anywhere; white-space: pre-wrap; }
+.relational-query-editor select { max-width: 100%; }
+.relational-query-editor .error-banner { overflow-wrap: anywhere; white-space: pre-wrap; }
 .mysql-sql-actions > span { color: var(--text-muted); font-size: 12px; }
 .mysql-sql .panel-heading h3, .mysql-sql-parameters h3 { margin: 0; font-size: 14px; }
 .mysql-sql .code-editor { margin: 0 12px; }

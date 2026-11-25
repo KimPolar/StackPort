@@ -79,6 +79,7 @@ async function verify(page, hiddenObject, exportFolder) {
     const schemas = await command('oracle_schemas', { id, search: 'sp_owner_', page: 0 });
     assert.deepEqual(schemas.items, [owner]);
     assert.deepEqual((await command('oracle_schemas', { id, search: '%', page: 0 })).items, []);
+    await verifyOracleExecution(command, id);
     const catalog = (await command('oracle_objects', { id, schema: owner, search: '', page: 0 })).items;
     const objects = catalog.filter(item => ['Daily Summary', 'Order Daily', 'Recent View'].includes(item.name));
     assert.deepEqual(objects.map(item => [item.name, item.kind]), [
@@ -200,9 +201,145 @@ async function verify(page, hiddenObject, exportFolder) {
   const ownDefinition = await verifyDefinitionPanel(page, ownView, engine);
   assert.match(ownDefinition, /"X%_Y"/);
   assert.match(ownDefinition, /"한글 정의"/);
+  const observer = await open(profile);
+  try { await verifyOracleEditor(workspace, command, observer.id); }
+  finally { await command('close_oracle', { id: observer.id }); }
+  await ownView.getByRole('heading', { name: 'Order Daily', exact: true }).waitFor();
   await workspace.getByRole('button', { name: engine + ' 연결 끊기', exact: true }).click();
   await detail.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);
+}
+
+const executionFixture = `${owner}."Execution Fixture"`;
+
+function oracleQuery(command, id, sql, requestId = randomUUID()) {
+  return command('run_oracle_query', { id, requestId, input: { sql, first_line: 1, cursor_byte: null } });
+}
+
+async function verifyOracleExecution(command, id) {
+  const query = (sql, requestId) => oracleQuery(command, id, sql, requestId);
+  const values = async () => {
+    const result = await query(`SELECT id FROM ${executionFixture} ORDER BY id;`);
+    assert.equal(result.status, 'succeeded', JSON.stringify(result.error));
+    return result.statements[0].data.rows.map(row => row[0].text);
+  };
+  const requestId = randomUUID();
+  const result = await query(`
+SELECT q'[한글;'🚀]' AS greeting, 12345678901234567890123456789012345678 AS exact_no,
+       HEXTORAW('00FF11') AS payload, CAST(NULL AS NUMBER) AS missing FROM dual;
+BEGIN
+  INSERT INTO ${executionFixture} VALUES (3);
+END;
+/
+SELECT id FROM ${executionFixture};
+INSERT INTO ${executionFixture} VALUES (4);
+`, requestId);
+  assert.equal(result.status, 'succeeded', JSON.stringify(result.error));
+  assert.equal(result.statements.length, 4);
+  assert.equal(result.transaction, 'rolled_back');
+  assert.equal(result.statements[3].rows_affected, 1);
+  assert.equal(result.statements[2].data.rows[0][0].text, '3');
+  const row = result.statements[0].data.rows[0];
+  assert.deepEqual(row.slice(0, 2).map(cell => cell.text), ["한글;'🚀", '12345678901234567890123456789012345678']);
+  assert.deepEqual(row[2], { text: '00FF11', encoding: 'hex', bytes: 3, truncated: false });
+  assert.equal(row[3], null);
+  assert.deepEqual(await values(), []);
+  const audit = (await command('list_audit_events', {})).events.find(event => event.correlation_id === requestId);
+  assert.equal(audit.operation, 'oracle.sql.execute');
+  assert.equal(audit.outcome, 'succeeded');
+  assert.doesNotMatch(JSON.stringify(audit), /Execution Fixture|SELECT/);
+
+  const failure = await query(`INSERT INTO ${executionFixture} VALUES (11);
+COMMIT;
+BEGIN
+  RAISE_APPLICATION_ERROR(-20029, 'script failed after commit');
+END;
+/
+INSERT INTO ${executionFixture} VALUES (12);`);
+  assert.equal(failure.status, 'failed');
+  assert.equal(failure.statements.length, 2);
+  assert.equal(failure.error.line, 3);
+  assert.equal(failure.error.code, 20029);
+  assert.deepEqual(await values(), ['11']);
+
+  const lob = await query(`SELECT note, payload FROM ${owner}."Export Fixture" WHERE id = 121;`);
+  assert.equal(lob.status, 'succeeded', JSON.stringify(lob.error));
+  const [characters, binary] = lob.statements[0].data.rows[0];
+  assert.deepEqual(characters, { text: 'a'.repeat(2048), encoding: 'utf8', bytes: null, truncated: true });
+  assert.equal(binary.bytes, 256 * 280);
+  assert.equal(binary.text.length, 2048);
+  assert.equal(binary.truncated, true);
+  const more = await query('SELECT LEVEL AS n FROM dual CONNECT BY LEVEL <= 140;');
+  assert.equal(more.statements[0].data.rows_received, 140);
+  assert.equal(more.statements[0].data.rows.length, 100);
+  const inline = await query(`WITH FUNCTION script_value RETURN NUMBER IS
+BEGIN RETURN 71; END;
+SELECT script_value() AS n FROM dual; -- end
+/`);
+  assert.equal(inline.status, 'succeeded', JSON.stringify(inline.error));
+  assert.equal(inline.statements[0].data.rows[0][0].text, '71');
+
+  const timed = await query(`INSERT INTO ${executionFixture} VALUES (16);
+BEGIN SYS.DBMS_SESSION.SLEEP(12); END;
+/
+COMMIT;`);
+  assert.equal(timed.status, 'timed_out', JSON.stringify(timed));
+  assert.equal(timed.statements.length, 1);
+  assert.deepEqual(await values(), ['11']);
+}
+
+async function verifyOracleEditor(workspace, command, observerId) {
+  const mode = workspace.getByRole('group', { name: engine + ' 작업 보기' });
+  await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  const pane = workspace.getByRole('region', { name: 'Oracle SQL 편집기', exact: true });
+  const editor = pane.getByRole('textbox', { name: 'Oracle SQL 문장', exact: true });
+  const results = pane.getByRole('region', { name: 'Oracle 실행 결과', exact: true });
+  const grid = results.getByRole('table', { name: 'Oracle SQL 결과 표', exact: true });
+  const entire = pane.getByRole('button', { name: '전체 실행', exact: true });
+  await editor.fill("SELECT q'[먼저;]' AS marker FROM dual;\nSELECT q'{다음;}' AS marker FROM dual;");
+  await entire.click();
+  await grid.getByText('먼저;', { exact: true }).waitFor();
+  await results.getByRole('combobox', { name: '문장 결과' }).selectOption('1');
+  await grid.getByText('다음;', { exact: true }).waitFor();
+  await editor.press('Control+Home');
+  await editor.press('Control+Enter');
+  await grid.getByText('먼저;', { exact: true }).waitFor();
+  assert.equal(await results.getByRole('combobox', { name: '문장 결과' }).count(), 0);
+  await editor.press('Control+End');
+  await editor.press('Shift+Home');
+  await pane.getByRole('button', { name: '선택 실행', exact: true }).click();
+  await grid.getByText('다음;', { exact: true }).waitFor();
+
+  await editor.fill(`INSERT INTO ${executionFixture} VALUES (13);
+COMMIT;
+BEGIN SYS.DBMS_SESSION.SLEEP(12); END;
+/
+INSERT INTO ${executionFixture} VALUES (14);
+COMMIT;`);
+  await entire.click();
+  const cancel = pane.getByRole('button', { name: '실행 중단', exact: true });
+  await cancel.waitFor();
+  const started = performance.now();
+  let running = false;
+  while (performance.now() - started < 7000) {
+    const marker = await oracleQuery(command, observerId, `SELECT id FROM ${executionFixture} WHERE id = 13;`);
+    assert.equal(marker.status, 'succeeded', JSON.stringify(marker.error));
+    if (marker.statements[0].data.rows_received === 1) { running = true; break; }
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  assert.ok(running, 'The server must commit the marker before cancellation.');
+  await cancel.click();
+  await results.getByRole('status').waitFor({ timeout: 25000 });
+  assert.match(await results.getByRole('status').innerText(), /실행 중단/);
+  const check = `SELECT id FROM ${executionFixture} WHERE id IN (13, 14) ORDER BY id;`;
+  await editor.fill(check);
+  await entire.click();
+  await grid.getByText('13', { exact: true }).waitFor();
+  assert.equal(await grid.getByText('14', { exact: true }).count(), 0);
+  await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
+  await mode.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
+  assert.equal(await editor.inputValue(), check);
+  await mode.getByRole('button', { name: '객체 탐색', exact: true }).click();
 }
 
 async function verifyExports(command, id, profile, folder, catalog, hiddenObject) {
@@ -323,7 +460,7 @@ async function main() {
     for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
     fs.rmdirSync(exportFolder);
   }
-  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging, CSV and JSON exports with cancellation).`);
+  console.log(`Oracle Windows E2E passed (${tcpOnly ? 'native TCP' : 'native TCP and TCPS'}, scoped object search, object definitions, permissions, native values, filters, sorting, saved conditions and paging, CSV and JSON exports, SQL and PL/SQL execution, rollback and cancellation).`);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

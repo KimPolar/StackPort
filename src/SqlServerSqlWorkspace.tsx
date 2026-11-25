@@ -134,7 +134,7 @@ export function SqlServerSqlWorkspace({ id, database }: { id: string; database: 
     }
   }
 
-  return <section className="results-card mysql-sql sql-server-query" aria-label="SQL Server SQL 편집기">
+  return <section className="results-card mysql-sql relational-query-editor" aria-label="SQL Server SQL 편집기">
     <div className="panel-heading"><h2>SQL 편집기</h2><span>{database}</span></div>
     <div className="mysql-sql-actions" role="group" aria-label="SQL 실행">
       <button type="button" className="primary small" disabled={!ready} onClick={() => void run("document")}>

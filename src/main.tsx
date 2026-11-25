@@ -2241,6 +2241,8 @@ const auditOperationNames: Record<string, string> = {
   "redis.key.delete.unconfirmed": "Redis 키 삭제 결과 미확인",
   "sql_server.sql.execute": "SQL Server SQL 실행", "sql_server.sql.execute.cancel": "SQL Server SQL 실행 중단",
   "sql_server.sql.execute.timeout": "SQL Server SQL 실행 시간 초과",
+  "oracle.sql.execute": "Oracle SQL 실행", "oracle.sql.execute.cancel": "Oracle SQL 실행 중단",
+  "oracle.sql.execute.timeout": "Oracle SQL 실행 시간 초과",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
   "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",
@@ -2294,7 +2296,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
       {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => {
-        const cancelled = event.operation === "sql_server.sql.execute.cancel" ||
+        const cancelled = event.operation === "sql_server.sql.execute.cancel" || event.operation === "oracle.sql.execute.cancel" ||
           (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
         const outcome = cancelled ? "cancelled" : event.outcome;
         return <li key={event.id}>

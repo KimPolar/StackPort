@@ -1,4 +1,4 @@
-export type EditorLanguage = "sqlite" | "postgres" | "mysql" | "tsql" | "json" | "xml";
+export type EditorLanguage = "sqlite" | "postgres" | "mysql" | "tsql" | "oracle" | "json" | "xml";
 type SyntaxKind = "comment" | "string" | "identifier" | "number" | "keyword" | "parameter" | "property" | "tag";
 type SyntaxToken = { start: number; end: number; kind: SyntaxKind };
 type SyntaxPart = { text: string; kind?: SyntaxKind };
@@ -78,6 +78,20 @@ const tsqlKeywords = new Set(`SELECT TOP FROM WHERE JOIN INNER LEFT RIGHT FULL O
   CASE WHEN THEN ELSE END CAST CONVERT OVER PARTITION ORDER BY GROUP HAVING OFFSET FETCH NEXT ROWS ONLY ASC DESC
   DECLARE SET BEGIN END TRAN TRANSACTION COMMIT ROLLBACK SAVE EXEC EXECUTE PRINT THROW RAISERROR TRY CATCH WAITFOR DELAY USE GO
 `.trim().split(/\s+/));
+const oracle = syntaxGrammar(
+  /(?<comment>--[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$))/,
+  /(?<string>[nN]?[qQ]'(?<oracleQuote>[^\s])|[nN]?'(?:''|[^'])*(?:'|$))/u,
+  /(?<identifier>"(?:""|[^"])*(?:"|$))/,
+  /(?<parameter>:(?:\d+|[\p{L}_][\p{L}\p{M}\p{N}_$#]*))/u,
+  sqliteRules[4], sqliteRules[5],
+);
+const oracleKeywords = new Set(`SELECT FROM DUAL WHERE JOIN INNER LEFT RIGHT FULL OUTER CROSS ON USING AS DISTINCT ALL UNION INTERSECT MINUS
+  WITH INSERT INTO UPDATE DELETE MERGE RETURNING VALUES CREATE OR REPLACE ALTER DROP TABLE VIEW INDEX PROCEDURE FUNCTION PACKAGE TRIGGER
+  PRIMARY KEY FOREIGN REFERENCES CONSTRAINT CHECK UNIQUE DEFAULT IDENTITY NULL TRUE FALSE AND NOT IS IN EXISTS BETWEEN LIKE ESCAPE
+  CASE WHEN THEN ELSE END CAST OVER PARTITION ORDER BY GROUP HAVING OFFSET FETCH FIRST NEXT ROWS ONLY ASC DESC CONNECT START PRIOR
+  DECLARE BEGIN EXCEPTION RAISE LOOP WHILE FOR RETURN COMMIT ROLLBACK SAVEPOINT SET TYPE BODY CURSOR OPEN CLOSE EXECUTE IMMEDIATE
+`.trim().split(/\s+/));
+const oracleQuoteClosers = new Map([["[", "]"], ["{", "}"], ["(", ")"], ["<", ">"]]);
 
 export type SqlEditorToken = { kind: "word" | "identifier" | "comment" | "string" | "parameter" | "number" | "punctuation"; text: string; start: number; end: number };
 
@@ -115,7 +129,7 @@ export function editorLanguageForFile(filename: string): EditorLanguage | undefi
 export function editorSyntaxTokens(value: string, language: EditorLanguage): SyntaxToken[] | null {
   if (value.length > textLimit) return null;
   const tokens: SyntaxToken[] = [];
-  const grammar = new RegExp({ sqlite, postgres, mysql, tsql, json, xml }[language]);
+  const grammar = new RegExp({ sqlite, postgres, mysql, tsql, oracle, json, xml }[language]);
   for (let match = grammar.exec(value); match; match = grammar.exec(value)) {
     const groups = match.groups!;
     const start = match.index;
@@ -124,12 +138,19 @@ export function editorSyntaxTokens(value: string, language: EditorLanguage): Syn
       end = nestedCommentEnd(value, end);
       grammar.lastIndex = end;
     }
+    if (language === "oracle" && groups.oracleQuote) {
+      const closer = (oracleQuoteClosers.get(groups.oracleQuote) ?? groups.oracleQuote) + "'";
+      const close = value.indexOf(closer, end);
+      end = close === -1 ? value.length : close + closer.length;
+      grammar.lastIndex = end;
+    }
     let kind: SyntaxKind;
     if (groups.word) {
       const marked = language === "sqlite" ? isSqliteKeyword(groups.word) : language === "postgres"
         ? postgresKeywords.has(groups.word.toUpperCase()) : language === "mysql"
           ? mysqlKeywords.has(groups.word.toUpperCase()) : language === "tsql"
-            ? tsqlKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
+            ? tsqlKeywords.has(groups.word.toUpperCase()) : language === "oracle"
+              ? oracleKeywords.has(groups.word.toUpperCase()) : /^(?:true|false|null)$/.test(groups.word);
       if (!marked) continue;
       kind = "keyword";
     } else if (groups.string && language === "json") {

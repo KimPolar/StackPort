@@ -34,18 +34,21 @@ with oracledb.connect(user='sys', password=os.environ['STACKPORT_ORACLE_SYS_PASS
         assert separator > 0
         datafile = (system_file[:separator + 1] + f'spfixture_{run.lower()}.dbf').replace("'", "''")
         tablespace = f'SP_FIXTURE_{run}'
-        cur.execute(f"CREATE TABLESPACE {tablespace} DATAFILE '{datafile}' SIZE 12M")
+        cur.execute(f"CREATE TABLESPACE {tablespace} DATAFILE '{datafile}' SIZE 20M")
         cur.execute(f'CREATE USER {owner} IDENTIFIED BY "{owner_password}" DEFAULT TABLESPACE {tablespace} QUOTA UNLIMITED ON {tablespace}')
         cur.execute(f'GRANT CREATE SESSION, CREATE TABLE, CREATE VIEW, CREATE MATERIALIZED VIEW, CREATE PROCEDURE TO {owner}')
         cur.execute(f'GRANT EXECUTE ON SYS.DBMS_SESSION TO {owner}')
         cur.execute(f'CREATE USER {reader} IDENTIFIED BY "{reader_password}"')
         cur.execute(f'GRANT CREATE SESSION TO {reader}')
+        cur.execute(f'GRANT EXECUTE ON SYS.DBMS_SESSION TO {reader}')
         cur.execute(f'CREATE VIEW {reader}."Order Daily" AS SELECT 1 "X%_Y", 2 "X%XY", 3 "한글 정의" FROM dual')
         cur.execute(f'CREATE VIEW {reader}.wildcard_decoy AS SELECT 1 "X%XY" FROM dual')
 
 with oracledb.connect(user=owner, password=owner_password, params=dsn) as connection:
     with connection.cursor() as cur:
         cur.execute('CREATE TABLE hidden_data (id NUMBER, "X%_Y" NUMBER)')
+        cur.execute('CREATE TABLE "Execution Fixture" (id NUMBER PRIMARY KEY)')
+        cur.execute(f'GRANT SELECT, INSERT ON "Execution Fixture" TO {reader}')
         cur.execute('''
             CREATE TABLE "Order Daily" (
                 tenant NUMBER(3,0) NOT NULL,

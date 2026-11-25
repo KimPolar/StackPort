@@ -30,6 +30,12 @@ SQL Server의 **키와 인덱스**는 현재 계정에 공개된 인덱스, 제�
 
 Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
 
+Oracle **SQL 편집기**는 전체 문서, 현재 문장, 선택 영역을 실행합니다. 일반 SQL은 세미콜론으로 나눕니다. 연달아 실행할 PL/SQL 블록과 저장 프로그램은 별도 줄의 `/`로 구분합니다. Oracle 대체 인용 문자열과 인용 식별자 안의 구분 문자는 유지합니다. 문서의 최대 크기는 256 KiB이며 한 번에 최대 100개 문장을 실행합니다. [Oracle SQL*Plus의 PL/SQL 구분](https://docs.oracle.com/en/database/oracle/oracle-database/19/sqpug/SQL-Plus-basics.html)
+
+실행마다 같은 로그인과 전송 설정으로 별도 연결을 엽니다. Oracle에서 커밋한 작업은 유지하고, 열린 트랜잭션은 실행 종료 시 롤백합니다. 한 문장이 실패하거나 중단 요청을 확인하면 다음 문장부터 실행을 멈춥니다. 스크립트 실행 시간은 최대 30초로 관리하며, 소켓 읽기·쓰기에는 최대 8초 한도를 적용합니다. 수동 중단 요청은 진행 중인 호출이 반환된 뒤 적용됩니다. 중단·시간 초과 과정에서 Oracle의 중단 응답과 실행 종료 시의 롤백 확인 상태를 표시합니다.
+
+결과에서 문장 시작 줄, Oracle 오류와 드라이버가 제공한 경고, DML의 영향받은 행 수를 확인할 수 있습니다. 조회마다 앞 100행과 128열을 표시하며, 텍스트 값은 2 KiB, 바이너리는 1 KiB까지 미리 봅니다. NUMBER는 정밀도를 보존하고 CLOB·BLOB은 제한된 부분만 읽습니다. 전체 미리보기 저장 한도에 도달한 뒤에도 해당 결과를 읽어 실행 성공 여부를 확인합니다. 편집기에는 매개변수 입력과 `DBMS_OUTPUT` 수집이 남아 있습니다.
+
 Oracle의 **결과 내보내기**는 테이블·뷰·구체화 뷰에서 적용한 필터와 정렬로 전체 결과를 UTF-8 CSV 또는 버전형 JSON에 저장합니다. `NUMBER`는 정밀도를 유지하고, 시간대가 있는 타임스탬프는 오프셋과 저장된 지역을 기록합니다. `WITH LOCAL TIME ZONE` 값은 UTC로 기록합니다. `CLOB`·`NCLOB`·`BLOB`은 작은 단위로 읽고 SQL `NULL`과 비어 있는 LOB를 구분합니다. 네이티브 `JSON` 값은 Oracle이 표준 JSON 텍스트로 직렬화합니다. [Oracle JSON_SERIALIZE](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/JSON_SERIALIZE.html)
 
 내보내기는 같은 인증과 전송 설정으로 별도 연결을 엽니다. 암호는 열린 세션 동안 메모리에 유지하고 종료 시 지웁니다. 진행 행 수를 표시하며, 중단은 진행 중인 서버 호출이 반환된 뒤 처리합니다. 제한은 4,096열, 행당 값 합계 32 MiB, 전체 5분입니다. `BFILE`·`LONG` 등 지원 범위 밖의 열은 이름과 타입을 오류에 표시합니다. 성공한 파일만 지정 경로에 저장하고 대상 객체와 행 수를 작업 기록에 남깁니다.
@@ -52,7 +58,7 @@ SQL Server의 **생성 SQL**은 `VIEW DEFINITION` 권한이 있는 일반 디스
 
 정의 SQL은 UTF-8 기준 1 MiB까지 표시하고 복사합니다. 새 `.sql` 파일에 저장할 때 원문의 줄바꿈과 문자를 그대로 기록하며 같은 경로의 기존 파일을 보호합니다. MySQL과 MariaDB의 생성 SQL도 같은 복사·저장 화면을 사용합니다.
 
-Oracle Free 컨테이너에서 정의 SQL을 조회하려면 XML DB가 포함된 Full 이미지가 필요합니다. Lite 이미지에서는 소유 객체의 `GET_DDL`을 호출할 때 서버가 XDB 라이브러리 오류를 반환하는 것을 확인했습니다. Oracle 정의 조회는 최대 60초까지 기다리고 완료 후 기존 연결의 호출 제한을 복원합니다. [Oracle Free 컨테이너 이미지 기능 비교](https://container-registry.oracle.com/ords/ocr/ba/database/free)
+Oracle Free 컨테이너에서 정의 SQL을 조회하려면 XML DB가 포함된 Full 이미지가 필요합니다. Full 이미지에서 소유자의 테이블·뷰·구체화 뷰 정의를 반환하는 것을 검증했습니다. Lite 이미지에서는 소유 객체의 `GET_DDL`을 호출할 때 서버가 XDB 라이브러리 오류를 반환했습니다. Oracle 정의 조회는 최대 60초까지 기다리고 완료 후 기존 연결의 호출 제한을 복원합니다. [Oracle Free 컨테이너 이미지 기능 비교](https://container-registry.oracle.com/ords/ocr/ba/database/free)
 
 **화면 설정**은 상단 또는 명령 팔레트에서 엽니다. 기본값은 시스템 테마이며 OS 설정이 바뀌면 작업 공간과 터미널에도 반영합니다. 라이트·다크를 직접 선택하면 창 제목 표시줄까지 적용합니다. 설정은 현재 WebView2 프로필에 저장합니다. 터미널에서는 실행 중인 세션을 유지한 채 화면 색상과 라이트 테마의 기본 ANSI 팔레트를 갱신합니다.
 
