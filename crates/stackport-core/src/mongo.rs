@@ -83,6 +83,7 @@ pub struct MongoIndex {
     keys: String,
     unique: bool,
     ttl_seconds: Option<u64>,
+    ttl_eligible: bool,
     hidden: bool,
 }
 
@@ -322,6 +323,7 @@ impl MongoManager {
                     unique: options.unique.unwrap_or(name == "_id_"),
                     name,
                     ttl_seconds: options.expire_after.map(|duration| duration.as_secs()),
+                    ttl_eligible: index_admin::ttl_key(&index.keys),
                     keys: document_snapshot::canonical_value(&Bson::Document(index.keys))?,
                     hidden: options.hidden.unwrap_or(false),
                 });

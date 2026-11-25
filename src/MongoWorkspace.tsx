@@ -7,7 +7,7 @@ import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
-import { MongoIndexDialog, type MongoIndexAction } from "./MongoIndexDialog";
+import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
@@ -15,7 +15,7 @@ import "./mongoWorkspace.css";
 type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
-type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; hidden: boolean };
+type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; ttl_eligible: boolean; hidden: boolean };
 type Query = { filter: string; projection: string; sort_field: string; descending: boolean; page: number };
 
 const defaultQuery: Query = { filter: "", projection: "", sort_field: "_id", descending: false, page: 0 };
@@ -198,8 +198,13 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       </tr></thead><tbody>{indexes.data.items.map(index => <tr key={index.name}>
         <th scope="row">{index.name}{index.hidden && <small> · 숨김</small>}</th><td><code>{index.keys}</code></td><td>{index.unique ? "예" : "—"}</td>
         <td>{index.ttl_seconds === null ? "—" : `${displayNumber.format(index.ttl_seconds)}초`}</td>
-        {allowIndexes && <td>{index.name !== "_id_" && index.name !== "*" && <button type="button" className="secondary small"
-          aria-label={`${index.name} 인덱스 삭제`} onClick={() => setIndexAction({ kind: "drop", name: index.name })}>삭제</button>}</td>}
+        {allowIndexes && <td>{index.name !== "_id_" && index.name !== "*" && <div className="mongo-index-actions">
+          <button type="button" className="secondary small" aria-label={`${index.name} 인덱스 옵션 변경`} onClick={() => setIndexAction({
+            kind: "modify", name: index.name, hidden: index.hidden, ttlSeconds: index.ttl_seconds, ttlEligible: index.ttl_eligible,
+          })}>옵션 변경</button>
+          <button type="button" className="secondary small" aria-label={`${index.name} 인덱스 삭제`}
+            onClick={() => setIndexAction({ kind: "drop", name: index.name })}>삭제</button>
+        </div>}</td>}
       </tr>)}</tbody></table></div>}
       {indexes.data?.has_next && <p className="form-note mongo-note">앞 64개 인덱스를 표시합니다.</p>}
     </>}
@@ -253,7 +258,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
     }} />}
     {indexAction && <MongoIndexDialog target={args} action={indexAction} environment={environment} onBusy={onBusy}
       onClose={() => setIndexAction(null)} onDone={warning => {
-        setIndexNotice(`인덱스 ${indexAction.kind === "drop" ? "삭제" : "생성"} 완료${warning ? " · 완료 감사 기록 저장 실패" : ""}`);
+        setIndexNotice(`인덱스 ${mongoIndexActionLabels[indexAction.kind]} 완료${warning ? " · 완료 감사 기록 저장 실패" : ""}`);
         setIndexAction(null);
         refresh();
       }} />}

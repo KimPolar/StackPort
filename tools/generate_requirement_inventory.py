@@ -190,12 +190,12 @@ PARTIAL = {
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
-    "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회",
+    "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 일반 컬렉션의 인덱스 생성·숨김과 TTL 변경·단일 삭제",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
-    "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성 및 영향 검토 후 단일 삭제",
+    "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -551,7 +551,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/redis-smoke.cjs"
             if requirement_id in {"SP-NS-010", "SP-NS-011", "SP-NS-017", "SP-AT-018"}:
                 evidence += "; crates/stackport-core/src/redis/json.rs"
-            if requirement_id in {"SP-NS-006", "SP-NS-018"}:
+            if requirement_id in {"SP-NS-001", "SP-NS-006", "SP-NS-018"}:
                 evidence += "; crates/stackport-core/src/mongo/index_admin.rs; src/MongoIndexDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"

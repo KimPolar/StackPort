@@ -48,6 +48,10 @@
 .mongo-index-keys li { padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
 .mongo-index-definition { max-height: 28dvh; overflow: auto; padding: 8px; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; }
 .mongo-index-impact { padding-inline-start: 20px; font-size: 13px; }
+.mongo-index-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mongo-index-comparison { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 10px; }
+.mongo-index-comparison section { min-width: 0; }
+.mongo-index-comparison h4 { margin: 0; font-size: 13px; }
 .dialog.mongo-edit-dialog { width: min(850px, calc(100vw - 32px)); }
 .mongo-edit-input, .mongo-edit-compare pre { min-width: 0; margin: 0; padding: 8px; border: 1px solid var(--control-border); border-radius: 5px; color: var(--text); background: var(--surface-inset); font: 12px/1.6 Consolas, monospace; }
 .mongo-edit-input { max-height: 45dvh; width: 100%; resize: vertical; }

@@ -24,6 +24,7 @@ const CHANGED: &str =
     "검토한 컬렉션 또는 인덱스가 바뀌었습니다. 목록을 새로 고친 뒤 다시 검토하세요.";
 const UNKNOWN: &str =
     "MongoDB 인덱스 변경 결과를 확인하지 못했습니다. 목록을 새로 고쳐 현재 상태를 확인하세요.";
+const TTL_KEY: &str = "TTL에는 _id를 제외한 오름차순 또는 내림차순 키 하나를 지정하세요.";
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -36,6 +37,11 @@ pub enum MongoIndexChange {
     },
     Drop {
         name: String,
+    },
+    Modify {
+        name: String,
+        hidden: Option<bool>,
+        expire_after_seconds: Option<u32>,
     },
 }
 
@@ -61,9 +67,12 @@ enum IndexKind {
 pub struct MongoIndexReview {
     token: String,
     definition: String,
+    previous_definition: Option<String>,
     unique: bool,
     ttl_seconds: Option<u32>,
+    ttl_may_expire_documents: bool,
     hidden: bool,
+    visibility_changed: bool,
     usage: Option<IndexUsage>,
     expires_seconds: u64,
 }
@@ -106,6 +115,7 @@ struct Review {
 enum Change {
     Create(Document),
     Drop(Document),
+    Modify { before: Document, options: Document },
 }
 
 impl MongoManager {
@@ -138,22 +148,12 @@ impl MongoManager {
         let (client, admin) = self.index_admin(id)?;
         let mut pending = admin.review.lock().await;
         *pending = None;
-        let (name, proposed) = match input {
-            MongoIndexChange::Create {
-                name,
-                keys,
-                unique,
-                expire_after_seconds,
-            } => {
-                validate_name(&name)?;
-                let definition = definition(&name, keys, unique, expire_after_seconds)?;
-                (name, Some(definition))
-            }
-            MongoIndexChange::Drop { name } => {
-                validate_name(&name)?;
-                (name, None)
-            }
+        let name = match &input {
+            MongoIndexChange::Create { name, .. }
+            | MongoIndexChange::Drop { name }
+            | MongoIndexChange::Modify { name, .. } => name.clone(),
         };
+        validate_name(&name)?;
         let db = client.database(&database);
         let (uuid, existing) = timeout(READ_TIMEOUT, async {
             let uuid = collection_uuid(&db, &collection).await?;
@@ -163,26 +163,72 @@ impl MongoManager {
         .await
         .map_err(|_| "MongoDB 인덱스 검토 시간이 초과되었습니다.")??;
 
-        let change = match (proposed, existing) {
-            (Some(spec), None) => Change::Create(spec),
-            (Some(_), Some(_)) => return Err("같은 이름의 MongoDB 인덱스가 이미 있습니다.".into()),
-            (None, Some(spec)) if !spec.get_bool("clustered").unwrap_or(false) => {
+        let change = match (input, existing) {
+            (
+                MongoIndexChange::Create {
+                    keys,
+                    unique,
+                    expire_after_seconds,
+                    ..
+                },
+                None,
+            ) => Change::Create(definition(&name, keys, unique, expire_after_seconds)?),
+            (MongoIndexChange::Create { .. }, Some(_)) => {
+                return Err("같은 이름의 MongoDB 인덱스가 이미 있습니다.".into())
+            }
+            (MongoIndexChange::Drop { .. }, Some(spec))
+                if !spec.get_bool("clustered").unwrap_or(false) =>
+            {
                 Change::Drop(spec)
             }
-            _ => return Err("삭제할 수 있는 MongoDB 인덱스를 확인하세요.".into()),
+            (
+                MongoIndexChange::Modify {
+                    hidden,
+                    expire_after_seconds,
+                    ..
+                },
+                Some(before),
+            ) if !before.get_bool("clustered").unwrap_or(false) => {
+                let options = modified_options(&before, hidden, expire_after_seconds)?;
+                Change::Modify { before, options }
+            }
+            _ => return Err("변경할 수 있는 MongoDB 인덱스를 확인하세요.".into()),
         };
         let token = Uuid::new_v4().to_string();
-        let spec = match &change {
-            Change::Create(spec) | Change::Drop(spec) => spec,
+        let (spec, previous_definition, ttl_may_expire_documents) = match &change {
+            Change::Create(spec) => (spec.clone(), None, spec.contains_key("expireAfterSeconds")),
+            Change::Drop(spec) => (spec.clone(), None, false),
+            Change::Modify { before, options } => {
+                let mut after = before.clone();
+                if let Ok(hidden) = options.get_bool("hidden") {
+                    if hidden {
+                        after.insert("hidden", true);
+                    } else {
+                        after.remove("hidden");
+                    }
+                }
+                if let Ok(ttl) = options.get_i32("expireAfterSeconds") {
+                    after.insert("expireAfterSeconds", ttl);
+                }
+                let may_expire = bson_count(options, "expireAfterSeconds").is_some_and(|ttl| {
+                    bson_count(before, "expireAfterSeconds").is_none_or(|old| ttl < old)
+                });
+                (after, Some(canonical(before)?), may_expire)
+            }
         };
         let review = MongoIndexReview {
             token: token.clone(),
-            definition: canonical(spec)?,
+            definition: canonical(&spec)?,
+            previous_definition,
             unique: spec.get_bool("unique").unwrap_or(false),
-            ttl_seconds: bson_count(spec, "expireAfterSeconds")
+            ttl_seconds: bson_count(&spec, "expireAfterSeconds")
                 .and_then(|value| u32::try_from(value).ok()),
+            ttl_may_expire_documents,
             hidden: spec.get_bool("hidden").unwrap_or(false),
-            usage: if matches!(&change, Change::Drop(_)) {
+            visibility_changed: matches!(&change, Change::Modify { options, .. } if options.contains_key("hidden")),
+            usage: if matches!(&change, Change::Drop(_))
+                || matches!(&change, Change::Modify { options, .. } if options.get_bool("hidden").unwrap_or(false))
+            {
                 index_usage(&db, &collection, &name).await
             } else {
                 None
@@ -243,6 +289,15 @@ impl MongoManager {
                 doc! { "dropIndexes": &review.collection, "index": [&review.name] },
                 SERVER_TIME,
             ),
+            Change::Modify { options, .. } => {
+                let mut index = doc! { "name": &review.name };
+                index.extend(options.clone());
+                (
+                    "mongo.index.modify",
+                    doc! { "collMod": &review.collection, "index": index },
+                    SERVER_TIME,
+                )
+            }
         };
         command.insert("collectionUUID", review.uuid.clone());
         command.insert("maxTimeMS", server_limit.as_millis() as i32);
@@ -282,7 +337,9 @@ async fn check_review(db: &Database, review: &Review) -> Result<()> {
     let current = named_index(db, &review.collection, &review.name).await?;
     let unchanged = match (&review.change, current) {
         (Change::Create(_), None) => true,
-        (Change::Drop(before), Some(current)) => same_document(before, &current)?,
+        (Change::Drop(before) | Change::Modify { before, .. }, Some(current)) => {
+            same_document(before, &current)?
+        }
         _ => false,
     };
     if unchanged {
@@ -396,21 +453,54 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn ttl_key(pattern: &Document) -> bool {
+    pattern.len() == 1
+        && pattern.iter().next().is_some_and(|(field, order)| {
+            field != "_id"
+                && valid_field(field)
+                && match order {
+                    Bson::Int32(1 | -1) | Bson::Int64(1 | -1) => true,
+                    Bson::Double(value) => *value == 1.0 || *value == -1.0,
+                    _ => false,
+                }
+        })
+}
+
+fn ttl_value(seconds: u32) -> Result<i32> {
+    i32::try_from(seconds).map_err(|_| "TTL은 0~2147483647초로 입력하세요.".into())
+}
+
+fn modified_options(
+    before: &Document,
+    hidden: Option<bool>,
+    expire_after_seconds: Option<u32>,
+) -> Result<Document> {
+    let mut options = Document::new();
+    if let Some(hidden) =
+        hidden.filter(|hidden| *hidden != before.get_bool("hidden").unwrap_or(false))
+    {
+        options.insert("hidden", hidden);
+    }
+    if let Some(ttl) = expire_after_seconds {
+        let ttl = ttl_value(ttl)?;
+        if !before.get_document("key").is_ok_and(ttl_key) {
+            return Err(TTL_KEY.into());
+        }
+        if bson_count(before, "expireAfterSeconds") != Some(ttl as u64) {
+            options.insert("expireAfterSeconds", ttl);
+        }
+    }
+    if options.is_empty() {
+        return Err("변경할 인덱스 옵션을 지정하세요.".into());
+    }
+    Ok(options)
+}
+
 fn definition(name: &str, keys: Vec<IndexKey>, unique: bool, ttl: Option<u32>) -> Result<Document> {
     if !(1..=32).contains(&keys.len()) {
         return Err("인덱스 키를 1~32개 지정하세요.".into());
     }
-    let ttl = ttl
-        .map(i32::try_from)
-        .transpose()
-        .map_err(|_| "TTL은 0~2147483647초로 입력하세요.")?;
-    if ttl.is_some()
-        && (keys.len() != 1
-            || keys[0].field == "_id"
-            || !matches!(keys[0].kind, IndexKind::Asc | IndexKind::Desc))
-    {
-        return Err("TTL에는 _id를 제외한 오름차순 또는 내림차순 키 하나를 지정하세요.".into());
-    }
+    let ttl = ttl.map(ttl_value).transpose()?;
     let simple_collation = keys
         .iter()
         .any(|key| matches!(key.kind, IndexKind::Text | IndexKind::Planar));
@@ -430,6 +520,9 @@ fn definition(name: &str, keys: Vec<IndexKey>, unique: bool, ttl: Option<u32>) -
             IndexKind::Hashed => Bson::String("hashed".into()),
         };
         pattern.insert(field, key);
+    }
+    if ttl.is_some() && !ttl_key(&pattern) {
+        return Err(TTL_KEY.into());
     }
     let mut spec = doc! { "key": pattern, "name": name };
     if unique {
@@ -523,5 +616,26 @@ mod tests {
             Some(u32::MAX)
         )
         .is_err());
+    }
+
+    #[test]
+    fn changes_only_supported_distinct_index_options() {
+        let before =
+            doc! { "key": { "expires": -1.0 }, "hidden": true, "expireAfterSeconds": 120_i64 };
+        assert!(modified_options(&before, Some(true), Some(120)).is_err());
+        let options = modified_options(&before, Some(false), Some(60)).unwrap();
+        assert_eq!(options, doc! { "hidden": false, "expireAfterSeconds": 60 });
+        assert_eq!(
+            modified_options(&before, None, Some(0)).unwrap(),
+            doc! { "expireAfterSeconds": 0 }
+        );
+        for pattern in [
+            doc! { "_id": 1 },
+            doc! { "a": 1, "b": 1 },
+            doc! { "tag": "text" },
+            doc! { "$**": 1 },
+        ] {
+            assert!(modified_options(&doc! { "key": pattern }, Some(true), Some(1)).is_err());
+        }
     }
 }

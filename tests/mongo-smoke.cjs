@@ -14,6 +14,7 @@ const openssl = process.env.STACKPORT_TEST_OPENSSL || 'openssl';
 const python = process.env.STACKPORT_TEST_PYTHON || 'python';
 const secret = 'stackport-mongo-catalog-test';
 const editSecret = 'stackport-mongo-edit-test';
+const indexSecret = 'stackport-mongo-index-test';
 const log = path.join(root, 'mongo-server.log');
 assert.ok(path.isAbsolute(root) && path.isAbsolute(binary));
 
@@ -231,12 +232,23 @@ async function verify(page, port, ca) {
   await detail.waitFor({ state: 'detached' });
 
   const editProfile = await alternate({ name: '편집 검증', username: 'document_editor' });
+  const indexProfile = await alternate({ name: '인덱스 검증', username: 'index_editor' });
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
-  await verifyIndexCommands(command, () => open(editProfile, editSecret, 'PROD', false, true));
+  await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
   await page.reload();
   await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
   await explorer.getByRole('button', { name: 'MongoDB 편집 검증 열기', exact: true }).click();
   await verifyDocumentEditor(page, workspace, detail);
+  await workspace.getByRole('button', { name: 'MongoDB 연결 끊기', exact: true }).click();
+  await detail.waitFor({ state: 'detached' });
+  await explorer.getByRole('button', { name: 'MongoDB 인덱스 검증 열기', exact: true }).click();
+  await workspace.getByRole('button', { name: 'MongoDB 연결', exact: true }).click();
+  const indexLogin = page.getByRole('dialog', { name: 'MongoDB 연결', exact: true });
+  await indexLogin.getByLabel('MongoDB 암호').fill(indexSecret);
+  await indexLogin.getByLabel('운영 환경 확인').fill('PROD');
+  await indexLogin.getByRole('checkbox', { name: '이 연결에서 인덱스 관리 허용', exact: true }).check();
+  await indexLogin.getByRole('button', { name: '연결', exact: true }).click();
+  await indexLogin.waitFor({ state: 'detached' });
   await verifyIndexEditor(page, workspace, detail);
   const audit = await command('list_audit_events', { before: null });
   const edits = audit.events.filter(event => event.operation.startsWith('mongo.document.'));
@@ -247,6 +259,8 @@ async function verify(page, port, ca) {
   assert.doesNotMatch(JSON.stringify(edits), /9223372036854775807|write-fixture|편집한 문서/u);
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.create' && event.outcome === 'succeeded'));
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.drop' && event.outcome === 'succeeded'));
+  assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'succeeded'));
+  assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'failed'));
   assert.deepEqual(errors, []);
 }
 
@@ -261,6 +275,7 @@ async function verifyIndexCommands(command, openAdmin) {
   const apply = (id, token, approval = '', confirmation = 'PROD') => command('apply_mongo_index_change', { id, token, approval, confirmation });
   const create = (name, keys, options = {}) => ({ kind: 'create', name, keys, unique: false, expire_after_seconds: null, ...options });
   const drop = name => ({ kind: 'drop', name });
+  const modify = (name, hidden, expire_after_seconds) => ({ kind: 'modify', name, hidden, expire_after_seconds });
   try {
     await assert.rejects(review(primary.id, drop('*')), /이름/);
     await assert.rejects(review(primary.id, drop('_id_')), /이름/);
@@ -295,6 +310,30 @@ async function verifyIndexCommands(command, openAdmin) {
     await apply(other.id, (await review(other.id, create(old.name, [{ field: 'new_field', kind: 'asc' }]))).token);
     await assert.rejects(apply(primary.id, stale.token, 'DROP'), /바뀌었습니다/);
     assert.deepEqual(Object.keys(JSON.parse((await get(old.name)).keys)), ['new_field']);
+
+    const name = 'option_review';
+    await apply(primary.id, (await review(primary.id, create(name, [{ field: 'option_expiry', kind: 'asc' }]))).token);
+    await assert.rejects(review(primary.id, modify(name, false, null)), /변경할 인덱스 옵션/);
+    const planned = await review(primary.id, modify(name, true, 120));
+    assert.equal(JSON.parse(planned.previous_definition).expireAfterSeconds, undefined);
+    assert.equal(JSON.parse(planned.definition).hidden, true);
+    assert.equal(planned.ttl_may_expire_documents, true);
+    assert.equal(planned.visibility_changed, true);
+    assert.equal((await get(name)).ttl_seconds, null);
+    await assert.rejects(apply(primary.id, planned.token, '', ''), /PROD/);
+    await apply(primary.id, planned.token);
+    assert.equal((await get(name)).hidden, true);
+    assert.equal((await get(name)).ttl_seconds, 120);
+    const staleOptions = await review(primary.id, modify(name, false, 60));
+    const extend = await review(other.id, modify(name, null, 300));
+    assert.equal(extend.ttl_may_expire_documents, false);
+    await apply(other.id, extend.token);
+    await assert.rejects(apply(primary.id, staleOptions.token), /바뀌었습니다/);
+    assert.equal((await get(name)).ttl_seconds, 300);
+    assert.equal((await get(name)).hidden, true);
+    await apply(primary.id, (await review(primary.id, modify(name, false, 60))).token);
+    assert.equal((await get(name)).ttl_seconds, 60);
+    assert.equal((await get(name)).hidden, false);
   } finally {
     await command('close_mongo', { id: primary.id });
     await command('close_mongo', { id: other.id });
@@ -317,6 +356,22 @@ async function verifyIndexEditor(page, workspace, detail) {
   await button(create, '인덱스 생성 적용').click();
   await create.waitFor({ state: 'detached' });
   await detail.getByRole('rowheader', { name: 'ui_ttl', exact: true }).waitFor();
+  await button(detail, 'ui_ttl 인덱스 옵션 변경').click();
+  const modify = page.getByRole('dialog', { name: 'MongoDB 인덱스 옵션 변경', exact: true });
+  assert.equal(await button(modify, '옵션 변경 검토').isDisabled(), true);
+  await modify.getByRole('checkbox', { name: '쿼리 플래너에서 숨기기', exact: true }).check();
+  await modify.getByRole('checkbox', { name: 'TTL 변경', exact: true }).check();
+  await modify.getByLabel('TTL (초)', { exact: true }).fill('30');
+  await button(modify, '옵션 변경 검토').click();
+  await modify.getByLabel('변경 전 인덱스 정의', { exact: true }).filter({ hasText: /60/u }).waitFor();
+  await modify.getByLabel('변경 후 인덱스 정의', { exact: true }).filter({ hasText: /30/u }).waitFor();
+  await modify.getByText(/쿼리 플래너에서 이 인덱스를 제외/u).waitFor();
+  await modify.getByText(/이미 만료된 문서/u).waitFor();
+  await modify.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+  await button(modify, '인덱스 옵션 변경 적용').click();
+  await modify.waitFor({ state: 'detached' });
+  await detail.getByRole('rowheader', { name: /ui_ttl.*숨김/u }).waitFor();
+  await detail.getByRole('cell', { name: '30초', exact: true }).first().waitFor();
   await button(detail, 'ui_ttl 인덱스 삭제').click();
   const drop = page.getByRole('dialog', { name: 'MongoDB 인덱스 삭제', exact: true });
   await button(drop, '삭제 영향 조회').click();
@@ -326,7 +381,7 @@ async function verifyIndexEditor(page, workspace, detail) {
   await drop.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
   await button(drop, '검토한 인덱스 삭제').click();
   await drop.waitFor({ state: 'detached' });
-  await detail.getByRole('rowheader', { name: 'ui_ttl', exact: true }).waitFor({ state: 'detached' });
+  await detail.getByRole('rowheader', { name: /ui_ttl/u }).waitFor({ state: 'detached' });
 }
 
 async function verifyFindBuilder(page, detail) {
@@ -442,7 +497,6 @@ async function verifyDocumentEditor(page, workspace, detail) {
   await login.getByLabel('MongoDB 암호').fill(editSecret);
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('checkbox', { name: '이 연결에서 문서 편집 허용', exact: true }).check();
-  await login.getByRole('checkbox', { name: '이 연결에서 인덱스 관리 허용', exact: true }).check();
   await button(login, '연결').click();
   await login.waitFor({ state: 'detached' });
   await button(workspace, 'edit_records 컬렉션').click();

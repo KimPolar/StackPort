@@ -12,9 +12,11 @@ MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·
 
 **이 연결에서 인덱스 관리 허용**을 선택하면 일반 컬렉션의 **인덱스** 화면에서 이름과 키 순서를 지정해 인덱스를 만들 수 있습니다. 오름차순·내림차순 단일 및 복합 키, 텍스트, 2d·2dsphere, 해시를 지원합니다. TTL은 `_id`를 제외한 일반 키 하나에 지정하고, 이미 만료된 문서에 미칠 영향을 생성 검토에 표시합니다. 인덱스 종류와 옵션 조합은 서버가 검사합니다. [MongoDB createIndexes](https://www.mongodb.com/docs/manual/reference/command/createindexes/) · [MongoDB TTL 인덱스](https://www.mongodb.com/docs/manual/core/index-ttl/)
 
+**옵션 변경**에서 쿼리 플래너의 인덱스 숨김을 켜거나 끄고, 지원하는 단일 키에 TTL을 추가하거나 변경할 수 있습니다. 검토 화면에 변경 전후 정의를 표시합니다. TTL을 새로 설정하거나 줄이면 이미 만료된 문서를 서버가 삭제할 수 있습니다. 숨김 인덱스도 고유 제약을 검사하고 TTL 만료를 처리합니다. 적용은 서버의 `collMod` 권한을 따르며, 컬렉션 UUID와 인덱스 정의를 다시 확인한 뒤 실행합니다. [MongoDB collMod](https://www.mongodb.com/docs/manual/reference/command/collmod/) · [MongoDB 숨김 인덱스](https://www.mongodb.com/docs/manual/core/index-hidden/)
+
 인덱스 삭제 검토는 현재 정의와 쿼리 계획·고유 제약·자동 만료에 미칠 영향을 표시합니다. `$indexStats`를 읽을 수 있으면 응답한 노드의 사용 횟수를 합산합니다. 인덱스 한 개를 대상으로 5분 이내에 `DROP`을 입력하며, 운영 환경에서는 `PROD`도 입력합니다. 적용 직전에 컬렉션 UUID와 인덱스 정의를 다시 읽습니다. 서버에 보내는 명령에는 컬렉션 UUID와 인덱스 이름을 포함합니다. 시작과 결과를 감사 기록에 남기고, 연결이나 시간 초과로 결과를 확인할 수 없으면 목록에서 상태를 다시 확인하도록 안내합니다. [MongoDB dropIndexes](https://www.mongodb.com/docs/manual/reference/command/dropindexes/) · [MongoDB 인덱스 사용 통계](https://www.mongodb.com/docs/manual/reference/operator/aggregation/indexstats/)
 
-Windows 앱과 로컬 MongoDB 8.0.38에서 복합 고유 인덱스와 TTL·텍스트·2dsphere 인덱스의 생성과 삭제를 확인했습니다. 같은 이름의 인덱스를 다른 키로 다시 만든 뒤 이전 삭제 검토가 거절되는 경우와 Windows 화면의 `DROP`·`PROD` 승인도 검사했습니다.
+Windows 앱과 로컬 MongoDB 8.0.38에서 복합 고유 인덱스와 TTL·텍스트·2dsphere 인덱스의 생성과 삭제를 확인했습니다. 숨김과 숨김 해제, 기존 인덱스에 TTL 추가·변경, Windows 화면의 `DROP`·`PROD` 승인도 검사했습니다. 다른 연결에서 인덱스 키 또는 TTL을 바꾼 뒤 이전 검토가 거절되는 것을 확인했습니다.
 
 문서 화면의 **찾기 빌더**에서 필드·비교 연산자·값으로 조건을 만들고 AND·OR 그룹을 중첩할 수 있습니다. 문자열 입력과 Extended JSON 값을 사용하며, 목록 연산에는 배열을 입력하고 필드 존재 여부는 선택합니다. 기존 필터도 함께 적용하면 AND로 연결합니다. **조회 적용**은 생성한 필터를 JSON 입력란에 채우고 현재 표시 필드·정렬 설정과 함께 첫 페이지를 조회합니다. Rust에서 BSON 타입과 필드 순서를 보존해 필터를 만들고 조회에 쓰는 검사 규칙을 적용합니다. [MongoDB 조회 조건](https://www.mongodb.com/docs/manual/reference/operator/query/)
 

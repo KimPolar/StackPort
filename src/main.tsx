@@ -2303,6 +2303,7 @@ const auditOperationNames: Record<string, string> = {
   "mongo.document.insert": "MongoDB 문서 삽입", "mongo.document.duplicate": "MongoDB 문서 복제", "mongo.document.replace": "MongoDB 문서 수정",
   "mongo.document.delete": "MongoDB 문서 삭제", "mongo.document.unconfirmed": "MongoDB 문서 변경 결과 미확인",
   "mongo.index.create": "MongoDB 인덱스 생성", "mongo.index.drop": "MongoDB 인덱스 삭제", "mongo.index.unconfirmed": "MongoDB 인덱스 변경 결과 미확인",
+  "mongo.index.modify": "MongoDB 인덱스 옵션 변경",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",
   "sql_parameter_set.create": "SQL 매개변수 세트 저장",
