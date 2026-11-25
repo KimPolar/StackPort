@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Download, Play, Square } from "lucide-react";
 import { CodeTextarea } from "./CodeTextarea";
 import { Dialog } from "./Dialog";
-import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
+import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
 import { MysqlQueryPlan, type MysqlPlan } from "./MysqlQueryPlan";
 import type { MysqlExportTarget, MysqlSqlBinding } from "./MysqlResultExport";
 
@@ -193,7 +193,7 @@ export function MysqlSqlWorkspace({ id, database, text, onTextChange, onExport }
         if (!result.parameterFields.length) exportResult(result.statement, []);
         else setDraft({ statement: result.statement, action: "export", parameters: result.parameterFields.map(field => ({ ...field, value: "" })) });
       }}><Download size={14} aria-hidden /> 결과 내보내기</button></div>
-      <MysqlDataGrid columns={result.data.columns} rows={result.data.rows} label="MySQL SQL 결과 표" />
+      <DatabasePreviewGrid columns={result.data.columns} rows={result.data.rows} label="MySQL SQL 결과 표" />
     </section>}
   </section>;
 }

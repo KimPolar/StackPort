@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
-import { MysqlDataGrid, type MysqlValue } from "./MysqlDataGrid";
+import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
 import { MysqlGridEditDialog, type MysqlEditOutcome, type MysqlEditTarget, type MysqlRowStamp } from "./MysqlGridEditDialog";
 import { MysqlObjectStructure, mysqlStructureLabels, type MysqlObjectInfo, type MysqlStructure, type MysqlStructureSection } from "./MysqlObjectStructure";
 import type { MysqlProfile } from "./MysqlProfileDialog";
@@ -385,7 +385,7 @@ function RowPage({ data, page, onEdit }: { data: Sample; page: number; onEdit: (
       {data.more_columns && " · 앞 128개 열"}
     </p>
     {!data.stable_order && <p className="form-note mysql-table-note">기본 키가 없는 결과는 페이지를 이동할 때 행 순서가 달라질 수 있습니다.</p>}
-    {data.rows.length > 0 && <MysqlDataGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기"
+    {data.rows.length > 0 && <DatabasePreviewGrid columns={data.columns} rows={data.rows} label="MySQL 데이터 미리보기"
       rowAction={data.edit ? row => data.edit?.rows[row] && <button type="button" className="secondary small"
         aria-label={`${offset + row + 1}행 편집`} onClick={() => onEdit(row)}>편집</button> : undefined} />}
     {data.query_sql && <details className="table-query-sql">

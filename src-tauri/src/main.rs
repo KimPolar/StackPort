@@ -3,6 +3,7 @@
 mod data_location;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
+use stackport_core::sql_server;
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
     EditCellChange, EditRowPreview, EditRowResult,
@@ -955,6 +956,57 @@ async fn mongo_indexes(mongo: State<'_, stackport_core::MongoManager>, id: Strin
 #[tauri::command]
 async fn mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, query: stackport_core::MongoQuery)
     -> Result<stackport_core::MongoDocumentPage, String> { mongo.documents(&id, &database, &collection, query).await }
+
+#[tauri::command]
+async fn list_sql_server_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<sql_server::Profile>, String> {
+    let store = store.inner().clone();
+    worker(move || store.list_sql_server_profiles(&project_id)).await
+}
+
+#[tauri::command]
+async fn create_sql_server_profile(store: State<'_, Store>, project_id: String, input: sql_server::ProfileSettings) -> Result<sql_server::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.create_sql_server_profile(&project_id, input)).await
+}
+
+#[tauri::command]
+async fn update_sql_server_profile(store: State<'_, Store>, id: String, revision: i64, input: sql_server::ProfileSettings) -> Result<sql_server::Profile, String> {
+    let store = store.inner().clone();
+    worker(move || store.update_sql_server_profile(&id, revision, input)).await
+}
+
+#[tauri::command]
+async fn delete_sql_server_profile(store: State<'_, Store>, id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.delete_sql_server_profile(&id, revision)).await
+}
+
+#[tauri::command]
+async fn open_sql_server(manager: State<'_, sql_server::Manager>, profile_id: String, revision: i64,
+    password: sql_server::Password, confirmation: String) -> Result<sql_server::SessionInfo, String> {
+    manager.open(profile_id, revision, password, &confirmation).await
+}
+
+#[tauri::command]
+fn close_sql_server(manager: State<'_, sql_server::Manager>, id: String) -> Result<(), String> {
+    manager.close(&id)
+}
+
+#[tauri::command]
+async fn sql_server_schemas(manager: State<'_, sql_server::Manager>, id: String, search: String, page: u32)
+    -> Result<sql_server::CatalogPage<String>, String> { manager.schemas(&id, &search, page).await }
+
+#[tauri::command]
+async fn sql_server_objects(manager: State<'_, sql_server::Manager>, id: String, schema: String, search: String, page: u32)
+    -> Result<sql_server::CatalogPage<sql_server::Object>, String> { manager.objects(&id, &schema, &search, page).await }
+
+#[tauri::command]
+async fn sql_server_columns(manager: State<'_, sql_server::Manager>, id: String, object: i32)
+    -> Result<sql_server::CatalogPage<sql_server::Column>, String> { manager.columns(&id, object).await }
+
+#[tauri::command]
+async fn sql_server_data(manager: State<'_, sql_server::Manager>, id: String, object: i32, page: u32)
+    -> Result<sql_server::DataPage, String> { manager.data(&id, object, page).await }
 
 #[tauri::command]
 async fn list_mysql_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<stackport_core::MysqlProfile>, String> {
@@ -2088,6 +2140,7 @@ fn main() {
             app.manage(stackport_core::RedisManager::new(store.clone()));
             app.manage(stackport_core::MysqlManager::new(store.clone()));
             app.manage(stackport_core::MongoManager::new(store.clone()));
+            app.manage(sql_server::Manager::new(store.clone()));
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -2197,6 +2250,16 @@ fn main() {
             mongo_collections,
             mongo_indexes,
             mongo_documents,
+            list_sql_server_profiles,
+            create_sql_server_profile,
+            update_sql_server_profile,
+            delete_sql_server_profile,
+            open_sql_server,
+            close_sql_server,
+            sql_server_schemas,
+            sql_server_objects,
+            sql_server_columns,
+            sql_server_data,
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,

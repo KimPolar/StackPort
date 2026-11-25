@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
-import type { MysqlValue } from "./MysqlDataGrid";
+import type { DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
 
 export type MysqlRowStamp = { keys: string[]; schema: string; row: string };
 type Field = { name: string; column_type: string; nullable: boolean; cell: MysqlValue | null };

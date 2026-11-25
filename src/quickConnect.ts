@@ -84,7 +84,7 @@ export function parseQuickTarget(input: string): QuickTarget {
   return kind === "postgres" ? { ...target, kind, database: component(path) } : { ...target, kind };
 }
 
-export function networkAddressText({ host, port }: NetworkAddress) {
+export function networkAddressText({ host, port }: Pick<NetworkAddress, "host" | "port">) {
   return `${host.includes(":") ? `[${host}]` : host}:${port}`;
 }
 

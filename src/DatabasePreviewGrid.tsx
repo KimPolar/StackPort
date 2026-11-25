@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 
-export type MysqlValue = { text: string; encoding: "utf8" | "hex"; bytes: number; truncated: boolean };
+export type DatabasePreviewValue = { text: string; encoding: "utf8" | "hex"; bytes: number; truncated: boolean };
 
-export function MysqlDataGrid({ columns, rows, label, rowAction }: {
-  columns: { name: string; data_type: string }[]; rows: (MysqlValue | null)[][]; label: string;
+export function DatabasePreviewGrid({ columns, rows, label, rowAction }: {
+  columns: { name: string; data_type: string }[]; rows: (DatabasePreviewValue | null)[][]; label: string;
   rowAction?: (row: number) => ReactNode;
 }) {
   return <div className="mysql-table" tabIndex={0} role="region" aria-label={`${label} 스크롤`}>

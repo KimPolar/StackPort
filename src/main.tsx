@@ -30,7 +30,7 @@ import { ResultExportDialog, type ExportReport, type ExportSource } from "./Resu
 import { ArchivedProjectsDialog } from "./ArchivedProjectsDialog";
 import { CommandPalette, type WorkspaceCommand } from "./CommandPalette";
 import { QuickConnectDialog } from "./QuickConnectDialog";
-import { matchesNetworkAddress, type NetworkAddress, type QuickTarget } from "./quickConnect";
+import { matchesNetworkAddress, networkAddressText, type NetworkAddress, type QuickTarget } from "./quickConnect";
 import { CodeTextarea } from "./CodeTextarea";
 import { sqlAliasRenameTarget, sqlCompletionContext, sqlCompletionSuggestions, sqlDefinitionReference, sqliteNameKey, type SqlAliasRenameTarget, type SqlCompletionCatalog, type SqlDefinitionReference, type SqlReferenceRange } from "./sqlCompletion";
 import { SqlDiagnostics } from "./SqlDiagnostics";
@@ -50,6 +50,8 @@ import { RedisProfileDialog, type RedisProfile, type RedisProfileAction } from "
 import { RedisWorkspace } from "./RedisWorkspace";
 import { MongoProfileDialog, mongoAddress, type MongoProfile, type MongoProfileAction } from "./MongoProfileDialog";
 import { MongoWorkspace } from "./MongoWorkspace";
+import { SqlServerProfileDialog, type SqlServerProfile, type SqlServerProfileAction } from "./SqlServerProfileDialog";
+import { SqlServerWorkspace } from "./SqlServerWorkspace";
 import { MysqlProfileDialog, type MysqlProfile, type MysqlProfileAction } from "./MysqlProfileDialog";
 import { MysqlWorkspace } from "./MysqlWorkspace";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
@@ -113,7 +115,7 @@ type AuditPage = { events: AuditEvent[]; next_cursor: number | null };
 type SshTrustEvent = { sequence: number; id: string; host: string; port: number; action: "accepted" | "replaced"; previous_fingerprint: string | null; fingerprint: string; occurred_at: string };
 type SshTrustPage = { events: SshTrustEvent[]; next_cursor: number | null };
 type Modal = "project" | "profile" | "rename" | "duplicateProject" | "archiveProject" | "deleteProject" | "deleteProfile" | "backup" | null;
-type NetworkEngine = "postgres" | "mysql" | "redis" | "mongo";
+type NetworkEngine = "postgres" | "mysql" | "redis" | "mongo" | "sqlServer";
 
 const desktop = isTauri();
 const initialTheme = readThemePreference();
@@ -202,7 +204,11 @@ function App() {
   const [mongoAction, setMongoAction] = useState<MongoProfileAction | null>(null);
   const mongoId = networkProfile?.engine === "mongo" ? networkProfile.id : "";
   const mongoProfile = mongoProfiles.find(item => item.id === mongoId && item.project_id === projectId);
-  const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile && !mongoProfile;
+  const [sqlServerProfiles, setSqlServerProfiles] = useState<SqlServerProfile[]>([]);
+  const [sqlServerAction, setSqlServerAction] = useState<SqlServerProfileAction | null>(null);
+  const sqlServerId = networkProfile?.engine === "sqlServer" ? networkProfile.id : "";
+  const sqlServerProfile = sqlServerProfiles.find(item => item.id === sqlServerId && item.project_id === projectId);
+  const sqliteWorkspace = !postgresProfile && !redisProfile && !mysqlProfile && !mongoProfile && !sqlServerProfile;
   const [sshProfiles, setSshProfiles] = useState<SshProfile[]>([]);
   const [sshProfileDialog, setSshProfileDialog] = useState<{ mode: "create" | "edit" | "delete"; profile?: SshProfile; initial?: NetworkAddress } | null>(null);
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
@@ -427,6 +433,7 @@ function App() {
     setRedisProfiles([]); setRedisAction(null);
     setMysqlProfiles([]); setMysqlAction(null); setDatabasePicker(false);
     setMongoProfiles([]); setMongoAction(null); setNetworkProfile(null);
+    setSqlServerProfiles([]); setSqlServerAction(null);
     setProfileId(""); setCatalog(null); setTableQueryResult(null);
     setRestoreReport(null);
     if (projectId) {
@@ -444,6 +451,7 @@ function App() {
       if (desktop) call<RedisProfile[]>("list_redis_profiles", { projectId }).then(items => { if (live) setRedisProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
       if (desktop) call<MysqlProfile[]>("list_mysql_profiles", { projectId }).then(items => { if (live) setMysqlProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
       if (desktop) call<MongoProfile[]>("list_mongo_profiles", { projectId }).then(items => { if (live) setMongoProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
+      if (desktop) call<SqlServerProfile[]>("list_sql_server_profiles", { projectId }).then(items => { if (live) setSqlServerProfiles(items); }).catch(e => { if (live) setError(errorText(e)); });
     }
     return () => { live = false; };
   }, [projectId]);
@@ -1115,6 +1123,7 @@ function App() {
   const selectRedisProfile = (id: string) => selectNetworkProfile("redis", id);
   const selectMysqlProfile = (id: string) => selectNetworkProfile("mysql", id);
   const selectMongoProfile = (id: string) => selectNetworkProfile("mongo", id);
+  const selectSqlServerProfile = (id: string) => selectNetworkProfile("sqlServer", id);
 
   function openPostgresObject(target: PostgresFavorite) {
     selectPostgresProfile(target.profile_id);
@@ -1162,6 +1171,15 @@ function App() {
     if (mongoAction.kind === "create" && saved) selectMongoProfile(saved.id);
     if (!saved && previous === mongoId) setNetworkProfile(null);
     setMongoAction(null);
+  }
+
+  function saveSqlServerProfile(saved: SqlServerProfile | null) {
+    if (!sqlServerAction) return;
+    const previous = sqlServerAction.kind === "create" ? null : sqlServerAction.profile.id;
+    setSqlServerProfiles(current => [...current.filter(item => item.id !== previous), ...(saved ? [saved] : [])]);
+    if (sqlServerAction.kind === "create" && saved) selectSqlServerProfile(saved.id);
+    if (!saved && previous === sqlServerId) setNetworkProfile(null);
+    setSqlServerAction(null);
   }
 
   function openSavedSsh(item: SshProfile) {
@@ -1265,6 +1283,7 @@ function App() {
         { id: "create:ssh", title: "SSH 연결 추가", group: "작업", Icon: TerminalSquare, run: () => setSshProfileDialog({ mode: "create" }) },
       );
       if (desktop) commands.push({ id: "create:mongo", title: "MongoDB 연결 추가", group: "작업", Icon: Database, run: () => setMongoAction({ kind: "create" }) });
+      if (desktop) commands.push({ id: "create:sql-server", title: "SQL Server 연결 추가", group: "작업", Icon: Database, run: () => setSqlServerAction({ kind: "create" }) });
       if (desktop && sqliteWorkspace) commands.push({ id: "open:sql-templates", title: "SQL 템플릿", group: "작업",
         keywords: "query templates snippets favorites", Icon: FileCode2, run: openSqlTemplates });
     }
@@ -1291,6 +1310,11 @@ function App() {
     for (const item of mongoProfiles.filter(item => item.project_id === projectId)) commands.push({
       id: `mongo:${item.id}`, title: item.settings.name, group: "MongoDB 연결", detail: `${mongoAddress(item.settings.uri)} · ${item.settings.environment}`,
       Icon: Database, run: () => selectMongoProfile(item.id),
+    });
+    for (const item of sqlServerProfiles.filter(item => item.project_id === projectId)) commands.push({
+      id: `sql-server:${item.id}`, title: item.settings.name, group: "SQL Server 연결",
+      detail: `${networkAddressText(item.settings)} / ${item.settings.database} · ${item.settings.environment}`,
+      Icon: Database, run: () => selectSqlServerProfile(item.id),
     });
     for (const item of sshProfiles.filter(item => item.project_id === projectId)) commands.push({
       id: `ssh:${item.id}`, title: item.name, group: "SSH 연결", detail: item.environment,
@@ -1482,6 +1506,7 @@ function App() {
     </div>}
     {mysqlProfile && <div hidden={historyOpen}><MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} onOpenTunnels={openTunnels} /></div>}
     {mongoProfile && <div hidden={historyOpen}><MongoWorkspace key={`${mongoProfile.id}:${mongoProfile.revision}`} profile={mongoProfile} /></div>}
+    {sqlServerProfile && <div hidden={historyOpen}><SqlServerWorkspace key={`${sqlServerProfile.id}:${sqlServerProfile.revision}`} profile={sqlServerProfile} /></div>}
     {postgresProfile && postgresTarget && <div hidden={historyOpen}>
       <PostgresWorkspace key={`${postgresProfile.id}:${postgresProfile.revision}`} profile={postgresProfile} onEditExitGuard={setGridEditExitGuard}
         visible={!historyOpen && toolVisible("workspace")}
@@ -1843,6 +1868,7 @@ function App() {
           redis={{ profiles: redisProfiles, activeId: redisId, open: selectRedisProfile, action: setRedisAction }}
           mysql={{ profiles: mysqlProfiles, activeId: mysqlId, open: selectMysqlProfile, action: setMysqlAction }}
           mongo={{ profiles: mongoProfiles, activeId: mongoId, open: selectMongoProfile, action: setMongoAction }}
+          sqlServer={{ profiles: sqlServerProfiles, activeId: sqlServerId, open: selectSqlServerProfile, action: setSqlServerAction }}
           ssh={{ profiles: sshProfiles, open: openSavedSsh, action: runExplorerSshAction }} />
         <WorkspacePanes layout={layout} panels={toolPanes} onResize={(id, size) => setLayout(current => resizePane(current, id, size))} />
       </div>
@@ -1890,6 +1916,7 @@ function App() {
             { name: "MySQL · MariaDB", Icon: Database, open: () => setMysqlAction({ kind: "create" }) },
             { name: "Redis", Icon: KeyRound, open: () => setRedisAction({ kind: "create" }) },
             { name: "MongoDB", Icon: Database, open: () => setMongoAction({ kind: "create" }) },
+            { name: "SQL Server", Icon: Database, open: () => setSqlServerAction({ kind: "create" }) },
           ] : []),
         ].map(({ name, Icon, open }) => <button type="button" key={name} className="secondary"
           onClick={() => { setDatabasePicker(false); open(); }}><Icon size={16} aria-hidden />{name}</button>)}
@@ -2014,6 +2041,7 @@ function App() {
     {redisAction && project && <RedisProfileDialog action={redisAction} projectId={project.id} onClose={() => setRedisAction(null)} onSaved={saveRedisProfile} />}
     {mysqlAction && project && <MysqlProfileDialog action={mysqlAction} projectId={project.id} onClose={() => setMysqlAction(null)} onSaved={saveMysqlProfile} />}
     {mongoAction && project && <MongoProfileDialog action={mongoAction} projectId={project.id} onClose={() => setMongoAction(null)} onSaved={saveMongoProfile} />}
+    {sqlServerAction && project && <SqlServerProfileDialog action={sqlServerAction} projectId={project.id} onClose={() => setSqlServerAction(null)} onSaved={saveSqlServerProfile} />}
     {sshExchange && project && <SshProfileExchange mode={sshExchange} projectId={project.id} profiles={sshProfiles} onClose={() => setSshExchange(null)} onImported={() => { void reloadSshProfiles(project.id).catch(e => setError(errorText(e))); }} />}
   </div>;
 }
@@ -2086,6 +2114,7 @@ const auditOperationNames: Record<string, string> = {
   "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
   "mysql_profile.create": "MySQL 계열 연결 추가", "mysql_profile.update": "MySQL 계열 연결 수정", "mysql_profile.delete": "MySQL 계열 연결 삭제",
   "mongo_profile.create": "MongoDB 연결 추가", "mongo_profile.update": "MongoDB 연결 수정", "mongo_profile.delete": "MongoDB 연결 삭제",
+  "sql_server_profile.create": "SQL Server 연결 추가", "sql_server_profile.update": "SQL Server 연결 수정", "sql_server_profile.delete": "SQL Server 연결 삭제",
   "redis.key.edit": "Redis 키 편집",
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "redis.key.delete": "Redis 키 삭제",
