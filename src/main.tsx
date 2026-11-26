@@ -1195,7 +1195,11 @@ function App() {
 
   function showTerminalFiles() {
     const tools = paneTools(layout);
-    if (tools.includes("files") || !tools.includes("terminal") || tools.length >= 4) return;
+    if (tools.includes("files") || !tools.includes("terminal")) return;
+    if (tools.length >= 4) {
+      setLoadedPages(current => current.has("files") ? current : new Set([...current, "files"]));
+      return;
+    }
     const pane = splitPane(++nextSplit.current, "side", toolPane("files"), toolPane("terminal"));
     applyLayout(editTool(layout, tool => tool === "terminal" ? { ...pane, size: 36 } : toolPane(tool)));
   }

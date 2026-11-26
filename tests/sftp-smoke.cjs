@@ -313,7 +313,7 @@ function makeHost() {
 
 async function startHost(host, identity, port = 0, terminal = false) {
   const clients = new Set();
-  const stats = { passwords: 0, signatures: 0, subsystem: 0, ptys: [], windowChanges: [], rejectPty: false, rejectSftp: false };
+  const stats = { passwords: 0, signatures: 0, subsystem: 0, ptys: [], windowChanges: [], rejectPty: false, rejectSftp: false, dropSftp: false };
   const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), comparisonDirectories: new Map(), moves: 0, moveCollision: false,
     deletions: 0, edits: 0, editRace: null, advertiseEdit: true, advertisePermissions: true,
     permissionDirectories: new Map(), permissionRequests: [] };
@@ -377,7 +377,9 @@ async function startHost(host, identity, port = 0, terminal = false) {
         stats.subsystem++;
         client._protocol.channelWindowAdjust(session._chanInfo.outgoing.id, 64 * 1024);
         if (stats.rejectSftp) return rejectSftp();
-        sftpChannel(acceptSftp(), uploads);
+        const channel = acceptSftp();
+        if (stats.dropSftp) return channel.end();
+        sftpChannel(channel, uploads);
       });
     }));
   });
@@ -661,8 +663,9 @@ async function main() {
     if (process.env.STACKPORT_SFTP_LINK_ONLY === '1') {
       await verifyLinkedSftp(page, command, profile, server, keyFile);
       await verifyDirectLinkedSftp(page, server);
+      await verifyStandaloneAndLinkedSftp(page, server);
       assert.deepEqual(errors, []);
-      console.log('Saved and direct SSH share authentication with SFTP, recover from subsystem rejection, and close independently.');
+      console.log('Saved and direct SSH share authentication with SFTP, recover from subsystem and protocol errors, and restore an open standalone SFTP connection.');
       return;
     }
     const authentication = { kind: 'password', password };
@@ -882,10 +885,14 @@ async function verifyLinkedSftp(page, command, profile, server, keyFile) {
   await page.keyboard.press('Enter');
   await shell.getByText('SFTP_FOLLOW_PATH_REPORTED', { exact: true }).waitFor();
   server.stats.rejectSftp = false;
+  server.stats.dropSftp = true;
+  await retry.click();
+  await workspace.getByRole('alert').getByText(/서브시스템은 승인되었지만 프로토콜을 시작하지 못했습니다/).waitFor();
+  server.stats.dropSftp = false;
   await retry.click();
   await remote.getByText('대시보드.txt', { exact: true }).waitFor();
   assert.equal(server.stats.passwords, 1);
-  assert.equal(server.stats.subsystem, 2);
+  assert.equal(server.stats.subsystem, 3);
 
   const name = '함께 연 파일.txt';
   const filePath = `/home/stackport/${name}`;
@@ -959,6 +966,43 @@ async function verifyDirectLinkedSftp(page, server) {
   assert.equal(server.stats.subsystem - subsystemsBefore, 2);
   page.once('dialog', confirmation => confirmation.accept());
   await page.getByRole('button', { name: /SSH \d+ .*터미널 닫기/ }).click();
+  await disconnect.waitFor({ state: 'detached' });
+}
+
+async function verifyStandaloneAndLinkedSftp(page, server) {
+  const passwordsBefore = server.stats.passwords;
+  const subsystemsBefore = server.stats.subsystem;
+  const workspace = page.getByRole('region', { name: '파일 탐색', exact: true });
+  const remote = workspace.getByRole('region', { name: '원격 파일', exact: true });
+  const shared = workspace.getByLabel('SFTP 연결 대상').getByText('SSH 터미널과 공유', { exact: true });
+  const disconnect = workspace.getByRole('button', { name: 'SFTP 연결 끊기', exact: true });
+  await workspace.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
+  await workspace.getByLabel('SSH 암호', { exact: true }).fill(password);
+  await workspace.getByLabel('운영 환경 확인').fill('PROD');
+  await workspace.getByRole('button', { name: 'SFTP 연결', exact: true }).click();
+  await remote.getByRole('button', { name: '문서', exact: true }).click();
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+
+  await page.getByRole('button', { name: 'SSH 운영 파일 서버 연결', exact: true }).click();
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await ssh.getByRole('button', { name: '지문 확인' }).click();
+  await ssh.getByLabel('SSH 암호', { exact: true }).fill(password);
+  await ssh.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+  await ssh.getByRole('button', { name: '연결', exact: true }).click();
+  await shared.waitFor();
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+  assert.equal(server.stats.passwords - passwordsBefore, 2, 'Only one login for each of the standalone and terminal connections.');
+  assert.equal(server.stats.subsystem - subsystemsBefore, 2);
+
+  page.once('dialog', confirmation => confirmation.accept());
+  await page.getByRole('button', { name: /SSH \d+ .*터미널 닫기/ }).click();
+  await shared.waitFor({ state: 'detached' });
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+  await remote.getByRole('button', { name: '원격 파일 새로고침' }).click();
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+  assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), '/home/stackport/문서');
+  assert.equal(server.stats.passwords - passwordsBefore, 2);
+  await disconnect.click();
   await disconnect.waitFor({ state: 'detached' });
 }
 

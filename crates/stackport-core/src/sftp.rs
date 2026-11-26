@@ -302,11 +302,13 @@ async fn start_session(
         }
     }
     let files = RawSftpSession::new(channel.into_stream());
-    let version = files.init().await.map_err(file_error)?;
+    let version = transfer::request(files.init()).await
+        .map_err(|error| format!("SFTP 서브시스템은 승인되었지만 프로토콜을 시작하지 못했습니다. {}", file_error(error)))?;
     if version.version != 3 {
-        return Err("서버의 SFTP 프로토콜 버전을 지원하지 않습니다.".into());
+        return Err(format!("서버가 SFTP 버전 {}을 반환했습니다. StackPort는 SFTP 버전 3을 지원합니다.", version.version));
     }
-    let directory = read_directory(&files, SftpString::from(".")).await?;
+    let directory = read_directory(&files, SftpString::from(".")).await
+        .map_err(|error| format!("SFTP 시작 폴더를 열 수 없습니다. {error}"))?;
     Ok((
         FilesSession {
             profile,

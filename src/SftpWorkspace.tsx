@@ -20,6 +20,7 @@ import type { TerminalDirectory, TerminalFiles } from "./terminalDirectory";
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
 type DirectoryHistory = { visits: DirectoryLocation[]; index: number };
+type FileConnection = Session & Omit<TerminalFiles, "terminalId"> & { projectName: string; terminalId?: string };
 type ComparisonSelection = { kind: "files"; pair: FolderPair; result: Promise<FolderComparison> }
   | { kind: "folder"; pair: FolderPair; result: Promise<FolderTreeComparison>; profile?: SavedSyncProfile };
 type FileSort = { key: "name" | "size" | "modified"; direction: "ascending" | "descending" };
@@ -41,7 +42,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
-  const [remote, setRemote] = useState<(Session & Omit<TerminalFiles, "terminalId"> & { projectName: string; terminalId?: string }) | null>(null);
+  const [standalone, setStandalone] = useState<FileConnection | null>(null);
+  const [linked, setLinked] = useState<FileConnection | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [pausedTerminal, setPausedTerminal] = useState("");
@@ -64,8 +66,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [error, setError] = useState("");
   const selected = profiles.find(profile => profile.id === selectedId) ?? profiles[0];
   const followPaused = Boolean(closing || transfer || comparison || showSyncProfiles || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
-  const remoteId = remote?.id;
-  const linkedTerminal = remote?.terminalId;
+  const remote = linked ?? standalone;
+  const linkedId = linked?.id;
+  const linkedTerminal = linked?.terminalId;
   const remoteProfile = remote?.profile;
   const remoteTarget = remoteProfile ? `${remoteProfile.name} · ${remoteProfile.environment}` : remote?.endpoint ?? "";
   const remoteDetails = remoteProfile ? `${remoteTarget} · ${remote?.endpoint}` : remoteTarget;
@@ -77,11 +80,11 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   useEffect(() => {
     if (followPaused || connecting) return;
     const terminalId = terminalFiles?.terminalId;
-    if (remoteId) {
-      if (linkedTerminal && linkedTerminal !== terminalId) {
-        setRemote(null);
+    if (linkedId) {
+      if (linkedTerminal !== terminalId) {
+        setLinked(null);
         setFinished(null); setNameResult(null); setSavedDraftPath(""); setError("");
-        void invoke("close_sftp", { id: remoteId }).catch(() => {});
+        void invoke("close_sftp", { id: linkedId }).catch(() => {});
       }
       return;
     }
@@ -96,7 +99,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         void invoke("close_sftp", { id: session.id }).catch(() => {});
         return;
       }
-      setRemote({ ...session, ...terminalFiles, projectName: terminalProjectName });
+      setLinked({ ...session, ...terminalFiles, projectName: terminalProjectName });
+      setFinished(null); setNameResult(null); setSavedDraftPath("");
       setActivePane("remote");
     }).catch(error => {
       if (!current) return;
@@ -104,7 +108,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       setPausedTerminal(terminalFiles.terminalId);
     }).finally(() => { if (current) setAttaching(false); });
     return () => { current = false; };
-  }, [terminalFiles, terminalProjectName, pausedTerminal, remoteId, linkedTerminal, followPaused, connecting]);
+  }, [terminalFiles, terminalProjectName, pausedTerminal, linkedId, linkedTerminal, followPaused, connecting]);
 
   async function disconnect() {
     if (!remote || closing) return;
@@ -112,8 +116,12 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     setError("");
     try {
       await invoke("close_sftp", { id: remote.id });
-      if (remote.terminalId) setPausedTerminal(remote.terminalId);
-      setRemote(null);
+      if (remote.terminalId) {
+        setPausedTerminal(remote.terminalId);
+        setLinked(null);
+      } else {
+        setStandalone(null);
+      }
       setTransfer(null);
       setComparison(null);
       setShowSyncProfiles(false);
@@ -239,6 +247,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         {remote && <div className="files-connection" aria-label="SFTP 연결 대상">
           {remoteProfile && <span className={`environment ${remoteProfile.environment.toLowerCase()}`}>{remoteProfile.environment}</span>}
           <strong>{remoteProfile?.name ?? remote.endpoint}</strong>
+          {remote.terminalId && <span>SSH 터미널과 공유</span>}
           {remoteProfile && <span>{[remote.projectName, remote.endpoint].filter(Boolean).join(" · ")}</span>}
           {remote.route.length > 0 && <span>경유 {remote.route.join(" → ")}</span>}
         </div>}
@@ -253,7 +262,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       </div>}
     </header>
     {attaching && <p className="form-note" role="status">SSH 세션에서 원격 파일을 여는 중…</p>}
-    {!remote && terminalFiles?.terminalId === pausedTerminal && <button type="button" className="secondary small"
+    {!linked && terminalFiles?.terminalId === pausedTerminal && <button type="button" className="secondary small"
       disabled={connecting || attaching} onClick={() => setPausedTerminal("")}>SSH 세션의 SFTP 다시 열기</button>}
     {!remote && !attaching && <div className="results-card files-setup">
       <label className="field">{projectName ? `${projectName}의 SSH 연결` : "SSH 연결"}
@@ -265,7 +274,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       {selected && <SftpConnect key={`${selected.id}:${selected.revision}`} profile={selected} profiles={profiles} onConnecting={setConnecting}
         onOpened={(session, route = []) => {
           const host = selected.host.includes(":") ? `[${selected.host}]` : selected.host;
-          setRemote({ ...session, profile: selected, endpoint: `${selected.username}@${host}:${selected.port}`, projectName, route });
+          setStandalone({ ...session, profile: selected, endpoint: `${selected.username}@${host}:${selected.port}`, projectName, route });
           setActivePane("remote");
         }} />}
     </div>}
@@ -298,7 +307,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       {remote ? <DirectoryPane id="remote-files" active={activePane === "remote"} key={remote.id} title="원격 파일" initial={remote.directory}
         load={path => invoke("list_sftp_directory", { id: remote.id, path })}
         terminalPath={remoteTerminalPath} followPaused={followPaused}
-        onFolder={directory => setRemote(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
+        onFolder={directory => (remote.terminalId ? setLinked : setStandalone)(current => current?.id === remote.id ? { ...current, directory } : current)} refresh={remoteRefresh}
         onNameAction={chooseNameAction}
         onDestination={chooseDestination}
         onDelete={chooseDelete}
