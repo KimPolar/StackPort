@@ -763,14 +763,168 @@ async function main() {
   const hidden = await seedSqlServer({ port, ca, database, account, password: secret });
   assert.ok(Number.isInteger(hidden) && hidden !== 0);
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+  const backupDir = process.env.STACKPORT_SQL_SERVER_BACKUP_DIR;
+  const onlyBackup = process.env.STACKPORT_SQL_SERVER_BACKUP_ONLY === '1';
   const exportFolder = fs.mkdtempSync(path.join(process.env.STACKPORT_TEST_ROOT || os.tmpdir(), 'stackport-sql-export-'));
-  try { await verify(browser.contexts()[0].pages()[0], hidden, exportFolder); }
+  try {
+    const page = browser.contexts()[0].pages()[0];
+    if (!onlyBackup) {
+      await verify(page, hidden, exportFolder);
+      console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation, T-SQL execution, rollback, and typed parameter binding).`);
+    }
+    if (onlyBackup || backupDir) {
+      assert.ok(backupDir);
+      await verifyBackup(page, backupDir);
+      console.log('SQL Server Windows backup E2E passed (server paths, limited role, preserved media, checksum verification, and isolated restore).');
+    }
+  }
   finally {
     await browser.close();
     for (const file of fs.readdirSync(exportFolder)) fs.unlinkSync(path.join(exportFolder, file));
     fs.rmdirSync(exportFolder);
   }
-  console.log(`SQL Server Windows E2E passed (${testStrict ? 'required and strict TLS' : 'required TLS'}, object search, keys and indexes, table DDL round-trip, view definitions, permissions, data filters and paging, CSV and JSON streaming and cancellation, T-SQL execution, rollback, and typed parameter binding).`);
+}
+
+async function verifyBackup(page, directory) {
+  const { withAdmin } = require('./sql-server-fixture.cjs');
+  const admin = action => withAdmin({ port, ca }, action);
+  const sql = (execute, command) => execute(command).then(rows => rows.map(row => row.map(cell => cell.value)));
+  const literal = value => "N'" + value.replaceAll("'", "''") + "'";
+  const identify = value => "[" + value.replaceAll("]", "]]") + "]";
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'SQL Server 디스크 백업 검증' });
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await chooseDatabase(page, 'SQL Server');
+  const create = page.getByRole('dialog', { name: 'SQL Server 연결 추가', exact: true });
+  await create.getByLabel('연결 이름').fill('격리 SQL Server');
+  await create.getByLabel('호스트 이름 또는 IP').fill('localhost');
+  await create.getByLabel('포트').fill(String(port));
+  await create.getByLabel('데이터베이스 이름').fill(database);
+  await create.getByLabel('인증 방식').selectOption('sql_login');
+  await create.getByLabel('로그인 이름').fill('sa');
+  await create.getByLabel('환경').selectOption('PROD');
+  await create.getByLabel('CA 인증서 경로 (선택)').fill(ca);
+  await create.getByRole('button', { name: '저장', exact: true }).click();
+  await create.waitFor({ state: 'detached' });
+  const [saved] = await command('list_sql_server_profiles', { projectId: project.id });
+  const reader = await command('create_sql_server_profile', {
+    projectId: project.id, input: { ...saved.settings, name: '백업 역할 검사', username: account },
+  });
+  const open = (profile, password) => command('open_sql_server', { profileId: profile.id, revision: profile.revision, password, confirmation: 'PROD' });
+  const { id } = await open(reader, secret);
+  const preview = (changes = {}) => command('preview_sql_server_backup', { id, options: { directory, compression: false, ...changes } });
+  const run = (plan, args = {}) => command('run_sql_server_backup', {
+    id, requestId: randomUUID(), token: plan.token, approved: true, confirmation: 'PROD', ...args,
+  });
+  const verify = (id, path, position, expectedName = null) => command('verify_sql_server_backup', {
+    id, requestId: randomUUID(), input: { path, position, expected_name: expectedName },
+  });
+  let restrictedArchive;
+  try {
+    const capability = await command('sql_server_backup_capabilities', { id });
+    assert.equal(capability.database, database);
+    assert.equal(capability.disk_supported, true);
+    assert.equal(capability.can_backup, false);
+    await assert.rejects(preview(), /BACKUP DATABASE/);
+    await admin(execute => execute(`USE ${identify(database)}; ALTER ROLE [db_backupoperator] ADD MEMBER ${identify(account)};`));
+    assert.equal((await command('sql_server_backup_capabilities', { id })).can_backup, true);
+    await assert.rejects(preview({ directory: 'relative/path' }), /절대 경로/);
+    const collision = await preview();
+    await admin(execute => execute(`BACKUP DATABASE ${identify(database)} TO DISK = ${literal(collision.path)}
+      WITH COPY_ONLY, CHECKSUM, NOFORMAT, NOINIT, NAME = N'fixture-existing-media';`));
+    const preserved = await run(collision);
+    assert.equal(preserved.status, 'failed', JSON.stringify(preserved));
+    assert.match(preserved.message, /같은 이름/, JSON.stringify(preserved));
+    await admin(async execute => {
+      const rows = await execute(`RESTORE HEADERONLY FROM DISK = ${literal(collision.path)}`);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0][0].value, 'fixture-existing-media');
+    });
+    const plan = await preview();
+    await assert.rejects(run(plan, { approved: false }), /서버 파일 경로/);
+    await assert.rejects(run(plan, { confirmation: '' }), /PROD/);
+    restrictedArchive = await run(plan);
+    assert.equal(restrictedArchive.status, 'succeeded', JSON.stringify(restrictedArchive));
+    assert.equal(restrictedArchive.path, plan.path);
+    assert.equal(restrictedArchive.audit_warning, false);
+    await assert.rejects(run(plan), /미리보기/);
+    assert.equal((await verify(id, plan.path, 1, restrictedArchive.backup_name)).status, 'failed');
+  } finally { await command('close_sql_server', { id }); }
+
+  const password = process.env.STACKPORT_SQL_SERVER_SA_PASSWORD;
+  await page.getByRole('complementary', { name: '작업 공간 탐색기', exact: true })
+    .getByRole('button', { name: 'SQL Server 격리 SQL Server 열기', exact: true }).click();
+  const workspace = page.getByRole('region', { name: 'SQL Server 작업 공간', exact: true });
+  await workspace.getByRole('button', { name: 'SQL Server 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'SQL Server 연결', exact: true });
+  await login.getByLabel('SQL Server 암호').fill(password);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'DB 백업', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'SQL Server 백업 관리', exact: true });
+  const folder = dialog.getByLabel('서버의 백업 폴더');
+  await dialog.getByRole('button', { name: '백업 미리보기', exact: true }).waitFor();
+  await folder.fill(directory);
+  await dialog.getByRole('checkbox', { name: '백업 압축', exact: true }).check();
+  await dialog.getByRole('button', { name: '백업 미리보기', exact: true }).click();
+  const start = dialog.getByRole('button', { name: '백업 실행', exact: true });
+  assert.equal(await start.isDisabled(), true);
+  await dialog.getByRole('checkbox', { name: '백업할 DB와 서버 파일 경로를 확인했습니다.' }).check();
+  assert.equal(await start.isDisabled(), true);
+  await dialog.getByLabel('운영 확인 문구 PROD').fill('PROD');
+  await start.click();
+  await dialog.getByRole('status').filter({ hasText: '서버에 백업을 저장했습니다.' }).waitFor();
+  await dialog.getByRole('button', { name: '이 백업 검증' }).click();
+  const archive = await dialog.getByLabel('서버의 백업 파일 경로').inputValue();
+  assert.ok(archive.startsWith(directory.replace(/[\\/]$/, '') + (directory.startsWith('/') ? '/' : '\\')));
+  await dialog.getByRole('button', { name: '파일 검증', exact: true }).click();
+  await dialog.getByRole('status').filter({ hasText: '백업 체크섬 검증 완료' }).waitFor();
+  await dialog.getByText('1 · 전체 DB · COPY_ONLY', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+
+  const { id: adminId } = await open(saved, password);
+  try {
+    const checked = await verify(adminId, restrictedArchive.path, 1, restrictedArchive.backup_name);
+    assert.equal(checked.status, 'succeeded', JSON.stringify(checked));
+    assert.equal(checked.set.database, database);
+    assert.equal(checked.set.backup_type, 1);
+    assert.equal(checked.set.has_checksums, true);
+    assert.equal(checked.set.copy_only, true);
+    assert.equal((await verify(adminId, archive, 2)).status, 'failed');
+    assert.equal((await verify(adminId, archive, 1, 'wrong-archive')).status, 'failed');
+    const readable = archive.replace(/stackport-[a-f0-9]+\.bak$/, `fixture-${testRun}-readable.bak`);
+    assert.notEqual(readable, archive);
+    await admin(execute => execute(`BACKUP DATABASE ${identify(database)} TO DISK = ${literal(readable)}
+      WITH COPY_ONLY, NO_CHECKSUM, NOFORMAT, NOINIT, NAME = N'fixture-readable';`));
+    const readability = await verify(adminId, readable, 1, 'fixture-readable');
+    assert.equal(readability.status, 'succeeded', JSON.stringify(readability));
+    assert.equal(readability.set.has_checksums, false);
+  } finally { await command('close_sql_server', { id: adminId }); }
+
+  // Native restore deliberately runs against the disposable test instance under a fresh fixture database name.
+  await admin(async execute => {
+    const target = database + '_bak_restore';
+    assert.match(target, /^StackPortFixture_[a-f0-9]{12}_bak_restore$/);
+    const files = await sql(execute, `RESTORE FILELISTONLY FROM DISK = ${literal(archive)} WITH FILE=1;`);
+    const [[dataDirectory, logDirectory]] = await sql(execute, "SELECT CONVERT(nvarchar(4000),SERVERPROPERTY('InstanceDefaultDataPath')), CONVERT(nvarchar(4000),SERVERPROPERTY('InstanceDefaultLogPath'))");
+    const relocation = files.map(([logical, , type], index) => {
+      assert.match(type, /^[DL]$/);
+      const folder = (type === 'L' ? logDirectory : dataDirectory).replace(/[\\/]$/, '');
+      return `MOVE ${literal(logical)} TO ${literal(folder + (folder.startsWith('/') ? '/' : '\\') + target + '_' + index + (type === 'L' ? '.ldf' : '.mdf'))}`;
+    });
+    await execute(`RESTORE DATABASE ${identify(target)} FROM DISK = ${literal(archive)}
+      WITH FILE=1, CHECKSUM, RECOVERY, ${relocation.join(', ')};`);
+    const [row] = await sql(execute, `SELECT COUNT(*), CONVERT(varchar(25),MAX(id)), MAX(CASE WHEN seq=1 THEN CONVERT(varchar(16),payload,2) END)
+        FROM ${identify(target)}.[catalog].[order]]daily];`);
+    assert.deepEqual(row, [61, '9223372036854775807', '00FF11']);
+  });
+  const { events } = await command('list_audit_events', { before: null });
+  const actions = events.filter(event => event.operation.startsWith('sql_server.backup'));
+  assert.ok(actions.some(event => event.operation === 'sql_server.backup' && event.outcome === 'succeeded'));
+  assert.ok(actions.some(event => event.operation === 'sql_server.backup.verify' && event.outcome === 'succeeded'));
+  assert.doesNotMatch(JSON.stringify(actions), /\.bak|StackPortFixture_|fixture-existing-media/);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

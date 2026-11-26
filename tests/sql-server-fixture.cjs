@@ -220,4 +220,4 @@ async function withLockedExportRow({ port, ca, database }, action) {
   });
 }
 
-module.exports = { seedSqlServer, recreateSqlServerTable, withLockedExportRow };
+module.exports = { seedSqlServer, recreateSqlServerTable, withLockedExportRow, withAdmin };

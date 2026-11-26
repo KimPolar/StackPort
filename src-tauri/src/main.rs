@@ -1300,6 +1300,38 @@ fn cancel_sql_server_export(manager: State<'_, sql_server::Manager>, id: String,
 }
 
 #[tauri::command]
+async fn sql_server_backup_capabilities(manager: State<'_, sql_server::Manager>, id: String)
+    -> Result<sql_server::BackupCapabilities, String> { manager.backup_capabilities(&id).await }
+
+#[tauri::command]
+async fn preview_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String, options: sql_server::BackupOptions)
+    -> Result<sql_server::BackupPreview, String> { manager.preview_backup(&id, options).await }
+
+#[tauri::command]
+fn discard_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String, token: String) -> Result<(), String> {
+    manager.discard_backup(&id, &token)
+}
+
+#[tauri::command]
+async fn run_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String, request_id: String, token: String,
+    approved: bool, confirmation: String) -> Result<sql_server::BackupOutcome, String> {
+    manager.run_backup(&id, &request_id, &token, approved, &confirmation).await
+}
+
+#[tauri::command]
+async fn verify_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String, request_id: String, input: sql_server::VerifyInput)
+    -> Result<sql_server::BackupOutcome, String> { manager.verify_backup(&id, &request_id, input).await }
+
+#[tauri::command]
+async fn sql_server_backup_progress(manager: State<'_, sql_server::Manager>, id: String, request_id: String)
+    -> Result<Option<sql_server::BackupProgress>, String> { manager.backup_progress(&id, &request_id).await }
+
+#[tauri::command]
+fn cancel_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_backup(&id, &request_id)
+}
+
+#[tauri::command]
 async fn list_oracle_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<oracle::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_oracle_profiles(&project_id)).await
@@ -3004,6 +3036,13 @@ fn main() {
             export_sql_server,
             sql_server_export_progress,
             cancel_sql_server_export,
+            sql_server_backup_capabilities,
+            preview_sql_server_backup,
+            discard_sql_server_backup,
+            run_sql_server_backup,
+            verify_sql_server_backup,
+            sql_server_backup_progress,
+            cancel_sql_server_backup,
             list_oracle_profiles,
             create_oracle_profile,
             update_oracle_profile,

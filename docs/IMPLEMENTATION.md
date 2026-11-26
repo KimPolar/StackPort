@@ -88,6 +88,10 @@ Windows 앱과 로컬 MongoDB 8.0.38에서 문서 23개의 전체 건수, 필터
 
 SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개된 스키마, 테이블, 뷰를 검색합니다. 열 이름·타입·NULL·IDENTITY를 표시하며, 미리보기는 앞 64개 열을 읽습니다. 테이블은 기본 키의 열 순서와 정렬 방향으로 50행씩 읽습니다. 기본 키가 없으면 한 번에 최대 50행을 표시합니다. 큰 정수와 소수는 문자열로, 바이너리는 HEX로 보존하며 값은 처음 256문자 또는 256바이트까지 표시합니다. 잘린 문자열의 크기는 UTF-16으로 변환한 전체 값의 바이트 수입니다. [SQL Server 메타데이터 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration)
 
+SQL Server 작업 공간의 **DB 백업**에서 SQL Server 2017 이상에 연결된 온라인 사용자 DB의 전체 `COPY_ONLY` 백업을 만들 수 있습니다. Windows 드라이브 또는 Linux의 서버 로컬 디스크 절대 경로를 입력하면 새 `.bak` 경로를 제안합니다. 미리보기에서 대상 DB·파일·압축 옵션을 확인합니다. `PROD` 연결에서는 `PROD` 입력이 필요합니다. SQL 계정에는 `BACKUP DATABASE`, 서버 서비스 계정에는 폴더의 읽기·쓰기 권한이 필요합니다. 실행 직전에 같은 이름의 파일이나 폴더와 부모 폴더를 확인한 뒤 `CHECKSUM`, `NOFORMAT`, `NOINIT`을 적용합니다. [SQL Server 전체 백업](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/create-a-full-database-backup-sql-server) · [BACKUP](https://learn.microsoft.com/en-us/sql/t-sql/statements/backup-transact-sql)
+
+**파일 검증**은 서버의 파일 경로와 백업 세트 위치를 입력받습니다. SQL 계정에 `CREATE DATABASE` 권한이 필요합니다. `RESTORE HEADERONLY`로 원본 DB·서버 버전·세트 ID를 읽고 `RESTORE VERIFYONLY`로 백업을 검사합니다. 체크섬이 있는 세트는 체크섬까지 검증하며, 없는 세트는 판독 결과를 표시합니다. 백업과 검증은 별도 TLS 연결에서 실행되며 서버가 진행률을 공개하면 현재 작업의 퍼센트를 표시합니다. 작업당 최대 30분이며 중단 요청에 대한 서버 응답을 표시합니다. 작업 기록에는 연결과 작업 ID·결과를 남깁니다. [백업 헤더](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/backup-history-and-header-information-sql-server) · [RESTORE VERIFYONLY](https://learn.microsoft.com/en-us/sql/t-sql/statements/restore-statements-verifyonly-transact-sql) · [백업 진행률](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/backup-restore/backup-restore-operations)
+
 **SQL 편집기**는 T-SQL 구문 강조와 줄 번호를 제공하며, 전체 문서·현재 배치·선택 영역을 실행합니다. `Ctrl+Enter`는 선택이 있으면 선택 영역을, 없으면 커서가 있는 배치를 실행합니다. 전체·선택 실행은 독립된 줄의 `GO`와 `GO n`으로 나눈 배치를 같은 실행 연결에서 최대 100회 처리합니다. 현재 배치 실행은 한 번 처리합니다. 문서의 최대 크기는 UTF-8 기준 256 KiB입니다. [SQL Server 배치 구분 명령](https://learn.microsoft.com/en-us/sql/t-sql/language-elements/sql-server-utilities-statements-go)
 
 로그인 계정의 실제 권한으로 SQL을 실행합니다. 실행마다 별도 TLS 연결을 사용하므로 임시 테이블과 세션 설정은 같은 실행의 배치 사이에서 유지됩니다. 실행이 끝나면 열린 트랜잭션을 롤백하고 연결을 닫습니다. 실패 배치 다음의 배치는 실행하지 않으며, 이미 커밋한 변경은 유지됩니다. 30초 실행 타임아웃과 수동 중단에서 서버의 중단 확인 여부를 표시합니다. SQL Server 2022 실서버 테스트에서는 드라이버가 일부 중단 응답을 확인하지 못했습니다. 이 경우 실행 연결을 닫고 중단 응답과 롤백 완료가 미확인임을 표시합니다. [SQL Server의 TDS 중단 응답](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/9bcc4b79-a791-41d0-bf76-73a97e501b35)
@@ -673,6 +677,8 @@ Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 
 SQL Server 검사는 `tests/sql-server-smoke.cjs`를 사용합니다. `STACKPORT_SQL_SERVER_PORT`에 루프백 테스트 인스턴스의 TCP 포트, `STACKPORT_SQL_SERVER_CA`에 PEM CA 경로, `STACKPORT_SQL_SERVER_SA_PASSWORD`에 테스트 인스턴스의 관리자 암호를 지정합니다. 스크립트는 Node의 `tedious` 패키지로 실행마다 별도 데이터베이스, 테이블·뷰와 제한 계정을 생성합니다. 패키지 경로는 `STACKPORT_TEDIOUS_PATH`로 지정할 수 있습니다. 격리 인스턴스에서 검사하고, 앱의 디버깅 주소는 `STACKPORT_CDP_URL`에 지정합니다.
 
 서버가 TDS 8.0을 제공하면 `STACKPORT_SQL_SERVER_TEST_STRICT=1`을 지정해 엄격한 TLS 연결도 검사합니다.
+
+격리 서버의 쓰기 가능한 백업 폴더를 `STACKPORT_SQL_SERVER_BACKUP_DIR`로 지정하면 백업과 검증을 검사합니다. `STACKPORT_SQL_SERVER_BACKUP_ONLY=1`은 이 흐름만 실행합니다. 제한 계정의 권한, 기존 백업 세트 보존, 운영 확인, 체크섬 및 판독 검증을 확인합니다. 테스트는 Windows 앱이 만든 백업을 SQL Server의 `RESTORE DATABASE`로 별도 DB에 복원해 행 수·큰 정수·바이너리를 비교합니다.
 
 SQL Server 2022 CU28과 2025 CU11에서 Windows 앱의 SQL 로그인, 필수 TLS와 인증서·호스트 이름 검증, 제한 계정의 스키마·테이블·뷰, 열 타입, 복합 기본 키 페이징, 큰 정수·소수·HEX·유니코드 보존을 확인했습니다. 2025 CU11에서는 TDS 8.0 엄격한 TLS 연결과 미등록 CA 차단도 확인했습니다. Windows 통합 인증은 도메인 환경에서의 실서버 확인이 남았습니다.
 

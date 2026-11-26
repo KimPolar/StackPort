@@ -961,6 +961,10 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "mysql.backup" | "mysql.backup.cancel" => "mysql-native-sql-no-overwrite",
         "mysql.restore" | "mysql.restore.partial" | "mysql.restore.unconfirmed" if record.environment == Some("PROD") => "mysql-native-new-database-prod-reviewed",
         "mysql.restore" | "mysql.restore.partial" | "mysql.restore.unconfirmed" => "mysql-native-new-database-reviewed",
+        "sql_server.backup" | "sql_server.backup.unconfirmed" if record.environment == Some("PROD") =>
+            "sql-server-copy-only-disk-prod-reviewed",
+        "sql_server.backup" | "sql_server.backup.unconfirmed" => "sql-server-copy-only-disk-reviewed",
+        "sql_server.backup.verify" => "sql-server-verifyonly-backup-set",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

@@ -1,3 +1,4 @@
+mod backup;
 mod catalog;
 mod definition;
 mod export;
@@ -9,6 +10,7 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
+pub use backup::{BackupCapabilities, BackupOptions, BackupOutcome, BackupPreview, BackupProgress, VerifyInput};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
 pub use query::{QueryInput, QueryOutcome};
 pub use structure::{Structure, StructureSection};
@@ -61,6 +63,7 @@ struct Session {
     profile: Profile,
     password: Mutex<Option<Password>>,
     export: Mutex<export::State>,
+    backup: Mutex<backup::State>,
     query: Mutex<Option<query::ActiveQuery>>,
     _permit: OwnedSemaphorePermit,
 }
@@ -134,6 +137,7 @@ impl Manager {
                     profile,
                     password: Mutex::new(Some(password)),
                     export: Mutex::new(export::State::default()),
+                    backup: Mutex::default(),
                     query: Mutex::new(None),
                     _permit: permit,
                 }),
@@ -154,6 +158,7 @@ impl Manager {
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
             session.stop_query();
+            session.stop_backup();
             session
                 .password
                 .lock()

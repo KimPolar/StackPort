@@ -9,6 +9,10 @@ pub(crate) fn valid_filename(name: &str) -> bool {
     if !cfg!(windows) {
         return !name.contains('\0');
     }
+    valid_windows_filename(name)
+}
+
+pub(crate) fn valid_windows_filename(name: &str) -> bool {
     if name.ends_with([' ', '.'])
         || name
             .chars()
