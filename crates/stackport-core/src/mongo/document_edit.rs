@@ -7,7 +7,7 @@ use super::{
 use crate::{insert_audit, AuditRecord, Result};
 use bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Binary, Document};
 use futures_util::TryStreamExt;
-use mongodb::{error::ErrorKind, options::Collation, results::CollectionType, Client};
+use mongodb::{error::ErrorKind, options::Collation, results::CollectionType, Client, Database};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::Arc,
@@ -73,8 +73,9 @@ pub struct MongoEditReport {
 }
 
 pub(super) struct DocumentEditor {
-    profile: MongoProfile,
+    pub(super) profile: MongoProfile,
     pending: Mutex<Option<Pending>>,
+    pub(super) import: Mutex<Option<super::import::PendingImport>>,
 }
 
 impl DocumentEditor {
@@ -82,6 +83,7 @@ impl DocumentEditor {
         Self {
             profile,
             pending: Mutex::new(None),
+            import: Mutex::new(None),
         }
     }
 }
@@ -103,7 +105,7 @@ struct Reviewed {
 }
 
 impl MongoManager {
-    fn document_editor(&self, id: &str) -> Result<(Client, Arc<DocumentEditor>)> {
+    pub(super) fn document_editor(&self, id: &str) -> Result<(Client, Arc<DocumentEditor>)> {
         let sessions = self
             .sessions
             .lock()
@@ -139,20 +141,7 @@ impl MongoManager {
             .map_err(|_| "MongoDB 연결 설정을 확인할 수 없습니다.")??;
         let db = client.database(&database);
         let (uuid, before) = timeout(READ_TIMEOUT, async {
-            let mut collections = db
-                .list_collections()
-                .filter(doc! { "name": &collection })
-                .await
-                .map_err(message)?;
-            let spec = collections
-                .try_next()
-                .await
-                .map_err(message)?
-                .ok_or(TARGET)?;
-            if spec.collection_type != CollectionType::Collection || spec.info.read_only {
-                return Err(TARGET.into());
-            }
-            let uuid = spec.info.uuid.ok_or(TARGET)?;
+            let uuid = editable_collection_uuid(&db, &collection).await?;
             let before = if let Some(key) = change.document_id() {
                 let document_id = parse_id(key)?;
                 let raw = db
@@ -338,6 +327,22 @@ impl MongoManager {
         .await
         .map_err(|_| "MongoDB 변경 감사 기록을 저장할 수 없습니다.")?
     }
+}
+
+pub(super) async fn editable_collection_uuid(db: &Database, collection: &str) -> Result<Binary> {
+    if collection.starts_with("system.") {
+        return Err(TARGET.into());
+    }
+    let mut collections = db
+        .list_collections()
+        .filter(doc! { "name": collection })
+        .await
+        .map_err(message)?;
+    let spec = collections.try_next().await.map_err(message)?.ok_or(TARGET)?;
+    if spec.collection_type != CollectionType::Collection || spec.info.read_only {
+        return Err(TARGET.into());
+    }
+    spec.info.uuid.ok_or_else(|| TARGET.into())
 }
 
 fn prepare_replacement(pending: &Pending, input: &str) -> Result<Option<Document>> {

@@ -12,7 +12,7 @@ pub(super) fn parse_document(text: &str) -> Result<Document> {
     if text.len() > MAX_BYTES {
         return Err(INVALID.into());
     }
-    validate_json_keys(text, 0)?;
+    validate_json_keys::<MAX_VALUES>(text, 0, MAX_DEPTH + 4)?;
     let document: Document = serde_json::from_str(text).map_err(|_| INVALID)?;
     validate_document(&document)?;
     Ok(document)
@@ -58,7 +58,7 @@ pub(super) fn parse_value(text: &str) -> Result<Bson> {
     if text.len() > MAX_BYTES {
         return Err(INVALID.into());
     }
-    validate_json_keys(text, 0)?;
+    validate_json_keys::<MAX_VALUES>(text, 0, MAX_DEPTH + 4)?;
     serde_json::from_str(text).map_err(|_| "올바른 Extended JSON 값을 입력하세요.".into())
 }
 
@@ -86,28 +86,39 @@ pub(super) fn parse_id(text: &str) -> Result<Bson> {
     if text.len() > 256 {
         return Err("MongoDB 문서의 _id를 확인하세요.".into());
     }
-    validate_json_keys(text, 0)?;
+    validate_json_keys::<MAX_VALUES>(text, 0, MAX_DEPTH + 4)?;
     serde_json::from_str::<Bson>(text).map_err(|_| "MongoDB 문서의 _id를 확인하세요.".into())
 }
 
-fn validate_json_keys(text: &str, depth: usize) -> Result<()> {
-    if depth > MAX_DEPTH + 4 {
+pub(super) fn validate_json_keys<const FIELDS: usize>(text: &str, depth: usize, max_depth: usize) -> Result<()> {
+    if depth > max_depth {
         return Err("문서 JSON이 너무 깊게 중첩되어 있습니다.".into());
     }
     let text = text.trim();
     if text.starts_with('{') {
-        let Properties(fields) = serde_json::from_str::<Properties<'_, MAX_VALUES>>(text)
+        let Properties(fields) = serde_json::from_str::<Properties<'_, FIELDS>>(text)
             .map_err(|_| "Extended JSON 객체의 문법과 중복 필드 이름을 확인하세요.")?;
+        if fields.len() > 1 && fields.iter().any(|(key, _)| is_extended_type_key(key))
+            && !(fields.len() == 2 && fields.iter().all(|(key, _)| matches!(key.as_str(), "$code" | "$scope")))
+        {
+            return Err("Extended JSON 타입을 나타내는 객체에 일반 필드를 섞을 수 없습니다.".into());
+        }
         for (_, child) in fields {
-            validate_json_keys(child.get(), depth + 1)?;
+            validate_json_keys::<FIELDS>(child.get(), depth + 1, max_depth)?;
         }
     } else if text.starts_with('[') {
         let values: Vec<&RawValue> = serde_json::from_str(text).map_err(|_| INVALID)?;
         for child in values {
-            validate_json_keys(child.get(), depth + 1)?;
+            validate_json_keys::<FIELDS>(child.get(), depth + 1, max_depth)?;
         }
     }
     Ok(())
+}
+
+fn is_extended_type_key(key: &str) -> bool {
+    matches!(key, "$oid" | "$symbol" | "$numberInt" | "$numberLong" | "$numberDouble" | "$binary"
+        | "$uuid" | "$code" | "$scope" | "$timestamp" | "$regularExpression" | "$dbPointer" | "$date"
+        | "$maxKey" | "$minKey" | "$undefined" | "$numberDecimal" | "$numberDecimalBytes")
 }
 
 fn as_raw(document: &Document) -> Result<RawDocumentBuf> {

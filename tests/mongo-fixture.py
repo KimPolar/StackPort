@@ -1,4 +1,5 @@
 import sys
+from time import monotonic, sleep
 from uuid import uuid4
 
 from bson import Binary, Decimal128, Int64, ObjectId
@@ -15,8 +16,17 @@ options = {
     'directConnection': True,
 }
 
-if not action:
+if not action or action == ['initialize_replica']:
     with MongoClient('localhost', **options) as first_user:
+        if action:
+            first_user.admin.command('replSetInitiate', {
+                '_id': 'stackport_fixture', 'members': [{'_id': 0, 'host': f'localhost:{port}'}],
+            })
+            deadline = monotonic() + 15
+            while not first_user.admin.command('hello').get('isWritablePrimary'):
+                assert monotonic() < deadline, 'The fixture did not elect a primary'
+                sleep(0.1)
+            action = []
         first_user.admin.command('createUser', 'stackport_fixture_admin',
                                  pwd='stackport-fixture-admin', roles=['root'])
 
@@ -25,6 +35,10 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     if action == ['recreate_edit_collection']:
         client.visible.drop_collection('edit_generation')
         client.visible.edit_generation.insert_one({'_id': 'seed', 'keep': True})
+        sys.exit(0)
+    if action == ['recreate_import_collection']:
+        client.visible.drop_collection('transfer_replaced')
+        client.visible.transfer_replaced.insert_one({'_id': 'replacement'})
         sys.exit(0)
     if action == ['recreate_validation_collection']:
         client.namespace_new.drop_collection('validated_items')
@@ -111,6 +125,10 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     })
     client.visible.export_ambiguous.insert_one({'_id': 'ambiguous', 'value': {'$numberLong': '3'}})
     client.visible.export_batches.insert_many({'_id': index} for index in range(130))
+    client.visible.transfer_target.insert_one({'_id': 'taken', 'marker': 'original'})
+    client.visible.create_collection('transfer_replaced')
+    client.visible.create_collection('transfer_validated', validator={'qty': {'$gte': 0}},
+                                     validationAction='error', validationLevel='strict')
     client.visible.command('create', 'recent_records', viewOn='records',
                            pipeline=[{'$match': {'rank': {'$gte': 20}}}])
     client.visible.schema_samples.insert_many([

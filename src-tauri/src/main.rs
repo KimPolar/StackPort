@@ -1068,6 +1068,25 @@ async fn export_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, 
     -> Result<stackport_core::MongoExportOutcome, String> { mongo.export_documents(&id, token, &database, &collection, input).await }
 
 #[tauri::command]
+async fn review_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, path: String)
+    -> Result<stackport_core::MongoImportReview, String> { mongo.review_document_import(&id, database, collection, path).await }
+
+#[tauri::command]
+async fn apply_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, confirmation: String, accept_partial: bool)
+    -> Result<stackport_core::MongoImportReport, String> { mongo.apply_document_import(&id, &token, &confirmation, accept_partial).await }
+
+#[tauri::command]
+async fn discard_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
+    -> Result<(), String> { mongo.discard_document_import(&id, &token).await }
+
+#[tauri::command]
+async fn choose_mongo_import_file() -> Result<Option<String>, String> {
+    worker(|| Ok(rfd::FileDialog::new().set_title("MongoDB 문서 파일 선택")
+        .add_filter("JSON", &["json", "jsonl", "ndjson"]).pick_file()
+        .map(|path| path.to_string_lossy().into_owned()))).await
+}
+
+#[tauri::command]
 async fn build_mongo_find_filter(node: stackport_core::MongoFindNode, base: String) -> Result<String, String> {
     worker(move || stackport_core::build_mongo_find_filter(node, &base)).await
 }
@@ -2821,6 +2840,10 @@ fn main() {
             mongo_documents,
             count_mongo_documents,
             export_mongo_documents,
+            review_mongo_document_import,
+            apply_mongo_document_import,
+            discard_mongo_document_import,
+            choose_mongo_import_file,
             build_mongo_find_filter,
             begin_mongo_document_edit,
             edit_mongo_document_draft,

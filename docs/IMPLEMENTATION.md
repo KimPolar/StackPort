@@ -14,6 +14,12 @@ MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·
 
 Windows 앱과 TLS를 적용한 MongoDB 8.0.38에서 읽기 전용 계정으로 컬렉션·뷰를 내보냈습니다. 화면의 페이지와 문서 크기 한도를 넘는 전체 결과, BSON 타입 왕복, CSV 필드 순서와 수식 보호, 취소·변환 오류·기존 파일 충돌을 확인했습니다.
 
+문서 편집을 허용한 연결에서 **문서 → 문서 가져오기**를 열면 기존 일반 컬렉션에 문서를 추가할 수 있습니다. UTF-8 JSON 객체·배열과 JSON Lines를 파일당 32 MiB, 1,000개 문서까지 읽고, 처음 세 문서의 Canonical Extended JSON과 건수를 검토합니다. 파일에 `_id`가 없으면 검토할 때 새 ObjectId를 만듭니다. 확인은 같은 연결에서 5분 동안 한 번 사용할 수 있으며 적용 전에 파일 해시를 다시 검사합니다. 각 쓰기에 검토한 컬렉션 UUID를 보내고 `PROD` 연결은 적용할 때 환경을 확인합니다. [MongoDB Extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/) · [MongoDB insert 명령](https://www.mongodb.com/docs/manual/reference/command/insert/)
+
+서버가 복제 세트나 샤드 라우터를 보고하면 하나의 트랜잭션으로 추가합니다. 독립 서버에서 문서를 여러 개 가져올 때는 첫 오류 전까지 저장된 문서가 유지됨을 확인합니다. 결과에 확인된 저장 건수와 오류 위치 또는 결과 미확인 상태를 표시합니다. 작업 기록에는 대상과 결과를 남깁니다. [MongoDB 트랜잭션](https://www.mongodb.com/docs/drivers/rust/current/crud/transactions/)
+
+Windows 앱과 TLS MongoDB 8.0.38 독립 서버 및 단일 노드 복제 세트에서 BSON과 큰 문서의 내보내기→가져오기→다시 내보내기 바이트 일치, 파일·컬렉션 교체 차단, 읽기 전용 계정 거부, 오류 위치와 두 번째 묶음 실패 시 롤백 여부를 확인했습니다. 복제 세트 검사는 `STACKPORT_MONGO_REPLICA=1`로 실행합니다.
+
 **이 연결에서 컬렉션·뷰 관리 허용**을 선택하면 **컬렉션·뷰 만들기**에서 기존 데이터베이스를 사용하거나 첫 컬렉션과 함께 새 데이터베이스를 만들 수 있습니다. 컬렉션에는 선택적으로 Extended JSON 유효성 규칙과 검사 범위, 위반 시 쓰기 거부 또는 서버 경고를 설정합니다. 뷰는 같은 데이터베이스의 원본과 읽기 전용 집계 단계 최대 24개를 사용합니다. 생성은 서버 명령을 검토한 뒤 5분 안에 한 번 적용하며 운영 환경에서는 `PROD`를 입력합니다. [MongoDB create](https://www.mongodb.com/docs/manual/reference/command/create/) · [MongoDB 뷰 생성](https://www.mongodb.com/docs/manual/core/views/create-view/) · [MongoDB 유효성 검사 범위](https://www.mongodb.com/docs/manual/core/schema-validation/specify-validation-level/)
 
 Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉션 생성, 규칙 위반 문서의 삽입 거절, 뷰의 필터 결과와 생성 후 목록 갱신을 확인했습니다. TLS와 사용자 인증을 적용한 서버에서 읽기 전용 계정은 생성 요청을 거절당하고, 별도 연결에서 같은 이름을 먼저 생성하면 이전 검토의 적용이 거절됩니다.

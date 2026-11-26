@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Download, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Database, Download, Plug, RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentExportDialog, type MongoDocumentQuery } from "./MongoDocumentExportDialog";
+import { MongoDocumentImportDialog, MongoDocumentImportReport, type MongoImportReport } from "./MongoDocumentImportDialog";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
@@ -216,6 +217,8 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const [definitionNotice, setDefinitionNotice] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importReport, setImportReport] = useState<MongoImportReport | null>(null);
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
   const countArgs = useMemo(() => view === "documents" && countRequest?.filter === query.filter
@@ -293,6 +296,9 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
         <button type="button" className="secondary small" onClick={() => setExportOpen(true)}>
           <Download size={14} aria-hidden /> 문서 내보내기
         </button>
+        {allowEdits && <button type="button" className="secondary small" onClick={() => { setImportReport(null); setImportOpen(true); }}>
+          <Upload size={14} aria-hidden /> 문서 가져오기
+        </button>}
         <button type="button" className="secondary small" disabled={documents.loading || count.loading}
           onClick={() => setCountRequest({ filter: query.filter })}>일치 건수 조회</button>
         {count.loading && <span className="mongo-count" role="status">건수 조회 중…</span>}
@@ -301,6 +307,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       {count.error && <p className="error-banner" role="alert">{count.error}</p>}
       {documentNotice && <p className="form-note mongo-note" role="status">{documentNotice}</p>}
       {exportReport && <ResultFileReport report={exportReport} onDismiss={() => setExportReport(null)} />}
+      {importReport && <MongoDocumentImportReport report={importReport} />}
       <details className="mongo-query">
         <summary>필터 및 정렬</summary>
         <form onSubmit={event => { event.preventDefault(); applyQuery(draft); }}>
@@ -365,6 +372,8 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
         setExportOpen(false);
         setExportReport(report);
       }} />}
+    {importOpen && <MongoDocumentImportDialog {...args} environment={environment} onBusy={onBusy}
+      onClose={() => setImportOpen(false)} onDone={report => { setImportOpen(false); setImportReport(report); refresh(); }} />}
   </section>;
 }
 

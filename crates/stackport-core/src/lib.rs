@@ -36,6 +36,7 @@ pub use mongo::{build_mongo_find_filter, MongoFindNode};
 pub use mongo::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use mongo::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
 pub use mongo::{MongoExportInput, MongoExportOutcome};
+pub use mongo::{MongoImportReport, MongoImportReview};
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use mongo::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
@@ -988,6 +989,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "mongo.namespace.rename_collection" | "mongo.namespace.rename_collection.unconfirmed" if record.environment == Some("PROD") => "mongo-collection-rename-uuid-prod-reviewed",
         "mongo.namespace.rename_collection" | "mongo.namespace.rename_collection.unconfirmed" => "mongo-collection-rename-uuid-reviewed",
         "mongo.export.csv" | "mongo.export.json" => "mongo-readonly-file-no-overwrite",
+        "mongo.import.json" | "mongo.import.json.unconfirmed" if record.environment == Some("PROD") => "mongo-document-import-uuid-prod-reviewed",
+        "mongo.import.json" | "mongo.import.json.unconfirmed" => "mongo-document-import-uuid-reviewed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",

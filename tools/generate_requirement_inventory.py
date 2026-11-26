@@ -142,12 +142,12 @@ PARTIAL = {
     "SP-MD-020": "SQLite 테이블·뷰 데이터 사전을 Markdown·HTML로 저장하고 생성 SQL의 주석·선언 타입 포함",
     "SP-SQ-025": "SQL 파일 BOM 자동 확인, UTF-8·UTF-16 LE/BE·Windows-949·Windows-1252 수동 선택과 무손실 변환, 표현할 수 없는 문자 경고, DB 연결 문자 전송과 분리",
     "SP-SQ-026": "PostgreSQL 연결당 단일 실행, 읽기 전용 트랜잭션, 결과 100행·24열 및 서버 문장 제한 8초",
-    "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON, 경로를 선택한 XML 레코드 가져오기",
+    "SP-MG-001": "SQLite·PostgreSQL의 CSV·TSV·TXT 구분 텍스트, JSON 객체 배열과 StackPort 결과 JSON, 경로를 선택한 XML 레코드 가져오기, MongoDB의 UTF-8 Extended JSON 객체·배열과 JSON Lines 가져오기",
     "SP-MG-002": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake 필터·정렬된 테이블·뷰 결과와 SQLite·PostgreSQL·MySQL·MariaDB SQL 전체 결과를 UTF-8 CSV·버전형 JSON으로 내보내기, MongoDB 문서·뷰의 Canonical Extended JSON·필드 지정 CSV, PostgreSQL 스크립트의 문장별 전체 결과 JSON 저장. Snowflake 실제 계정 검증 대기",
-    "SP-MG-004": "두 엔진에서 파일·형식·인코딩·구분자·헤더와 XML 레코드 경로 선택, JSON·XML 원본 열과 대상 열 매핑, 검증 미리보기",
+    "SP-MG-004": "SQLite·PostgreSQL 파일·형식·인코딩·구분자·헤더와 XML 레코드 경로 선택, JSON·XML 열 매핑과 검증 미리보기, MongoDB 파일 선택 및 대상·건수·BSON 표본 검토",
     "SP-MG-005": "JSON 숫자 토큰과 중첩 값, XML 중첩 셀, SQL NULL·빈 문자열·생략 구분, SQLite 저장 타입 확인과 BLOB·bytea 복원, PostgreSQL 서버 타입 변환, SQL Server·Oracle·Snowflake 내보내기에서 큰 수·날짜·유니코드·바이너리·NULL 보존. Snowflake 실제 계정 검증 대기",
-    "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·중복 키와 제약 오류 시 전체 롤백",
-    "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, XML DTD·처리 지시문·반복 필드, DB 타입·제약 위반 메시지 표시",
+    "SP-MG-006": "SQLite·PostgreSQL 기존 테이블에 추가, 한 트랜잭션의 커밋·제약 오류 시 전체 롤백, MongoDB 기존 컬렉션에 추가와 복제 세트의 전체 롤백, 독립 서버에서 첫 오류까지의 성공 건수 확인",
+    "SP-MG-007": "인코딩, 구분 텍스트 따옴표·열 수, JSON 문법·중복 속성, XML DTD·처리 지시문·반복 필드, DB 타입·제약 위반 메시지 표시, MongoDB 중복 키·유효성 검사 오류 문서 위치 표시",
     "SP-MG-008": "SQLite·PostgreSQL·MySQL·MariaDB·SQL Server·Oracle·Snowflake·MongoDB CSV·JSON 내보내기 스트리밍과 진행 건수, 중단·시간 제한, 완료 파일만 저장, PostgreSQL 스크립트 실행 중 JSON으로 행 기록 및 취소 시 임시 파일 정리. Snowflake 실제 계정 검증 대기",
     "SP-MG-013": "SQLite 기준·대상 스키마의 객체와 선언 속성 차이, 한쪽 객체 생성·삭제와 뷰 재정의 SQL 초안",
     "SP-MG-014": "SQLite 새 일반 테이블·뷰와 출력 열이 같은 뷰의 재정의를 선택 검토한 뒤 대상 백업과 트랜잭션 적용",
@@ -196,8 +196,8 @@ PARTIAL = {
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
-    "SP-NS-007": "MongoDB 컬렉션·뷰의 적용된 필터·표시 필드·정렬 결과를 Canonical Extended JSON 배열 또는 필드 경로 지정 CSV로 내보내기. JSON의 BSON 왕복 검증과 CSV 타입 손실 표시",
-    "SP-BK-009": "MongoDB 컬렉션·뷰 문서의 조회 결과를 BSON 왕복 검증 Canonical Extended JSON 또는 CSV 파일로 내보내기",
+    "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 배열 또는 필드 지정 CSV로 내보내기, BSON 타입 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines 가져오기",
+    "SP-BK-009": "MongoDB 조회 결과를 BSON 왕복 검증 Extended JSON 또는 CSV 파일로 내보내기, 검토한 Extended JSON 문서를 기존 컬렉션에 추가",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -561,6 +561,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mongo/namespace_admin/collection_changes.rs; src/MongoCollectionActionDialog.tsx"
             if requirement_id in {"SP-NS-007", "SP-BK-009", "SP-MG-002", "SP-MG-008"}:
                 evidence += "; crates/stackport-core/src/mongo/export.rs; src/MongoDocumentExportDialog.tsx; tests/mongo-smoke.cjs"
+            if requirement_id in {"SP-NS-007", "SP-BK-009", "SP-MG-001", "SP-MG-004", "SP-MG-006", "SP-MG-007"}:
+                evidence += "; crates/stackport-core/src/mongo/import.rs; crates/stackport-core/src/mongo/import_file.rs; src/MongoDocumentImportDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id == "SP-NS-012":

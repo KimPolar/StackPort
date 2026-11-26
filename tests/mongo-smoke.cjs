@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
+const { randomBytes } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -15,6 +16,7 @@ const python = process.env.STACKPORT_TEST_PYTHON || 'python';
 const secret = 'stackport-mongo-catalog-test';
 const editSecret = 'stackport-mongo-edit-test';
 const indexSecret = 'stackport-mongo-index-test';
+const replica = process.env.STACKPORT_MONGO_REPLICA === '1';
 const log = path.join(root, 'mongo-server.log');
 assert.ok(path.isAbsolute(root) && path.isAbsolute(binary));
 
@@ -38,7 +40,8 @@ function certificates() {
   run(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-keyout', 'mongo-ca.key', '-out', ca,
     '-subj', '/CN=StackPort MongoDB Test CA', '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign']);
   run(openssl, ['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', 'mongo-server.csr', '-subj', '/CN=localhost']);
-  fs.writeFileSync(path.join(root, 'mongo-server.ext'), 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost\nextendedKeyUsage=serverAuth\n');
+  const usage = replica ? 'serverAuth,clientAuth' : 'serverAuth';
+  fs.writeFileSync(path.join(root, 'mongo-server.ext'), `basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:localhost\nextendedKeyUsage=${usage}\n`);
   run(openssl, ['x509', '-req', '-in', 'mongo-server.csr', '-CA', ca, '-CAkey', 'mongo-ca.key', '-CAcreateserial', '-days', '2',
     '-out', cert, '-extfile', 'mongo-server.ext']);
   fs.writeFileSync(combined, fs.readFileSync(cert, 'utf8') + fs.readFileSync(key, 'utf8'));
@@ -247,6 +250,7 @@ async function verify(page, port, ca) {
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
   const fixtureAction = action => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, action]);
+  await verifyMongoImportCommands(command, open, profile, editProfile, fixtureAction);
   await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
     fixtureAction);
   await verifyCollectionDropCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, false, true), fixtureAction);
@@ -299,6 +303,11 @@ async function verify(page, port, ca) {
     cursor = next;
   } while (cursor !== null);
   const edits = audit.filter(event => event.operation.startsWith('mongo.document.'));
+  const imports = audit.filter(event => event.operation === 'mongo.import.json');
+  assert.ok(imports.some(event => event.outcome === 'succeeded' && event.affected_count === 23 && event.object_name === 'visible.transfer_target'));
+  assert.ok(imports.some(event => event.outcome === 'failed' && event.affected_count === (replica ? 0 : 100)));
+  assert.ok(imports.every(event => event.policy === 'mongo-document-import-uuid-prod-reviewed'));
+  assert.doesNotMatch(JSON.stringify(imports), /mongo-all\.json|9223372036854775807|roundtrip-private-input\.json/u);
   for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
     assert.ok(edits.some(event => event.operation === `mongo.document.${kind}` && event.outcome === 'succeeded'));
   }
@@ -401,6 +410,99 @@ async function verifyMongoExportEditor(page, detail) {
   await dialog.waitFor({ state: 'detached' });
   assert.equal(fs.readFileSync(csv, 'utf8'), '"rank"\r\n22\r\n21\r\n20\r\n');
   await detail.getByText(/CSV 저장 완료 · 3행/u).waitFor();
+}
+
+async function verifyMongoImportCommands(command, open, reader, writer, fixtureAction) {
+  const database = 'visible';
+  const primary = await open(writer, editSecret, 'PROD', true);
+  const readonly = await open(reader, secret, 'PROD', true);
+  const disabled = await open(writer, editSecret);
+  const id = primary.id;
+  const review = (file, collection = 'transfer_target', session = id) =>
+    command('review_mongo_document_import', { id: session, database, collection, path: file });
+  const apply = (token, confirmation = 'PROD', acceptPartial = !replica, session = id) =>
+    command('apply_mongo_document_import', { id: session, token, confirmation, acceptPartial });
+  const count = (filter = '', collection = 'transfer_target') =>
+    command('count_mongo_documents', { id, database, collection, filter });
+  const write = (name, text) => {
+    const file = path.join(root, name);
+    fs.writeFileSync(file, text);
+    return file;
+  };
+  try {
+    const source = path.join(root, 'mongo-all.json');
+    await assert.rejects(review(source, 'transfer_target', disabled.id), /편집을 허용한/);
+    await assert.rejects(review(source, 'recent_records'), /일반 MongoDB 컬렉션/);
+    await assert.rejects(review(write('import-duplicate-fields.json', '[{"nested":{"same":1,"same":2}}]')), /중복 필드/);
+    const inspected = await review(source);
+    assert.equal(inspected.atomic, replica);
+    assert.equal(inspected.document_count, 23);
+    assert.equal(inspected.sample.length, 3);
+    assert.equal(inspected.sample[0].truncated, true);
+    assert.equal(await count(), '1');
+    await assert.rejects(apply(inspected.token, ''), /PROD/);
+    if (!replica) await assert.rejects(apply(inspected.token, 'PROD', false), /유지됨을 확인/);
+    assert.deepEqual(await apply(inspected.token), {
+      status: 'complete', document_count: 23, inserted: 23, stopped_at: null, reason: null, audit_warning: false,
+    });
+    await assert.rejects(apply(inspected.token), /검토가 만료됐거나 변경/);
+    assert.equal(await count(), '24');
+
+    const destination = path.join(root, 'roundtrip-private-output.json');
+    const token = await command('prepare_query');
+    const exported = await command('export_mongo_documents', { id, token, database, collection: 'transfer_target', input: {
+      query: { sort_field: 'rank', descending: true, filter: '{"rank":{"$gte":0}}' },
+      options: { destination, format: 'json', include_header: true, spreadsheet_safe: true },
+    } });
+    assert.equal(exported.report.rows, 23);
+    assert.deepEqual(fs.readFileSync(destination), fs.readFileSync(source));
+
+    const mutable = write('roundtrip-private-input.json', '{"_id":"first"}');
+    const inspectedMutable = await review(mutable);
+    fs.writeFileSync(mutable, '{"_id":"different"}');
+    await assert.rejects(apply(inspectedMutable.token), /파일이 변경/);
+    assert.equal(await count(), '24');
+    const discarded = await review(mutable);
+    await command('discard_mongo_document_import', { id, token: discarded.token });
+    await assert.rejects(apply(discarded.token), /검토가 만료됐거나 변경/);
+
+    const insufficient = await review(mutable, 'transfer_target', readonly.id);
+    const denied = await apply(insufficient.token, 'PROD', !replica, readonly.id);
+    assert.equal(denied.status, 'stopped');
+    assert.equal(denied.inserted, 0);
+    assert.match(denied.reason, /쓰기 권한/);
+    const replaced = await review(mutable, 'transfer_replaced');
+    fixtureAction('recreate_import_collection');
+    const stale = await apply(replaced.token);
+    assert.equal(stale.status, 'stopped');
+    assert.equal(stale.inserted, 0);
+    assert.match(stale.reason, /컬렉션이 변경/);
+    assert.equal(await count('{"_id":"replacement"}', 'transfer_replaced'), '1');
+    assert.equal(await count('', 'transfer_replaced'), '1');
+
+    const invalid = await review(write('import-validation.json', '[{"qty":1},{"qty":-1},{"qty":2}]'), 'transfer_validated');
+    const invalidResult = await apply(invalid.token);
+    assert.equal(invalidResult.status, 'stopped');
+    assert.equal(invalidResult.inserted, replica ? 0 : 1);
+    assert.equal(invalidResult.stopped_at, 2);
+    assert.match(invalidResult.reason, /유효성 검사/);
+    assert.equal(await count('', 'transfer_validated'), replica ? '0' : '1');
+
+    const lines = [...Array.from({ length: 100 }, (_, index) => ({ _id: `batch-${index}`, marker: 'bulk' })),
+      { _id: 'taken', marker: 'bulk' }, { _id: 'not-attempted', marker: 'bulk' }].map(value => JSON.stringify(value)).join('\n');
+    const grouped = await review(write('import-batch.jsonl', lines));
+    assert.equal(grouped.document_count, 102);
+    const stopped = await apply(grouped.token);
+    assert.equal(stopped.status, 'stopped');
+    assert.equal(stopped.stopped_at, 101);
+    assert.equal(stopped.inserted, replica ? 0 : 100);
+    assert.match(stopped.reason, /고유 인덱스/);
+    assert.equal(await count('{"marker":"bulk"}'), replica ? '0' : '100');
+    assert.equal(await count('{"_id":"taken","marker":"original"}'), '1');
+    assert.equal(await count('{"_id":"not-attempted"}'), '0');
+  } finally {
+    for (const session of [primary, readonly, disabled]) await command('close_mongo', { id: session.id });
+  }
 }
 
 async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
@@ -967,6 +1069,24 @@ async function verifyDocumentEditor(page, workspace, detail) {
   await login.getByRole('checkbox', { name: '이 연결에서 문서 편집 허용', exact: true }).check();
   await button(login, '연결').click();
   await login.waitFor({ state: 'detached' });
+  await button(workspace, 'transfer_validated 컬렉션').click();
+  await button(detail, '문서 가져오기').click();
+  const importing = dialog('MongoDB 문서 가져오기');
+  const importPath = path.join(root, 'mongo-ui-import.jsonl');
+  fs.writeFileSync(importPath, '{"qty":7,"label":"파일에서 추가"}\n');
+  await importing.getByLabel('가져올 JSON 파일 경로').fill(importPath);
+  await button(importing, '파일 검토').click();
+  await importing.getByLabel('문서 1 미리보기').filter({ hasText: '파일에서 추가' }).waitFor();
+  assert.equal(await button(importing, '검토한 문서 추가').isDisabled(), true);
+  await importing.getByLabel('운영 환경 확인').fill('PROD');
+  assert.equal(await button(importing, '검토한 문서 추가').isEnabled(), true);
+  await button(importing, '검토한 문서 추가').click();
+  await importing.waitFor({ state: 'detached' });
+  await detail.getByRole('status').getByText(/가져오기 완료.*저장 확인 1개/).waitFor();
+  const imported = detail.getByLabel('Canonical Extended JSON').filter({ hasText: '파일에서 추가' });
+  await imported.waitFor({ state: 'attached' });
+  if (!await imported.isVisible()) await imported.locator('..').locator('summary').click();
+  await imported.waitFor();
   await button(workspace, 'edit_records 컬렉션').click();
   await detail.getByText('필터 및 정렬', { exact: true }).click();
   await detail.getByLabel('표시 필드 JSON').fill('{"title":1}');
@@ -1155,9 +1275,15 @@ async function main() {
   const { ca, combined } = certificates();
   const db = path.join(root, 'mongo-data');
   fs.mkdirSync(db);
+  const profileArgs = [];
+  if (replica) {
+    const keyFile = path.join(root, 'replica-membership.key');
+    fs.writeFileSync(keyFile, randomBytes(756).toString('base64'), { mode: 0o600 });
+    profileArgs.push('--replSet', 'stackport_fixture', '--keyFile', keyFile);
+  }
   const server = spawn(binary, ['--dbpath', db, '--bind_ip', '127.0.0.1', '--port', String(port), '--auth',
     '--tlsMode', 'requireTLS', '--tlsCertificateKeyFile', combined, '--tlsCAFile', ca, '--tlsAllowConnectionsWithoutCertificates',
-    '--logpath', log], { cwd: root, windowsHide: true, stdio: 'ignore' });
+    '--logpath', log, ...profileArgs], { cwd: root, windowsHide: true, stdio: 'ignore' });
   let browser;
   try {
     await once(server, 'spawn');
@@ -1168,10 +1294,10 @@ async function main() {
       await delay(250);
     }
     assert.ok(listening, 'The isolated MongoDB server did not start.');
-    run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
+    run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, ...(replica ? ['initialize_replica'] : [])]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, document exports, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops and renames).');
+    console.log(`MongoDB Windows E2E passed (${replica ? 'replica set' : 'standalone'}, TLS, BSON, document transfer, pipelines, document and index editing, and reviewed collection and view operations).`);
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;
