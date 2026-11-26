@@ -16,7 +16,7 @@ PARTIAL = {
     "SP-AU-007": "Windows 앱이 실행 중일 때 SQLite·PostgreSQL 예약을 처리하고, 앱이 닫힌 동안 지난 예약을 다음 실행에서 한 번 처리",
     "SP-AU-008": "SQLite·PostgreSQL 백업의 실행 대기·실행 중·성공·실패·취소·시간 초과·건너뜀·완료 확인 필요, 예정 및 시작 시각·실행 시간·파일 크기·원인 이력",
     "SP-AU-009": "Windows 상태 표시줄에 SQLite·PostgreSQL 예약 백업 및 재시도의 성공·실패 알림",
-    "SP-AU-012": "SQLite·PostgreSQL 백업 계획의 원본 크기·사용 가능 공간 확인, 다음 달력 일정 미리보기 및 즉시 백업",
+    "SP-AU-012": "SQLite·PostgreSQL 백업 계획 초안의 예약·저장 권한·원본 읽기·용량 검증, PostgreSQL TLS 경로·백업 도구 확인, 다음 달력 일정 미리보기와 즉시 백업",
     "SP-AU-016": "SQLite·PostgreSQL 백업 계획의 파일별 보존 만료일, 검토한 만료 파일 삭제와 결과 이력",
     "SP-AT-017": "Windows SQLite·PostgreSQL 달력 예약 실행·중지, SQLite 미리보기·재시작 후 지난 예약 실행, 두 엔진의 실패 알림·재시도, PostgreSQL 복원·SSH 경로 검증",
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
@@ -422,6 +422,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/backup_schedule/history.rs; src/BackupHistoryView.tsx"
                 if requirement_id == "SP-UI-011":
                     evidence += "; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-BK-012", "SP-AU-012"}:
+                evidence += "; crates/stackport-core/src/backup_schedule/validation.rs"
             if requirement_id in {"SP-BK-011", "SP-BK-012", "SP-BK-016", "SP-AU-016", "SP-SEC-013"}:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence

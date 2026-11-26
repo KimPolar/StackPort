@@ -816,6 +816,12 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .backup-plan-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
 .backup-plan-fields .field { margin-bottom: 0; }
 .sqlite-backup-plan .dialog-actions { flex-wrap: wrap; }
+.backup-validation { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); font-size: 12px; }
+.backup-validation h3 { margin: 0 0 8px; font-size: 14px; }
+.backup-validation ul { list-style: none; padding: 0; margin: 0; }
+.backup-validation li { padding: 7px 0; border-top: 1px solid var(--divider); }
+.backup-validation strong { margin-inline-end: 8px; }
+.backup-validation p { margin: 5px 0 0; color: var(--text-muted); overflow-wrap: anywhere; }
 .backup-run-history { padding: 0 21px 20px; }
 .backup-run-history h3 { margin-top: 0; font-size: 14px; }
 .backup-run-history details { padding: 8px 0; border-top: 1px solid var(--border); font-size: 12px; }

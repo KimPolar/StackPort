@@ -9,17 +9,26 @@ use crate::{
     insert_audit, ssh_tunnel::DatabaseTunnel, AuditRecord, BackupTunnelRoute, Result, SshTunnelManager, Store,
 };
 use postgres_native_tls::MakeTlsConnector;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TUNNEL_STOPPED: &str = "백업 계획의 SSH 터널이 중단되었습니다. 터널을 시작한 뒤 다시 시도하세요.";
 
-pub(crate) fn scheduled_backup_size(store: &Store, profile: &PostgresProfile, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<u64> {
+pub(crate) fn scheduled_backup_source(store: &Store, profile: &PostgresProfile, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<(u32, u64)> {
     let password = store.saved_postgres_password(profile)?;
     let tunnel = route.map(|(manager, reviewed)| {
         reviewed.verify_saved(&store.connect()?, &profile.project_id, &profile.settings.host, profile.settings.port)?;
         manager.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)
     }).transpose()?;
-    source_details(profile, &password, true, tunnel.as_ref(), None).map(|(_, size)| size)
+    source_details(profile, &password, true, tunnel.as_ref(), None)
+}
+
+pub(crate) fn scheduled_backup_tools_version(profile: &PostgresProfile, major: u32) -> Result<String> {
+    let deadline = Instant::now() + Duration::from_secs(16);
+    let check = || {
+        (Instant::now() < deadline).then_some(())
+            .ok_or_else(|| "PostgreSQL 백업 도구 확인 시간이 초과되었습니다.".into())
+    };
+    backup::tools_for(&profile.settings, major, &check).map(|tools| tools.version)
 }
 
 impl Store {

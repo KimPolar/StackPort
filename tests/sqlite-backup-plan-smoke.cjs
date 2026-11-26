@@ -11,7 +11,7 @@ const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip', 'history'].includes(phase)) {
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip', 'history', 'validate'].includes(phase)) {
   throw new Error('Set the isolated root and backup test phase.');
 }
 
@@ -86,6 +86,11 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
+        if (phase === 'validate') {
+          await verifyPlanValidation(dialog, () => state(profile.id));
+          assert.deepEqual(errors, []);
+          return;
+        }
         if (phase === 'history') {
           await verifyWorkspaceHistory(page, dialog, command, profile);
           assert.deepEqual(errors, []);
@@ -222,6 +227,36 @@ function seedLargeSnapshot(db, blocks = 256) {
   db.exec(`CREATE TABLE large_snapshot (data BLOB);
     WITH RECURSIVE blocks(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM blocks WHERE n<${blocks})
     INSERT INTO large_snapshot SELECT zeroblob(1048576) FROM blocks;`);
+}
+
+async function verifyPlanValidation(dialog, state) {
+  const button = dialog.getByRole('button', { name: '계획 검증', exact: true });
+  const result = dialog.getByRole('region', { name: '백업 계획 검증 결과', exact: true });
+  const folder = dialog.getByLabel('저장 폴더');
+  await folder.fill(path.join(root, '없는 백업 경로'));
+  await button.click();
+  await result.getByText(/백업 폴더를 열 수 없습니다/).waitFor();
+  await result.getByText('SQLite 원본을 읽을 수 있습니다.', { exact: true }).waitFor();
+  await folder.fill(output);
+  await result.waitFor({ state: 'detached' });
+  await button.click();
+  await result.getByText('저장 폴더에서 임시 파일을 만들고 지웠습니다.', { exact: true }).waitFor();
+  await result.getByText(/원본 크기 .* 사용 가능/).waitFor();
+  await result.getByText(/^다음 실행 /).waitFor();
+  assert.equal(await result.getByText('실패', { exact: true }).count(), 0);
+  const draftState = await state();
+  assert.equal(draftState.plan, null);
+  assert.deepEqual(draftState.runs, []);
+  assert.deepEqual(fs.readdirSync(output), []);
+
+  await dialog.getByLabel('실행 주기').selectOption('calendar');
+  await dialog.getByLabel('Cron 식', { exact: true }).fill('60 12 * * *');
+  await button.click();
+  await result.getByText(/cron 식의 분, 시, 일, 월, 요일/).waitFor();
+  assert.equal(await result.getByRole('listitem').count(), 1);
+  assert.equal((await state()).plan, null);
+  assert.deepEqual(fs.readdirSync(output), []);
+  console.log('Validated the unsaved SQLite plan and reported missing storage and invalid cron without creating a backup.');
 }
 
 async function verifyWorkspaceHistory(page, dialog, command, profile) {

@@ -30,6 +30,10 @@ type ExecutionPolicy = { revision: number; max_concurrent: number; max_supported
 type Snapshot = { plan: Plan | null; runs: BackupRun[]; execution_policy: ExecutionPolicy };
 type ExpiredPage = { runs: BackupRun[]; next_before: number | null };
 type Capacity = { directory: string; estimated_bytes: number; available_bytes: number | null };
+type Validation = {
+  checks: { step: keyof typeof validationSteps; status: "passed" | "warning" | "failed"; message: string }[];
+  next_at: number | null; estimated_bytes: number | null; available_bytes: number | null;
+};
 type RemovalPreview = { token: string; path: string; size_bytes: number; sha256: string; expires_at: number };
 type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
@@ -43,6 +47,8 @@ export const backupRunStatus = { running: "실행 중", succeeded: "무결성 �
 export const backupRunTrigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
+const validationSteps = { settings: "계획 설정", folder: "저장 폴더", source: "원본 연결", tools: "백업 도구", space: "저장 공간" };
+const validationStatus = { passed: "통과", warning: "확인 필요", failed: "실패" };
 export const formatBackupTime = (seconds: number) => date.format(seconds * 1000);
 export const formatBackupSize = (amount: number) => bytes.format(amount / 1_048_576) + " MiB";
 
@@ -76,6 +82,20 @@ function calendarInput(draft: Draft): Calendar {
   return { expression: draft.expression.trim(), time_zone: draft.timeZone.trim(), excluded_dates: draft.excluded.split(/[\s,]+/).filter(Boolean) };
 }
 
+function planInput(draft: Draft) {
+  const nextAt = draft.scheduled && draft.mode !== "calendar" ? Date.parse(draft.next) / 1000 : null;
+  if (nextAt !== null && !Number.isSafeInteger(nextAt)) throw new Error("첫 실행 시각을 입력하세요.");
+  return {
+    revision: draft.revision, directory: draft.directory, prefix: draft.prefix,
+    interval_minutes: draft.mode === "periodic" ? Number(draft.minutes) : null,
+    calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
+    calendar_enabled: draft.mode === "calendar" && draft.scheduled,
+    retention_days: Number(draft.retention), retry_limit: draft.retry ? Number(draft.retryCount) : 0,
+    retry_delay_minutes: draft.retry ? Number(draft.retryMinutes) : undefined,
+    timeout_seconds: Number(draft.timeoutSeconds), next_at: nextAt,
+  };
+}
+
 function calendarDate(seconds: number, timeZone: string) {
   try {
     return new Intl.DateTimeFormat("ko-KR", { timeZone: timeZone.trim(), dateStyle: "medium", timeStyle: "medium" }).format(seconds * 1000) + ` (${timeZone.trim()})`;
@@ -97,9 +117,10 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [capacity, setCapacity] = useState<Capacity | null>(null);
+  const [validation, setValidation] = useState<Validation | null>(null);
   const [preview, setPreview] = useState<Occurrence[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "preview" | "refresh" | "pause" | "file" | "history" | "policy" | "">("");
+  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "validate" | "preview" | "refresh" | "pause" | "file" | "history" | "policy" | "">("");
   const [cancelRequested, setCancelRequested] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -157,6 +178,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setDirty(true);
     setError("");
     setNotice("");
+    setValidation(null);
     if (key === "directory" || key === "tunnel") setCapacity(null);
     if (key === "mode" || key === "expression" || key === "timeZone" || key === "excluded") setPreview([]);
   }
@@ -175,6 +197,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setSnapshot(state);
     setDraft(form(state.plan, displayPath, engine, tunnels.find(tunnel => tunnel.id === preferredTunnel?.id) ?? preferredTunnel));
     setPreview([]);
+    setValidation(null);
     setDirty(false);
   }
 
@@ -192,24 +215,24 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   function save(event: FormEvent) {
     event.preventDefault();
     if (!draft || needsCredential || approvalMissing || routeUnavailable) return;
-    const nextAt = draft.scheduled && draft.mode !== "calendar" ? Date.parse(draft.next) / 1000 : null;
-    if (nextAt !== null && (!Number.isSafeInteger(nextAt) || nextAt <= Date.now() / 1000)) {
-      setError("첫 실행 시각을 현재보다 늦게 지정하세요.");
-      return;
-    }
     void perform("save", async () => {
+      const input = planInput(draft);
+      if (input.next_at !== null && input.next_at <= Date.now() / 1000) {
+        throw new Error("첫 실행 시각을 현재보다 늦게 지정하세요.");
+      }
       const target = postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
-      apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...target, input: {
-        revision: draft.revision, directory: draft.directory, prefix: draft.prefix,
-        interval_minutes: draft.mode === "periodic" ? Number(draft.minutes) : null,
-        calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
-        calendar_enabled: draft.mode === "calendar" && draft.scheduled,
-        retention_days: Number(draft.retention), retry_limit: draft.retry ? Number(draft.retryCount) : 0,
-        retry_delay_minutes: draft.retry ? Number(draft.retryMinutes) : undefined,
-        timeout_seconds: Number(draft.timeoutSeconds), next_at: nextAt,
-      } }));
+      apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...target, input }));
       setConfirmation("");
       setNotice("백업 계획을 저장했습니다.");
+    });
+  }
+
+  function validate() {
+    if (!draft || routeUnavailable) return;
+    void perform("validate", async () => {
+      setValidation(null);
+      const target = postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
+      setValidation(await invoke<Validation>(`validate_${engine}_backup_plan`, { ...target, input: planInput(draft) }));
     });
   }
 
@@ -373,7 +396,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         </div>}
         <p className="form-note">앱을 실행 중일 때 백업합니다. 앱이 닫혀 있는 동안 지난 예약은 다음 실행에서 한 번 처리합니다. {postgres ? "백업 파일은 암호화되지 않습니다." : "백업은 전체 SQLite 파일이며 암호화되지 않습니다."}</p>
         {production && <label className="field">운영 백업 확인 (PROD 입력)<input value={confirmation} autoComplete="off"
-          disabled={Boolean(busy)} onChange={event => setConfirmation(event.target.value)} /></label>}
+          disabled={Boolean(busy)} onChange={event => { setConfirmation(event.target.value); setValidation(null); }} /></label>}
         {plan && <p className="form-note">다음 예약 {plan.requires_review ? "설정 검토 필요" : nextAt}
           {!plan.requires_review && plan.retry_at !== null && ` · ${plan.retry_attempt}차 재시도 ${plan.calendar
             ? calendarDate(plan.retry_at, plan.calendar.time_zone) : formatBackupTime(plan.retry_at)}`}</p>}
@@ -382,6 +405,18 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         {stale && <p className="form-error" role="alert">다른 창에서 계획이 변경되었습니다. 설정을 새로고침하세요.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {notice && <p className="form-note" role="status">{notice}</p>}
+        {validation && !stale && !routeUnavailable && <section className="backup-validation" aria-label="백업 계획 검증 결과">
+          <h3>검증 결과</h3>
+          <ul>{validation.checks.map(check => <li key={check.step}>
+            <strong>{validationSteps[check.step]}</strong>
+            <span className={`audit-outcome ${check.status === "passed" ? "succeeded" : check.status}`}>{validationStatus[check.status]}</span>
+            <p>{check.message}</p>
+          </li>)}</ul>
+          {validation.next_at !== null && <p>다음 실행 {draft.mode === "calendar"
+            ? calendarDate(validation.next_at, draft.timeZone) : formatBackupTime(validation.next_at)}</p>}
+          {validation.estimated_bytes !== null && <p>원본 크기 {formatBackupSize(validation.estimated_bytes)}
+            {validation.available_bytes !== null && ` · 사용 가능 ${formatBackupSize(validation.available_bytes)}`}</p>}
+        </section>}
         <div className="dialog-actions">
           {stale && <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void perform("refresh", async () => {
             apply(await invoke<Snapshot>(`${engine}_backup_plan`, { profileId }));
@@ -395,6 +430,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
             onClick={runNow}>{busy === "run" ? "백업 중…" : "지금 백업"}</button>
           {cancellable && <button type="button" className="secondary" disabled={cancellable.id === cancelRequested}
             onClick={() => void cancelRun(cancellable.id)}>{cancellable.id === cancelRequested ? "취소 처리 중…" : "백업 취소"}</button>}
+          <button type="button" className="secondary" disabled={Boolean(busy || stale || routeUnavailable)}
+            onClick={event => { if (event.currentTarget.form?.reportValidity()) validate(); }}>
+            {busy === "validate" ? "검증 중…" : "계획 검증"}</button>
           <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || approvalMissing || routeUnavailable)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
         </div>
       </form>

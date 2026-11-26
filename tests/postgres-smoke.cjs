@@ -3006,6 +3006,27 @@ async function verifyPostgresCalendarBackupPlan(page, command, profile) {
 async function verifyPostgresBackupHistory(page, command, profile) {
   const directory = path.join(root, 'postgres history backups');
   fs.mkdirSync(directory);
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(profile.project_id);
+  await page.getByRole('button', { name: `PostgreSQL ${profile.settings.name} 열기`, exact: true }).click();
+  await page.getByRole('button', { name: '백업 계획', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+  await dialog.getByLabel('저장 폴더').fill(directory);
+  const validate = dialog.getByRole('button', { name: '계획 검증', exact: true });
+  const result = dialog.getByRole('region', { name: '백업 계획 검증 결과', exact: true });
+  await validate.click();
+  await result.getByText(/운영 PostgreSQL 백업을 승인하려면 PROD/).waitFor();
+  assert.equal(await result.getByText('백업 도구', { exact: true }).count(), 0);
+  await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+  await validate.click();
+  await result.getByText(/직접 TLS로 PostgreSQL \d+에 연결했습니다/).waitFor();
+  await result.getByText(/pg_dump와 pg_restore .* 버전을 확인했습니다/).waitFor();
+  const unmodified = await command('postgres_backup_plan', { profileId: profile.id });
+  assert.equal(unmodified.plan, null);
+  assert.deepEqual(unmodified.runs, []);
+  assert.deepEqual(fs.readdirSync(directory), []);
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  console.log('Validated PostgreSQL TLS and backup tools after PROD confirmation without saving a plan or archive.');
   const { plan } = await command('save_postgres_backup_plan', { profile, confirmation: 'PROD', tunnel: null, input: {
     revision: null, directory, prefix: 'history', interval_minutes: null, retention_days: 7, retry_limit: 0, next_at: null,
   } });
@@ -3018,7 +3039,6 @@ async function verifyPostgresBackupHistory(page, command, profile) {
   const entry = history.getByRole('listitem').filter({ hasText: profile.settings.name }).first();
   await entry.getByText(/PostgreSQL · 수동 실행/).waitFor();
   await entry.getByRole('button', { name: '백업 계획 열기', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
   const approval = dialog.getByLabel('운영 백업 확인 (PROD 입력)');
   await approval.waitFor();
   const runNow = dialog.getByRole('button', { name: '지금 백업', exact: true });
@@ -3084,6 +3104,14 @@ async function verifyTunneledPostgresBackupPlan(page, command, project, profile,
     await dialog.getByRole('button', { name: '용량 확인', exact: true }).click();
     await dialog.getByText(/원본 크기 .*사용 가능/).waitFor();
     assert.ok(gateway.forwarded() > beforeCapacity);
+    const beforeValidation = gateway.forwarded();
+    await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+    await dialog.getByRole('button', { name: '계획 검증', exact: true }).click();
+    const validation = dialog.getByRole('region', { name: '백업 계획 검증 결과', exact: true });
+    await validation.getByText(/SSH 경유 TLS로 PostgreSQL \d+에 연결했습니다/).waitFor();
+    await validation.getByText(/pg_dump와 pg_restore .* 버전을 확인했습니다/).waitFor();
+    assert.ok(gateway.forwarded() > beforeValidation);
+    assert.deepEqual(fs.readdirSync(directory), []);
     const approved = (await command('postgres_backup_tunnel_options', { profile }))[0];
     assert.deepEqual(approved.profiles.map(item => item.id), [first.id, target.id]);
     const input = { revision: null, directory, prefix: 'route-test', interval_minutes: null, retention_days: 7, retry_once: true, next_at: null };

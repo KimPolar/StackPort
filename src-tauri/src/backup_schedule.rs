@@ -2,7 +2,7 @@ use stackport_core::{
     backup_artifact::{RemovalPreview, RemovalResult},
     backup_schedule::{
         BackupCalendar, BackupCapacity, BackupExecutionPolicy, BackupHistoryCursor, BackupHistoryFilter,
-        BackupHistoryPage, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence, ExpiredBackupPage,
+        BackupHistoryPage, BackupPlanState, BackupPlanValidation, BackupPlanWrite, BackupRun, CalendarOccurrence, ExpiredBackupPage,
         MAX_CONCURRENT_BACKUPS,
     },
     BackupTunnelRoute, PostgresProfile, SshTunnelManager, Store,
@@ -49,6 +49,21 @@ impl Scheduler {
 pub(crate) async fn list_backup_history(store: State<'_, Store>, filter: BackupHistoryFilter, before: Option<BackupHistoryCursor>) -> Result<BackupHistoryPage, String> {
     let store = store.inner().clone();
     super::worker(move || store.list_backup_history(filter, before)).await
+}
+
+#[tauri::command]
+pub(crate) async fn validate_sqlite_backup_plan(store: State<'_, Store>, profile_id: String, input: BackupPlanWrite) -> Result<BackupPlanValidation, String> {
+    let store = store.inner().clone();
+    super::worker(move || Ok(store.validate_sqlite_backup_plan(&profile_id, &input))).await
+}
+
+#[tauri::command]
+pub(crate) async fn validate_postgres_backup_plan(app: AppHandle, store: State<'_, Store>, profile: PostgresProfile, confirmation: String, input: BackupPlanWrite, tunnel: Option<BackupTunnelRoute>) -> Result<BackupPlanValidation, String> {
+    let store = store.inner().clone();
+    super::worker(move || {
+        let manager = app.state::<SshTunnelManager>();
+        Ok(store.validate_postgres_backup_plan(&profile, &confirmation, &input, tunnel.as_ref().map(|route| (manager.inner(), route))))
+    }).await
 }
 
 #[tauri::command]

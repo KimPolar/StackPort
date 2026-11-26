@@ -2,10 +2,13 @@
 mod calendar;
 mod execution;
 mod history;
+mod validation;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
 pub(crate) use execution::{Execution, RunControl, Stop};
 pub use history::{BackupHistoryCursor, BackupHistoryFilter, BackupHistoryPage};
+pub use validation::BackupPlanValidation;
+use validation::{validate_settings, ValidatedSettings};
 use calendar::CalendarSchedule;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
@@ -301,27 +304,14 @@ impl Store {
     ) -> Result<BackupCapacity> {
         let profile = self.profile(profile_id)?;
         let directory = backup_directory(directory)?;
-        let source = open_user_db(Path::new(&profile.path))?;
-        // This read-only connection runs only the two fixed size PRAGMAs.
-        source.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-        let page_value = |pragma| {
-            if let Some(control) = control {
-                control.check()?;
-                source.busy_timeout(control.bounded_wait(Duration::from_secs(5))).map_err(db_error)?;
-            }
-            source.pragma_query_value(None, pragma, |row| row.get::<_, u64>(0)).map_err(db_error)
-        };
-        let pages = page_value("page_count")?;
-        let page_size = page_value("page_size")?;
-        let estimated_bytes = pages
-            .checked_mul(page_size)
-            .ok_or("원본 데이터베이스 크기를 확인할 수 없습니다.")?;
+        let estimated_bytes = sqlite_backup_source_size(Path::new(&profile.path), control)?;
         capacity(&directory, estimated_bytes)
     }
 
     pub fn postgres_backup_capacity(&self, profile: &PostgresProfile, directory: &str, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<BackupCapacity> {
         let directory = backup_directory(directory)?;
-        capacity(&directory, postgres::scheduled_backup_size(self, profile, route)?)
+        let (_, size) = postgres::scheduled_backup_source(self, profile, route)?;
+        capacity(&directory, size)
     }
 
     pub fn sqlite_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
@@ -430,58 +420,8 @@ impl Store {
 
     fn save_backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>, route: Option<&BackupTunnelRoute>, input: BackupPlanWrite) -> Result<BackupPlanState> {
         let now = unix_now()?;
-        let prefix = input.prefix.trim();
-        if prefix.is_empty()
-            || prefix.len() > 40
-            || !prefix
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-        {
-            return Err(
-                "백업 이름 접두어는 영문, 숫자, 하이픈, 밑줄을 사용해 1~40자로 입력하세요.".into(),
-            );
-        }
-        if input
-            .interval_minutes
-            .is_some_and(|minutes| !(1..=43_200).contains(&minutes))
-        {
-            return Err("반복 간격은 1~43,200분으로 입력하세요.".into());
-        }
-        if !(1..=3_650).contains(&input.retention_days) {
-            return Err("보존 기간은 1~3,650일로 입력하세요.".into());
-        }
-        let retry_limit = input.retry_limit.unwrap_or(u8::from(input.retry_once));
-        let retry_delay_minutes = input.retry_delay_minutes.unwrap_or(DEFAULT_RETRY_DELAY_MINUTES);
-        if retry_limit > MAX_RETRIES || !(1..=1_440).contains(&retry_delay_minutes) {
-            return Err("재시도는 최대 5회, 간격은 1~1,440분으로 입력하세요.".into());
-        }
-        if input.timeout_seconds.is_some_and(|seconds| seconds > MAX_TIMEOUT_SECONDS) {
-            return Err("최대 실행 시간은 0~86,400초로 입력하세요.".into());
-        }
-        if input.calendar.is_some() && (input.next_at.is_some() || input.interval_minutes.is_some()) {
-            return Err("달력 일정과 단발·간격 예약은 함께 저장할 수 없습니다.".into());
-        }
-        if input.calendar.is_none() && input.calendar_enabled {
-            return Err("달력 예약을 사용하려면 cron 식과 시간대를 입력하세요.".into());
-        }
-        if input
-            .next_at
-            .is_some_and(|at| at <= now || at > LATEST_START)
-        {
-            return Err("첫 예약은 현재보다 늦고 2100년 이전인 시각을 선택하세요.".into());
-        }
-        let (next_at, next_excluded_at) = match &input.calendar {
-            Some(calendar) => {
-                let schedule = CalendarSchedule::parse(calendar)?;
-                let next = schedule.next_after(now)?.ok_or(NO_CALENDAR_OCCURRENCE)?;
-                if input.calendar_enabled {
-                    (Some(next.at), schedule.excluded_after(now)?.first().copied())
-                } else {
-                    (None, None)
-                }
-            }
-            None => (input.next_at, None),
-        };
+        let ValidatedSettings { prefix, retry_limit, retry_delay_minutes, next_at, next_excluded_at } =
+            validate_settings(&input, now)?;
         let directory = if postgres.is_some() {
             backup_directory(&input.directory)?.to_string_lossy().into_owned()
         } else {
@@ -1000,6 +940,22 @@ pub(crate) fn confirm_backup_directory(directory: &str) -> Result<()> {
         return Err("백업 폴더가 다른 위치를 가리킵니다. 계획에서 저장 폴더를 다시 확인하세요.".into());
     }
     Ok(())
+}
+
+fn sqlite_backup_source_size(path: &Path, control: Option<&RunControl>) -> Result<u64> {
+    let source = open_user_db(path)?;
+    // This read-only connection runs only the two fixed size PRAGMAs.
+    source.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    let page_value = |pragma| {
+        if let Some(control) = control {
+            control.check()?;
+            source.busy_timeout(control.bounded_wait(Duration::from_secs(5))).map_err(db_error)?;
+        }
+        source.pragma_query_value(None, pragma, |row| row.get::<_, u64>(0)).map_err(db_error)
+    };
+    let pages = page_value("page_count")?;
+    let page_size = page_value("page_size")?;
+    pages.checked_mul(page_size).ok_or_else(|| "원본 데이터베이스 크기를 확인할 수 없습니다.".into())
 }
 
 fn capacity(directory: &Path, estimated_bytes: u64) -> Result<BackupCapacity> {

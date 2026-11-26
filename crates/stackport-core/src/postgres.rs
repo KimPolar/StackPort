@@ -33,7 +33,7 @@ pub use grid_layout::PostgresGridLayout;
 pub use monitor::{PostgresActivityInput, PostgresActivitySnapshot};
 pub use parameters::PostgresSqlBindings;
 pub(crate) use profiles::{copy_profiles, find as find_profile, SCHEMA};
-pub(crate) use schedule::scheduled_backup_size;
+pub(crate) use schedule::{scheduled_backup_source, scheduled_backup_tools_version};
 pub use profiles::{PostgresProfile, PostgresProfileInput};
 pub use restore::{PostgresRestorePreview, PostgresRestoreReport};
 pub use search::{PostgresSearchInput, PostgresSearchPage};
