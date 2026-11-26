@@ -1,5 +1,6 @@
 mod backup_file;
 mod console;
+mod credentials;
 mod edit;
 mod json;
 mod keys;
@@ -11,6 +12,7 @@ mod resp;
 
 pub use backup_file::{RedisBackupFileFormat, RedisBackupFileReport};
 pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
+pub use credentials::RedisCredentialStatus;
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub use monitor::RedisServerSnapshot;
 pub use persistence::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersistenceReport};
@@ -44,6 +46,23 @@ const UPDATE_UNKNOWN: &str =
 #[serde(transparent)]
 pub struct RedisPassword(#[serde(deserialize_with = "deserialize_secret")] Zeroizing<String>);
 
+pub enum RedisAuthentication {
+    Entered {
+        password: RedisPassword,
+        remember: bool,
+    },
+    Saved,
+}
+
+impl From<RedisPassword> for RedisAuthentication {
+    fn from(password: RedisPassword) -> Self {
+        Self::Entered {
+            password,
+            remember: false,
+        }
+    }
+}
+
 fn deserialize_secret<'de, D: Deserializer<'de>>(
     input: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -59,6 +78,7 @@ pub struct RedisSessionInfo {
     allow_publish: bool,
     allow_persistence: bool,
     json_support: json::Support,
+    credential_warning: Option<String>,
 }
 
 struct Session {
@@ -92,28 +112,27 @@ impl RedisManager {
         &self,
         id: String,
         revision: i64,
-        password: RedisPassword,
+        authentication: impl Into<RedisAuthentication>,
         confirmation: &str,
         allow_edits: bool,
         allow_publish: bool,
         allow_persistence: bool,
     ) -> Result<RedisSessionInfo> {
-        if password.0.len() > 4096 {
-            return Err("Redis 암호가 너무 깁니다.".into());
-        }
+        let authentication = authentication.into();
         let store = self.store.clone();
-        let profile = tokio::task::spawn_blocking(move || {
+        let confirmed = confirmation == "PROD";
+        let (profile, tls, password, remember) = tokio::task::spawn_blocking(move || {
             let profile = store.redis_profile(&id, revision)?;
+            if profile.settings.environment == "PROD" && !confirmed {
+                return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+            }
             let tls = connector(&profile.settings)?;
-            Ok::<_, String>((profile, tls))
+            let (password, remember) = store.redis_password(&profile, authentication)?;
+            Ok::<_, String>((profile, tls, password, remember))
         })
         .await
         .map_err(|_| "Redis 연결 설정을 읽을 수 없습니다.")??;
-        let (profile, tls) = profile;
         let settings = &profile.settings;
-        if settings.environment == "PROD" && confirmation != "PROD" {
-            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
-        }
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| "열린 Redis 연결이 너무 많습니다.")?;
@@ -126,6 +145,7 @@ impl RedisManager {
         })
         .await
         .map_err(|_| "Redis 연결 시간이 초과되었습니다.")??;
+        let entry = (remember && !password.0.is_empty()).then(|| (profile.clone(), password));
         let id = Uuid::new_v4().to_string();
         self.sessions
             .lock()
@@ -144,6 +164,17 @@ impl RedisManager {
                     _permit: permit,
                 }),
             );
+        let credential_warning = if let Some((profile, secret)) = entry {
+            let store = self.store.clone();
+            match tokio::task::spawn_blocking(move || store.remember_redis_password(&profile, &secret))
+                .await
+            {
+                Ok(result) => result.err(),
+                Err(_) => Some("Redis 암호를 저장할 수 없습니다.".into()),
+            }
+        } else {
+            None
+        };
         Ok(RedisSessionInfo {
             id,
             engine,
@@ -152,6 +183,7 @@ impl RedisManager {
             allow_publish,
             allow_persistence,
             json_support,
+            credential_warning,
         })
     }
 

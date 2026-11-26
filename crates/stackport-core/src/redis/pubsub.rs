@@ -2,7 +2,8 @@ use super::{
     connector, establish,
     keys::{display, RedisBytes},
     resp::{Failure, Wire},
-    RedisManager, RedisPassword, RedisProfile, RedisSettings, CONNECT_TIMEOUT, UPDATE_UNKNOWN,
+    RedisAuthentication, RedisManager, RedisPassword, RedisProfile, RedisSettings, CONNECT_TIMEOUT,
+    UPDATE_UNKNOWN,
 };
 use crate::{insert_audit, AuditRecord, Result, Store};
 use serde::Serialize;
@@ -97,13 +98,10 @@ impl RedisManager {
         id: &str,
         name: String,
         pattern: bool,
-        password: RedisPassword,
+        authentication: impl Into<RedisAuthentication>,
         confirmation: &str,
     ) -> Result<String> {
         validate_channel(&name)?;
-        if password.0.len() > 4096 {
-            return Err("Redis 암호가 너무 깁니다.".into());
-        }
         let session = self.session(id)?;
         check_production(&session.profile, confirmation)?;
         let mut slot = session.subscription.lock().await;
@@ -112,8 +110,11 @@ impl RedisManager {
         }
         let store = self.store.clone();
         let profile = session.profile.clone();
+        let authentication = authentication.into();
         let mut connection = tokio::task::spawn_blocking(move || {
-            let mut settings = store.redis_profile(&profile.id, profile.revision)?.settings;
+            let current = store.redis_profile(&profile.id, profile.revision)?;
+            let (password, _) = store.redis_password(&current, authentication)?;
+            let mut settings = current.settings;
             settings.database = 0;
             Ok::<_, String>(Connection {
                 tls: connector(&settings)?,

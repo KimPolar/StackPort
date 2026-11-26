@@ -1,12 +1,10 @@
 //! Opt-in PostgreSQL credentials in the operating system's per-user vault.
 use super::{profiles::find, PostgresPassword, PostgresProfile};
 pub use crate::credential_store::CredentialStatus as PostgresCredentialStatus;
-use crate::credential_store::{self as platform, password_bytes, BINDING_BYTES};
+use crate::credential_store::{self as platform, BINDING_BYTES};
 use crate::{db_error, insert_audit, AuditRecord, Result, Store};
 use rusqlite::{Connection, TransactionBehavior};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 const NO_PASSWORD: &str = "현재 연결 설정에 저장된 PostgreSQL 암호가 없습니다.";
 const PROFILE_CHANGED: &str = "PostgreSQL 연결이 변경되었습니다. 새로고침하세요.";
@@ -40,16 +38,7 @@ impl Store {
         db: &Connection,
         id: &str,
     ) -> Result<()> {
-        let mut directive = db
-            .prepare("SELECT id FROM postgres_profiles WHERE project_id=?1")
-            .map_err(db_error)?;
-        let ids = directive
-            .query_map([id], |row| row.get::<_, String>(0))
-            .map_err(db_error)?;
-        for id in ids {
-            self.delete_postgres_password_if_present(&id.map_err(db_error)?)?;
-        }
-        Ok(())
+        platform::delete_project_passwords(self, db, id, "PostgreSQL", "postgres_profiles")
     }
 
     pub(super) fn saved_postgres_password(
@@ -57,13 +46,9 @@ impl Store {
         expected: &PostgresProfile,
     ) -> Result<PostgresPassword> {
         current_profile(&self.connect()?, expected)?;
-        let binding = binding(expected)?;
-        platform::read(&self.postgres_vault_target(&expected.id)?, |blob| {
-            password_bytes(blob, &binding)
-                .map(|password| PostgresPassword(Zeroizing::new(password.to_owned())))
-        })?
-        .flatten()
-        .ok_or_else(|| NO_PASSWORD.into())
+        platform::load_password(&self.postgres_vault_target(&expected.id)?, &binding(expected)?)?
+            .map(PostgresPassword)
+            .ok_or_else(|| NO_PASSWORD.into())
     }
 
     pub(super) fn remember_postgres_password(
@@ -98,9 +83,7 @@ fn current_profile(db: &Connection, expected: &PostgresProfile) -> Result<()> {
 }
 
 fn binding(profile: &PostgresProfile) -> Result<[u8; BINDING_BYTES]> {
-    let settings =
-        serde_json::to_vec(profile).map_err(|_| "PostgreSQL 연결 설정을 확인할 수 없습니다.")?;
-    Ok(Sha256::digest(settings).into())
+    platform::binding(profile, "PostgreSQL")
 }
 
 fn audit(db: &Connection, profile: &PostgresProfile, operation: &'static str) -> Result<()> {
@@ -122,6 +105,7 @@ fn audit(db: &Connection, profile: &PostgresProfile, operation: &'static str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credential_store::password_bytes;
     use crate::PostgresProfileInput;
 
     #[test]

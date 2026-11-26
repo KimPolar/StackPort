@@ -10,6 +10,7 @@ const { Transform } = require('node:stream');
 const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_REDIS_BIN;
@@ -1011,6 +1012,101 @@ async function verifyKeyLifecycle({ command, open, profile, writer, serverPort, 
   assert.doesNotMatch(JSON.stringify(audit), /lifecycle:|ff2100|binary-fixture|long-fixture/);
 }
 
+async function verifyCredentials(browser, port, secure) {
+  const page = browser.contexts()[0].pages()[0];
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'Redis 암호 보관 검증' });
+  const input = { name: '암호 보관 검증', host: 'localhost', port: secure.port, database: 3, username: 'fixture_writer',
+    environment: 'PROD', tls: true, ca_path: secure.ca };
+  let profile = await command('create_redis_profile', { projectId: project.id, input });
+  const args = (target = profile) => ({ profileId: target.id, revision: target.revision });
+  const status = () => command('redis_credential_status', args());
+  const open = (options, target = profile) => command('open_redis', { ...args(target), confirmation: 'PROD', ...options });
+  const close = session => command('close_redis', { id: session.id });
+  const useSaved = { password: null, useSavedPassword: true };
+  const empty = { supported: true, stored: false, usable: false };
+  const named = name => ({ name, exact: true });
+  const workspace = page.getByRole('region', named('Redis 작업 공간'));
+  const login = page.getByRole('dialog', named('Redis 연결'));
+  const openLogin = () => workspace.getByRole('button', named('Redis 연결')).click();
+  const disconnect = () => workspace.getByRole('button', named('Redis 연결 끊기')).click();
+
+  try {
+    await close(await open({ password: secret }));
+    assert.deepEqual(await status(), empty);
+    await assert.rejects(open({ password: 'wrong-redis-password', rememberPassword: true }), /사용자 또는 암호/);
+    assert.deepEqual(await status(), empty);
+
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', named('Redis 암호 보관 검증 열기')).click();
+    await openLogin();
+    const remember = login.getByRole('checkbox', named('연결 성공 후 Windows에 암호 저장'));
+    await remember.waitFor();
+    assert.equal(await remember.isChecked(), false);
+    await remember.check();
+    await login.getByLabel('Redis 암호', { exact: true }).fill(secret);
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', named('연결')).click();
+    await login.waitFor({ state: 'detached' });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: true });
+    await assert.rejects(open({ ...useSaved, confirmation: '' }), /PROD/);
+    await assert.rejects(open({ ...useSaved, password: secret }), /암호를 선택하세요/);
+
+    await withSecondDesktopInstance(root, async invoke => {
+      const session = await invoke('open_redis', { ...args(), ...useSaved, confirmation: 'PROD' });
+      try {
+        assert.match(session.engine, /Redis|Valkey/);
+        assert.equal(session.credential_warning, null);
+        assert.ok(!JSON.stringify(session).includes(secret));
+        const keys = await invoke('redis_run_console', { id: session.id, line: 'GET cache:string' });
+        assert.match(JSON.stringify(keys), /문자열 값/);
+      } finally {
+        await invoke('close_redis', { id: session.id });
+      }
+    });
+
+    await workspace.getByRole('button', named('Pub/Sub')).click();
+    const subscription = page.getByRole('dialog', named('Redis Pub/Sub'));
+    await subscription.getByLabel('구독 채널', { exact: true }).fill('events:credential');
+    await subscription.getByRole('checkbox', named('저장한 암호 사용')).check();
+    assert.equal(await subscription.getByLabel('구독 연결 암호', { exact: true }).count(), 0);
+    await subscription.getByLabel('구독 운영 환경 확인', { exact: true }).fill('PROD');
+    await subscription.getByRole('button', named('구독 시작')).click();
+    await subscription.getByText('구독 중', { exact: true }).waitFor();
+    cli(port, [['PUBLISH', 'events:credential', 'credential-fixture-message']]);
+    await subscription.getByText('credential-fixture-message', { exact: true }).waitFor();
+    await subscription.getByRole('button', named('닫기')).click();
+    await disconnect();
+
+    await openLogin();
+    await login.getByRole('checkbox', named('저장한 암호 사용')).check();
+    assert.equal(await login.getByLabel('Redis 암호', { exact: true }).count(), 0);
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', named('연결')).click();
+    await login.waitFor({ state: 'detached' });
+    await disconnect();
+    await openLogin();
+    await login.getByRole('button', named('저장한 암호 삭제')).click();
+    await login.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+    assert.deepEqual(await status(), empty);
+    await assert.rejects(open(useSaved), /저장된 Redis 암호가 없습니다/);
+
+    await close(await open({ password: secret, rememberPassword: true }));
+    const previous = profile;
+    profile = await command('update_redis_profile', { id: profile.id, revision: profile.revision, input: { ...input, name: '설정 변경됨' } });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: false });
+    await assert.rejects(open(useSaved, previous), /연결이 변경/);
+    await assert.rejects(open(useSaved), /저장된 Redis 암호가 없습니다/);
+    for (const file of ['workspace.sqlite', 'workspace.sqlite-wal']) {
+      const target = path.join(process.env.STACKPORT_DATA_DIR, file);
+      if (fs.existsSync(target)) assert.equal(fs.readFileSync(target).includes(secret), false);
+    }
+  } finally {
+    await command('forget_redis_password', args());
+  }
+}
+
 async function main() {
   const port = await availablePort();
   const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no', '--databases', '40',
@@ -1064,6 +1160,11 @@ async function main() {
     ]);
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+    if (process.env.STACKPORT_REDIS_CREDENTIAL_ONLY === '1') {
+      await verifyCredentials(browser, port, secure);
+      console.log('Redis Windows credential flow passed (opt-in, ACL/TLS, new process, Pub/Sub, profile changes and deletion).');
+      return;
+    }
     await verify(browser, port, secure, hasJson);
     console.log('Windows Redis E2E passed (ACL, TLS, editing, native backup checks and in-app isolated RDB recovery).');
     console.log(hasJson ? 'Redis JSON module editing and TTL verified.' : 'Redis JSON module unavailable on the fixture server.');

@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import type { PostgresProfile } from "./PostgresWorkspace";
+import type { RedisProfile } from "./RedisProfileDialog";
 
 type Status = { supported: boolean; stored: boolean; usable: boolean };
-type Engine = "postgres" | "mysql";
-type Profile = PostgresProfile | MysqlProfile;
+type Engine = "postgres" | "mysql" | "redis";
+type Profile = PostgresProfile | MysqlProfile | RedisProfile;
+const passwordLabels: Record<Engine, string> = { postgres: "PostgreSQL 암호", mysql: "MySQL 암호", redis: "Redis 암호" };
 
 function credentialArgs(engine: Engine, profile: Profile) {
   return engine === "postgres" ? { profile } : { profileId: profile.id, revision: profile.revision };
@@ -59,19 +61,19 @@ export function useDatabaseCredentials(engine: Engine, profile: Profile | null) 
     }
   }
 
-  const label = engine === "postgres" ? "PostgreSQL 암호" : "MySQL 암호";
-  return { label, status, password, setPassword, useSaved, setUseSaved, remember, setRemember, clearing, message, take, forget };
+  return { label: passwordLabels[engine], status, password, setPassword, useSaved, setUseSaved, remember, setRemember, clearing, message, take, forget };
 }
 
-export function DatabasePasswordField({ credentials, disabled, allowRemember = false, autoFocus = false }: {
+export function DatabasePasswordField({ credentials, disabled, allowRemember = false, autoFocus = false, passwordLabel }: {
   credentials: ReturnType<typeof useDatabaseCredentials>; disabled: boolean; allowRemember?: boolean; autoFocus?: boolean;
+  passwordLabel?: string;
 }) {
   const { label, status, password, setPassword, useSaved, setUseSaved, remember, setRemember, clearing, message, forget } = credentials;
   const blocked = disabled || clearing;
   return <>
     {status?.usable && <label className="postgres-edit-opt-in"><input type="checkbox" checked={useSaved} disabled={blocked}
       onChange={event => { setUseSaved(event.target.checked); setPassword(""); setRemember(false); }} /> 저장한 암호 사용</label>}
-    {!(status?.usable && useSaved) && <label className="field">{label}<input type="password" autoComplete="off"
+    {!(status?.usable && useSaved) && <label className="field">{passwordLabel ?? label}<input type="password" autoComplete="off"
       autoFocus={autoFocus} maxLength={4096} disabled={blocked} value={password} onChange={event => setPassword(event.target.value)} /></label>}
     {allowRemember && status?.supported && !useSaved && <label className="postgres-edit-opt-in">
       <input type="checkbox" checked={remember} disabled={blocked} onChange={event => setRemember(event.target.checked)} />

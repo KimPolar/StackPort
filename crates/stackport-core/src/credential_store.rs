@@ -1,4 +1,5 @@
-use crate::{Result, Store};
+use crate::{db_error, Result, Store};
+use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -49,6 +50,41 @@ pub(crate) fn target(store: &Store, engine: &str, id: &str) -> Result<String> {
     name.update(b"\0");
     name.update(id.as_bytes());
     Ok(format!("StackPort/{engine}/{:x}", name.finalize()))
+}
+
+pub(crate) fn binding(profile: &impl Serialize, engine: &str) -> Result<[u8; BINDING_BYTES]> {
+    let encoded = serde_json::to_vec(profile)
+        .map_err(|_| format!("{engine} 연결 설정을 확인할 수 없습니다."))?;
+    Ok(Sha256::digest(encoded).into())
+}
+
+pub(crate) fn load_password(
+    target: &str,
+    binding: &[u8; BINDING_BYTES],
+) -> Result<Option<Zeroizing<String>>> {
+    read(target, |blob| {
+        password_bytes(blob, binding).map(|secret| Zeroizing::new(secret.to_owned()))
+    })
+    .map(Option::flatten)
+}
+
+pub(crate) fn delete_project_passwords(
+    store: &Store,
+    db: &Connection,
+    project_id: &str,
+    engine: &str,
+    table: &'static str,
+) -> Result<()> {
+    let mut query = db
+        .prepare(&format!("SELECT id FROM {table} WHERE project_id=?1"))
+        .map_err(db_error)?;
+    let ids = query
+        .query_map([project_id], |row| row.get::<_, String>(0))
+        .map_err(db_error)?;
+    for id in ids {
+        delete(&target(store, engine, &id.map_err(db_error)?)?)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn status(target: &str, binding: &[u8; BINDING_BYTES]) -> Result<CredentialStatus> {

@@ -49,6 +49,7 @@ pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
 pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisServerSnapshot, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
+pub use redis::{RedisAuthentication, RedisCredentialStatus};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus, RedisKeyDeletePreview};
 pub use redis::{RedisPublishReport, RedisSubscriptionSnapshot};
 pub use redis::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersistenceReport};
@@ -642,6 +643,7 @@ impl Store {
             .map_err(db_error)?;
         self.delete_project_postgres_passwords(&tx, id)?;
         self.delete_project_mysql_passwords(&tx, id)?;
+        self.delete_project_redis_passwords(&tx, id)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;

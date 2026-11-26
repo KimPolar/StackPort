@@ -218,7 +218,9 @@ MySQL·MariaDB 직접 연결에서 **DB 백업** 또는 **테이블 백업**으�
 
 파일은 별도의 읽기 전용 연결에서 행 단위로 기록하며 진행 행 수를 표시합니다. 한 행의 최대 크기는 32 MiB이며 서버 설정에 따라 더 낮을 수 있습니다. 조회와 임시 파일 쓰기는 5분 이내에 완료해야 합니다. 중단 또는 오류 시 임시 파일을 정리하고, 완료한 파일만 새 경로에 저장합니다. 화면에서 행 수와 파일 크기를 확인할 수 있습니다. 성공 작업 기록에는 연결·환경·형식·행 수를 남깁니다. [MySQL 비동기 결과 읽기](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.QueryResult.html)
 
-탐색기의 **Redis 연결 추가**에서 Redis 6.2 이상과 호환되는 단독 서버의 호스트·포트, DB 번호, ACL 사용자와 환경을 프로젝트에 저장합니다. TLS는 시스템 신뢰 저장소와 선택한 PEM CA를 사용해 TLS 1.2 이상에서 호스트 이름과 인증서를 검증합니다. 일반 TCP도 연결 설정에서 명시적으로 선택할 수 있습니다. 연결마다 암호를 입력하며 `PROD` 연결에는 운영 환경 확인이 필요합니다. `INFO server`와 `INFO cluster`로 접속한 서버의 버전과 단독 구성을 확인합니다. DB 0 이외의 번호는 `SELECT` 권한이 필요합니다. 메타데이터 v14에서 Redis 프로필을 보관하며 프로젝트 복제 시 연결 설정을 복사합니다. [Redis 프로토콜](https://redis.io/docs/latest/develop/reference/protocol-spec/)
+탐색기의 **Redis 연결 추가**에서 Redis 6.2 이상과 호환되는 단독 서버의 호스트·포트, DB 번호, ACL 사용자와 환경을 프로젝트에 저장합니다. TLS는 시스템 신뢰 저장소와 선택한 PEM CA를 사용해 TLS 1.2 이상에서 호스트 이름과 인증서를 검증합니다. 일반 TCP도 연결 설정에서 명시적으로 선택할 수 있습니다. `PROD` 연결에는 운영 환경 확인이 필요합니다. `INFO server`와 `INFO cluster`로 접속한 서버의 버전과 단독 구성을 확인합니다. DB 0 이외의 번호는 `SELECT` 권한이 필요합니다. 메타데이터 v14에서 Redis 프로필을 보관하며 프로젝트 복제 시 연결 설정을 복사합니다. [Redis 프로토콜](https://redis.io/docs/latest/develop/reference/protocol-spec/)
+
+Windows의 Redis 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 저장한 암호는 다음 연결이나 Pub/Sub 구독에 사용할 수 있으며, `PROD`에서는 각 연결의 운영 환경 확인을 거칩니다. 프로필, 연결 교환 파일과 작업 기록에는 암호를 넣지 않습니다.
 
 **키 탐색**은 `SCAN`으로 서버 패턴과 타입 필터를 실행합니다. `COUNT 100`은 서버에 전달하는 탐색 힌트입니다. 비어 있는 페이지에도 다음 커서가 있을 수 있고, 조회 중 키가 바뀌면 결과에 반영될 수 있습니다. 역할에 해당 권한이 있으면 `DBSIZE`, `PTTL`, `MEMORY USAGE`로 DB 전체 키 수와 선택한 키의 만료 시간 및 메모리를 표시합니다. String은 512바이트 구간, List와 Sorted Set은 순서 범위, Hash와 Set은 커서, Stream은 메시지 ID로 값을 탐색합니다. 바이너리 키와 값은 HEX로 표시합니다. 응답 하나가 4 MiB 또는 8,192개 항목을 초과하면 연결을 닫습니다. Windows 통합 테스트는 실제 Redis 서버와 로컬 TLS 연결로 인증·DB 번호·타입별 읽기 및 단절 감지를 확인합니다. [Redis SCAN](https://redis.io/docs/latest/commands/scan/)
 
@@ -260,7 +262,7 @@ Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만
 
 Windows에서는 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 성공한 연결의 암호는 현재 Windows 사용자의 자격 증명 관리자에 보관합니다. **저장한 암호 사용**을 선택하면 연결, 서버 모니터, 백업, 복원에 네이티브 코드가 자격 증명을 전달합니다. 백업과 복원에서 `pg_dump`와 `pg_restore`에는 해당 프로세스의 환경으로 전달합니다. 각 작업에서 TLS와 운영 확인을 적용합니다.
 
-PostgreSQL과 MySQL·MariaDB의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
+PostgreSQL, MySQL·MariaDB, Redis의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
 
@@ -819,6 +821,8 @@ Windows 자격 증명 검사에서는 `STACKPORT_POSTGRES_CREDENTIAL_ONLY=1`, `S
 `STACKPORT_MYSQL_PLAN_ONLY=1`로 계획 검증, 수동 및 자동 실행, SQL 파일 지문과 데이터 복원을 검사합니다.
 
 MySQL·MariaDB에서 `STACKPORT_MYSQL_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 암호 저장 흐름만 검증합니다. 일회성 연결과 인증 실패 시 저장 여부, 운영 환경 확인, 별도 프로세스에서 재접속, 설정 변경 후 재사용 차단과 암호 삭제를 검사합니다.
+
+Redis에서 `STACKPORT_REDIS_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 Windows 암호 저장, 별도 프로세스의 TLS 재접속과 Pub/Sub 메시지 수신, 설정 변경과 암호 삭제를 검사합니다.
 
 SSH 검사는 같은 격리 앱에서 테스트 전용 루프백 서버를 시작합니다. Node 24와 개발 의존성 `ssh2`가 필요하며, 아래 경로는 위에서 만든 테스트 폴더여야 합니다.
 

@@ -9,6 +9,7 @@ import { RedisServerMonitor } from "./RedisServerMonitor";
 import { RedisPersistenceDialog } from "./RedisPersistenceDialog";
 import { RedisBackupFileDialog } from "./RedisBackupFileDialog";
 import { RedisPubSubDialog } from "./RedisPubSubDialog";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { RedisConsoleDialog, type RedisConsoleEntry } from "./RedisConsoleDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./redisWorkspace.css";
@@ -25,7 +26,8 @@ type KeyPage = { keys: Key[]; cursor: string; total: number | null };
 type Position = { kind: "index"; index: number } | { kind: "scan"; cursor: string } | { kind: "stream"; after: string };
 type Value = { kind: string; ttl_ms: number | null; memory_bytes: number | null; length: number | null;
   columns: string[]; rows: RedisBytes[][]; next: Position | null };
-type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean; allow_persistence: boolean; json_support: JsonSupport };
+type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean; allow_persistence: boolean;
+  json_support: JsonSupport; credential_warning: string | null };
 const number = new Intl.NumberFormat("ko-KR");
 
 function hasJsonFilter(support: JsonSupport | undefined) {
@@ -42,7 +44,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [pubsubOpen, setPubsubOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleHistory, setConsoleHistory] = useState<RedisConsoleEntry[]>([]);
-  const [password, setPassword] = useState("");
+  const credentials = useDatabaseCredentials("redis", connectOpen ? profile : null);
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
   const [allowPublish, setAllowPublish] = useState(false);
@@ -105,11 +107,11 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (connecting.current) return;
-    connecting.current = true; setPending(true); setError(""); setPassword("");
+    if (connecting.current || credentials.clearing) return;
+    connecting.current = true; setPending(true); setError("");
     try {
       const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision,
-        password, confirmation, allowEdits, allowPublish, allowPersistence });
+        ...credentials.take(), confirmation, allowEdits, allowPublish, allowPersistence });
       if (!mounted.current) { await invoke("close_redis", { id: opened.id }); return; }
       active.current = opened.id;
       if (!hasJsonFilter(opened.json_support)) {
@@ -170,6 +172,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       </div>
     </div>
     {error && !connectOpen && <p className="error-banner" role="alert">{error}</p>}
+    {session?.credential_warning && <p className="form-note" role="status">{session.credential_warning}</p>}
     {session && <p className="redis-server" role="status">{session.engine} {session.version} · DB {settings.database} · {settings.tls ? "TLS" : "일반 TCP"} · {jsonSupportText[session.json_support]}</p>}
     {session && <div className="redis-layout">
       <section className="results-card redis-keys" aria-label="Redis 키 탐색">
@@ -242,12 +245,11 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         {detail.data && <KeyValue value={detail.data} positions={positions} setPositions={setPositions} />}
       </section>
     </div>}
-    {connectOpen && <Dialog title="Redis 연결" busy={pending} onClose={() => { setConnectOpen(false); setPassword(""); setError(""); }}>
+    {connectOpen && <Dialog title="Redis 연결" busy={pending || credentials.clearing} onClose={() => { setConnectOpen(false); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={pending}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} / DB {settings.database}
           {settings.username && ` · ${settings.username}`}</p>
-        <label className="field">Redis 암호<input type="password" autoComplete="off" value={password} disabled={pending}
-          maxLength={4096} onChange={event => setPassword(event.target.value)} /></label>
+        <DatabasePasswordField credentials={credentials} disabled={pending} allowRemember />
         <label className="redis-edit-permission"><input type="checkbox" checked={allowEdits} disabled={pending}
           onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 키 편집 허용</label>
         <label className="redis-edit-permission"><input type="checkbox" checked={allowPublish} disabled={pending}
@@ -258,7 +260,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         {production && <label className="field">운영 환경 확인<input value={confirmation} required disabled={pending}
           autoComplete="off" placeholder="PROD" onChange={event => setConfirmation(event.target.value)} /></label>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="dialog-actions"><button className="primary" type="submit" disabled={pending || (production && confirmation !== "PROD")}>
+        <div className="dialog-actions"><button className="primary" type="submit" disabled={pending || credentials.clearing || (production && confirmation !== "PROD")}>
           {pending ? "연결 중…" : "연결"}</button></div>
       </form>
     </Dialog>}
@@ -279,7 +281,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       onBusy={onBusy} onFailure={handleFailure} onClose={() => setPersistenceOpen(false)}
       onInspect={() => { setPersistenceOpen(false); setBackupFileOpen(true); }} />}
     {backupFileOpen && <RedisBackupFileDialog onBusy={onBusy} onClose={() => setBackupFileOpen(false)} />}
-    {pubsubOpen && session && <RedisPubSubDialog id={session.id} allowPublish={session.allow_publish} environment={settings.environment}
+    {pubsubOpen && session && <RedisPubSubDialog id={session.id} profile={profile} allowPublish={session.allow_publish} environment={settings.environment}
       target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
     {consoleOpen && session && <RedisConsoleDialog id={session.id} history={consoleHistory}
       target={`${settings.name} · ${settings.environment} · DB ${settings.database}`} onFailure={handleFailure}

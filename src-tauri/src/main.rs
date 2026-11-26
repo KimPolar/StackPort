@@ -1839,11 +1839,35 @@ async fn delete_redis_profile(store: State<'_, Store>, id: String, revision: i64
 }
 
 #[tauri::command]
+async fn redis_credential_status(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<stackport_core::RedisCredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.redis_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_redis_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_redis_password(&profile_id, revision)).await
+}
+
+fn redis_authentication(password: Option<stackport_core::RedisPassword>, use_saved: Option<bool>, remember: bool)
+    -> Result<stackport_core::RedisAuthentication, String> {
+    use stackport_core::RedisAuthentication;
+    match (password, use_saved.unwrap_or(false), remember) {
+        (None, true, false) => Ok(RedisAuthentication::Saved),
+        (Some(password), false, remember) => Ok(RedisAuthentication::Entered { password, remember }),
+        _ => Err("Redis 암호를 입력하거나 저장한 암호를 선택하세요.".into()),
+    }
+}
+
+#[tauri::command]
 async fn open_redis(redis: State<'_, stackport_core::RedisManager>, profile_id: String, revision: i64,
-    password: stackport_core::RedisPassword, confirmation: String, allow_edits: Option<bool>,
+    password: Option<stackport_core::RedisPassword>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String, allow_edits: Option<bool>,
     allow_publish: Option<bool>, allow_persistence: Option<bool>,
 ) -> Result<stackport_core::RedisSessionInfo, String> {
-    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false), allow_publish.unwrap_or(false),
+    let authentication = redis_authentication(password, use_saved_password, remember_password.unwrap_or(false))?;
+    redis.open(profile_id, revision, authentication, &confirmation, allow_edits.unwrap_or(false), allow_publish.unwrap_or(false),
         allow_persistence.unwrap_or(false)).await
 }
 
@@ -1916,9 +1940,10 @@ async fn redis_run_console(
 #[tauri::command]
 async fn redis_start_subscription(
     redis: State<'_, stackport_core::RedisManager>,
-    id: String, name: String, pattern: bool, password: stackport_core::RedisPassword, confirmation: String,
+    id: String, name: String, pattern: bool, password: Option<stackport_core::RedisPassword>, use_saved_password: Option<bool>, confirmation: String,
 ) -> Result<String, String> {
-    redis.start_subscription(&id, name, pattern, password, &confirmation).await
+    let authentication = redis_authentication(password, use_saved_password, false)?;
+    redis.start_subscription(&id, name, pattern, authentication, &confirmation).await
 }
 
 #[tauri::command]
@@ -3257,6 +3282,8 @@ fn main() {
             create_redis_profile,
             update_redis_profile,
             delete_redis_profile,
+            redis_credential_status,
+            forget_redis_password,
             open_redis,
             close_redis,
             redis_keys,

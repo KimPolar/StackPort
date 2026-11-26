@@ -34,7 +34,7 @@ pub struct RedisSettings {
     pub ca_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct RedisProfile {
     pub id: String,
     pub project_id: String,
@@ -113,6 +113,7 @@ impl Store {
         tx.execute("DELETE FROM redis_profiles WHERE id=?1", [id])
             .map_err(db_error)?;
         audit(&tx, &profile, "redis_profile.delete")?;
+        self.delete_redis_password_if_present(id)?;
         tx.commit().map_err(db_error)
     }
 }
@@ -233,7 +234,7 @@ fn validate(profile: RedisProfile) -> Result<RedisProfile> {
     Ok(profile)
 }
 
-fn audit(db: &Connection, profile: &RedisProfile, operation: &'static str) -> Result<()> {
+pub(super) fn audit(db: &Connection, profile: &RedisProfile, operation: &'static str) -> Result<()> {
     insert_audit(
         db,
         AuditRecord {

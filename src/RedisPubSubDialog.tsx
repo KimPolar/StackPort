@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import type { RedisBytes } from "./RedisEditDialog";
+import type { RedisProfile } from "./RedisProfileDialog";
 
 type Message = { sequence: number; received_at_ms: number; channel: RedisBytes; payload: RedisBytes };
 type Snapshot = { status: "subscribed" | "reconnecting" | "failed"; error: string | null; interruptions: number; evicted: number; messages: Message[] };
@@ -12,13 +14,13 @@ const times = new Intl.DateTimeFormat("ko-KR", { hour: "numeric", minute: "numer
 const encoder = new TextEncoder();
 const statuses = { subscribed: "구독 중", reconnecting: "재연결 중", failed: "구독 실패" };
 
-export function RedisPubSubDialog({ id, allowPublish, environment, target, onBusy, onFailure, onClose }: {
-  id: string; allowPublish: boolean; environment: string; target: string;
+export function RedisPubSubDialog({ id, profile, allowPublish, environment, target, onBusy, onFailure, onClose }: {
+  id: string; profile: RedisProfile; allowPublish: boolean; environment: string; target: string;
   onBusy: (busy: boolean) => void; onFailure: (message: string) => boolean; onClose: () => void;
 }) {
   const [name, setName] = useState("");
   const [pattern, setPattern] = useState(false);
-  const [password, setPassword] = useState("");
+  const credentials = useDatabaseCredentials("redis", profile);
   const [confirmation, setConfirmation] = useState("");
   const [subscription, setSubscription] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -63,8 +65,9 @@ export function RedisPubSubDialog({ id, allowPublish, environment, target, onBus
     setBusy(true); setError("");
     try {
       if (action === "start") {
-        setPassword(""); setConfirmation("");
-        const active = await invoke<string>("redis_start_subscription", { id, name, pattern, password, confirmation });
+        setConfirmation("");
+        const { password, useSavedPassword } = credentials.take();
+        const active = await invoke<string>("redis_start_subscription", { id, name, pattern, password, useSavedPassword, confirmation });
         if (!mounted.current) { await invoke("redis_stop_subscription", { id, subscription: active }); return; }
         current.current = active;
         setSubscription(active);
@@ -97,7 +100,7 @@ export function RedisPubSubDialog({ id, allowPublish, environment, target, onBus
               <option value="channel">채널 이름</option><option value="pattern">패턴</option>
             </select></label>
             <label className="field">{pattern ? "구독 패턴" : "구독 채널"}<input required maxLength={512} value={name} onChange={event => setName(event.target.value)} disabled={busy} /></label>
-            <label className="field">구독 연결 암호<input type="password" autoComplete="off" value={password} maxLength={4096} onChange={event => setPassword(event.target.value)} disabled={busy} /></label>
+            <DatabasePasswordField credentials={credentials} disabled={busy} passwordLabel="구독 연결 암호" />
             {production && <label className="field">구독 운영 환경 확인<input required autoComplete="off" placeholder="PROD" value={confirmation}
               onChange={event => setConfirmation(event.target.value)} disabled={busy} /></label>}
             <button type="submit" className="primary small" disabled={busy || !name || (production && confirmation !== "PROD")}>구독 시작</button>
