@@ -7,6 +7,7 @@ import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditTarget, type RedisEditReport } from "./RedisEditDialog";
 import { RedisServerMonitor } from "./RedisServerMonitor";
 import { RedisPersistenceDialog } from "./RedisPersistenceDialog";
+import { RedisBackupFileDialog } from "./RedisBackupFileDialog";
 import { RedisPubSubDialog } from "./RedisPubSubDialog";
 import { RedisConsoleDialog, type RedisConsoleEntry } from "./RedisConsoleDialog";
 import { useNativeRead } from "./usePostgresRead";
@@ -37,6 +38,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [connectOpen, setConnectOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [persistenceOpen, setPersistenceOpen] = useState(false);
+  const [backupFileOpen, setBackupFileOpen] = useState(false);
   const [pubsubOpen, setPubsubOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleHistory, setConsoleHistory] = useState<RedisConsoleEntry[]>([]);
@@ -160,6 +162,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
           <Radio size={15} aria-hidden /> Pub/Sub</button>}
         {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setConsoleOpen(true)}>
           <SquareTerminal size={15} aria-hidden /> 명령 콘솔</button>}
+        {!session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setBackupFileOpen(true)}>
+          백업 파일 검사</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
           <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowPublish(false); setAllowPersistence(false); setConnectOpen(true); }}>
             <Plug size={15} aria-hidden /> Redis 연결</button>}
@@ -272,7 +276,9 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       onPersistence={() => { setMonitorOpen(false); setPersistenceOpen(true); }} />}
     {persistenceOpen && session && <RedisPersistenceDialog id={session.id} allowPersistence={session.allow_persistence}
       target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`} environment={settings.environment}
-      onBusy={onBusy} onFailure={handleFailure} onClose={() => setPersistenceOpen(false)} />}
+      onBusy={onBusy} onFailure={handleFailure} onClose={() => setPersistenceOpen(false)}
+      onInspect={() => { setPersistenceOpen(false); setBackupFileOpen(true); }} />}
+    {backupFileOpen && <RedisBackupFileDialog onBusy={onBusy} onClose={() => setBackupFileOpen(false)} />}
     {pubsubOpen && session && <RedisPubSubDialog id={session.id} allowPublish={session.allow_publish} environment={settings.environment}
       target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
     {consoleOpen && session && <RedisConsoleDialog id={session.id} history={consoleHistory}

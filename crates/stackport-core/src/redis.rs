@@ -1,3 +1,4 @@
+mod backup_file;
 mod console;
 mod edit;
 mod json;
@@ -8,6 +9,7 @@ pub(crate) mod profiles;
 mod pubsub;
 mod resp;
 
+pub use backup_file::{RedisBackupFileFormat, RedisBackupFileReport};
 pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub use monitor::RedisServerSnapshot;

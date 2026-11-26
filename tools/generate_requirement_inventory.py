@@ -162,7 +162,8 @@ PARTIAL = {
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-011": "PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",
     "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인, MongoDB 원본과 새 대상·서버와 도구 버전·객체 목록과 뷰 원본·문서 수·SHA-256 검토",
-    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 아카이브 체크섬과 복원된 객체 유형·인덱스 이름·문서·시계열 버킷 수 및 단일 컬렉션 UUID 확인",
+    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 복원 객체·인덱스·문서·버킷 수와 체크섬·UUID 확인, Redis 로컬 RDB 체크섬 및 단일·다중 AOF 구조와 파일별 SHA-256 검사",
+    "SP-BK-016": "선택한 Redis 백업 파일과 매니페스트의 활성 기본·증분 파일, 용량, SHA-256, 검사 도구 버전과 RDB 형식 표시",
     "SP-BK-017": "PostgreSQL 백업의 로컬 파일 경로와 복원할 서버·새 DB를 표시하고 CREATEDB 권한 확인, MongoDB 백업의 로컬 파일 경로와 실제 새 데이터베이스·컬렉션 이름 표시 및 목록 조회 권한 확인, Redis 서버 파일 경로와 별도 전송·읽기 권한 안내",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
     "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, JSON 명령을 확인한 서버의 JSON 타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
@@ -170,7 +171,7 @@ PARTIAL = {
     "SP-NS-012": "읽기 전용 명령 콘솔, Tab 명령 완성, RESP 응답 타입·HEX 표시, 연결별 최근 30건과 방향키 재입력, 변경·삭제·관리 명령 차단 사유",
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
-    "SP-NS-015": "단독 서버의 RDB·AOF 상태와 서버 경로 조회, 세션별 허용·서버 권한·운영 승인으로 RDB 스냅샷과 AOF 재작성 요청 및 완료 확인",
+    "SP-NS-015": "단독 서버의 RDB·AOF 상태와 경로 조회, 세션별 허용·권한·승인으로 RDB 스냅샷과 AOF 재작성 요청과 완료 확인, 로컬 RDB 및 단일·다중 AOF 검사",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, JSON.GET·JSON.SET 확인과 권한으로 명령 정보를 읽을 수 없는 상태 처리, 서버 지원 여부에 따른 JSON 필터·편집 UI",
     "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 미리보기와 동시 변경 차단, MongoDB 단일 문서·인덱스·일반 컬렉션 삭제 검토, 인덱스 영향 또는 전체 문서·인덱스·의존 뷰 표시, 컬렉션 UUID와 검토 정보 재확인, DELETE·DROP 및 PROD 승인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
@@ -199,7 +200,7 @@ PARTIAL = {
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
     "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 또는 CSV로 내보내기, BSON 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 BSON 매핑, mongodump 아카이브 생성과 일반 컬렉션 또는 데이터베이스 복원",
     "SP-BK-009": "MongoDB JSON·CSV 가져오기와 내보내기, mongodump로 데이터베이스나 일반 컬렉션 백업, 서버·도구 버전을 확인하고 mongorestore로 새 컬렉션 또는 새 데이터베이스에 복원",
-    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 호환 서버에 격리 복원하는 절차 안내",
+    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 격리 복원 절차 안내, 복사한 RDB와 단일·다중 AOF의 네이티브 파일 검사",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -573,6 +574,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-017", "SP-SEC-011", "SP-AT-016"}:
                 evidence += "; crates/stackport-core/src/redis/persistence.rs; src/RedisPersistenceDialog.tsx; tests/redis-smoke.cjs"
+            if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-014", "SP-BK-016"}:
+                evidence += "; crates/stackport-core/src/redis/backup_file.rs; src/RedisBackupFileDialog.tsx; tests/redis-smoke.cjs"
             if requirement_id == "SP-NS-012":
                 evidence += "; crates/stackport-core/src/redis/console.rs; src/RedisConsoleDialog.tsx"
             if requirement_id in {"SP-NS-013", "SP-AT-018"}:

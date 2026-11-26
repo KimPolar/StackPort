@@ -1724,6 +1724,22 @@ async fn redis_persistence_report(redis: State<'_, stackport_core::RedisManager>
     -> Result<stackport_core::RedisPersistenceReport, String> { redis.persistence_report(&id).await }
 
 #[tauri::command]
+async fn inspect_redis_backup_file(store: State<'_, Store>, request: String, format: stackport_core::RedisBackupFileFormat,
+    source: String, directory: String) -> Result<stackport_core::RedisBackupFileReport, String> {
+    store.inspect_redis_backup_file(&request, format, source, directory).await
+}
+
+#[tauri::command]
+async fn choose_redis_backup_input(tools: bool) -> Result<Option<String>, String> {
+    worker(move || {
+        let dialog = rfd::FileDialog::new();
+        let path = if tools { dialog.set_title("Redis 검사 도구 폴더 선택").pick_folder() }
+        else { dialog.set_title("검사할 Redis 백업 파일 선택").pick_file() };
+        Ok(path.map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
 fn redis_console_commands() -> Vec<stackport_core::RedisConsoleCommand> {
     stackport_core::redis_console_commands()
 }
@@ -3012,6 +3028,8 @@ fn main() {
             redis_persistence_info,
             redis_start_persistence,
             redis_persistence_report,
+            inspect_redis_backup_file,
+            choose_redis_backup_input,
             redis_console_commands,
             redis_run_console,
             redis_start_subscription,

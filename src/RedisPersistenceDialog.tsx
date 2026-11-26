@@ -22,9 +22,10 @@ function lastSave(seconds: number | null) {
   return seconds && Number.isFinite(date.getTime()) ? dateFormat.format(date) : "미확인";
 }
 
-export function RedisPersistenceDialog({ id, target, environment, allowPersistence, onBusy, onClose, onFailure }: {
+export function RedisPersistenceDialog({ id, target, environment, allowPersistence, onBusy, onClose, onFailure, onInspect }: {
   id: string; target: string; environment: string; allowPersistence: boolean;
   onBusy: (busy: boolean) => void; onClose: () => void; onFailure: (error: string) => boolean;
+  onInspect: () => void;
 }) {
   const [revision, setRevision] = useState(0);
   const args = useMemo(() => ({ id }), [id]);
@@ -77,6 +78,7 @@ export function RedisPersistenceDialog({ id, target, environment, allowPersisten
   return <Dialog title="Redis 백업 관리" onClose={onClose} busy={starting} className="redis-monitor">
     <form onSubmit={event => void start(event)} aria-busy={loading || starting}>
       <div className="redis-monitor-toolbar"><p>{target} · 전체 논리 DB</p>
+        <button type="button" className="secondary small" disabled={starting} onClick={onInspect}>로컬 백업 파일 검사</button>
         <button type="button" className="secondary small" disabled={loading || starting}
           onClick={() => setRevision(value => value + 1)}>저장 상태 새로 고침</button>
       </div>

@@ -462,10 +462,19 @@ pub(crate) struct ProcessJob(std::os::windows::io::OwnedHandle);
 #[cfg(windows)]
 impl ProcessJob {
     pub(crate) fn new() -> Result<Self> {
+        Self::create(None)
+    }
+
+    pub(crate) fn with_memory_limit(bytes: usize) -> Result<Self> {
+        Self::create(Some(bytes))
+    }
+
+    fn create(memory_limit: Option<usize>) -> Result<Self> {
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         };
         // SAFETY: the unnamed job has no inherited handle; OwnedHandle closes it.
         let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -478,6 +487,10 @@ impl ProcessJob {
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if let Some(bytes) = memory_limit {
+            limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+            limits.JobMemoryLimit = bytes;
+        }
         let ok = unsafe {
             SetInformationJobObject(
                 handle.as_raw_handle(),

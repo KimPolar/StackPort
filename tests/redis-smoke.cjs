@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -258,7 +259,7 @@ async function verify(browser, serverPort, secure, hasJson) {
   await verifyPubSub({ command, open, profile, writer, secure, serverPort });
   await verifyEdits({ command, open, profile, writer, serverPort, secure });
   await verifyKeyLifecycle({ command, open, profile, writer, serverPort, secure });
-  await verifyPersistence({ command, open, profile, backup, serverPort, secure });
+  const backupFiles = await verifyPersistence({ command, open, profile, backup, serverPort, secure });
 
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'Redis 연결', exact: true });
@@ -299,6 +300,7 @@ async function verify(browser, serverPort, secure, hasJson) {
   await verifyPubSubDialog(page, workspace, secure);
   await page.getByRole('button', { name: 'Redis 백업 검증 열기', exact: true }).click();
   await verifyPersistenceDialog(page, workspace);
+  await verifyLocalBackupDialog(page, workspace, backupFiles);
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
   await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
   await page.getByText('Redis 키 삭제', { exact: true }).first().waitFor();
@@ -377,6 +379,8 @@ async function verifyPersistence({ command, open, profile, backup, serverPort, s
       fs.copyFileSync(path.join(root, aofConfig.aof_filename), path.join(aof, aofConfig.aof_filename));
     }
     await verifyRecovery(aof, true);
+    const localManifest = aofConfig.aof_directory ? path.join(aof, aofConfig.aof_directory, `${aofConfig.aof_filename}.manifest`) : null;
+    await verifyLocalBackups(command, file, localManifest);
 
     secure.interruptNextSnapshot();
     await assert.rejects(start(id), /결과를 확인할 수 없습니다/);
@@ -389,9 +393,116 @@ async function verifyPersistence({ command, open, profile, backup, serverPort, s
     }
     assert.ok(events.some(event => event.operation === 'redis.persistence.rdb.unconfirmed' && event.outcome === 'started'));
     assert.doesNotMatch(JSON.stringify(events.filter(event => event.operation.startsWith('redis.persistence.'))), /dump\.rdb|appendonly|to-restore|fixture-password/u);
+    return { rdb: file, manifest: localManifest };
   } finally {
     for (const session of [id, denied.id, limited.id]) await command('close_redis', { id: session });
   }
+}
+
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+const fileReport = (file, role) => {
+  const contents = fs.readFileSync(file);
+  return { name: path.basename(file), role, bytes: contents.length, sha256: sha256(contents) };
+};
+
+async function verifyLocalBackups(command, rdb, manifest) {
+  const directory = path.dirname(binary);
+  const inspect = async (format, source, request) => command('inspect_redis_backup_file', {
+    format, source, directory, request: request ?? await command('prepare_query'),
+  });
+  const before = fileReport(rdb, 'rdb');
+  const snapshot = await inspect('rdb', rdb);
+  assert.equal(snapshot.format, 'rdb');
+  assert.match(snapshot.checker_version, /^\d+\.\d+\./u);
+  assert.deepEqual(snapshot.files, [before]);
+  assert.equal(snapshot.rdb.checksum_verified, true);
+  assert.ok(snapshot.rdb.format_version >= 5 && snapshot.rdb.keys_read > 300);
+  assert.ok(Number.isInteger(snapshot.rdb.expired_keys));
+
+  const bad = path.join(root, 'corrupt.rdb');
+  const corrupt = fs.readFileSync(rdb);
+  corrupt[corrupt.length - 1] ^= 1;
+  fs.writeFileSync(bad, corrupt);
+  await assert.rejects(inspect('rdb', bad), /무결성을 확인하지 못했습니다/);
+  assert.deepEqual(fs.readFileSync(bad), corrupt);
+
+  const trailing = path.join(root, 'trailing.rdb');
+  fs.writeFileSync(trailing, Buffer.concat([fs.readFileSync(rdb), Buffer.from([0])]));
+  await assert.rejects(inspect('rdb', trailing), /끝 위치/);
+  const unchecked = path.join(root, 'checksum-off.rdb');
+  corrupt.fill(0, corrupt.length - 8);
+  fs.writeFileSync(unchecked, corrupt);
+  assert.equal((await inspect('rdb', unchecked)).rdb.checksum_verified, false);
+  assert.deepEqual(fileReport(rdb, 'rdb'), before);
+
+  const legacy = path.join(root, 'single.aof');
+  const commands = Buffer.concat([encode(['SELECT', '3']), encode(['SET', 'aof-fixture', 'verified'])]);
+  fs.writeFileSync(legacy, commands);
+  assert.deepEqual((await inspect('aof_file', legacy)).files, [fileReport(legacy, 'aof')]);
+  const embedded = path.join(root, 'preamble.aof');
+  fs.writeFileSync(embedded, Buffer.concat([fs.readFileSync(rdb), commands]));
+  assert.deepEqual((await inspect('aof_file', embedded)).files, [fileReport(embedded, 'aof')]);
+  fs.writeFileSync(legacy, commands.subarray(0, -1));
+  await assert.rejects(inspect('aof_file', legacy), /무결성을 확인하지 못했습니다/);
+
+  if (manifest) {
+    const parent = path.dirname(manifest);
+    const rows = fs.readFileSync(manifest, 'utf8').trim().split(/\r?\n/u);
+    const files = [fileReport(manifest, 'manifest')];
+    const namedDirectory = path.join(root, 'named-aof');
+    fs.mkdirSync(namedDirectory);
+    const namedManifest = path.join(namedDirectory, 'selected.manifest');
+    const renamed = rows.map((line, index) => {
+      const [, name, seq, type] = line.match(/^file (\S+) seq (\d+) type ([bih])/u);
+      if (type === 'h') return line;
+      const part = path.join(parent, name);
+      files.push(fileReport(part, type === 'b' ? 'base' : 'incremental'));
+      const friendlyName = `백업 ${index}.aof`;
+      const escaped = Array.from(Buffer.from(friendlyName)).map(byte => byte >= 128 ? `\\x${byte.toString(16).padStart(2, '0')}` : String.fromCharCode(byte)).join('');
+      fs.copyFileSync(part, path.join(namedDirectory, friendlyName));
+      return `file "${escaped}" seq ${seq} type ${type}`;
+    });
+    const multipart = await inspect('aof_manifest', manifest);
+    assert.equal(multipart.rdb, null);
+    assert.deepEqual(multipart.files, files);
+    fs.writeFileSync(namedManifest, `${renamed.join('\n')}\n`);
+    const named = await inspect('aof_manifest', namedManifest);
+    assert.equal(named.files.length, files.length);
+    assert.ok(named.files[1].name.startsWith('백업 '));
+    assert.deepEqual(named.files.slice(1).map(file => file.sha256), files.slice(1).map(file => file.sha256));
+    await assert.rejects(inspect('aof_file', manifest), /매니페스트는 다중/);
+    assert.deepEqual(files[0], fileReport(manifest, 'manifest'));
+  }
+  const missing = path.join(root, 'missing-part.manifest');
+  fs.writeFileSync(missing, 'file absent.aof seq 1 type i\n');
+  await assert.rejects(inspect('aof_manifest', missing), /구성 파일을 열 수 없습니다/);
+  fs.writeFileSync(missing, 'file ../dump.rdb seq 1 type b\n');
+  await assert.rejects(inspect('aof_manifest', missing), /매니페스트의 형식이나 파일 이름/);
+  fs.writeFileSync(missing, 'file absent.aof seq 1 type i');
+  await assert.rejects(inspect('aof_manifest', missing), /매니페스트의 형식이나 파일 이름/);
+  const cancelled = await command('prepare_query');
+  assert.equal(await command('cancel_query', { token: cancelled }), true);
+  await assert.rejects(inspect('rdb', rdb, cancelled), /검사가 중단되었습니다/);
+}
+
+async function verifyLocalBackupDialog(page, workspace, files) {
+  await workspace.getByRole('button', { name: 'Redis 연결 끊기', exact: true }).click();
+  await workspace.getByRole('button', { name: '백업 파일 검사', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Redis 백업 파일 검사', exact: true });
+  await dialog.getByLabel('Redis 검사 도구 폴더').fill(path.dirname(binary));
+  await dialog.getByLabel('로컬 백업 파일 경로').fill(files.rdb);
+  const check = dialog.getByRole('button', { name: '백업 파일 검사', exact: true });
+  await check.click();
+  await dialog.getByRole('status').filter({ hasText: '파일 검사 통과' }).waitFor();
+  await dialog.getByText(/내장 체크섬 검증 완료/u).waitFor();
+  if (files.manifest) {
+    await dialog.getByLabel('백업 형식').selectOption('aof_manifest');
+    await dialog.getByLabel('로컬 AOF 매니페스트 경로').fill(files.manifest);
+    await check.click();
+    await dialog.getByRole('rowheader', { name: path.basename(files.manifest), exact: true }).waitFor();
+    await dialog.getByRole('cell', { name: '증분 파일', exact: true }).first().waitFor();
+  }
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
 }
 
 async function verifyRecovery(directory, aof) {
@@ -925,7 +1036,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure, hasJson);
-    console.log('Windows Redis E2E passed (ACL, TLS, console, monitor, Pub/Sub, typed edits, TTL, reviewed key deletion, and isolated RDB/AOF recovery).');
+    console.log('Windows Redis E2E passed (ACL, TLS, editing, RDB/AOF recovery and local backup inspection).');
     console.log(hasJson ? 'Redis JSON module editing and TTL verified.' : 'Redis JSON module unavailable on the fixture server.');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);

@@ -57,6 +57,8 @@
 .redis-monitor .redis-values { max-height: 28dvh; font-variant-numeric: tabular-nums; }
 .redis-monitor .redis-values small { margin-left: 6px; }
 .redis-edit-permission + .redis-edit-permission { margin-top: 8px; }
+.redis-backup-result th, .redis-backup-result code { overflow-wrap: anywhere; white-space: normal; }
+.redis-backup-result .redis-values { max-height: 14rem; }
 .dialog.redis-pubsub { width: min(860px, calc(100vw - 32px)); }
 .redis-pubsub-body { display: grid; gap: 12px; padding: 0 21px 21px; }
 .redis-pubsub-body > p { margin: 0; overflow-wrap: anywhere; }
