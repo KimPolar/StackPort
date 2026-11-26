@@ -25,10 +25,10 @@ pub struct RedisServerSnapshot {
 }
 
 #[derive(Serialize)]
-struct DatabaseStats {
-    database: u32,
-    keys: u64,
-    expiring: Option<u64>,
+pub(super) struct DatabaseStats {
+    pub(super) database: u32,
+    pub(super) keys: u64,
+    pub(super) expiring: Option<u64>,
     average_ttl_ms: Option<u64>,
 }
 
@@ -100,7 +100,7 @@ pub(super) async fn snapshot(wire: &mut Wire) -> Result<RedisServerSnapshot, Fai
     })
 }
 
-fn database_stats(line: &str) -> Option<DatabaseStats> {
+pub(super) fn database_stats(line: &str) -> Option<DatabaseStats> {
     let (name, fields) = line.split_once(':')?;
     let database = name.strip_prefix("db")?.parse().ok()?;
     let stat = |name| {

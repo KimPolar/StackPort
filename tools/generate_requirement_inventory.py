@@ -161,8 +161,8 @@ PARTIAL = {
     "SP-BK-005": "버전이 일치하는 pg_dump·pg_restore 탐색, 전체·스키마·일반 테이블 백업, 커스텀 아카이브 목차 확인 후 새 DB에 단일 트랜잭션 복원",
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-011": "PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",
-    "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인, MongoDB 원본과 새 대상·서버와 도구 버전·객체 목록과 뷰 원본·문서 수·SHA-256 검토",
-    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 복원 객체·인덱스·문서·버킷 수와 체크섬·UUID 확인, Redis 로컬 RDB 체크섬 및 단일·다중 AOF 구조와 파일별 SHA-256 검사",
+    "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인, MongoDB 원본과 새 대상·서버와 도구 버전·객체 목록과 뷰 원본·문서 수·SHA-256 검토, Redis 검사를 마친 RDB의 SHA-256과 임시 복원 사본 대조",
+    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 복원 객체·인덱스·문서·버킷 수와 체크섬·UUID 확인, Redis RDB 체크섬·격리 복원 키 수와 만료 상태·단일 및 다중 AOF 구조·파일별 SHA-256 검사",
     "SP-BK-016": "선택한 Redis 백업 파일과 매니페스트의 활성 기본·증분 파일, 용량, SHA-256, 검사 도구 버전과 RDB 형식 표시",
     "SP-BK-017": "PostgreSQL 백업의 로컬 파일 경로와 복원할 서버·새 DB를 표시하고 CREATEDB 권한 확인, MongoDB 백업의 로컬 파일 경로와 실제 새 데이터베이스·컬렉션 이름 표시 및 목록 조회 권한 확인, Redis 서버 파일 경로와 별도 전송·읽기 권한 안내",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
@@ -191,7 +191,7 @@ PARTIAL = {
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
-    "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰 복원 및 내용·정의·인덱스 비교, 격리된 Redis의 RDB·AOF 복원에서 두 논리 DB의 값과 TTL 확인",
+    "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰 복원 및 내용·정의·인덱스 비교, Redis RDB 앱 격리 복원에서 DB 0·3·31 키 수와 만료 확인, 별도 격리 서버에서 RDB·AOF의 값과 TTL 확인",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 새 데이터베이스의 첫 컬렉션과 유효성 규칙·읽기 전용 뷰 생성, 서버에 저장된 유효성 규칙과 뷰 정의 조회, 검토를 거친 유효성 규칙 변경·제거와 뷰 원본·파이프라인 수정, 일반 컬렉션의 동일 데이터베이스 내 이름 변경과 삭제, 인덱스 생성·숨김과 TTL 변경·삭제",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
@@ -200,7 +200,7 @@ PARTIAL = {
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
     "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 또는 CSV로 내보내기, BSON 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 BSON 매핑, mongodump 아카이브 생성과 일반 컬렉션 또는 데이터베이스 복원",
     "SP-BK-009": "MongoDB JSON·CSV 가져오기와 내보내기, mongodump로 데이터베이스나 일반 컬렉션 백업, 서버·도구 버전을 확인하고 mongorestore로 새 컬렉션 또는 새 데이터베이스에 복원",
-    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 격리 복원 절차 안내, 복사한 RDB와 단일·다중 AOF의 네이티브 파일 검사",
+    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 격리 복원 절차 안내, 복사한 RDB와 단일·다중 AOF의 네이티브 파일 검사, 앱에서 로컬 RDB 격리 복원 검증",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -574,8 +574,12 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-017", "SP-SEC-011", "SP-AT-016"}:
                 evidence += "; crates/stackport-core/src/redis/persistence.rs; src/RedisPersistenceDialog.tsx; tests/redis-smoke.cjs"
-            if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-014", "SP-BK-016"}:
-                evidence += "; crates/stackport-core/src/redis/backup_file.rs; src/RedisBackupFileDialog.tsx; tests/redis-smoke.cjs"
+            if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-013", "SP-BK-014", "SP-BK-016", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/redis/backup_file.rs; src/RedisBackupFileDialog.tsx"
+                if "tests/redis-smoke.cjs" not in evidence:
+                    evidence += "; tests/redis-smoke.cjs"
+            if requirement_id in {"SP-BK-010", "SP-BK-013", "SP-BK-014", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/redis/backup_file/recovery.rs"
             if requirement_id == "SP-NS-012":
                 evidence += "; crates/stackport-core/src/redis/console.rs; src/RedisConsoleDialog.tsx"
             if requirement_id in {"SP-NS-013", "SP-AT-018"}:

@@ -4,8 +4,11 @@ import { Dialog } from "./Dialog";
 
 type Format = "rdb" | "aof_file" | "aof_manifest";
 type FileInfo = { name: string; role: "rdb" | "aof" | "manifest" | "base" | "incremental"; bytes: number; sha256: string };
+type Recovery = { server_version: string; loaded_keys: number; expired_on_load: number; live_keys: number;
+  databases: { database: number; keys: number; expiring: number }[] };
 type Report = { format: Format; checker_version: string; files: FileInfo[];
-  rdb: { format_version: number; checksum_verified: boolean; keys_read: number | null; expired_keys: number | null } | null };
+  rdb: { format_version: number; checksum_verified: boolean; keys_read: number | null; expired_keys: number | null } | null;
+  recovery?: Recovery };
 
 const kindLabels: Record<FileInfo["role"], string> = {
   rdb: "RDB", aof: "AOF", manifest: "매니페스트", base: "기본 파일", incremental: "증분 파일",
@@ -21,9 +24,10 @@ export function RedisBackupFileDialog({ onBusy, onClose }: {
   const [request, setRequest] = useState<string>();
   const [report, setReport] = useState<Report>();
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [operation, setOperation] = useState<"inspect" | "restore">();
   const [cancelling, setCancelling] = useState(false);
   const working = useRef(false);
+  const busy = operation !== undefined;
 
   function clearResult() { setReport(undefined); setError(""); }
 
@@ -37,19 +41,26 @@ export function RedisBackupFileDialog({ onBusy, onClose }: {
     finally { working.current = false; }
   }
 
-  async function inspect(event: FormEvent) {
-    event.preventDefault();
+  async function run(mode: "inspect" | "restore") {
     if (working.current) return;
-    working.current = true; setBusy(true); clearResult(); onBusy(true);
+    const sha256 = report?.files[0]?.sha256;
+    if (mode === "restore" && !sha256) return;
+    working.current = true; setOperation(mode); setError(""); onBusy(true);
+    if (mode === "inspect") setReport(undefined);
+    else setReport(value => value && { ...value, recovery: undefined });
     try {
       const token = await invoke<string>("prepare_query");
       setRequest(token);
-      setReport(await invoke<Report>("inspect_redis_backup_file", { request: token, format, source, directory }));
+      const next = mode === "restore" ? invoke<Report>("verify_redis_rdb_restore", { request: token, source, directory, sha256 })
+        : invoke<Report>("inspect_redis_backup_file", { request: token, format, source, directory });
+      setReport(await next);
     } catch (reason) { setError(String(reason)); }
     finally {
-      working.current = false; setRequest(undefined); setBusy(false); setCancelling(false); onBusy(false);
+      working.current = false; setRequest(undefined); setOperation(undefined); setCancelling(false); onBusy(false);
     }
   }
+
+  function inspect(event: FormEvent) { event.preventDefault(); void run("inspect"); }
 
   async function cancel() {
     if (!request || cancelling) return;
@@ -76,7 +87,8 @@ export function RedisBackupFileDialog({ onBusy, onClose }: {
       </span></label>
       <p className="form-note">{format === "rdb" ? "redis-check-rdb" : "redis-check-aof"}로 임시 사본의 형식을 검사합니다.
         {format === "aof_manifest" && " 매니페스트와 기본·증분 파일을 같은 폴더에 복사해 두세요."}</p>
-      {busy && <p className="form-note" role="status">{cancelling ? "검사 중단 요청 중…" : "사본을 준비하고 형식을 검사하는 중…"}</p>}
+      {busy && <p className="form-note" role="status">{cancelling ? "중단 요청 중…" : operation === "restore"
+        ? "임시 Redis에서 사본을 복원하고 키 수를 확인하는 중…" : "사본을 준비하고 형식을 검사하는 중…"}</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {report && <section className="redis-backup-result" aria-label="Redis 백업 검사 결과">
         <p className="success-banner" role="status">파일 검사 통과 · Redis 검사 도구 {report.checker_version}</p>
@@ -89,12 +101,27 @@ export function RedisBackupFileDialog({ onBusy, onClose }: {
             <td>{kindLabels[file.role]}</td><td>{numbers.format(file.bytes)}</td><td><code>{file.sha256}</code></td>
           </tr>)}</tbody>
         </table></div>
-        <p className="form-note">복원 호환성과 키·만료 상태는 대상과 같은 버전·모듈을 사용한 격리 서버에서 확인하세요.</p>
+        {report.recovery && <RecoveryResult result={report.recovery} />}
+        {report.rdb ? <p className="form-note">격리 복원은 같은 도구 폴더의 Redis 7 이상을 임시로 실행해 검증합니다.</p>
+          : <p className="form-note">AOF의 복원 호환성은 대상과 같은 버전·모듈을 사용한 격리 서버에서 확인합니다.</p>}
       </section>}
       <div className="dialog-actions">
-        {busy && <button className="secondary" type="button" disabled={!request || cancelling} onClick={() => void cancel()}>검사 중단</button>}
+        {busy && <button className="secondary" type="button" disabled={!request || cancelling} onClick={() => void cancel()}>작업 중단</button>}
+        {report?.rdb && <button className="secondary" type="button" disabled={busy} onClick={() => void run("restore")}>격리 복원 검증</button>}
         <button className="primary" type="submit" disabled={busy}>백업 파일 검사</button>
       </div>
     </form>
   </Dialog>;
+}
+
+function RecoveryResult({ result }: { result: Recovery }) {
+  return <section aria-label="RDB 격리 복원 결과">
+    <p className="success-banner" role="status">격리 복원 검증 통과 · Redis {result.server_version}</p>
+    <p className="form-note">로드 {numbers.format(result.loaded_keys)}개 · 로드 시 만료 {numbers.format(result.expired_on_load)}개 · 조회 시 키 {numbers.format(result.live_keys)}개</p>
+    {result.databases.length > 0 && <div className="redis-values" role="region" aria-label="복원한 논리 DB" tabIndex={0}>
+      <table><thead><tr><th scope="col">논리 DB</th><th scope="col">키</th><th scope="col">만료 설정</th></tr></thead>
+        <tbody>{result.databases.map(database => <tr key={database.database}><th scope="row">DB {database.database}</th>
+          <td>{numbers.format(database.keys)}</td><td>{numbers.format(database.expiring)}</td></tr>)}</tbody></table>
+    </div>}
+  </section>;
 }

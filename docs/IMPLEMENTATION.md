@@ -214,9 +214,13 @@ RDB 복사에는 서버 파일 읽기 권한과 SFTP 등 별도 전송 수단이
 
 Windows 앱과 TLS·ACL을 적용한 Redis 8.4.7 테스트 연결에서 RDB·AOF 완료, 읽기 전용과 서버 ACL의 실행 차단, `PROD` 확인, 요청 응답 유실의 결과 미확인을 검증했습니다. 생성된 RDB와 재작성된 AOF 폴더를 각각 격리된 Redis에 읽혀 논리 DB 0·3의 키와 만료 시간이 복원되는지 확인했습니다.
 
-**백업 파일 검사**에서는 로컬의 RDB·단일 AOF 파일이나 다중 파일 AOF 매니페스트를 선택합니다. 실행 파일이 설치된 폴더를 지정하면 `redis-check-rdb` 또는 `redis-check-aof`를 임시 사본에 검사 모드로 실행합니다. 다중 파일 AOF에서는 매니페스트와 같은 폴더의 활성 기본·증분 파일을 검사합니다. 구성 파일의 외부 경로와 링크는 거절합니다. 파일마다 크기와 SHA-256을 표시하고, RDB는 형식 버전, 내장 체크섬 검증 여부, 검사 도구가 읽은 키와 이미 만료된 키 수를 표시합니다. 파일 형식·무결성 검사 뒤 실제 복원 호환성은 별도 격리 서버에서 확인합니다. [Redis RDB 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-rdb.c) · [Redis AOF 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-aof.c)
+**백업 파일 검사**에서는 로컬의 RDB·단일 AOF 파일이나 다중 파일 AOF 매니페스트를 선택합니다. 실행 파일이 설치된 폴더를 지정하면 `redis-check-rdb` 또는 `redis-check-aof`를 임시 사본에 검사 모드로 실행합니다. 다중 파일 AOF에서는 매니페스트와 같은 폴더의 활성 기본·증분 파일을 검사합니다. 구성 파일의 외부 경로와 링크는 거절합니다. 파일마다 크기와 SHA-256을 표시하고, RDB는 형식 버전, 내장 체크섬 검증 여부, 검사 도구가 읽은 키와 이미 만료된 키 수를 표시합니다. [Redis RDB 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-rdb.c) · [Redis AOF 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-aof.c)
 
 Windows 앱과 Redis 8.4.7 도구에서 실제로 만든 RDB와 다중 파일 AOF, 단일 RESP AOF와 RDB 선두부가 있는 단일 AOF를 검사했습니다. RDB 체크섬 손상·생략과 끝 위치 불일치, 잘린 AOF, 매니페스트 구성 파일 누락과 외부 경로, 한글·공백 파일 이름을 확인했습니다. 파일의 SHA-256을 별도로 계산한 값과 비교했고, Redis 연결을 끊은 상태의 RDB·AOF 검사 화면도 통과했습니다.
+
+RDB 검사가 끝나면 **격리 복원 검증**을 실행할 수 있습니다. 앱은 임시 복사본의 SHA-256을 검사 결과와 다시 비교하고, 같은 도구 폴더의 Redis 7 이상을 로컬 루프백에서 실행해 복사본을 불러옵니다. Redis 버전, 로딩한 키와 로딩 때 만료로 건너뛴 키, 논리 DB별 키 수와 만료 설정 수를 표시합니다. 검증이 성공하거나 실패하거나 취소되면 임시 Redis 프로세스와 파일을 정리합니다. AOF의 실제 로딩은 호환 버전의 별도 격리 서버에서 확인할 수 있습니다. [Redis INFO](https://redis.io/docs/latest/commands/info/)
+
+Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만료된 키의 집계, 검사 이후 SHA-256이 달라진 파일의 실행 차단을 확인했습니다.
 
 **Pub/Sub**는 별도 연결에서 채널 이름 하나 또는 패턴 하나를 구독합니다. Redis 논리 DB와 관계없이 서버 전체의 채널에 연결합니다. 연결이 끊기면 재접속을 시도하며, 실패할 때마다 다음 연결까지 대기 시간을 1초에서 늘려 최대 15초까지 기다립니다. 중단된 동안의 메시지는 다시 받지 못합니다. 구독 암호와 최근 100개의 수신 기록은 구독 세션 동안 메모리에 보관합니다. 메시지의 첫 512바이트를 텍스트 또는 HEX로 표시하고, 기록을 비우거나 구독을 종료할 수 있습니다. [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/)
 

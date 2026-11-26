@@ -335,7 +335,9 @@ async function verifyPersistence({ command, open, profile, backup, serverPort, s
     assert.equal(target.rdb_filename, 'dump.rdb');
     assert.equal(target.aof_enabled, false);
     await assert.rejects(start(id, 'aof'), /AOF가 꺼져/);
-    cli(serverPort, [['SELECT', '3'], ['SET', 'backup:expiring', 'to-restore', 'PX', '120000']]);
+    cli(serverPort, [['SELECT', '3'], ['SET', 'backup:expiring', 'to-restore', 'PX', '120000'],
+      ['SET', 'backup:expires-before-recovery', 'expired', 'PX', '5000'],
+      ['SELECT', '31'], ['SET', 'backup:high-db', 'logical-db-31']]);
 
     async function finished(kind) {
       assert.equal((await start(id, kind)).status, 'running');
@@ -380,7 +382,7 @@ async function verifyPersistence({ command, open, profile, backup, serverPort, s
     }
     await verifyRecovery(aof, true);
     const localManifest = aofConfig.aof_directory ? path.join(aof, aofConfig.aof_directory, `${aofConfig.aof_filename}.manifest`) : null;
-    await verifyLocalBackups(command, file, localManifest);
+    await verifyLocalBackups(command, serverPort, file, localManifest);
 
     secure.interruptNextSnapshot();
     await assert.rejects(start(id), /결과를 확인할 수 없습니다/);
@@ -405,7 +407,7 @@ const fileReport = (file, role) => {
   return { name: path.basename(file), role, bytes: contents.length, sha256: sha256(contents) };
 };
 
-async function verifyLocalBackups(command, rdb, manifest) {
+async function verifyLocalBackups(command, serverPort, rdb, manifest) {
   const directory = path.dirname(binary);
   const inspect = async (format, source, request) => command('inspect_redis_backup_file', {
     format, source, directory, request: request ?? await command('prepare_query'),
@@ -419,11 +421,16 @@ async function verifyLocalBackups(command, rdb, manifest) {
   assert.ok(snapshot.rdb.format_version >= 5 && snapshot.rdb.keys_read > 300);
   assert.ok(Number.isInteger(snapshot.rdb.expired_keys));
 
+  const verifyRecovery = async (source, sha256, request) => command('verify_redis_rdb_restore', {
+    source, directory, sha256, request: request ?? await command('prepare_query'),
+  });
+
   const bad = path.join(root, 'corrupt.rdb');
   const corrupt = fs.readFileSync(rdb);
   corrupt[corrupt.length - 1] ^= 1;
   fs.writeFileSync(bad, corrupt);
   await assert.rejects(inspect('rdb', bad), /무결성을 확인하지 못했습니다/);
+  await assert.rejects(verifyRecovery(bad, before.sha256), /검사 이후.*변경/);
   assert.deepEqual(fs.readFileSync(bad), corrupt);
 
   const trailing = path.join(root, 'trailing.rdb');
@@ -483,6 +490,23 @@ async function verifyLocalBackups(command, rdb, manifest) {
   const cancelled = await command('prepare_query');
   assert.equal(await command('cancel_query', { token: cancelled }), true);
   await assert.rejects(inspect('rdb', rdb, cancelled), /검사가 중단되었습니다/);
+
+  const cancelledRestore = await command('prepare_query');
+  assert.equal(await command('cancel_query', { token: cancelledRestore }), true);
+  await assert.rejects(verifyRecovery(rdb, before.sha256, cancelledRestore), /중단되었습니다/);
+  for (let attempt = 0; attempt < 50 && redisRaw(serverPort, '-n', '3', 'EXISTS', 'backup:expires-before-recovery') !== '0'; attempt++) {
+    await delay(150);
+  }
+  const result = await verifyRecovery(rdb, before.sha256);
+  assert.deepEqual(result.files, [before]);
+  const recovery = result.recovery;
+  assert.equal(recovery.server_version, snapshot.checker_version);
+  assert.equal(recovery.loaded_keys + recovery.expired_on_load, snapshot.rdb.keys_read);
+  assert.ok(recovery.expired_on_load >= 1 && recovery.live_keys <= recovery.loaded_keys);
+  assert.deepEqual(recovery.databases.map(db => db.database), [0, 3, 31]);
+  assert.equal(recovery.databases.find(db => db.database === 31).keys, 1);
+  assert.ok(recovery.databases.find(db => db.database === 3).expiring > 0);
+  assert.deepEqual(fileReport(rdb, 'rdb'), before);
 }
 
 async function verifyLocalBackupDialog(page, workspace, files) {
@@ -495,6 +519,10 @@ async function verifyLocalBackupDialog(page, workspace, files) {
   await check.click();
   await dialog.getByRole('status').filter({ hasText: '파일 검사 통과' }).waitFor();
   await dialog.getByText(/내장 체크섬 검증 완료/u).waitFor();
+  await dialog.getByRole('button', { name: '격리 복원 검증', exact: true }).click();
+  const recovery = dialog.getByRole('region', { name: 'RDB 격리 복원 결과', exact: true });
+  await recovery.getByRole('status').filter({ hasText: '격리 복원 검증 통과' }).waitFor();
+  await recovery.getByRole('rowheader', { name: 'DB 31', exact: true }).waitFor();
   if (files.manifest) {
     await dialog.getByLabel('백업 형식').selectOption('aof_manifest');
     await dialog.getByLabel('로컬 AOF 매니페스트 경로').fill(files.manifest);
@@ -507,7 +535,7 @@ async function verifyLocalBackupDialog(page, workspace, files) {
 
 async function verifyRecovery(directory, aof) {
   const port = await availablePort();
-  const restore = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', aof ? 'yes' : 'no'],
+  const restore = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--databases', '40', '--appendonly', aof ? 'yes' : 'no'],
     { cwd: directory, windowsHide: true, stdio: 'ignore' });
   try {
     await ready(port, restore);
@@ -515,6 +543,7 @@ async function verifyRecovery(directory, aof) {
     assert.equal(redisRaw(port, '-n', '3', 'GET', 'cache:string'), '문자열 값');
     assert.equal(redisRaw(port, '-n', '3', 'GET', 'backup:expiring'), 'to-restore');
     assert.ok(Number(redisRaw(port, '-n', '3', 'PTTL', 'backup:expiring')) > 0);
+    assert.equal(redisRaw(port, '-n', '31', 'GET', 'backup:high-db'), 'logical-db-31');
   } finally {
     if (restore.exitCode === null) {
       const closed = once(restore, 'exit');
@@ -984,7 +1013,7 @@ async function verifyKeyLifecycle({ command, open, profile, writer, serverPort, 
 
 async function main() {
   const port = await availablePort();
-  const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no',
+  const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no', '--databases', '40',
     '--repl-diskless-sync-delay', '0', '--loglevel', 'warning'], {
     cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -1036,7 +1065,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure, hasJson);
-    console.log('Windows Redis E2E passed (ACL, TLS, editing, RDB/AOF recovery and local backup inspection).');
+    console.log('Windows Redis E2E passed (ACL, TLS, editing, native backup checks and in-app isolated RDB recovery).');
     console.log(hasJson ? 'Redis JSON module editing and TTL verified.' : 'Redis JSON module unavailable on the fixture server.');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);

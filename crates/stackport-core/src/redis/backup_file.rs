@@ -10,7 +10,14 @@ use std::{
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
-use tokio::{io::AsyncReadExt, process::Command, task::spawn_blocking, time::timeout};
+use tokio::{
+    io::AsyncReadExt,
+    process::{Child, Command},
+    task::spawn_blocking,
+    time::timeout,
+};
+
+mod recovery;
 
 const TIME_LIMIT: Duration = Duration::from_secs(15 * 60);
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -36,6 +43,8 @@ pub struct RedisBackupFileReport {
     checker_version: String,
     files: Vec<BackupFile>,
     rdb: Option<RdbDetails>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<recovery::RecoveryReport>,
 }
 
 #[derive(Serialize)]
@@ -69,11 +78,43 @@ impl Store {
         source: String,
         directory: String,
     ) -> Result<RedisBackupFileReport> {
+        self.check_redis_backup_file(request, format, source, directory, None)
+            .await
+    }
+
+    pub async fn verify_redis_rdb_restore(
+        &self,
+        request: &str,
+        source: String,
+        directory: String,
+        sha256: String,
+    ) -> Result<RedisBackupFileReport> {
+        if sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("백업 파일을 검사해 SHA-256을 확인하세요.".into());
+        }
+        self.check_redis_backup_file(
+            request,
+            RedisBackupFileFormat::Rdb,
+            source,
+            directory,
+            Some(sha256),
+        )
+        .await
+    }
+
+    async fn check_redis_backup_file(
+        &self,
+        request: &str,
+        format: RedisBackupFileFormat,
+        source: String,
+        directory: String,
+        reviewed_sha256: Option<String>,
+    ) -> Result<RedisBackupFileReport> {
         let guard = self.queries.claim(request)?;
         let cancelled = guard.cancellation_check();
         let deadline = Instant::now() + TIME_LIMIT;
+        let directory = Path::new(directory.trim());
         let operation = async {
-            let directory = Path::new(directory.trim());
             if !directory.is_absolute() {
                 return Err("Redis 검사 도구 폴더의 절대 경로를 지정하세요.".into());
             }
@@ -87,6 +128,7 @@ impl Store {
             .await
             .map_err(|_| "Redis 검사 도구의 버전 확인 시간이 초과되었습니다.")??;
             let checker_version = version
+                .text
                 .split_whitespace()
                 .nth(1)
                 .map(|word| word.strip_prefix("v=").unwrap_or(word))
@@ -97,7 +139,7 @@ impl Store {
                             .bytes()
                             .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
                 })
-                .filter(|_| version.starts_with(format.tool_name()))
+                .filter(|_| version.text.starts_with(format.tool_name()))
                 .ok_or("Redis 검사 도구의 버전을 확인할 수 없습니다.")?
                 .to_owned();
             if matches!(format, RedisBackupFileFormat::AofManifest)
@@ -124,6 +166,14 @@ impl Store {
             })
             .await
             .map_err(|_| "Redis 백업 파일의 임시 사본을 준비할 수 없습니다.")??;
+            if let Some(reviewed) = &reviewed_sha256 {
+                if !snapshot.files[0].sha256.eq_ignore_ascii_case(reviewed) {
+                    return Err(
+                        "검사 이후 Redis 백업 파일이 변경되었습니다. 파일을 다시 검사하세요."
+                            .into(),
+                    );
+                }
+            }
             let output = checker(
                 &executable,
                 Some(snapshot.directory.path()),
@@ -132,20 +182,41 @@ impl Store {
             .await?;
             let rdb = snapshot
                 .rdb_version
-                .map(|version| rdb_result(version, snapshot.files[0].bytes, &output))
+                .map(|version| rdb_result(version, snapshot.files[0].bytes, &output.text))
                 .transpose()?;
-            Ok(RedisBackupFileReport {
+            let report = RedisBackupFileReport {
                 format,
                 checker_version,
                 files: snapshot.files,
                 rdb,
-            })
+                recovery: None,
+            };
+            Ok::<_, String>((report, snapshot.directory, output.highest_database))
         };
-        tokio::select! {
+        let (mut report, snapshot, highest_database) = tokio::select! {
             biased;
-            _ = guard.wait_cancelled() => Err(CANCELLED.into()),
-            result = timeout(TIME_LIMIT, operation) => result.map_err(|_| TIMED_OUT.to_owned())?,
+            _ = guard.wait_cancelled() => return Err(CANCELLED.into()),
+            result = timeout(TIME_LIMIT, operation) => result.map_err(|_| TIMED_OUT.to_owned())??,
+        };
+        if reviewed_sha256.is_some() {
+            let keys = report
+                .rdb
+                .as_ref()
+                .and_then(|details| details.keys_read)
+                .ok_or("RDB 파일의 키 수를 확인할 수 없습니다.")?;
+            report.recovery = Some(
+                recovery::restore(
+                    directory,
+                    snapshot.path(),
+                    highest_database,
+                    keys,
+                    &guard,
+                    deadline,
+                )
+                .await?,
+            );
         }
+        Ok(report)
     }
 }
 
@@ -556,7 +627,18 @@ fn counter(output: &str, suffix: &str) -> Option<u64> {
     })
 }
 
-async fn checker(executable: &Path, directory: Option<&Path>, argument: &str) -> Result<String> {
+struct CheckerOutput {
+    text: String,
+    highest_database: u64,
+}
+
+struct LocalProcess {
+    child: Child,
+    #[cfg(windows)]
+    _job: crate::terminal::ProcessJob,
+}
+
+fn local_process(executable: &Path, directory: &Path, argument: &str) -> Result<LocalProcess> {
     let mut command = Command::new(executable);
     command
         .arg(argument)
@@ -565,11 +647,7 @@ async fn checker(executable: &Path, directory: Option<&Path>, argument: &str) ->
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    command.current_dir(
-        directory
-            .or_else(|| executable.parent())
-            .ok_or("Redis 검사 도구 폴더를 확인하세요.")?,
-    );
+    command.current_dir(directory);
     #[cfg(windows)]
     let job = {
         for name in ["SystemRoot", "WINDIR"] {
@@ -582,7 +660,7 @@ async fn checker(executable: &Path, directory: Option<&Path>, argument: &str) ->
     };
     let mut child = command
         .spawn()
-        .map_err(|_| "Redis 검사 도구를 실행할 수 없습니다.")?;
+        .map_err(|_| "Redis 실행 파일을 시작할 수 없습니다.")?;
     #[cfg(windows)]
     {
         let attached = child
@@ -596,9 +674,28 @@ async fn checker(executable: &Path, directory: Option<&Path>, argument: &str) ->
             }
         }
     }
-    let mut stdout = child.stdout.take().ok_or(CHECK_FAILED)?;
+    Ok(LocalProcess {
+        child,
+        #[cfg(windows)]
+        _job: job,
+    })
+}
+
+async fn checker(
+    executable: &Path,
+    directory: Option<&Path>,
+    argument: &str,
+) -> Result<CheckerOutput> {
+    let directory = directory
+        .or_else(|| executable.parent())
+        .ok_or("Redis 검사 도구 폴더를 확인하세요.")?;
+    let mut process = local_process(executable, directory, argument)?;
+    let mut stdout = process.child.stdout.take().ok_or(CHECK_FAILED)?;
     let mut tail = Vec::with_capacity(OUTPUT_LIMIT);
     let mut chunk = [0; 4096];
+    let mut line = Vec::with_capacity(2048);
+    let mut oversized = false;
+    let mut highest_database = 0;
     loop {
         let size = stdout.read(&mut chunk).await.map_err(|_| CHECK_FAILED)?;
         if size == 0 {
@@ -607,9 +704,41 @@ async fn checker(executable: &Path, directory: Option<&Path>, argument: &str) ->
         let extra = (tail.len() + size).saturating_sub(OUTPUT_LIMIT);
         tail.drain(..extra);
         tail.extend_from_slice(&chunk[..size]);
+        for segment in chunk[..size].split_inclusive(|byte| *byte == b'\n') {
+            oversized |= line.len() + segment.len() > 2048;
+            if !oversized {
+                line.extend_from_slice(segment);
+            }
+            if segment.ends_with(b"\n") {
+                if !oversized {
+                    if let Some(database) = checker_database(&line) {
+                        highest_database = highest_database.max(database);
+                    }
+                }
+                oversized = false;
+                line.clear();
+            }
+        }
     }
-    if !child.wait().await.is_ok_and(|status| status.success()) {
+    if !process
+        .child
+        .wait()
+        .await
+        .is_ok_and(|status| status.success())
+    {
         return Err(CHECK_FAILED.into());
     }
-    Ok(String::from_utf8_lossy(&tail).into_owned())
+    Ok(CheckerOutput {
+        text: String::from_utf8_lossy(&tail).into_owned(),
+        highest_database,
+    })
+}
+
+fn checker_database(line: &[u8]) -> Option<u64> {
+    let line = std::str::from_utf8(line).ok()?.strip_prefix("[offset ")?;
+    let (offset, message) = line.split_once("] Selecting DB ID ")?;
+    if !offset.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    message.trim_end().parse().ok()
 }

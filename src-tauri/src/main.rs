@@ -1730,6 +1730,12 @@ async fn inspect_redis_backup_file(store: State<'_, Store>, request: String, for
 }
 
 #[tauri::command]
+async fn verify_redis_rdb_restore(store: State<'_, Store>, request: String, source: String, directory: String, sha256: String)
+    -> Result<stackport_core::RedisBackupFileReport, String> {
+    store.verify_redis_rdb_restore(&request, source, directory, sha256).await
+}
+
+#[tauri::command]
 async fn choose_redis_backup_input(tools: bool) -> Result<Option<String>, String> {
     worker(move || {
         let dialog = rfd::FileDialog::new();
@@ -3029,6 +3035,7 @@ fn main() {
             redis_start_persistence,
             redis_persistence_report,
             inspect_redis_backup_file,
+            verify_redis_rdb_restore,
             choose_redis_backup_input,
             redis_console_commands,
             redis_run_console,
