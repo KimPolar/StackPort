@@ -257,9 +257,19 @@ async fn start_session(
         .request_subsystem(true, "sftp")
         .await
         .map_err(|_| "서버에 SFTP를 요청할 수 없습니다.")?;
-    match channel.wait().await {
-        Some(ChannelMsg::Success) => {}
-        _ => return Err("서버가 SFTP 기능을 제공하지 않거나 사용을 거부했습니다.".into()),
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::Success) => break,
+            Some(ChannelMsg::WindowAdjusted { .. }) => continue,
+            Some(ChannelMsg::Failure) => {
+                let _ = channel.close().await;
+                return Err("서버가 SFTP 서브시스템 요청을 거부했습니다.".into());
+            }
+            _ => {
+                let _ = channel.close().await;
+                return Err("SFTP 서브시스템을 시작하기 전에 SSH 채널이 닫혔거나 예상하지 못한 응답을 받았습니다.".into());
+            }
+        }
     }
     let files = RawSftpSession::new(channel.into_stream());
     let version = files.init().await.map_err(file_error)?;

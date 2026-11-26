@@ -375,6 +375,7 @@ async function startHost(host, identity, port = 0, terminal = false) {
       });
       session.on('sftp', acceptSftp => {
         stats.subsystem++;
+        client._protocol.channelWindowAdjust(session._chanInfo.outgoing.id, 64 * 1024);
         sftpChannel(acceptSftp(), uploads);
       });
     }));
