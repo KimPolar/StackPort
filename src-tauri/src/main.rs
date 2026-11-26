@@ -1641,6 +1641,19 @@ async fn delete_mysql_profile(store: State<'_, Store>, id: String, revision: i64
 }
 
 #[tauri::command]
+async fn mysql_credential_status(store: State<'_, Store>, profile_id: String, revision: i64)
+    -> Result<stackport_core::MysqlCredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.mysql_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_mysql_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_mysql_password(&profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn mysql_tunnel_options(store: State<'_, Store>, tunnels: State<'_, SshTunnelManager>, profile_id: String,
     revision: i64) -> Result<Vec<LocalTunnelEndpoint>, String> {
     let store = store.inner().clone();
@@ -1650,10 +1663,17 @@ async fn mysql_tunnel_options(store: State<'_, Store>, tunnels: State<'_, SshTun
 
 #[tauri::command]
 async fn open_mysql(mysql: State<'_, stackport_core::MysqlManager>, tunnels: State<'_, SshTunnelManager>, profile_id: String,
-    revision: i64, password: stackport_core::MysqlPassword, confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
+    revision: i64, password: Option<stackport_core::MysqlPassword>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
 ) -> Result<stackport_core::MysqlSessionInfo, String> {
+    use stackport_core::MysqlAuthentication;
+    let authentication = match (password, use_saved_password.unwrap_or(false), remember_password.unwrap_or(false)) {
+        (None, true, false) => MysqlAuthentication::Saved,
+        (Some(password), false, remember) => MysqlAuthentication::Entered { password, remember },
+        _ => return Err("MySQL 암호를 입력하거나 저장한 암호를 선택하세요.".into()),
+    };
     let route = tunnel_id.as_deref().map(|id| (tunnels.inner(), id));
-    mysql.open(profile_id, revision, password, &confirmation, route, grid_edit.unwrap_or_default()).await
+    mysql.open(profile_id, revision, authentication, &confirmation, route, grid_edit.unwrap_or_default()).await
 }
 
 #[tauri::command]
@@ -3205,6 +3225,8 @@ fn main() {
             create_mysql_profile,
             update_mysql_profile,
             delete_mysql_profile,
+            mysql_credential_status,
+            forget_mysql_password,
             mysql_tunnel_options,
             open_mysql,
             close_mysql,

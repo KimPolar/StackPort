@@ -28,7 +28,7 @@ pub struct MysqlSettings {
     pub client_key_path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct MysqlProfile {
     pub id: String,
     pub project_id: String,
@@ -108,6 +108,7 @@ impl Store {
         tx.execute("DELETE FROM mysql_profiles WHERE id=?1", [id])
             .map_err(db_error)?;
         audit(&tx, &profile, "mysql_profile.delete")?;
+        self.delete_mysql_password_if_present(id)?;
         tx.commit().map_err(db_error)
     }
 }
@@ -253,7 +254,7 @@ pub(crate) fn normalize(mut settings: MysqlSettings) -> Result<MysqlSettings> {
     Ok(settings)
 }
 
-fn audit(db: &Connection, profile: &MysqlProfile, operation: &'static str) -> Result<()> {
+pub(super) fn audit(db: &Connection, profile: &MysqlProfile, operation: &'static str) -> Result<()> {
     insert_audit(
         db,
         AuditRecord {

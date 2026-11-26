@@ -22,11 +22,12 @@ mod web_check;
 pub use web_check::{WebDiagnostic, WebMethod, WebResponse, WebSample};
 mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
+mod credential_store;
 mod postgres;
 mod mysql;
 pub use mysql::{MysqlBackupInput, MysqlBackupReport};
 pub use mysql::{MysqlRestoreInput, MysqlRestorePreview, MysqlRestoreReport};
-pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
+pub use mysql::{MysqlAuthentication, MysqlCatalogPage, MysqlColumn, MysqlCredentialStatus, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::MysqlPlan;
 pub use mysql::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
@@ -640,6 +641,7 @@ impl Store {
             )
             .map_err(db_error)?;
         self.delete_project_postgres_passwords(&tx, id)?;
+        self.delete_project_mysql_passwords(&tx, id)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;

@@ -30,7 +30,7 @@ impl Drop for CredentialBuffer {
     }
 }
 
-pub(super) fn read<T>(name: &str, inspect: impl FnOnce(&[u8]) -> T) -> Result<Option<T>> {
+pub(crate) fn read<T>(name: &str, inspect: impl FnOnce(&[u8]) -> T) -> Result<Option<T>> {
     let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
     let mut out = ptr::null_mut();
     let ok = unsafe { CredReadW(name.as_ptr(), CRED_TYPE_GENERIC, 0, &mut out) };
@@ -59,7 +59,7 @@ pub(super) fn read<T>(name: &str, inspect: impl FnOnce(&[u8]) -> T) -> Result<Op
     Ok(Some(inspect(blob)))
 }
 
-pub(super) fn write(name: &str, blob: &mut [u8]) -> Result<()> {
+pub(crate) fn write(name: &str, blob: &mut [u8]) -> Result<()> {
     if blob.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
         return Err("암호가 Windows 자격 증명 관리자의 저장 한도를 초과합니다.".into());
     }
@@ -76,7 +76,7 @@ pub(super) fn write(name: &str, blob: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn delete(name: &str) -> Result<()> {
+pub(crate) fn delete(name: &str) -> Result<()> {
     let name: Vec<u16> = name.encode_utf16().chain([0]).collect();
     if unsafe { CredDeleteW(name.as_ptr(), CRED_TYPE_GENERIC, 0) } != 0 {
         return Ok(());

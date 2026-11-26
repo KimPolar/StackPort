@@ -4,7 +4,7 @@ import { Dialog } from "./Dialog";
 import { PostgresPager } from "./PostgresPager";
 import { PostgresStatementStats } from "./PostgresStatementStats";
 import { usePostgresRead } from "./usePostgresRead";
-import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Filter = "all" | "running" | "blocked" | "slow" | "idle_in_transaction";
@@ -160,7 +160,7 @@ function MonitorTotals({ snapshot }: { snapshot: Snapshot }) {
 function MonitorLogin({ workspace, profile, environment, onClose, onOpened }: {
   workspace: { id: string; tunnel: string | null }; profile: PostgresProfile; environment: string; onClose: () => void; onOpened: (id: string) => void;
 }) {
-  const credentials = usePostgresCredentials(profile);
+  const credentials = useDatabaseCredentials("postgres", profile);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -183,7 +183,7 @@ function MonitorLogin({ workspace, profile, environment, onClose, onOpened }: {
   return <Dialog title="PostgreSQL 모니터 연결" onClose={onClose} busy={busy}>
     <form onSubmit={submit} aria-busy={busy}>
       <p className="form-note">읽기 전용 · {workspace.tunnel ? `SSH 터널 ${workspace.tunnel}` : "직접 연결"}</p>
-      <PostgresPasswordField credentials={credentials} disabled={busy} autoFocus />
+      <DatabasePasswordField credentials={credentials} disabled={busy} autoFocus />
       {environment === "PROD" && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation}
         disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
       {busy && <p className="form-note" role="status">서버 모니터에 연결하는 중…</p>}

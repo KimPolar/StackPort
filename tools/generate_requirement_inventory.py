@@ -196,7 +196,7 @@ PARTIAL = {
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
     "SP-SEC-003": "SFTP 원격 삭제와 SQLite 셀 변경의 영향·운영 확인, 쓰기 SQL의 범위·연결·환경·위험 유형 표시, MySQL 계열 복원의 원본·새 DB·환경 확인과 기존 이름 충돌 방지",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
-    "SP-SEC-006": "PostgreSQL 연결 암호의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정 검증과 네이티브 재사용, 저장 데이터에 대한 임시 버퍼 정리",
+    "SP-SEC-006": "PostgreSQL과 MySQL·MariaDB 연결 암호의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정 검증과 네이티브 재사용, 임시 버퍼 정리",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키와 MongoDB 문서 변경·삭제 및 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
     "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키·MongoDB 문서 변경, SFTP 삭제·원격 편집 저장에도 확인",
@@ -430,7 +430,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence
             if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-SEC-006"}:
-                credential_evidence = "crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/postgres/credentials/windows.rs; src/PostgresPasswordField.tsx; tests/postgres-smoke.cjs"
+                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs"
                 evidence = credential_evidence if requirement_id == "SP-SEC-006" else evidence + "; " + credential_evidence
             if requirement_id in {
                 "SP-UI-002", "SP-UI-006", "SP-UI-011", "SP-CN-001", "SP-CN-003", "SP-CN-011", "SP-CN-012",

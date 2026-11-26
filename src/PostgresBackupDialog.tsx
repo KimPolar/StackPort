@@ -1,7 +1,7 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
-import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Selection = { kind: "database" } | { kind: "schema"; schema: number } | { kind: "table"; object: number };
@@ -23,7 +23,7 @@ export function PostgresBackupDialog({ id, profile, target, connection, source, 
 }) {
   const [destination, setDestination] = useState("");
   const [contents, setContents] = useState<Contents>("all");
-  const credentials = usePostgresCredentials(profile);
+  const credentials = useDatabaseCredentials("postgres", profile);
   const [confirmation, setConfirmation] = useState("");
   const [running, setRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -73,7 +73,7 @@ export function PostgresBackupDialog({ id, profile, target, connection, source, 
         <input required disabled={blocked} value={destination} onChange={event => setDestination(event.target.value)} placeholder="절대 경로 (.backup)" />
         <button type="button" className="secondary" disabled={blocked} onClick={() => void chooseDirectory()}>폴더 선택</button>
       </span></label>
-      <PostgresPasswordField credentials={credentials} disabled={blocked} />
+      <DatabasePasswordField credentials={credentials} disabled={blocked} />
       {production && <label className="field">운영 확인 문구 PROD<input required autoComplete="off" disabled={blocked}
         value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
       <p className="form-note">설치된 PostgreSQL의 pg_dump와 pg_restore로 압축 아카이브를 로컬에 저장합니다. 저장 폴더의 접근 권한을 확인하세요.</p>

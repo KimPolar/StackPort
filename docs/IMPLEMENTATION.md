@@ -164,7 +164,9 @@ Oracle Free 컨테이너에서 정의 SQL을 조회하려면 XML DB가 포함된
 
 **화면 밀도**를 **컴팩트**로 설정하면 작업 도구, 탐색기, SQL 결과 및 파일 목록의 여백을 줄입니다. 선택한 밀도는 같은 WebView2 프로필에서 다시 적용됩니다. 상단 버튼이나 명령 팔레트에서 **집중 모드**를 켜면 탐색기, 도구 표시줄과 하단 상태 표시줄이 숨겨집니다. 현재 도구와 분할 위치, SQL 초안 및 열린 터미널은 유지됩니다. 집중 모드를 끝내면 기존 탐색기 상태가 돌아옵니다. 앱을 다시 열면 저장된 분할 배치와 탐색기 설정을 복원하고 도구 표시줄을 표시합니다.
 
-탐색기의 **MySQL 계열 연결 추가**에서 MySQL·MariaDB의 호스트, 포트, 사용자, 시작 데이터베이스와 환경을 저장합니다. TLS를 기본으로 사용하고, 시스템 신뢰 저장소와 선택한 CA로 호스트 이름과 인증서를 검증합니다. 암호는 연결할 때만 입력하며 운영 연결에는 `PROD` 확인이 필요합니다. 접속 직후 서버 종류·버전을 읽고 세션의 기본 트랜잭션을 읽기 전용으로 설정합니다. 메타데이터 v15에서 연결을 프로젝트에 저장하고 복제할 때 연결 설정을 함께 복사합니다. [mysql_async TLS 옵션](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html)
+탐색기의 **MySQL 계열 연결 추가**에서 MySQL·MariaDB의 호스트, 포트, 사용자, 시작 데이터베이스와 환경을 저장합니다. TLS를 기본으로 사용하고, 시스템 신뢰 저장소와 선택한 CA로 호스트 이름과 인증서를 검증합니다. 운영 연결에는 `PROD` 확인이 필요합니다. 접속 직후 서버 종류·버전을 읽고 세션의 기본 트랜잭션을 읽기 전용으로 설정합니다. 메타데이터 v15에서 연결을 프로젝트에 저장하고 복제할 때 연결 설정을 함께 복사합니다. [mysql_async TLS 옵션](https://docs.rs/mysql_async/0.37.1/mysql_async/struct.SslOpts.html)
+
+Windows에서는 **연결 성공 후 Windows에 암호 저장**을 선택하고 접속하면 현재 사용자의 자격 증명 관리자에 암호가 저장됩니다. 다음 연결에서 **저장한 암호 사용**을 선택할 수 있습니다. 직접 연결과 SSH 터널을 모두 지원합니다.
 
 **클라이언트 인증서**에서 PEM 인증서 체인과 암호화되지 않은 PEM 개인 키의 절대 경로를 지정할 수 있습니다. 두 파일은 각각 256 KiB까지 지원합니다. 프로필에는 경로만 저장하고 드라이버가 연결할 때 파일을 읽습니다. `REQUIRE X509` 계정에 인증서를 제시하며 계정 암호와 서버 인증서도 검증합니다. 직접 연결과 SSH 터널의 SQL·내보내기·서버 모니터에도 같은 인증 설정을 사용합니다. [MySQL 암호화 연결](https://dev.mysql.com/doc/refman/8.4/en/using-encrypted-connections.html) · [MariaDB 계정의 TLS 정책](https://mariadb.com/docs/server/reference/sql-statements/account-management-sql-statements/create-user)
 
@@ -258,7 +260,7 @@ Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만
 
 Windows에서는 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 성공한 연결의 암호는 현재 Windows 사용자의 자격 증명 관리자에 보관합니다. **저장한 암호 사용**을 선택하면 연결, 서버 모니터, 백업, 복원에 네이티브 코드가 자격 증명을 전달합니다. 백업과 복원에서 `pg_dump`와 `pg_restore`에는 해당 프로세스의 환경으로 전달합니다. 각 작업에서 TLS와 운영 확인을 적용합니다.
 
-저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
+PostgreSQL과 MySQL·MariaDB의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
 
@@ -811,6 +813,8 @@ node tests/postgres-smoke.cjs
 ```
 
 Windows 자격 증명 검사에서는 `STACKPORT_POSTGRES_CREDENTIAL_ONLY=1`, `STACKPORT_TEST_APP_EXE`에 격리 앱 실행 파일, `STACKPORT_POSTGRES_TOOLS_DIR`에 백업 도구 폴더를 지정합니다. 테스트용 암호만 저장해 별도 앱 프로세스에서 TLS 연결 및 모니터를 열고, 기존 앱에서 백업과 새 DB 복원을 수행한 뒤 저장 항목을 삭제합니다.
+
+MySQL·MariaDB에서 `STACKPORT_MYSQL_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 암호 저장 흐름만 검증합니다. 일회성 연결과 인증 실패 시 저장 여부, 운영 환경 확인, 별도 프로세스에서 재접속, 설정 변경 후 재사용 차단과 암호 삭제를 검사합니다.
 
 SSH 검사는 같은 격리 앱에서 테스트 전용 루프백 서버를 시작합니다. Node 24와 개발 의존성 `ssh2`가 필요하며, 아래 경로는 위에서 만든 테스트 폴더여야 합니다.
 

@@ -1,4 +1,5 @@
 mod backup;
+mod credentials;
 mod edit;
 mod export;
 mod grid;
@@ -11,6 +12,7 @@ mod structure;
 mod tls;
 
 pub use backup::{MysqlBackupInput, MysqlBackupReport};
+pub use credentials::MysqlCredentialStatus;
 pub use edit::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
@@ -60,6 +62,23 @@ const TUNNEL_STOPPED: &str =
 #[serde(transparent)]
 pub struct MysqlPassword(#[serde(deserialize_with = "deserialize_secret")] Zeroizing<String>);
 
+pub enum MysqlAuthentication {
+    Entered {
+        password: MysqlPassword,
+        remember: bool,
+    },
+    Saved,
+}
+
+impl From<MysqlPassword> for MysqlAuthentication {
+    fn from(password: MysqlPassword) -> Self {
+        Self::Entered {
+            password,
+            remember: false,
+        }
+    }
+}
+
 fn deserialize_secret<'de, D: Deserializer<'de>>(
     input: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -74,6 +93,7 @@ pub struct MysqlSessionInfo {
     database: Option<String>,
     tunnel: Option<LocalTunnelEndpoint>,
     grid_edit: bool,
+    credential_warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -195,27 +215,34 @@ impl MysqlManager {
         &self,
         id: String,
         revision: i64,
-        password: MysqlPassword,
+        authentication: impl Into<MysqlAuthentication>,
         confirmation: &str,
         route: Option<(&SshTunnelManager, &str)>,
         grid_edit: bool,
     ) -> Result<MysqlSessionInfo> {
-        if password.0.len() > 4096 {
-            return Err("MySQL 암호가 너무 깁니다.".into());
-        }
+        let authentication = authentication.into();
         let store = self.store.clone();
         let production_confirmed = confirmation == "PROD";
-        let (profile, tls) = tokio::task::spawn_blocking(move || {
+        let (profile, tls, password, remember) = tokio::task::spawn_blocking(move || {
             let profile = store.mysql_profile(&id, revision)?;
             let settings = &profile.settings;
             if settings.environment == "PROD" && !production_confirmed {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
+            let (password, remember) = match authentication {
+                MysqlAuthentication::Entered { password, remember } => (password, remember),
+                MysqlAuthentication::Saved => (store.saved_mysql_password(&profile)?, false),
+            };
+            if password.0.len() > 4096 {
+                return Err("MySQL 암호가 너무 깁니다.".into());
+            }
             let tls = settings.tls.then(|| tls::options(settings)).transpose()?;
-            Ok::<_, String>((profile, tls))
+            Ok::<_, String>((profile, tls, password, remember))
         })
         .await
         .map_err(|_| "MySQL 연결 설정을 읽을 수 없습니다.")??;
+        let entry = (remember && !password.0.is_empty())
+            .then(|| (profile.clone(), MysqlPassword(password.0.clone())));
         let settings = profile.settings;
         let tunnel = route
             .map(|(tunnels, id)| {
@@ -311,6 +338,17 @@ impl MysqlManager {
                 }
             });
         }
+        let credential_warning = if let Some((profile, secret)) = entry {
+            let store = self.store.clone();
+            match tokio::task::spawn_blocking(move || store.remember_mysql_password(&profile, &secret))
+                .await
+            {
+                Ok(result) => result.err(),
+                Err(_) => Some("MySQL 암호를 저장할 수 없습니다.".into()),
+            }
+        } else {
+            None
+        };
         Ok(MysqlSessionInfo {
             id,
             engine,
@@ -318,6 +356,7 @@ impl MysqlManager {
             database: settings.database,
             tunnel: endpoint,
             grid_edit,
+            credential_warning,
         })
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
-import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Preview = {
@@ -21,7 +21,7 @@ export function PostgresRestoreDialog({ id, profile, server, environment, unavai
   const [database, setDatabase] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [name, setName] = useState("");
-  const credentials = usePostgresCredentials(profile);
+  const credentials = useDatabaseCredentials("postgres", profile);
   const [confirmation, setConfirmation] = useState("");
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState<"preview" | "restore" | null>(null);
@@ -110,7 +110,7 @@ export function PostgresRestoreDialog({ id, profile, server, environment, unavai
           onChange={event => setTrusted(event.target.checked)} /> 백업 출처를 확인했고 복원 실행에 동의합니다.</label>
         <label className="field">새 DB 이름 확인<input required disabled={blocked} value={name} autoComplete="off"
           onChange={event => setName(event.target.value)} /></label>
-        <PostgresPasswordField credentials={credentials} disabled={blocked} />
+        <DatabasePasswordField credentials={credentials} disabled={blocked} />
         {production && <label className="field">운영 확인 문구 PROD<input required autoComplete="off" disabled={blocked}
           value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
       </>}

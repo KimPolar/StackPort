@@ -1,25 +1,15 @@
 //! Opt-in PostgreSQL credentials in the operating system's per-user vault.
-#[cfg(windows)]
-mod windows;
-
 use super::{profiles::find, PostgresPassword, PostgresProfile};
+pub use crate::credential_store::CredentialStatus as PostgresCredentialStatus;
+use crate::credential_store::{self as platform, password_bytes, BINDING_BYTES};
 use crate::{db_error, insert_audit, AuditRecord, Result, Store};
 use rusqlite::{Connection, TransactionBehavior};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-const BINDING_BYTES: usize = 32;
 const NO_PASSWORD: &str = "현재 연결 설정에 저장된 PostgreSQL 암호가 없습니다.";
 const PROFILE_CHANGED: &str = "PostgreSQL 연결이 변경되었습니다. 새로고침하세요.";
-
-#[derive(Serialize)]
-pub struct PostgresCredentialStatus {
-    supported: bool,
-    stored: bool,
-    pub(crate) usable: bool,
-}
 
 impl Store {
     pub fn postgres_credential_status(
@@ -27,15 +17,7 @@ impl Store {
         expected: &PostgresProfile,
     ) -> Result<PostgresCredentialStatus> {
         current_profile(&self.connect()?, expected)?;
-        let binding = binding(expected)?;
-        let status = platform::read(&self.postgres_vault_target(&expected.id)?, |blob| {
-            password_bytes(blob, &binding).is_some()
-        })?;
-        Ok(PostgresCredentialStatus {
-            supported: cfg!(windows),
-            stored: status.is_some(),
-            usable: status == Some(true),
-        })
+        platform::status(&self.postgres_vault_target(&expected.id)?, &binding(expected)?)
     }
 
     pub fn forget_postgres_password(&self, expected: &PostgresProfile) -> Result<()> {
@@ -94,26 +76,17 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
         current_profile(&tx, expected)?;
-        let binding = binding(expected)?;
-        let mut blob = Zeroizing::new(Vec::with_capacity(BINDING_BYTES + password.0.len()));
-        blob.extend_from_slice(&binding);
-        blob.extend_from_slice(password.0.as_bytes());
-        platform::write(&self.postgres_vault_target(&expected.id)?, &mut blob)?;
+        platform::save(
+            &self.postgres_vault_target(&expected.id)?,
+            &binding(expected)?,
+            &password.0,
+        )?;
         audit(&tx, expected, "postgres.credential.save")?;
         tx.commit().map_err(db_error)
     }
 
     fn postgres_vault_target(&self, id: &str) -> Result<String> {
-        let workspace = self
-            .path
-            .canonicalize()
-            .map_err(|_| "작업 공간 위치를 확인할 수 없습니다.")?;
-        let mut name = Sha256::new();
-        name.update(b"StackPort PostgreSQL credential v1\0");
-        name.update(workspace.as_os_str().as_encoded_bytes());
-        name.update(b"\0");
-        name.update(id.as_bytes());
-        Ok(format!("StackPort/PostgreSQL/{:x}", name.finalize()))
+        platform::target(self, "PostgreSQL", id)
     }
 }
 
@@ -130,15 +103,6 @@ fn binding(profile: &PostgresProfile) -> Result<[u8; BINDING_BYTES]> {
     Ok(Sha256::digest(settings).into())
 }
 
-fn password_bytes<'a>(blob: &'a [u8], binding: &[u8; BINDING_BYTES]) -> Option<&'a str> {
-    let (saved, secret) = blob.split_at_checked(BINDING_BYTES)?;
-    if saved != binding || secret.is_empty() {
-        return None;
-    }
-    let password = std::str::from_utf8(secret).ok()?;
-    (!password.contains('\0')).then_some(password)
-}
-
 fn audit(db: &Connection, profile: &PostgresProfile, operation: &'static str) -> Result<()> {
     insert_audit(
         db,
@@ -153,23 +117,6 @@ fn audit(db: &Connection, profile: &PostgresProfile, operation: &'static str) ->
             affected_count: None,
         },
     )
-}
-
-#[cfg(windows)]
-use windows as platform;
-
-#[cfg(not(windows))]
-mod platform {
-    use crate::Result;
-    pub(super) fn read<T>(_: &str, _: impl FnOnce(&[u8]) -> T) -> Result<Option<T>> {
-        Ok(None)
-    }
-    pub(super) fn write(_: &str, _: &mut [u8]) -> Result<()> {
-        Err("이 환경에서는 PostgreSQL 암호 저장을 지원하지 않습니다.".into())
-    }
-    pub(super) fn delete(_: &str) -> Result<()> {
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Archive, ArchiveRestore, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
 import { MysqlBackupDialog, type MysqlBackupTarget } from "./MysqlBackupDialog";
 import { MysqlRestoreDialog } from "./MysqlRestoreDialog";
@@ -19,7 +20,8 @@ import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
 type Route = { id: string; name: string; port: number };
-type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null; tunnel: Route | null; grid_edit: boolean };
+type Session = { id: string; version: string; engine: "MySQL" | "MariaDB"; database: string | null; tunnel: Route | null;
+  grid_edit: boolean; credential_warning: string | null };
 type Page<T> = { items: T[]; has_next: boolean };
 type ObjectView = "columns" | "rows" | MysqlStructureSection;
 const objectViewLabels: Record<ObjectView, string> = {
@@ -45,7 +47,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
-  const [password, setPassword] = useState("");
+  const credentials = useDatabaseCredentials("mysql", login ? profile : null);
   const [confirmation, setConfirmation] = useState("");
   const [gridEdit, setGridEdit] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -158,11 +160,11 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (connecting.current || routeUnavailable) return;
-    connecting.current = true; setBusy(true); setError(""); setPassword("");
+    if (connecting.current || routeUnavailable || credentials.clearing) return;
+    connecting.current = true; setBusy(true); setError("");
     try {
       const next = await invoke<Session>("open_mysql", {
-        profileId: profile.id, revision: profile.revision, password, confirmation, tunnelId: route?.id ?? null, gridEdit,
+        ...credentials.take(), profileId: profile.id, revision: profile.revision, confirmation, tunnelId: route?.id ?? null, gridEdit,
       });
       if (!mounted.current) { await invoke("close_mysql", { id: next.id }); return; }
       active.current = next.id; chooseDatabase(next.database); setSchemaSearch(""); setSchemaPage(0);
@@ -211,7 +213,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   }
 
   function closeLogin() {
-    setLogin(false); setPassword(""); setError("");
+    setLogin(false); setError("");
   }
 
   return <section className="mysql-workspace" aria-label="MySQL 작업 공간">
@@ -233,6 +235,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
+    {session?.credential_warning && <p className="form-note" role="status">{session.credential_warning}</p>}
     {editReport && <div className="mysql-export-report" role={editReport.status === "unknown" ? "alert" : "status"}>
       <div>{editReport.status === "unknown" ? "서버의 커밋 결과를 확인할 수 없습니다. 다시 적용하기 전에 현재 행을 확인하세요."
         : editReport.affected_rows ? "행 변경을 적용했습니다." : "이미 같은 값입니다."}
@@ -325,7 +328,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {editTarget && <MysqlGridEditDialog target={editTarget} environment={settings.environment}
       unavailable={session?.id !== editTarget.id} onApplied={finishEdit} onClose={() => setEditTarget(null)} />}
-    {login && <Dialog title="MySQL 계열 연결" busy={busy} onClose={closeLogin}>
+    {login && <Dialog title="MySQL 계열 연결" busy={busy || credentials.clearing} onClose={closeLogin}>
       <form aria-busy={busy} onSubmit={event => void connect(event)}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{networkAddressText(settings)} · {settings.username}</p>
         {settings.client_certificate_path && <p className="form-note">TLS 클라이언트 인증서 사용</p>}
@@ -338,18 +341,17 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
         {routeUnavailable && !routes.loading && <p className="form-note">선택한 터널을 시작한 뒤 목록을 새로 고침하세요.</p>}
         {!routes.loading && (routeUnavailable || !routes.data?.length) && <div className="dialog-actions">
           <button type="button" className="secondary small" disabled={busy} onClick={() => setRouteRevision(value => value + 1)}>터널 목록 새로 고침</button>
-          <button type="button" className="secondary small" disabled={busy} onClick={() => { closeLogin(); onOpenTunnels(); }}>SSH 터널 열기</button>
+          <button type="button" className="secondary small" disabled={busy || credentials.clearing} onClick={() => { closeLogin(); onOpenTunnels(); }}>SSH 터널 열기</button>
         </div>}
         {routes.error && <p className="form-error" role="alert">{routes.error}</p>}
-        <label className="field">MySQL 암호<input type="password" autoComplete="off" maxLength={4096} value={password}
-          disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
+        <DatabasePasswordField credentials={credentials} disabled={busy} allowRemember />
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" value={confirmation}
           autoComplete="off" disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
         <label className="postgres-edit-opt-in"><input type="checkbox" checked={gridEdit} disabled={busy}
           onChange={event => setGridEdit(event.target.checked)} /> 이 연결에서 데이터 그리드 편집 허용</label>
         {!settings.tls && <p className="form-note">{route ? "SSH 게이트웨이와 데이터베이스 사이에는 TLS가 적용되지 않습니다." : "일반 TCP 연결에는 TLS 전송 보호가 적용되지 않습니다."}</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || routeUnavailable || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || credentials.clearing || routeUnavailable || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
       </form>
     </Dialog>}
   </section>;

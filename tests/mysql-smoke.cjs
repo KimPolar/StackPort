@@ -11,6 +11,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { startGateway } = require('./ssh-forward-fixture.cjs');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_MYSQL_BIN;
@@ -1517,12 +1518,102 @@ async function verifySqlEditor(page, workspace) {
   await toggle.click();
 }
 
+async function verifyCredentials(page, server) {
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'MySQL 암호 보관 검증' });
+  const input = { name: '암호 보관 검증', host: 'localhost', port: server.port, database: 'visible_db',
+    username: 'catalog_reader', environment: 'PROD', tls: true, ca_path: server.ca };
+  let profile = await command('create_mysql_profile', { projectId: project.id, input });
+  const args = (target = profile) => ({ profileId: target.id, revision: target.revision });
+  const status = () => command('mysql_credential_status', args());
+  const open = (options = {}, target = profile) => command('open_mysql', { ...args(target), confirmation: 'PROD', ...options });
+  const close = session => command('close_mysql', { id: session.id });
+  const useSaved = { password: null, useSavedPassword: true };
+  const notStored = { supported: true, stored: false, usable: false };
+  const login = page.getByRole('dialog', { name: 'MySQL 계열 연결', exact: true });
+  const remember = login.getByRole('checkbox', { name: '연결 성공 후 Windows에 암호 저장', exact: true });
+  const useSavedControl = login.getByRole('checkbox', { name: '저장한 암호 사용', exact: true });
+  const openLogin = () => page.getByRole('button', { name: 'MySQL 연결', exact: true }).click();
+
+  try {
+    assert.deepEqual(await status(), notStored);
+    await close(await open({ password: secret }));
+    assert.deepEqual(await status(), notStored);
+    await assert.rejects(open({ password: 'bad-catalog-password', rememberPassword: true }), /사용자 이름과 암호/);
+    assert.deepEqual(await status(), notStored);
+
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', { name: 'MySQL 암호 보관 검증 열기', exact: true }).click();
+    await openLogin();
+    await remember.waitFor();
+    assert.equal(await remember.isChecked(), false);
+    await login.getByLabel('MySQL 암호', { exact: true }).fill(secret);
+    await remember.check();
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', { name: '연결', exact: true }).click();
+    await login.waitFor({ state: 'detached' });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: true });
+    await page.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
+    await assert.rejects(open({ ...useSaved, confirmation: '' }), /PROD/);
+    await assert.rejects(open({ ...useSaved, password: secret }), /암호를 선택하세요/);
+
+    await withSecondDesktopInstance(root, async invoke => {
+      const stored = await invoke('mysql_credential_status', args());
+      assert.equal(stored.usable, true);
+      const session = await invoke('open_mysql', { ...args(), ...useSaved, confirmation: 'PROD' });
+      try {
+        assert.equal(session.engine, engine);
+        assert.equal(session.database, 'visible_db');
+        assert.equal(session.credential_warning, null);
+        assert.ok(!JSON.stringify({ stored, session }).includes(secret));
+      } finally {
+        await invoke('close_mysql', { id: session.id });
+      }
+    });
+
+    await openLogin();
+    await useSavedControl.check();
+    assert.equal(await login.getByLabel('MySQL 암호', { exact: true }).count(), 0);
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', { name: '연결', exact: true }).click();
+    await login.waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: 'MySQL 연결 끊기', exact: true }).click();
+    await openLogin();
+    await login.getByRole('button', { name: '저장한 암호 삭제', exact: true }).click();
+    await login.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+    assert.deepEqual(await status(), notStored);
+    await assert.rejects(open(useSaved), /저장된 MySQL 암호가 없습니다/);
+
+    const remembered = await open({ password: secret, rememberPassword: true });
+    await close(remembered);
+    assert.equal(remembered.credential_warning, null);
+    const previous = profile;
+    profile = await command('update_mysql_profile', { id: profile.id, revision: profile.revision, input: { ...input, name: '설정 변경됨' } });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: false });
+    await assert.rejects(open(useSaved, previous), /연결이 변경/);
+    await assert.rejects(open(useSaved), /저장된 MySQL 암호가 없습니다/);
+
+    for (const file of ['workspace.sqlite', 'workspace.sqlite-wal']) {
+      const target = path.join(process.env.STACKPORT_DATA_DIR, file);
+      if (fs.existsSync(target)) assert.equal(fs.readFileSync(target).includes(secret), false);
+    }
+  } finally {
+    await command('forget_mysql_password', args());
+  }
+}
+
 async function main() {
   let server, browser;
   try {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     const page = browser.contexts()[0].pages()[0];
+    if (process.env.STACKPORT_MYSQL_CREDENTIAL_ONLY === '1') {
+      await verifyCredentials(page, server);
+      console.log(`${engine} Windows credential flow passed (opt-in, failed login, production confirmation, restart, profile changes and deletion).`);
+      return;
+    }
     if (process.env.STACKPORT_MYSQL_BACKUP_ONLY !== '1') {
       await verify(page, server);
       console.log(`${engine} Windows E2E passed (TLS, SSH, catalog, activity, grid, read-only SQL, scripts, transactions, cancellation, execution plans and export).`);

@@ -13,7 +13,7 @@ import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type Postg
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
 import type { PostgresDiagramTable } from "./PostgresSchemaDiagramDialog";
 import { PostgresServerMonitor } from "./PostgresServerMonitor";
-import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
@@ -260,7 +260,7 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
   const title = useId();
   const live = useRef(false);
   const pending = useRef(false);
-  const credentials = usePostgresCredentials(profile);
+  const credentials = useDatabaseCredentials("postgres", profile);
   const [confirmation, setConfirmation] = useState("");
   const [route, setRoute] = useState(preferredRoute);
   const [routeRevision, setRouteRevision] = useState(0);
@@ -307,7 +307,7 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
         <button type="button" className="secondary small" onClick={() => { dialog.current?.close(); onOpenTunnels(); }}>SSH 터널 열기</button>
       </div>}
       {routes.error && <p className="form-error" role="alert">{routes.error}</p>}
-      <PostgresPasswordField credentials={credentials} disabled={busy} allowRemember autoFocus />
+      <DatabasePasswordField credentials={credentials} disabled={busy} allowRemember autoFocus />
       {environment === "PROD" && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
       <label className="postgres-edit-opt-in"><input type="checkbox" checked={gridEdit} disabled={busy}
         onChange={event => setGridEdit(event.target.checked)} /> 이 연결에서 데이터 그리드 편집 허용</label>
