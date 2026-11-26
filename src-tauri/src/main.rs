@@ -1068,8 +1068,12 @@ async fn export_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, 
     -> Result<stackport_core::MongoExportOutcome, String> { mongo.export_documents(&id, token, &database, &collection, input).await }
 
 #[tauri::command]
-async fn review_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, path: String)
-    -> Result<stackport_core::MongoImportReview, String> { mongo.review_document_import(&id, database, collection, path).await }
+async fn review_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, path: String, source: Option<stackport_core::MongoImportSource>)
+    -> Result<stackport_core::MongoImportReview, String> { mongo.review_document_import(&id, database, collection, path, source.unwrap_or_default()).await }
+
+#[tauri::command]
+async fn inspect_mongo_import_csv(mongo: State<'_, stackport_core::MongoManager>, id: String, path: String, header: bool)
+    -> Result<stackport_core::MongoCsvInspection, String> { mongo.inspect_document_import_csv(&id, path, header).await }
 
 #[tauri::command]
 async fn apply_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, confirmation: String, accept_partial: bool)
@@ -1082,7 +1086,8 @@ async fn discard_mongo_document_import(mongo: State<'_, stackport_core::MongoMan
 #[tauri::command]
 async fn choose_mongo_import_file() -> Result<Option<String>, String> {
     worker(|| Ok(rfd::FileDialog::new().set_title("MongoDB 문서 파일 선택")
-        .add_filter("JSON", &["json", "jsonl", "ndjson"]).pick_file()
+        .add_filter("MongoDB 문서", &["json", "jsonl", "ndjson", "csv"]).add_filter("JSON", &["json", "jsonl", "ndjson"])
+        .add_filter("CSV", &["csv"]).pick_file()
         .map(|path| path.to_string_lossy().into_owned()))).await
 }
 
@@ -2841,6 +2846,7 @@ fn main() {
             count_mongo_documents,
             export_mongo_documents,
             review_mongo_document_import,
+            inspect_mongo_import_csv,
             apply_mongo_document_import,
             discard_mongo_document_import,
             choose_mongo_import_file,

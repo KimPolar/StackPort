@@ -1,4 +1,7 @@
-use super::document_snapshot::{canonical_value, validate_json_keys};
+use super::{
+    csv_import::{self, CsvField},
+    document_snapshot::{canonical_value, validate_json_keys},
+};
 use crate::Result;
 use bson::{doc, oid::ObjectId, raw::RawDocumentBuf, Bson, Document};
 use serde::{
@@ -15,7 +18,34 @@ const MAX_DOCUMENTS: usize = 1_000;
 const BATCH_DOCUMENTS: usize = 100;
 const BATCH_BYTES: usize = 4 * 1024 * 1024;
 const PREVIEW_BYTES: usize = 4_096;
-const FILE_LIMIT: &str = "32 MiB 이하의 MongoDB JSON 파일을 선택하세요.";
+const FILE_LIMIT: &str = "32 MiB 이하의 MongoDB 문서 파일을 선택하세요.";
+
+#[derive(Default, Deserialize)]
+#[serde(tag = "format", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MongoImportSource {
+    #[default]
+    Json,
+    Csv {
+        header: bool,
+        digest: [u8; 32],
+        fields: Vec<CsvField>,
+    },
+}
+
+impl MongoImportSource {
+    pub(super) fn audit_operations(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Json => ("mongo.import.json", "mongo.import.json.unconfirmed"),
+            Self::Csv { .. } => ("mongo.import.csv", "mongo.import.csv.unconfirmed"),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct MongoCsvInspection {
+    columns: Vec<String>,
+    digest: [u8; 32],
+}
 
 pub(super) struct ImportFile {
     pub(super) bytes: usize,
@@ -34,19 +64,19 @@ pub(super) struct ImportSample {
 pub(super) fn read_bytes(path: &str) -> Result<Vec<u8>> {
     let path = Path::new(path);
     if !path.is_absolute() {
-        return Err("MongoDB JSON 파일의 절대 경로를 선택하세요.".into());
+        return Err("MongoDB 문서 파일의 절대 경로를 선택하세요.".into());
     }
-    let file = File::open(path).map_err(|_| "MongoDB JSON 파일을 열 수 없습니다.")?;
+    let file = File::open(path).map_err(|_| "MongoDB 문서 파일을 열 수 없습니다.")?;
     let info = file
         .metadata()
-        .map_err(|_| "MongoDB JSON 파일을 확인할 수 없습니다.")?;
+        .map_err(|_| "MongoDB 문서 파일을 확인할 수 없습니다.")?;
     if !info.is_file() || info.len() > MAX_FILE {
         return Err(FILE_LIMIT.into());
     }
     let mut bytes = Vec::new();
     file.take(MAX_FILE + 1)
         .read_to_end(&mut bytes)
-        .map_err(|_| "MongoDB JSON 파일을 읽을 수 없습니다.")?;
+        .map_err(|_| "MongoDB 문서 파일을 읽을 수 없습니다.")?;
     if bytes.len() as u64 > MAX_FILE {
         return Err(FILE_LIMIT.into());
     }
@@ -57,15 +87,40 @@ pub(super) fn fingerprint(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
 }
 
-pub(super) fn read_import(path: &str) -> Result<ImportFile> {
-    decode(&read_bytes(path)?)
+pub(super) fn inspect_csv(path: &str, header: bool) -> Result<MongoCsvInspection> {
+    let bytes = read_bytes(path)?;
+    let columns = csv_import::column_labels(decode_text(&bytes)?, header)?;
+    Ok(MongoCsvInspection {
+        columns,
+        digest: fingerprint(&bytes),
+    })
+}
+
+pub(super) fn read_import(path: &str, source: MongoImportSource) -> Result<ImportFile> {
+    let bytes = read_bytes(path)?;
+    match source {
+        MongoImportSource::Json => decode(&bytes),
+        MongoImportSource::Csv {
+            header,
+            digest,
+            fields,
+        } => {
+            if fingerprint(&bytes) != digest {
+                return Err("열을 읽은 뒤 CSV 파일이 변경되었습니다. 열을 다시 읽으세요.".into());
+            }
+            let records = csv_import::documents(decode_text(&bytes)?, header, &fields)?;
+            stage_records(bytes.len(), digest, records)
+        }
+    }
+}
+
+fn decode_text(bytes: &[u8]) -> Result<&str> {
+    let content = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    std::str::from_utf8(content).map_err(|_| "MongoDB 문서 파일을 UTF-8로 저장하세요.".into())
 }
 
 fn decode(bytes: &[u8]) -> Result<ImportFile> {
-    let content = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
-    let text = std::str::from_utf8(content)
-        .map_err(|_| "MongoDB JSON 파일을 UTF-8로 저장하세요.")?
-        .trim();
+    let text = decode_text(bytes)?.trim();
     let records = if text.starts_with('[') {
         serde_json::from_str::<Records<'_>>(text)
             .map_err(|error| {
@@ -93,20 +148,34 @@ fn decode(bytes: &[u8]) -> Result<ImportFile> {
         }
         records
     };
-    if records.is_empty() {
-        return Err("가져올 MongoDB 문서가 없습니다.".into());
-    }
+    stage_records(
+        bytes.len(),
+        fingerprint(bytes),
+        records.into_iter().map(|record| parse_record(record.get())),
+    )
+}
+
+fn stage_records(
+    bytes: usize,
+    digest: [u8; 32],
+    records: impl Iterator<Item = Result<Document>>,
+) -> Result<ImportFile> {
     let mut result = ImportFile {
-        bytes: bytes.len(),
-        digest: fingerprint(bytes),
-        documents: records.len(),
+        bytes,
+        digest,
+        documents: 0,
         sample: Vec::new(),
         batches: vec![Vec::new()],
     };
     let mut batch_bytes = 0;
-    for (index, record) in records.into_iter().enumerate() {
-        let (document, size) =
-            parse_record(record.get()).map_err(|error| format!("문서 {}: {error}", index + 1))?;
+    for (index, record) in records.enumerate() {
+        if index == MAX_DOCUMENTS {
+            return Err(format!("문서를 {MAX_DOCUMENTS}개 이하의 파일로 나누세요."));
+        }
+        let (document, size) = record
+            .and_then(prepare_document)
+            .map_err(|error| format!("문서 {}: {error}", index + 1))?;
+        result.documents += 1;
         if index < 3 {
             let mut json = canonical_value(&Bson::Document(document.clone()))?;
             let truncated = json.len() > PREVIEW_BYTES;
@@ -125,16 +194,21 @@ fn decode(bytes: &[u8]) -> Result<ImportFile> {
             batch_bytes += size;
         }
     }
+    if result.documents == 0 {
+        return Err("가져올 MongoDB 문서가 없습니다.".into());
+    }
     Ok(result)
 }
 
-fn parse_record(text: &str) -> Result<(Document, usize)> {
+fn parse_record(text: &str) -> Result<Document> {
     if !text.starts_with('{') {
         return Err("Extended JSON 객체를 입력하세요.".into());
     }
     validate_json_keys::<{ usize::MAX }>(text, 0, 104)?;
-    let mut source: Document =
-        serde_json::from_str(text).map_err(|_| "올바른 Extended JSON 객체인지 확인하세요.")?;
+    serde_json::from_str(text).map_err(|_| "올바른 Extended JSON 객체인지 확인하세요.".into())
+}
+
+fn prepare_document(mut source: Document) -> Result<(Document, usize)> {
     let id = source
         .remove("_id")
         .unwrap_or_else(|| Bson::ObjectId(ObjectId::new()));

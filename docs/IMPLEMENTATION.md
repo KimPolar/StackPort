@@ -16,6 +16,10 @@ Windows 앱과 TLS를 적용한 MongoDB 8.0.38에서 읽기 전용 계정으로 
 
 문서 편집을 허용한 연결에서 **문서 → 문서 가져오기**를 열면 기존 일반 컬렉션에 문서를 추가할 수 있습니다. UTF-8 JSON 객체·배열과 JSON Lines를 파일당 32 MiB, 1,000개 문서까지 읽고, 처음 세 문서의 Canonical Extended JSON과 건수를 검토합니다. 파일에 `_id`가 없으면 검토할 때 새 ObjectId를 만듭니다. 확인은 같은 연결에서 5분 동안 한 번 사용할 수 있으며 적용 전에 파일 해시를 다시 검사합니다. 각 쓰기에 검토한 컬렉션 UUID를 보내고 `PROD` 연결은 적용할 때 환경을 확인합니다. [MongoDB Extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/) · [MongoDB insert 명령](https://www.mongodb.com/docs/manual/reference/command/insert/)
 
+CSV도 같은 가져오기 화면에서 엽니다. UTF-8 쉼표 구분 파일의 첫 행을 머리글로 선택할 수 있고, 64개까지의 열을 대상 필드에 매핑합니다. 각 열은 문자열, Int32, Int64, Double, Decimal128, 불리언, RFC 3339 날짜, Extended JSON 중 하나로 읽거나 건너뜁니다. 따옴표 안의 쉼표·따옴표·줄바꿈과 빈 문자열은 보존합니다. 따옴표 없는 `\N`은 BSON null입니다. 텍스트 값 `'=`처럼 내보낼 때 추가한 수식 보호 문자도 파일에 있는 그대로 읽습니다. 점이 있는 이름은 점을 포함한 단일 필드 이름입니다. 열을 읽은 뒤 파일이 바뀌면 열을 다시 읽어야 합니다. [CSV 형식](https://www.rfc-editor.org/rfc/rfc4180) · [MongoDB Extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/)
+
+독립 서버와 복제 세트에서 내보낸 CSV의 줄바꿈·따옴표·큰 정수·null을 다시 읽었습니다. 머리글 없는 파일의 타입 변환, 중복 매핑과 열 확인 이후 바뀐 파일의 거절, Windows 화면의 대상 이름 변경·열 제외와 가져온 문서 재조회를 확인했습니다.
+
 서버가 복제 세트나 샤드 라우터를 보고하면 하나의 트랜잭션으로 추가합니다. 독립 서버에서 문서를 여러 개 가져올 때는 첫 오류 전까지 저장된 문서가 유지됨을 확인합니다. 결과에 확인된 저장 건수와 오류 위치 또는 결과 미확인 상태를 표시합니다. 작업 기록에는 대상과 결과를 남깁니다. [MongoDB 트랜잭션](https://www.mongodb.com/docs/drivers/rust/current/crud/transactions/)
 
 Windows 앱과 TLS MongoDB 8.0.38 독립 서버 및 단일 노드 복제 세트에서 BSON과 큰 문서의 내보내기→가져오기→다시 내보내기 바이트 일치, 파일·컬렉션 교체 차단, 읽기 전용 계정 거부, 오류 위치와 두 번째 묶음 실패 시 롤백 여부를 확인했습니다. 복제 세트 검사는 `STACKPORT_MONGO_REPLICA=1`로 실행합니다.

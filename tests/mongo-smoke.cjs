@@ -308,6 +308,8 @@ async function verify(page, port, ca) {
   assert.ok(imports.some(event => event.outcome === 'failed' && event.affected_count === (replica ? 0 : 100)));
   assert.ok(imports.every(event => event.policy === 'mongo-document-import-uuid-prod-reviewed'));
   assert.doesNotMatch(JSON.stringify(imports), /mongo-all\.json|9223372036854775807|roundtrip-private-input\.json/u);
+  assert.ok(audit.some(event => event.operation === 'mongo.import.csv' && event.object_name === 'visible.transfer_csv'
+    && event.affected_count === 1 && event.outcome === 'succeeded' && event.policy === 'mongo-document-import-uuid-prod-reviewed'));
   for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
     assert.ok(edits.some(event => event.operation === `mongo.document.${kind}` && event.outcome === 'succeeded'));
   }
@@ -500,9 +502,61 @@ async function verifyMongoImportCommands(command, open, reader, writer, fixtureA
     assert.equal(await count('{"marker":"bulk"}'), replica ? '0' : '100');
     assert.equal(await count('{"_id":"taken","marker":"original"}'), '1');
     assert.equal(await count('{"_id":"not-attempted"}'), '0');
+    await verifyMongoCsvCommands(command, id, database);
   } finally {
     for (const session of [primary, readonly, disabled]) await command('close_mongo', { id: session.id });
   }
+}
+
+async function verifyMongoCsvCommands(command, id, database) {
+  const collection = 'transfer_csv';
+  const file = path.join(root, 'mongo-columns.csv');
+  const inspect = (path, header) => command('inspect_mongo_import_csv', { id, path, header });
+  const review = (path, source) => command('review_mongo_document_import', { id, database, collection, path, source });
+  const apply = token => command('apply_mongo_document_import', { id, token, confirmation: 'PROD', acceptPartial: false });
+  const read = async filter => {
+    const page = await command('mongo_documents', { id, database, collection, query: { filter } });
+    return JSON.parse(page.items[0].json);
+  };
+  const headers = await inspect(file, true);
+  assert.deepEqual(headers.columns, ['formula', 'array.0.n', 'meta.label', 'missing']);
+  const fields = [
+    { name: 'formula', kind: 'text' }, { name: 'exact.n', kind: 'int64' },
+    { name: 'label', kind: 'text' }, { name: 'missing', kind: 'text' },
+  ];
+  const csvSource = { format: 'csv', header: true, digest: headers.digest, fields };
+  await assert.rejects(review(file, { ...csvSource, fields: fields.map(field => ({ ...field, name: 'duplicate' })) }), /고유 필드/);
+  await assert.rejects(review(file, { ...csvSource, fields: fields.map((field, index) => index === 1 ? { ...field, kind: 'int32' } : field) }), /문서 1: 2열/);
+  const checked = await review(file, csvSource);
+  assert.equal(checked.document_count, 1);
+  assert.equal(checked.atomic, replica);
+  const first = JSON.parse(checked.sample[0].json);
+  assert.deepEqual(first['exact.n'], { $numberLong: '-9007199254740993' });
+  assert.equal(first.missing, null);
+  assert.equal((await apply(checked.token)).inserted, 1);
+  assert.deepEqual(await read('{"formula":"\'=1+1"}'), first);
+  assert.equal(first.label, '쉼표, "인용"\n다음 줄');
+
+  const noHeader = path.join(root, 'mongo-csv-types.csv');
+  fs.writeFileSync(noHeader, 'typed,123.4500,true,2025-01-02T03:04:05Z,"{""$oid"":""000000000000000000000001""}","\\N",discard');
+  const columns = await inspect(noHeader, false);
+  assert.deepEqual(columns.columns, Array.from({ length: 7 }, (_, index) => `column_${index + 1}`));
+  const typedSource = { format: 'csv', header: false, digest: columns.digest, fields: [
+    { name: '_id', kind: 'text' }, { name: 'precise', kind: 'decimal128' }, { name: 'active', kind: 'boolean' },
+    { name: 'created', kind: 'date_time' }, { name: 'object', kind: 'extended_json' },
+    { name: 'literal', kind: 'text' }, { name: '', kind: 'skip' },
+  ] };
+  const typed = await review(noHeader, typedSource);
+  const sample = JSON.parse(typed.sample[0].json);
+  assert.equal(sample._id, 'typed');
+  assert.deepEqual(sample.precise, { $numberDecimal: '123.4500' });
+  assert.equal(sample.active, true);
+  assert.deepEqual(sample.created, { $date: { $numberLong: '1735787045000' } });
+  assert.deepEqual(sample.object, { $oid: '000000000000000000000001' });
+  assert.equal(sample.literal, '\\N');
+  assert.equal(Object.keys(sample).length, 6);
+  fs.appendFileSync(noHeader, '\r\n');
+  await assert.rejects(review(noHeader, typedSource), /CSV 파일이 변경/);
 }
 
 async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
@@ -1087,6 +1141,31 @@ async function verifyDocumentEditor(page, workspace, detail) {
   await imported.waitFor({ state: 'attached' });
   if (!await imported.isVisible()) await imported.locator('..').locator('summary').click();
   await imported.waitFor();
+  const csvPath = path.join(root, 'mongo-ui-import.csv');
+  fs.writeFileSync(csvPath, 'qty,title,discard\r\n8,CSV로 추가,unused\r\n');
+  await button(detail, '문서 가져오기').click();
+  await importing.getByLabel('파일 형식').selectOption('csv');
+  await importing.getByLabel('가져올 CSV 파일 경로').fill(csvPath);
+  await button(importing, 'CSV 열 읽기').click();
+  const mapping = importing.getByRole('table', { name: 'CSV 열 매핑', exact: true });
+  await mapping.getByLabel('1열 BSON 타입').selectOption('int32');
+  await mapping.getByLabel('2열 대상 필드').fill('label');
+  await mapping.getByLabel('3열 BSON 타입').selectOption('skip');
+  await button(importing, '파일 검토').click();
+  const previewCsv = importing.getByLabel('문서 1 미리보기').filter({ hasText: 'CSV로 추가' });
+  await previewCsv.waitFor();
+  const csvDoc = JSON.parse(await previewCsv.textContent());
+  assert.deepEqual(csvDoc.qty, { $numberInt: '8' });
+  assert.equal(csvDoc.label, 'CSV로 추가');
+  assert.equal(Object.keys(csvDoc).length, 3);
+  await importing.getByLabel('운영 환경 확인').fill('PROD');
+  await button(importing, '검토한 문서 추가').click();
+  await importing.waitFor({ state: 'detached' });
+  await detail.getByRole('status').getByText(/가져오기 완료.*저장 확인 1개/).waitFor();
+  const importedCsv = detail.getByLabel('Canonical Extended JSON').filter({ hasText: 'CSV로 추가' });
+  await importedCsv.waitFor({ state: 'attached' });
+  if (!await importedCsv.isVisible()) await importedCsv.locator('..').locator('summary').click();
+  await importedCsv.waitFor();
   await button(workspace, 'edit_records 컬렉션').click();
   await detail.getByText('필터 및 정렬', { exact: true }).click();
   await detail.getByLabel('표시 필드 JSON').fill('{"title":1}');

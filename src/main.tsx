@@ -2324,6 +2324,8 @@ const auditOperationNames: Record<string, string> = {
   "mongo.export.json": "MongoDB 문서 JSON 내보내기",
   "mongo.import.json": "MongoDB 문서 JSON 가져오기",
   "mongo.import.json.unconfirmed": "MongoDB 문서 가져오기 결과 미확인",
+  "mongo.import.csv": "MongoDB 문서 CSV 가져오기",
+  "mongo.import.csv.unconfirmed": "MongoDB 문서 CSV 가져오기 결과 미확인",
   "mongo.namespace.unconfirmed": "MongoDB 컬렉션·뷰 변경 결과 미확인",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",

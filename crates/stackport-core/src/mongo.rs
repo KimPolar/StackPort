@@ -1,3 +1,4 @@
+mod csv_import;
 mod document_edit;
 mod document_snapshot;
 mod document_structure;
@@ -18,6 +19,7 @@ pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoD
 pub use export::{MongoExportInput, MongoExportOutcome};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use import::{MongoImportReport, MongoImportReview};
+pub use import_file::{MongoCsvInspection, MongoImportSource};
 pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use namespace_admin::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};

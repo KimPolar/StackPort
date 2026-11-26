@@ -65,6 +65,9 @@
 .mongo-structure-controls button[aria-pressed="true"], .mongo-structure button[aria-pressed="true"] { color: var(--text-accent); background: var(--surface-selected); }
 .mongo-structure-browser { max-height: 32dvh; overflow: auto; border: 1px solid var(--border); border-radius: 5px; }
 .mongo-structure-browser table { width: 100%; }
+.mongo-import-mapping th, .mongo-import-mapping td { padding: 5px 8px; text-align: start; }
+.mongo-import-mapping th[scope="row"] { max-width: 220px; overflow-wrap: anywhere; font-size: 12px; }
+.mongo-import-mapping :is(input, select) { width: 100%; min-width: 6rem; }
 .mongo-structure-browser .object-row { min-width: 0; width: 100%; }
 .mongo-structure-root { padding-inline: 8px; }
 .mongo-structure-tree { list-style: none; margin: 0; padding-inline: 5px 0; }

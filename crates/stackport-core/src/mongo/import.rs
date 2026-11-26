@@ -1,6 +1,6 @@
 use super::{
     document_edit::editable_collection_uuid,
-    import_file::{self, ImportSample},
+    import_file::{self, ImportSample, MongoCsvInspection, MongoImportSource},
     message, validate_namespace, MongoManager, READ_TIMEOUT, SERVER_TIME,
 };
 use crate::Result;
@@ -17,8 +17,6 @@ use uuid::Uuid;
 const REVIEW_TIME: Duration = Duration::from_secs(300);
 const APPLY_TIME: Duration = Duration::from_secs(45);
 const STALE: &str = "MongoDB 가져오기 검토가 만료됐거나 변경되었습니다. 파일을 다시 검토하세요.";
-const OPERATION: &str = "mongo.import.json";
-const UNCONFIRMED: &str = "mongo.import.json.unconfirmed";
 
 pub(super) struct PendingImport {
     token: String,
@@ -30,6 +28,7 @@ pub(super) struct PendingImport {
     digest: [u8; 32],
     total: usize,
     atomic: bool,
+    operations: (&'static str, &'static str),
     batches: Vec<Vec<Document>>,
 }
 
@@ -62,21 +61,35 @@ enum ImportStatus {
 }
 
 impl MongoManager {
+    pub async fn inspect_document_import_csv(
+        &self,
+        id: &str,
+        path: String,
+        header: bool,
+    ) -> Result<MongoCsvInspection> {
+        self.document_editor(id)?;
+        spawn_blocking(move || import_file::inspect_csv(&path, header))
+            .await
+            .map_err(|_| "CSV 파일의 열을 확인할 수 없습니다.")?
+    }
+
     pub async fn review_document_import(
         &self,
         id: &str,
         database: String,
         collection: String,
         path: String,
+        source: MongoImportSource,
     ) -> Result<MongoImportReview> {
         validate_namespace(&database, &collection)?;
         let (client, editor) = self.document_editor(id)?;
         let mut pending = editor.import.lock().await;
         *pending = None;
         let source_path = path.clone();
-        let file = spawn_blocking(move || import_file::read_import(&source_path))
+        let operations = source.audit_operations();
+        let file = spawn_blocking(move || import_file::read_import(&source_path, source))
             .await
-            .map_err(|_| "MongoDB JSON 파일을 검토할 수 없습니다.")??;
+            .map_err(|_| "MongoDB 문서 파일을 검토할 수 없습니다.")??;
         let (uuid, atomic) = timeout(READ_TIMEOUT, async {
             let uuid = editable_collection_uuid(&client.database(&database), &collection).await?;
             let hello = client
@@ -104,6 +117,7 @@ impl MongoManager {
             digest: file.digest,
             total: file.documents,
             atomic,
+            operations,
             batches: file.batches,
         });
         Ok(MongoImportReview {
@@ -159,10 +173,11 @@ impl MongoManager {
             return Err("검토 뒤 파일이 변경되었습니다. 파일을 다시 검토하세요.".into());
         }
         let target = format!("{}.{}", pending.database, pending.collection);
+        let (operation, unconfirmed) = pending.operations;
         self.audit_mongo_change(
             &editor.profile,
             token,
-            OPERATION,
+            operation,
             "started",
             None,
             Some(&target),
@@ -171,9 +186,9 @@ impl MongoManager {
         // The server checks the reviewed UUID on each batch, including writes inside a transaction.
         let mut report = insert_documents(&client, pending).await;
         let (operation, outcome) = match report.status {
-            ImportStatus::Complete => (OPERATION, "succeeded"),
-            ImportStatus::Unconfirmed => (UNCONFIRMED, "started"),
-            ImportStatus::Stopped => (OPERATION, "failed"),
+            ImportStatus::Complete => (operation, "succeeded"),
+            ImportStatus::Unconfirmed => (unconfirmed, "started"),
+            ImportStatus::Stopped => (operation, "failed"),
         };
         report.audit_warning = self
             .audit_mongo_change(

@@ -127,6 +127,7 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     client.visible.export_batches.insert_many({'_id': index} for index in range(130))
     client.visible.transfer_target.insert_one({'_id': 'taken', 'marker': 'original'})
     client.visible.create_collection('transfer_replaced')
+    client.visible.create_collection('transfer_csv')
     client.visible.create_collection('transfer_validated', validator={'qty': {'$gte': 0}},
                                      validationAction='error', validationLevel='strict')
     client.visible.command('create', 'recent_records', viewOn='records',
