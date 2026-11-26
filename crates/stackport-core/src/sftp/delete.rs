@@ -76,7 +76,7 @@ impl SftpManager {
                 .size
                 .filter(|_| !directory)
                 .map(|size| size.to_string()),
-            production: session.profile.environment == "PROD",
+            production: session.is_production(),
             expires_seconds: PREVIEW_LIFETIME.as_secs(),
         };
         *session.pending_delete.lock().map_err(|_| PREVIEW_EXPIRED)? = Some(PendingDelete {
@@ -106,7 +106,7 @@ impl SftpManager {
         confirmation: String,
     ) -> Result<SftpMutationReport> {
         self.run_mutation(id, FileOperation::Delete, |session| async move {
-            if session.profile.environment == "PROD" && confirmation != "PROD" {
+            if session.is_production() && confirmation != "PROD" {
                 return Err("운영 환경에서 삭제하려면 PROD를 입력하세요.".into());
             }
             let pending = {
@@ -119,16 +119,7 @@ impl SftpManager {
                 }
                 slot.take().ok_or(PREVIEW_EXPIRED)?
             };
-            let store = self.store.clone();
-            let profile_id = session.profile.id.clone();
-            let current = tokio::task::spawn_blocking(move || store.ssh_profile(&profile_id))
-                .await
-                .map_err(|_| "현재 SSH 연결 설정을 확인하지 못했습니다.")??;
-            if current != session.profile {
-                return Err(
-                    "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 삭제 대상을 확인하세요.".into(),
-                );
-            }
+            session.verify_profile(&self.store, "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 삭제 대상을 확인하세요.").await?;
             delete_confirmed(&session.files, pending).await
         })
         .await

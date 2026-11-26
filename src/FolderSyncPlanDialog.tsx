@@ -27,7 +27,7 @@ const executionLabels = { applied: "완료", failed: "실패", skipped: "건너�
 const targetLabels = { local: "로컬", remote: "원격" };
 
 export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, target, recursive, incomplete,
-  sessionId, localRoot, remoteRoot, production, profile, onExitGuard, onVerified, onClose }: {
+  sessionId, localRoot, remoteRoot, production, canSaveProfile, profile, onExitGuard, onVerified, onClose }: {
   rows: readonly FolderTreeRow[];
   content: ReadonlyMap<string, ContentResult>;
   localPath: string;
@@ -39,6 +39,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
   localRoot: string;
   remoteRoot: string;
   production: boolean;
+  canSaveProfile: boolean;
   profile?: SavedSyncProfile;
   onExitGuard: (guard: (() => void) | null) => void;
   onVerified: (result: Map<string, ContentResult>) => void;
@@ -319,7 +320,7 @@ export function FolderSyncPlanDialog({ rows, content, localPath, remotePath, tar
           <span id="folder-sync-pattern-hint" className="form-note">한 줄에 하나씩 입력하세요. *는 이름 일부, ?는 한 글자, **는 하위 경로에 대응합니다.</span>
         </label>
       </div>
-      {!confirming && !executing && <div className="sync-profile-save">
+      {canSaveProfile && !confirming && !executing && <div className="sync-profile-save">
         {profileName !== null ? <form onSubmit={event => void saveProfile(event)}>
           <label className="field">새 동기화 프로필 이름<input value={profileName} maxLength={80} disabled={savingProfile}
             onChange={event => { setProfileName(event.target.value); setProfileError(""); }} /></label>

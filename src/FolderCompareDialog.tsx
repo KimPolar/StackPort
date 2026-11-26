@@ -24,11 +24,12 @@ function Metadata({ entries }: { entries: Entry[] }) {
   </td>;
 }
 
-export function FolderCompareDialog({ pair, initial, profile, production, onExitGuard, onSynced, onClose }: {
+export function FolderCompareDialog({ pair, initial, profile, production, canSaveProfile, onExitGuard, onSynced, onClose }: {
   pair: FolderPair;
   initial: Promise<FolderTreeComparison>;
   profile?: SavedSyncProfile;
   production: boolean;
+  canSaveProfile: boolean;
   onExitGuard: (guard: (() => void) | null) => void;
   onSynced: () => void;
   onClose: () => void;
@@ -173,7 +174,7 @@ export function FolderCompareDialog({ pair, initial, profile, production, onExit
     {selection && <FileDifferenceDialog {...selection} onClose={() => setSelection(null)} />}
     {showPlan && folders && <FolderSyncPlanDialog rows={rows} content={content} localPath={folders.local.path} remotePath={folders.remote.path}
       target={pair.target} recursive={recursive} incomplete={localIncomplete + remoteIncomplete} profile={profile}
-      sessionId={pair.id} localRoot={pair.local.location} remoteRoot={pair.remote.location} production={production} onExitGuard={onExitGuard}
+      sessionId={pair.id} localRoot={pair.local.location} remoteRoot={pair.remote.location} production={production} canSaveProfile={canSaveProfile} onExitGuard={onExitGuard}
       onVerified={verified => setContent(current => new Map([...current, ...verified]))}
       onClose={executed => {
         setShowPlan(false);

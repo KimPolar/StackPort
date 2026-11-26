@@ -311,7 +311,7 @@ impl SftpManager {
         } else {
             None
         };
-        if session.profile.environment == "PROD"
+        if session.is_production()
             && (delete_target == Some(Side::Remote)
                 || input.items.iter().any(|item| item.target == Side::Remote))
             && input.confirmation != "PROD"
@@ -319,16 +319,7 @@ impl SftpManager {
             return Err("운영 연결에 저장하려면 PROD를 입력하세요.".into());
         }
         if delete_target.is_some() {
-            let store = self.store.clone();
-            let profile_id = session.profile.id.clone();
-            let current = tokio::task::spawn_blocking(move || store.ssh_profile(&profile_id))
-                .await
-                .map_err(|_| "현재 SSH 연결 설정을 확인할 수 없습니다.")??;
-            if current != session.profile {
-                return Err(
-                    "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 삭제 대상을 확인하세요.".into(),
-                );
-            }
+            session.verify_profile(&self.store, "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 삭제 대상을 확인하세요.").await?;
         }
         let additions = resolve_items(input, &remote_root)?;
         let local = local_root.clone();
@@ -375,7 +366,7 @@ impl SftpManager {
         let correlation = Uuid::new_v4().to_string();
         let audit = FileAudit::start(
             &self.store,
-            &session.profile,
+            session.profile.as_ref(),
             &correlation,
             if delete_target.is_some() {
                 FileOperation::SynchronizeDelete

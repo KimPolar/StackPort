@@ -402,7 +402,7 @@ async fn connect_gateway(
     let stage = format!("SSH 서버 · {}", gateway.profile.name);
     match ssh_transport::connect_endpoint(
         ssh,
-        &gateway.profile,
+        (&gateway.profile).into(),
         gateway.authentication,
         None,
         true,

@@ -41,7 +41,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
-  const [remote, setRemote] = useState<(Session & { profile: SshProfile; projectName: string; route: string[]; terminalId?: string }) | null>(null);
+  const [remote, setRemote] = useState<(Session & Omit<TerminalFiles, "terminalId"> & { projectName: string; terminalId?: string }) | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [attaching, setAttaching] = useState(false);
   const [pausedTerminal, setPausedTerminal] = useState("");
@@ -66,9 +66,13 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const followPaused = Boolean(closing || transfer || comparison || showSyncProfiles || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
   const remoteId = remote?.id;
   const linkedTerminal = remote?.terminalId;
-  const remoteTerminalPath = terminalDirectory?.kind === "ssh" && remote && terminalDirectory.profileId === remote.profile.id
-    && terminalDirectory.revision === remote.profile.revision
-    && (!linkedTerminal || terminalDirectory.terminalId === linkedTerminal) ? terminalDirectory.path : null;
+  const remoteProfile = remote?.profile;
+  const remoteTarget = remoteProfile ? `${remoteProfile.name} · ${remoteProfile.environment}` : remote?.endpoint ?? "";
+  const remoteDetails = remoteProfile ? `${remoteTarget} · ${remote?.endpoint}` : remoteTarget;
+  const remoteTerminalPath = terminalDirectory?.kind === "ssh" && (linkedTerminal
+    ? terminalDirectory.terminalId === linkedTerminal
+    : remoteProfile && terminalDirectory.profileId === remoteProfile.id && terminalDirectory.revision === remoteProfile.revision)
+    ? terminalDirectory.path : null;
 
   useEffect(() => {
     if (followPaused || connecting) return;
@@ -209,7 +213,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   function openComparison(kind: "folder" | "files") {
     if (!localFolder || !remote) return;
     const pair = {
-      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`, exactRoots: kind === "folder",
+      id: remote.id, target: remoteTarget, exactRoots: kind === "folder",
       local: localFolder, remote: directoryLocation(remote.directory),
     };
     const result = loadFolderComparison(pair);
@@ -219,7 +223,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   function openSyncProfile(profile: SavedSyncProfile) {
     if (!remote || !profile.available) return;
     const pair = {
-      id: remote.id, target: `${remote.profile.name} · ${remote.profile.environment}`, exactRoots: true,
+      id: remote.id, target: remoteTarget, exactRoots: true,
       local: { path: profile.local_root, location: profile.local_root },
       remote: { path: profile.remote_path, location: profile.remote_root },
     };
@@ -233,9 +237,9 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       <div className="files-title">
         <h1><FolderOpen size={20} aria-hidden /> 파일 탐색</h1>
         {remote && <div className="files-connection" aria-label="SFTP 연결 대상">
-          <span className={`environment ${remote.profile.environment.toLowerCase()}`}>{remote.profile.environment}</span>
-          <strong>{remote.profile.name}</strong>
-          <span>{[remote.projectName, `${remote.profile.username}@${remote.profile.host}:${remote.profile.port}`].filter(Boolean).join(" · ")}</span>
+          {remoteProfile && <span className={`environment ${remoteProfile.environment.toLowerCase()}`}>{remoteProfile.environment}</span>}
+          <strong>{remoteProfile?.name ?? remote.endpoint}</strong>
+          {remoteProfile && <span>{[remote.projectName, remote.endpoint].filter(Boolean).join(" · ")}</span>}
           {remote.route.length > 0 && <span>경유 {remote.route.join(" → ")}</span>}
         </div>}
       </div>
@@ -244,7 +248,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         <button type="button" className="secondary small" disabled={closing || !localFolder} onClick={() => openComparison("folder")}>
           <GitCompareArrows size={14} aria-hidden /> 폴더 비교
         </button>
-        <button type="button" className="secondary small" disabled={closing} onClick={() => setShowSyncProfiles(true)}>동기화 프로필</button>
+        {remoteProfile && <button type="button" className="secondary small" disabled={closing} onClick={() => setShowSyncProfiles(true)}>동기화 프로필</button>}
         <button type="button" className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
       </div>}
     </header>
@@ -260,7 +264,8 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       </label>
       {selected && <SftpConnect key={`${selected.id}:${selected.revision}`} profile={selected} profiles={profiles} onConnecting={setConnecting}
         onOpened={(session, route = []) => {
-          setRemote({ ...session, profile: selected, projectName, route });
+          const host = selected.host.includes(":") ? `[${selected.host}]` : selected.host;
+          setRemote({ ...session, profile: selected, endpoint: `${selected.username}@${host}:${selected.port}`, projectName, route });
           setActivePane("remote");
         }} />}
     </div>}
@@ -299,7 +304,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         onDelete={chooseDelete}
         onEdit={chooseEditor}
         onPermissions={selection => { setFinished(null); setNameResult(null); setPermissionSelection(selection); }}
-        onPreview={file => choosePreview(file.name, `${remote.profile.name} · ${remote.profile.environment}`,
+        onPreview={file => choosePreview(file.name, remoteTarget,
           invoke("preview_sftp_file", { id: remote.id, location: file.location }))}
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder ? displayFilePath(localFolder.path) : "" }) }} />
         : <section className="results-card files-pane" id="remote-files" data-active={activePane === "remote"} aria-label="원격 파일">
@@ -307,26 +312,26 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
           <div className="files-empty"><p>{attaching ? "원격 폴더를 여는 중입니다." : profiles.length ? "위에서 SSH 연결을 확인한 뒤 원격 폴더를 엽니다." : "탐색기에서 SSH 연결을 추가하면 원격 폴더를 열 수 있습니다."}</p></div>
         </section>}
     </div>
-    {remote && transfer && <SftpTransferDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+    {remote && transfer && <SftpTransferDialog id={remote.id} target={remoteDetails}
       file={transfer} onClose={() => setTransfer(null)} onSaved={transferSaved} />}
-    {remote && nameAction && <SftpNameDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+    {remote && nameAction && <SftpNameDialog id={remote.id} target={remoteDetails}
       action={nameAction} onClose={() => setNameAction(null)} onSaved={(name, warning) => mutationSaved(nameAction.kind, name, warning)} />}
-    {remote && destinationSelection && <SftpDestinationDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+    {remote && destinationSelection && <SftpDestinationDialog id={remote.id} target={remoteDetails}
       selection={destinationSelection} onClose={() => setDestinationSelection(null)}
       onMoved={(path, warning) => mutationSaved("move", path, warning)} onCopied={transferSaved} />}
-    {remote && deleteSelection && <SftpDeleteDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+    {remote && deleteSelection && <SftpDeleteDialog id={remote.id} target={remoteDetails}
       selection={deleteSelection} onClose={closeDelete} onDeleted={(path, warning) => mutationSaved("delete", path, warning)} />}
-    {remote && editorSelection && <SftpEditorDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
+    {remote && editorSelection && <SftpEditorDialog id={remote.id} target={remoteDetails}
       selection={editorSelection} onClose={closeEditor} onSaved={transferSaved} onDraftSaved={setSavedDraftPath}
       onExitGuard={onExitGuard} onRequestExit={onRequestExit} />}
-    {remote && permissionSelection && <SftpPermissionsDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}
-      production={remote.profile.environment === "PROD"} selection={permissionSelection} onClose={() => setPermissionSelection(null)}
+    {remote && permissionSelection && <SftpPermissionsDialog id={remote.id} target={remoteDetails}
+      production={remoteProfile?.environment === "PROD"} selection={permissionSelection} onClose={() => setPermissionSelection(null)}
       onRefresh={() => setRemoteRefresh(value => value + 1)} onSaved={(name, warning) => mutationSaved("permissions", name, warning)} />}
     {preview && <FilePreviewDialog selection={preview} onClose={() => setPreview(null)} />}
-    {remote && showSyncProfiles && <FolderSyncProfilesDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.environment}`}
+    {remote && remoteProfile && showSyncProfiles && <FolderSyncProfilesDialog id={remote.id} target={remoteTarget}
       onOpen={openSyncProfile} onClose={() => setShowSyncProfiles(false)} />}
     {comparison?.kind === "folder" && <FolderCompareDialog pair={comparison.pair} initial={comparison.result} profile={comparison.profile}
-      production={remote?.profile.environment === "PROD"} onExitGuard={onExitGuard} onClose={() => setComparison(null)}
+      production={remoteProfile?.environment === "PROD"} canSaveProfile={Boolean(remoteProfile)} onExitGuard={onExitGuard} onClose={() => setComparison(null)}
       onSynced={() => { setLocalRefresh(value => value + 1); setRemoteRefresh(value => value + 1); }} />}
     {comparison?.kind === "files" && <FilePairCompareDialog pair={comparison.pair} initial={comparison.result} onClose={() => setComparison(null)} />}
   </section>;

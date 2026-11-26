@@ -23,7 +23,7 @@ type DirectSshTarget = { host: string; port: number; username: string };
 type TerminalLaunch = { kind: "local"; shell: LocalShell }
   | { kind: "saved_ssh"; projectId: string; profileId: string; revision: number; authentication: SshAuthenticationMode; withFiles: boolean }
   | { kind: "routed_ssh"; projectId: string; profileId: string; revision: number; hops: Pick<SshProfile, "id" | "name">[]; withFiles: boolean }
-  | { kind: "direct_ssh"; target: DirectSshTarget; authentication: SshAuthenticationMode };
+  | { kind: "direct_ssh"; target: DirectSshTarget; authentication: SshAuthenticationMode; withFiles: boolean };
 type ClosedTab = { number: number; name: string; launch: TerminalLaunch };
 type Tab = TerminalInfo & { number: number; exit: TerminalExit | null; directory: string | null; unreadOutput: boolean; pinned: boolean; launch: TerminalLaunch; files?: TerminalFiles };
 type SshDialogRequest = {
@@ -104,6 +104,8 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
       onDirectoryChange({ kind: "local", path: activeDirectory });
     } else if (activeDirectory && (activeLaunch?.kind === "saved_ssh" || activeLaunch?.kind === "routed_ssh")) {
       onDirectoryChange({ kind: "ssh", path: activeDirectory, profileId: activeLaunch.profileId, revision: activeLaunch.revision, terminalId: activeId });
+    } else if (activeDirectory && activeLaunch?.kind === "direct_ssh") {
+      onDirectoryChange({ kind: "ssh", path: activeDirectory, terminalId: activeId });
     } else {
       onDirectoryChange(null);
     }
@@ -123,8 +125,8 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
 
   function addTerminal(terminal: TerminalInfo, launch: TerminalLaunch, reopened?: number, profile?: SshProfile) {
     const number = nextNumber.current++;
-    const files = profile && "withFiles" in launch && launch.withFiles ? {
-      terminalId: terminal.id, profile, route: launch.kind === "routed_ssh" ? launch.hops.map(hop => hop.name) : [],
+    const files = terminal.target && "withFiles" in launch && launch.withFiles ? {
+      terminalId: terminal.id, endpoint: terminal.target, profile, route: launch.kind === "routed_ssh" ? launch.hops.map(hop => hop.name) : [],
     } : undefined;
     setTabs(current => [...current, { ...terminal, launch, number, exit: null, directory: null, unreadOutput: false, pinned: false, files }]);
     if (reopened !== undefined) setRecentTabs(current => current.filter(tab => tab.number !== reopened));
@@ -137,7 +139,7 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
     setTabDialogOpen(false);
     setError("");
     if (launch.kind === "direct_ssh") {
-      setSshDialog({ profile: null, target: launch.target, authentication: launch.authentication, reopen: reopened });
+      setSshDialog({ profile: null, target: launch.target, authentication: launch.authentication, withFiles: launch.withFiles, reopen: reopened });
       return;
     }
     const generation = ++sshRequestGeneration.current;
@@ -437,7 +439,7 @@ function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirecto
       let resizeQueue = Promise.resolve();
       let reportedExit = false;
       const directoryUpdates = emulator.parser.registerOscHandler(7, data => {
-        if (tab.cwd_authority || tab.launch.kind === "saved_ssh" || tab.launch.kind === "routed_ssh") {
+        if (tab.cwd_authority || tab.files || tab.launch.kind === "saved_ssh" || tab.launch.kind === "routed_ssh") {
           const directory = terminalDirectoryFromOsc(data, tab.cwd_authority);
           if (directory !== undefined) directoryCallback.current(tab.id, directory);
         }
@@ -564,7 +566,7 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
   const [port, setPort] = useState(String(profile?.port ?? target?.port ?? 22));
   const [username, setUsername] = useState(profile?.username ?? target?.username ?? "");
   const [authentication, setAuthentication] = useState(initialAuthentication);
-  const [withFiles, setWithFiles] = useState(Boolean(profile) && initialFiles);
+  const [withFiles, setWithFiles] = useState(initialFiles);
   const [fileMethod, setFileMethod] = useState<"password" | "private_key">("password");
   const [fileSecret, setFileSecret] = useState("");
   const [identityPaths, setIdentityPaths] = useState([""]);
@@ -635,20 +637,23 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
     setBusy("open"); onOpeningChange(true); setError("");
     try {
       const selectedAuthentication = authentication === "key_files" ? { kind: authentication, paths: identityPaths } : { kind: authentication };
+      const nativeAuthentication = fileMethod === "password" ? { kind: fileMethod, password: fileSecret }
+        : { kind: fileMethod, path: identityPaths[0], passphrase: fileSecret };
+      setFileSecret("");
+      const credentials = withFiles ? nativeAuthentication : selectedAuthentication;
       let terminal: TerminalInfo;
       if (profile) {
-        const nativeAuthentication = fileMethod === "password" ? { kind: fileMethod, password: fileSecret }
-          : { kind: fileMethod, path: identityPaths[0], passphrase: fileSecret };
-        setFileSecret("");
         terminal = await call<TerminalInfo>(withFiles ? "open_saved_native_ssh_terminal" : "open_saved_ssh_terminal", {
-          profile, confirmation: prodConfirmation, authentication: withFiles ? nativeAuthentication : selectedAuthentication, rows: 24, cols: 80,
+          profile, confirmation: prodConfirmation, authentication: credentials, rows: 24, cols: 80,
         });
       } else {
-        terminal = await call<TerminalInfo>("open_ssh_terminal", { host: info.host, port: info.port, username, authentication: selectedAuthentication, rows: 24, cols: 80 });
+        terminal = await call<TerminalInfo>(withFiles ? "open_direct_native_ssh_terminal" : "open_ssh_terminal", {
+          host: info.host, port: info.port, username, authentication: credentials, rows: 24, cols: 80,
+        });
       }
       const launch: TerminalLaunch = profile
         ? { kind: "saved_ssh", projectId: profile.project_id, profileId: profile.id, revision: profile.revision, authentication, withFiles }
-        : { kind: "direct_ssh", target: { host: info.host, port: info.port, username }, authentication };
+        : { kind: "direct_ssh", target: { host: info.host, port: info.port, username }, authentication, withFiles };
       onOpened(terminal, launch);
     } catch (e) { setError(errorText(e)); }
     finally { onOpeningChange(false); setBusy(""); }
@@ -660,9 +665,9 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
       {profile && <p className="ssh-profile-context"><strong>{profile.name}</strong> <span className={`environment ${profile.environment.toLowerCase()}`}>{profile.environment}</span>
         {onRoute && <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => onRoute(withFiles)}>경유 서버 사용</button>}
       </p>}
-      {profile && <label className="files-check"><input type="checkbox" checked={withFiles} disabled={Boolean(busy)} onChange={event => {
+      <label className="files-check"><input type="checkbox" checked={withFiles} disabled={Boolean(busy)} onChange={event => {
         setWithFiles(event.target.checked); setFileSecret(""); setError("");
-      }} /> 파일 탐색 함께 열기</label>}
+      }} /> 파일 탐색 함께 열기</label>
       <div className="ssh-connection-fields ssh-endpoint">
         <label className="field">호스트 또는 IP<input autoFocus={!profile} required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
         <label className="field">포트<input required type="number" min="1" max="65535" step="1" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={port} onChange={event => { setPort(event.target.value); setDiagnostic(null); }} /></label>

@@ -825,6 +825,20 @@ async fn open_saved_native_ssh_terminal(
 }
 
 #[tauri::command]
+async fn open_direct_native_ssh_terminal(
+    ssh: State<'_, Arc<SshManager>>,
+    terminals: State<'_, Arc<TerminalManager>>,
+    host: String,
+    port: u16,
+    username: String,
+    authentication: SshCredentials,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalInfo, String> {
+    terminals.open_direct_native_ssh(Arc::clone(ssh.inner()), &host, port, &username, authentication, rows, cols).await
+}
+
+#[tauri::command]
 async fn open_terminal_sftp(
     terminals: State<'_, Arc<TerminalManager>>,
     sftp: State<'_, SftpManager>,
@@ -3022,6 +3036,7 @@ fn main() {
             open_ssh_terminal,
             open_saved_ssh_terminal,
             open_saved_native_ssh_terminal,
+            open_direct_native_ssh_terminal,
             open_terminal_sftp,
             open_routed_ssh_terminal,
             list_ssh_tunnels,

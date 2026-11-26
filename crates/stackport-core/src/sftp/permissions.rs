@@ -115,15 +115,10 @@ impl SftpManager {
             Change::Owner { .. } => FileOperation::Chown,
         };
         self.run_mutation(id, operation, |session| async move {
-            if session.profile.environment == "PROD" && input.confirmation != "PROD" {
+            if session.is_production() && input.confirmation != "PROD" {
                 return Err("운영 환경의 권한이나 소유자를 변경하려면 PROD를 입력하세요.".into());
             }
-            let profile_id = session.profile.id.clone();
-            let current_profile = tokio::task::spawn_blocking(move || store.ssh_profile(&profile_id))
-                .await.map_err(|_| "현재 SSH 연결 설정을 확인할 수 없습니다.")??;
-            if current_profile != session.profile {
-                return Err("SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 변경 대상을 확인하세요.".into());
-            }
+            session.verify_profile(&store, "SSH 연결 설정이 변경되었습니다. 다시 연결한 뒤 변경 대상을 확인하세요.").await?;
             let files = &session.files;
             ensure_current_directory(files, &parent).await?;
             if !session.lsetstat_supported && canonical_remote_path(files, path.clone()).await? != path {

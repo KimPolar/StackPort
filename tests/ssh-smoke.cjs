@@ -85,6 +85,7 @@ async function waitForRows(page, pattern, timeout = 15000) {
 
 async function openDialog(page, port) {
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  await page.getByLabel('파일 탐색 함께 열기').uncheck();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');

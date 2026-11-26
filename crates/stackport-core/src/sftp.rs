@@ -122,7 +122,7 @@ pub struct SftpManager {
 }
 
 struct FilesSession {
-    profile: SshProfile,
+    profile: Option<SshProfile>,
     ssh: Arc<SshRoute>,
     shared_transport: bool,
     files: RawSftpSession,
@@ -136,6 +136,21 @@ struct FilesSession {
     posix_rename_supported: bool,
     lsetstat_supported: bool,
     _permit: OwnedSemaphorePermit,
+}
+
+impl FilesSession {
+    fn is_production(&self) -> bool {
+        self.profile.as_ref().is_some_and(|profile| profile.environment == "PROD")
+    }
+
+    async fn verify_profile(&self, store: &Store, changed: &str) -> Result<()> {
+        let Some(profile) = self.profile.clone() else { return Ok(()); };
+        let store = store.clone();
+        let unchanged = tokio::task::spawn_blocking(move || store.ssh_profile(&profile.id).map(|current| current == profile))
+            .await.map_err(|_| "현재 SSH 연결 설정을 확인하지 못했습니다.")??;
+        if !unchanged { return Err(changed.into()); }
+        Ok(())
+    }
 }
 
 impl SftpManager {
@@ -164,11 +179,11 @@ impl SftpManager {
     ) -> Result<SftpOpened> {
         let permit = self.acquire()?;
         let ready = timeout(START_TIMEOUT, async {
-            let endpoint = ssh_transport::connect_endpoint(ssh, &profile, auth, None, false, None).await?;
+            let endpoint = ssh_transport::connect_endpoint(ssh, (&profile).into(), auth, None, false, None).await?;
             let Endpoint::Authenticated(connection) = endpoint else {
                 return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
             };
-            start_session(profile, Arc::new(SshRoute { connection, hops: Vec::new() }), false, permit).await
+            start_session(Some(profile), Arc::new(SshRoute { connection, hops: Vec::new() }), false, permit).await
         }).await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
         self.insert_session(ready)
     }
@@ -185,14 +200,14 @@ impl SftpManager {
             SshRouteResult::TrustRequired { stage, host } => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
         };
         let stage = format!("대상 · {}", destination.profile.name);
-        let ready = timeout(START_TIMEOUT, start_session(destination.profile, Arc::new(route), false, permit))
+        let ready = timeout(START_TIMEOUT, start_session(Some(destination.profile), Arc::new(route), false, permit))
             .await.map_err(|_| format!("{stage} — SFTP 연결 준비 시간이 초과되었습니다."))?
             .map_err(|error| format!("{stage} — {error}"))?;
         let session = self.insert_session(ready)?;
         Ok(RoutedSftpOpened::Open { session })
     }
 
-    pub(crate) async fn open_on_terminal(&self, profile: SshProfile, route: Arc<SshRoute>) -> Result<SftpOpened> {
+    pub(crate) async fn open_on_terminal(&self, profile: Option<SshProfile>, route: Arc<SshRoute>) -> Result<SftpOpened> {
         let permit = self.acquire()?;
         let ready = timeout(START_TIMEOUT, start_session(profile, Arc::clone(&route), true, permit))
             .await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
@@ -259,7 +274,7 @@ impl SftpManager {
 }
 
 async fn start_session(
-    profile: SshProfile,
+    profile: Option<SshProfile>,
     ssh: Arc<SshRoute>,
     shared_transport: bool,
     permit: OwnedSemaphorePermit,

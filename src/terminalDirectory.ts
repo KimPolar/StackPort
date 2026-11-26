@@ -2,9 +2,9 @@ import type { SshProfile } from "./ssh-profile-types";
 
 export type TerminalDirectory =
   | { kind: "local"; path: string }
-  | { kind: "ssh"; path: string; profileId: string; revision: number; terminalId: string };
+  | { kind: "ssh"; path: string; profileId?: string; revision?: number; terminalId: string };
 
-export type TerminalFiles = { terminalId: string; profile: SshProfile; route: string[] };
+export type TerminalFiles = { terminalId: string; endpoint: string; profile?: SshProfile; route: string[] };
 
 // undefined means the sequence is unrelated. A null path clears the current directory.
 export function terminalDirectoryFromOsc(data: string, localAuthority: string | null): string | null | undefined {

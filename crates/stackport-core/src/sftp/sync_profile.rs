@@ -75,7 +75,7 @@ impl SftpManager {
         write: bool,
         operation: impl FnOnce(&Connection, &SshProfile) -> Result<T> + Send + 'static,
     ) -> Result<T> {
-        let profile = self.session(id)?.profile.clone();
+        let profile = self.session(id)?.profile.clone().ok_or("동기화 프로필은 저장된 SSH 연결에서 사용할 수 있습니다.")?;
         let store = self.store.clone();
         tokio::task::spawn_blocking(move || with_profile(&store, &profile, write, operation))
             .await

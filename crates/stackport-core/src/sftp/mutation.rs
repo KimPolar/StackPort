@@ -137,7 +137,7 @@ impl SftpManager {
             .map_err(|_| "이 SFTP 연결에서 다른 작업이 진행 중입니다.")?;
         let correlation_id = Uuid::new_v4().to_string();
         let audit =
-            FileAudit::start(&self.store, &session.profile, &correlation_id, operation).await?;
+            FileAudit::start(&self.store, session.profile.as_ref(), &correlation_id, operation).await?;
         let result = run(Arc::clone(&session)).await;
         let ((), audit_warning) = audit.finish(result, false).await?;
         Ok(SftpMutationReport { audit_warning })

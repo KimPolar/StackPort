@@ -3,8 +3,9 @@ use super::{
     TerminalManager, TerminalState, CHUNK_SIZE, OUTPUT_CHUNKS,
 };
 use crate::{
-    ssh_transport::{self, Endpoint, SshRoute},
-    Result, SftpManager, SftpOpened, SshManager, SshProfile, SshRouteHop, SshRouteResult,
+    ssh,
+    ssh_transport::{self, Endpoint, SshAddress, SshRoute},
+    Result, SftpManager, SftpOpened, SshCredentials, SshManager, SshProfile, SshRouteHop, SshRouteResult,
 };
 use portable_pty::PtySize;
 use russh::{client::Msg, Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
@@ -23,7 +24,7 @@ pub(super) struct RemoteControl {
     size: watch::Sender<PtySize>,
     stop: oneshot::Sender<()>,
     route: Arc<SshRoute>,
-    profile: SshProfile,
+    profile: Option<SshProfile>,
 }
 
 impl RemoteControl {
@@ -60,13 +61,29 @@ impl TerminalManager {
     ) -> Result<TerminalInfo> {
         let size = terminal_size(rows, cols)?;
         let profile = destination.profile;
-        let endpoint = ssh_transport::connect_endpoint(
-            manager, &profile, destination.authentication, None, false, None,
-        ).await?;
-        let Endpoint::Authenticated(connection) = endpoint else {
-            return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
-        };
-        self.start_remote(profile, SshRoute { connection, hops: Vec::new() }, size).await
+        let address = (&profile).into();
+        let target = terminal_target(&address);
+        let route = pinned_route(manager, address, destination.authentication).await?;
+        self.start_remote(Some(profile), target, route, size).await
+    }
+
+    pub async fn open_direct_native_ssh(
+        &self,
+        manager: Arc<SshManager>,
+        host: &str,
+        port: u16,
+        username: &str,
+        authentication: SshCredentials,
+        rows: u16,
+        cols: u16,
+    ) -> Result<TerminalInfo> {
+        let size = terminal_size(rows, cols)?;
+        let host = ssh::normalize_host(host)?;
+        let username = ssh::normalize_username(username)?;
+        let address = SshAddress { host: &host, port, username: &username };
+        let target = terminal_target(&address);
+        let route = pinned_route(manager, address, authentication).await?;
+        self.start_remote(None, target, route, size).await
     }
 
     pub async fn open_sftp(&self, files: &SftpManager, id: &str) -> Result<SftpOpened> {
@@ -104,11 +121,12 @@ impl TerminalManager {
                 return Ok(SshRouteResult::TrustRequired { stage, host })
             }
         };
-        let session = self.start_remote(profile, route, size).await?;
+        let target = terminal_target(&(&profile).into());
+        let session = self.start_remote(Some(profile), target, route, size).await?;
         Ok(SshRouteResult::Open { session })
     }
 
-    async fn start_remote(&self, profile: SshProfile, route: SshRoute, size: PtySize) -> Result<TerminalInfo> {
+    async fn start_remote(&self, profile: Option<SshProfile>, target: String, route: SshRoute, size: PtySize) -> Result<TerminalInfo> {
         let channel = match timeout(SETUP_TIMEOUT, open_shell(&route, size)).await {
             Ok(Ok(channel)) => channel,
             result => {
@@ -117,7 +135,8 @@ impl TerminalManager {
                     Ok(Err(reason)) => reason,
                     _ => "원격 터미널 준비 시간이 초과되었습니다.",
                 };
-                return Err(format!("대상 · {} — {reason}", profile.name));
+                let name = profile.as_ref().map_or(target.as_str(), |profile| &profile.name);
+                return Err(format!("대상 · {name} — {reason}"));
             }
         };
         let (output, receiver) = mpsc::channel();
@@ -156,19 +175,31 @@ impl TerminalManager {
             }
             route.close().await;
         });
-        let address = if profile.host.contains(':') {
-            format!("[{}]", profile.host)
-        } else {
-            profile.host
-        };
         Ok(TerminalInfo {
             id,
             shell: "ssh".into(),
             process_id: None,
-            target: Some(format!("{}@{address}:{}", profile.username, profile.port)),
-            environment: Some(profile.environment),
+            target: Some(target),
+            environment: profile.map(|profile| profile.environment),
             cwd_authority: None,
         })
+    }
+}
+
+async fn pinned_route(manager: Arc<SshManager>, address: SshAddress<'_>, authentication: SshCredentials) -> Result<SshRoute> {
+    let endpoint = ssh_transport::connect_endpoint(manager, address, authentication, None, false, None).await?;
+    let Endpoint::Authenticated(connection) = endpoint else {
+        return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
+    };
+    Ok(SshRoute { connection, hops: Vec::new() })
+}
+
+fn terminal_target(address: &SshAddress<'_>) -> String {
+    let SshAddress { host, port, username } = address;
+    if host.contains(':') {
+        format!("{username}@[{host}]:{port}")
+    } else {
+        format!("{username}@{host}:{port}")
     }
 }
 

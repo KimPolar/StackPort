@@ -660,8 +660,9 @@ async function main() {
     const [profile] = await command('list_ssh_profiles', { projectId: project.id });
     if (process.env.STACKPORT_SFTP_LINK_ONLY === '1') {
       await verifyLinkedSftp(page, command, profile, server, keyFile);
+      await verifyDirectLinkedSftp(page, server);
       assert.deepEqual(errors, []);
-      console.log('SSH and SFTP share authentication, report a rejected subsystem, retry independently, and edit and reread a remote file.');
+      console.log('Saved and direct SSH share authentication with SFTP, recover from subsystem rejection, and close independently.');
       return;
     }
     const authentication = { kind: 'password', password };
@@ -917,6 +918,48 @@ async function verifyLinkedSftp(page, command, profile, server, keyFile) {
   assert.equal(server.stats.passwords, 1);
   assert.equal(server.stats.signatures, 1);
   await closeTerminal();
+}
+
+async function verifyDirectLinkedSftp(page, server) {
+  const passwordsBefore = server.stats.passwords;
+  const subsystemsBefore = server.stats.subsystem;
+  const workspace = page.getByRole('region', { name: '파일 탐색', exact: true });
+  const remote = workspace.getByRole('region', { name: '원격 파일', exact: true });
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  assert.equal(await ssh.getByLabel('파일 탐색 함께 열기').isChecked(), true);
+  await ssh.getByLabel('호스트 또는 IP').fill('127.0.0.1');
+  await ssh.getByLabel('포트', { exact: true }).fill(String(server.port));
+  await ssh.getByLabel('사용자 이름').fill('stackport');
+  await ssh.getByRole('button', { name: '지문 확인' }).click();
+  await ssh.getByLabel('SSH 암호', { exact: true }).fill(password);
+  await ssh.getByRole('button', { name: '연결', exact: true }).click();
+
+  const shell = page.locator('[role=tabpanel]:visible .xterm-rows');
+  await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+  await workspace.getByLabel('SFTP 연결 대상').getByText(`stackport@127.0.0.1:${server.port}`, { exact: true }).waitFor();
+  assert.equal(server.stats.passwords - passwordsBefore, 1);
+  assert.equal(server.stats.subsystem - subsystemsBefore, 1);
+  assert.equal(await workspace.getByRole('button', { name: '동기화 프로필', exact: true }).count(), 0);
+
+  await remote.getByRole('checkbox', { name: '터미널 경로 따라가기' }).check();
+  await page.locator('[role=tabpanel]:visible .xterm-helper-textarea').focus();
+  await page.keyboard.press('Enter');
+  await shell.getByText('SFTP_FOLLOW_PATH_REPORTED', { exact: true }).waitFor();
+  await remote.getByText('보고서.txt', { exact: true }).waitFor();
+  assert.equal(await remote.getByLabel('원격 파일 경로').inputValue(), '/home/stackport/문서');
+
+  const disconnect = workspace.getByRole('button', { name: 'SFTP 연결 끊기' });
+  await disconnect.click();
+  await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+  await workspace.getByRole('button', { name: 'SSH 세션의 SFTP 다시 열기' }).click();
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+  assert.equal(server.stats.passwords - passwordsBefore, 1);
+  assert.equal(server.stats.subsystem - subsystemsBefore, 2);
+  page.once('dialog', confirmation => confirmation.accept());
+  await page.getByRole('button', { name: /SSH \d+ .*터미널 닫기/ }).click();
+  await disconnect.waitFor({ state: 'detached' });
 }
 
 async function verifyRemoteDirectoryFollow(page, remote) {

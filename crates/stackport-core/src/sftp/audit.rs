@@ -55,7 +55,7 @@ impl FileOperation {
 
 pub(super) struct FileAudit {
     store: Store,
-    profile: SshProfile,
+    profile: Option<SshProfile>,
     correlation_id: String,
     operation: FileOperation,
 }
@@ -63,13 +63,13 @@ pub(super) struct FileAudit {
 impl FileAudit {
     pub(super) async fn start(
         store: &Store,
-        profile: &SshProfile,
+        profile: Option<&SshProfile>,
         correlation_id: &str,
         operation: FileOperation,
     ) -> Result<Self> {
         let audit = Self {
             store: store.clone(),
-            profile: profile.clone(),
+            profile: profile.cloned(),
             correlation_id: correlation_id.to_owned(),
             operation,
         };
@@ -143,9 +143,9 @@ impl FileAudit {
             AuditRecord {
                 correlation_id: &self.correlation_id,
                 operation: self.operation.name(cancelled),
-                project_id: Some(&self.profile.project_id),
-                profile_id: Some(&self.profile.id),
-                environment: Some(&self.profile.environment),
+                project_id: self.profile.as_ref().map(|profile| profile.project_id.as_str()),
+                profile_id: self.profile.as_ref().map(|profile| profile.id.as_str()),
+                environment: self.profile.as_ref().map(|profile| profile.environment.as_str()),
                 object_name: None,
                 outcome,
                 affected_count: count,
@@ -176,7 +176,7 @@ mod tests {
                 environment: "DEV".into(),
                 revision: 1,
             };
-            let audit = FileAudit::start(&store, &profile, "first", FileOperation::Upload)
+            let audit = FileAudit::start(&store, Some(&profile), "first", FileOperation::Upload)
                 .await
                 .unwrap();
             let db = store.connect().unwrap();
@@ -196,7 +196,7 @@ mod tests {
             assert!(matches!(written.outcome, SftpTransferOutcome::Saved { .. }));
             assert!(written.audit_warning.is_some());
             assert!(
-                FileAudit::start(&store, &profile, "second", FileOperation::Download)
+                FileAudit::start(&store, Some(&profile), "second", FileOperation::Download)
                     .await
                     .is_err()
             );

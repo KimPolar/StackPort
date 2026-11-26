@@ -2007,7 +2007,7 @@ function App() {
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
       <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard}
         onRequestExit={requestAppClose} terminalDirectory={terminalDirectory} terminalFiles={terminalFiles}
-        terminalProjectName={projects.find(item => item.id === terminalFiles?.profile.project_id)?.name ?? ""} />
+        terminalProjectName={projects.find(item => item.id === terminalFiles?.profile?.project_id)?.name ?? ""} />
     </div>,
   };
 

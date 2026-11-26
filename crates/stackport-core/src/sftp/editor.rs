@@ -112,7 +112,7 @@ impl SftpManager {
             line_ending,
             bom,
             replace_supported,
-            production: session.profile.environment == "PROD",
+            production: session.is_production(),
             max_bytes: LIMIT,
         })
     }
@@ -151,16 +151,10 @@ impl SftpManager {
             if replacing && !edit.replace_supported {
                 return Err("이 파일은 원래 경로에 저장할 수 없습니다. 새 이름으로 저장하세요.".into());
             }
-            if replacing && session.profile.environment == "PROD" && input.confirmation != "PROD" {
+            if replacing && session.is_production() && input.confirmation != "PROD" {
                 return Err("운영 환경의 원본을 저장하려면 PROD를 입력하세요.".into());
             }
-            let store = self.store.clone();
-            let profile_id = session.profile.id.clone();
-            let current = tokio::task::spawn_blocking(move || store.ssh_profile(&profile_id)).await
-                .map_err(|_| "현재 SSH 연결 설정을 확인하지 못했습니다.")??;
-            if current != session.profile {
-                return Err("SSH 연결 설정이 변경되었습니다. 편집 내용을 보관하고 다시 연결하세요.".into());
-            }
+            session.verify_profile(&self.store, "SSH 연결 설정이 변경되었습니다. 편집 내용을 보관하고 다시 연결하세요.").await?;
             let destination = match input.copy_name {
                 Some(name) => new_child_path(&edit.parent, &name)?,
                 None => edit.path.clone(),

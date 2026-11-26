@@ -88,6 +88,18 @@ fn secret<'de, D: Deserializer<'de>>(
 
 pub(crate) type SshConnection = Handle<HostVerifier>;
 
+pub(crate) struct SshAddress<'a> {
+    pub(crate) host: &'a str,
+    pub(crate) port: u16,
+    pub(crate) username: &'a str,
+}
+
+impl<'a> From<&'a SshProfile> for SshAddress<'a> {
+    fn from(profile: &'a SshProfile) -> Self {
+        Self { host: &profile.host, port: profile.port, username: &profile.username }
+    }
+}
+
 pub(crate) struct SshRoute {
     pub(crate) connection: SshConnection,
     pub(crate) hops: Vec<SshConnection>,
@@ -118,7 +130,7 @@ pub(crate) async fn connect_route(
         let stage = format!("경유 {} · {}", index + 1, hop.profile.name);
         match connect_endpoint(
             Arc::clone(&manager),
-            &hop.profile,
+            (&hop.profile).into(),
             hop.authentication,
             connections.last(),
             true,
@@ -136,7 +148,7 @@ pub(crate) async fn connect_route(
     let stage = format!("대상 · {}", destination.name);
     match connect_endpoint(
         manager,
-        destination,
+        destination.into(),
         authentication,
         connections.last(),
         true,
@@ -241,7 +253,7 @@ impl client::Handler for HostVerifier {
 
 pub(crate) async fn connect_endpoint(
     manager: Arc<SshManager>,
-    profile: &SshProfile,
+    address: SshAddress<'_>,
     credentials: SshCredentials,
     previous: Option<&SshConnection>,
     capture_unknown: bool,
@@ -251,7 +263,7 @@ pub(crate) async fn connect_endpoint(
         CONNECT_TIMEOUT,
         connect(
             manager,
-            profile,
+            address,
             credentials,
             previous,
             capture_unknown,
@@ -264,16 +276,16 @@ pub(crate) async fn connect_endpoint(
 
 async fn connect(
     manager: Arc<SshManager>,
-    profile: &SshProfile,
+    address: SshAddress<'_>,
     credentials: SshCredentials,
     previous: Option<&SshConnection>,
     capture_unknown: bool,
     remote: Option<Arc<RemoteForward>>,
 ) -> Result<Endpoint> {
-    let host = ssh::normalize_host(&profile.host)?;
-    let port = profile.port;
+    let host = ssh::normalize_host(address.host)?;
+    let port = address.port;
     ssh::validate_port(port)?;
-    let username = ssh::normalize_username(&profile.username)?;
+    let username = ssh::normalize_username(address.username)?;
     let key_host = host.clone();
     let keys = Arc::clone(&manager);
     let pinned = tokio::task::spawn_blocking(move || keys.pinned_public_key(&key_host, port))

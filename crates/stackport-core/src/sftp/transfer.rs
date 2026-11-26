@@ -163,7 +163,7 @@ impl SftpManager {
         let active = session.register_transfer()?;
         let audit = FileAudit::start(
             &self.store,
-            &session.profile,
+            session.profile.as_ref(),
             &active.transfer.id,
             operation,
         )

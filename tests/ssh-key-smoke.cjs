@@ -75,6 +75,7 @@ async function main() {
   page.on('pageerror', error => errors.push(String(error)));
   await page.getByRole('button', { name: '터미널', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  await page.getByLabel('파일 탐색 함께 열기').uncheck();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
@@ -114,6 +115,7 @@ async function main() {
   await reopened.getByRole('button', { name: '닫기', exact: true }).click();
 
   await page.getByRole('button', { name: 'SSH 연결', exact: true }).click();
+  await page.getByLabel('파일 탐색 함께 열기').uncheck();
   await page.getByLabel('호스트 또는 IP').fill('127.0.0.1');
   await page.getByLabel('포트', { exact: true }).fill(String(port));
   await page.getByLabel('사용자 이름').fill('stackport');
