@@ -11,15 +11,16 @@ type Occurrence = { at: number; local_time: string };
 type Plan = {
   revision: number; directory: string; prefix: string; interval_minutes: number | null;
   retention_days: number; retry_limit: number; retry_delay_minutes: number; retry_attempt: number | null; timeout_seconds: number;
-  next_at: number | null; retry_at: number | null; requires_review: boolean;
+  next_at: number | null; next_excluded_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
   calendar: Calendar | null;
 };
 type Run = {
-  id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled" | "timed_out"; trigger_kind: "scheduled" | "retry" | "manual";
+  id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled" | "timed_out" | "skipped"; trigger_kind: "scheduled" | "retry" | "manual";
   can_cancel: boolean;
   retry_attempt: number | null;
-  started_at: number; finished_at: number | null; expires_at: number | null; path: string; size_bytes: number | null; message: string | null;
+  scheduled_at: number | null; started_at: number; finished_at: number | null; expires_at: number | null;
+  path: string; size_bytes: number | null; message: string | null;
   artifact: {
     sha256: string; engine_version: string; verified_at: number | null; removal_started_at: number | null;
     removed_at: number | null; owned_here: boolean; removal_supported: boolean;
@@ -38,7 +39,7 @@ type Draft = {
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
-const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과" };
+const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과", skipped: "건너뜀" };
 const trigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
@@ -55,7 +56,7 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     revision: plan?.revision ?? null,
     directory: plan ? displayPath(plan.directory) : "",
     prefix: plan?.prefix ?? `${engine}-backup`,
-    scheduled: plan ? plan.next_at !== null : true,
+    scheduled: plan ? plan.next_at !== null || plan.next_excluded_at !== null : true,
     next: dateInput(plan?.next_at ?? Math.floor(Date.now() / 1000) + 600),
     mode: plan?.calendar ? "calendar" : plan && plan.interval_minutes === null ? "once" : "periodic",
     minutes: String(plan?.interval_minutes ?? 1440),
@@ -385,7 +386,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           {stale && <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void perform("refresh", async () => {
             apply(await invoke<Snapshot>(`${engine}_backup_plan`, { profileId }));
           })}>설정 새로고침</button>}
-          {plan && (postgres || !plan.requires_review) && (plan.next_at !== null || plan.retry_at !== null) && <button type="button" className="secondary"
+          {plan && (postgres || !plan.requires_review) && (plan.next_at !== null || plan.retry_at !== null || plan.next_excluded_at !== null) && <button type="button" className="secondary"
             disabled={Boolean(busy || dirty || stale)} onClick={() => void perform("pause", async () => {
               apply(await invoke<Snapshot>(`pause_${engine}_backup_plan`, { profileId, revision: plan.revision }));
               setNotice("예약 실행을 중지했습니다.");
@@ -409,8 +410,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           <p className="form-note" role="status">{fileFeedback.text}</p>}
         {runs.length ? runs.map(run => <details key={run.id}>
           <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]}{run.retry_attempt !== null && ` (${run.retry_attempt}차)`} · {dateText(run.started_at)}</summary>
-          <p>{displayPath(run.path)}</p>
-          {run.finished_at !== null && <p>실행 시간 {(run.finished_at - run.started_at).toLocaleString("ko-KR")}초</p>}
+          {run.scheduled_at !== null && <p>예정 시각 {dateText(run.scheduled_at)}</p>}
+          {run.path && <p>{displayPath(run.path)}</p>}
+          {run.status !== "skipped" && run.finished_at !== null && <p>실행 시간 {(run.finished_at - run.started_at).toLocaleString("ko-KR")}초</p>}
           {run.size_bytes !== null && <p>백업 크기 {size(run.size_bytes)}
             {run.expires_at !== null && " · 보존 만료 " + dateText(run.expires_at)}</p>}
           {run.message && <p>{run.message}</p>}

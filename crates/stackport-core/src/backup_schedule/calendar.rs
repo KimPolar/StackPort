@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 const MAX_EXCEPTIONS: usize = 366;
 const BAD_TIME: &str = "예약 시각을 계산할 수 없습니다.";
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BackupCalendar {
     expression: String,
@@ -73,13 +73,43 @@ impl CalendarSchedule {
     }
 
     pub(super) fn is_excluded(&self, at: i64) -> Result<bool> {
-        let timestamp = Timestamp::from_second(at).map_err(|_| BAD_TIME)?;
-        Ok(self.excluded.binary_search(&timestamp.to_zoned(self.zone.clone()).date()).is_ok())
+        Ok(self.excluded.binary_search(&self.local_date(at)?).is_ok())
+    }
+
+    pub(super) fn local_date(&self, at: i64) -> Result<Date> {
+        Ok(Timestamp::from_second(at).map_err(|_| BAD_TIME)?.to_zoned(self.zone.clone()).date())
+    }
+
+    /// One occurrence per excluded local date, starting with the first matching tick after the cursor.
+    pub(super) fn excluded_after(&self, at: i64) -> Result<Vec<i64>> {
+        let start_date = self.local_date(at)?;
+        let mut excluded = Vec::new();
+        for &date in self.excluded.iter().filter(|&&date| date >= start_date) {
+            let start = date.at(0, 0, 0, 0).to_zoned(self.zone.clone()).map_err(|_| BAD_TIME)?;
+            if start.date() != date { continue; }
+            let end = start.end_of_day().map_err(|_| BAD_TIME)?.timestamp().as_second().min(LATEST_START);
+            let after = at.max(start.timestamp().as_second() - 1);
+            if let Some(tick) = self.next_tick(after, end)? {
+                excluded.push(tick.timestamp().as_second());
+            }
+        }
+        Ok(excluded)
     }
 
     pub(super) fn next_after(&self, at: i64) -> Result<Option<CalendarOccurrence>> {
+        let mut cursor = at;
+        while let Some(next) = self.next_tick(cursor, LATEST_START)? {
+            if self.excluded.binary_search(&next.date()).is_err() {
+                return Ok(Some(occurrence(next)));
+            }
+            cursor = next.end_of_day().map_err(|_| BAD_TIME)?.timestamp().as_second();
+        }
+        Ok(None)
+    }
+
+    fn next_tick(&self, at: i64, end: i64) -> Result<Option<Zoned>> {
         let mut cursor = Timestamp::from_second(at).map_err(|_| BAD_TIME)?;
-        while cursor.as_second() < LATEST_START {
+        while cursor.as_second() < end {
             let next = match self.cron.find_next(cursor) {
                 Ok(next) => next,
                 Err(_) => {
@@ -88,15 +118,11 @@ impl CalendarSchedule {
                     continue;
                 }
             };
-            if next.timestamp().as_second() > LATEST_START { break; }
+            if next.timestamp().as_second() > end { break; }
             cursor = next.timestamp();
-            if self.excluded.binary_search(&next.date()).is_ok() {
-                cursor = next.end_of_day().map_err(|_| BAD_TIME)?.timestamp();
-                continue;
-            }
             let first = self.zone.to_ambiguous_timestamp(next.datetime()).earlier().map_err(|_| BAD_TIME)?;
             if first == cursor {
-                return Ok(Some(occurrence(next)));
+                return Ok(Some(next));
             }
         }
         Ok(None)
@@ -131,9 +157,20 @@ mod tests {
     fn local_weekday_and_monthly_rules_honor_excluded_dates() {
         let weekly = CalendarSchedule::parse(&schedule("0 9 * * MON", "Asia/Seoul", &["2026-01-05"])).unwrap();
         assert_eq!(next(&weekly, "2026-01-01T00:00:00Z"), timestamp("2026-01-12T00:00:00Z"));
+        assert_eq!(weekly.excluded_after(timestamp("2026-01-01T00:00:00Z")).unwrap(), [timestamp("2026-01-05T00:00:00Z")]);
         assert!(weekly.is_excluded(timestamp("2026-01-04T19:00:00Z")).unwrap());
         let monthly = CalendarSchedule::parse(&schedule("30 18 15 * *", "Asia/Seoul", &[])).unwrap();
         assert_eq!(next(&monthly, "2026-01-15T09:30:00Z"), timestamp("2026-02-15T09:30:00Z"));
+    }
+
+    #[test]
+    fn excluded_dates_only_report_matching_local_times_once_per_date() {
+        let schedule = CalendarSchedule::parse(&schedule("0,30 1 * * SUN", "America/New_York",
+            &["2026-11-01", "2026-11-02", "2026-11-08", "2026-11-08"])).unwrap();
+        let ticks = schedule.excluded_after(timestamp("2026-11-01T05:00:00Z")).unwrap();
+        assert_eq!(ticks, [timestamp("2026-11-01T05:30:00Z"), timestamp("2026-11-08T06:00:00Z")]);
+        let after_first_occurrences = schedule.excluded_after(timestamp("2026-11-01T05:30:00Z")).unwrap();
+        assert_eq!(after_first_occurrences, [timestamp("2026-11-08T06:00:00Z")]);
     }
 
     #[test]

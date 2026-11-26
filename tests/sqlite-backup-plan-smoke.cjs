@@ -11,7 +11,7 @@ const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency'].includes(phase)) {
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip'].includes(phase)) {
   throw new Error('Set the isolated root and backup test phase.');
 }
 
@@ -101,6 +101,11 @@ async function main() {
         if (phase === 'calendar' || phase === 'retry') {
           const verify = phase === 'calendar' ? verifyCalendarPlan : verifyRetryPlan;
           await verify(dialog, history, () => state(profile.id), storeRun);
+          assert.deepEqual(errors, []);
+          return;
+        }
+        if (phase === 'skip') {
+          await verifySkippedCalendarPlan(dialog, history, instance, () => state(profile.id), storeRun);
           assert.deepEqual(errors, []);
           return;
         }
@@ -388,6 +393,43 @@ async function verifyCalendarPlan(dialog, history, state, storeRun) {
   assert.deepEqual(paused.calendar, plan.calendar);
   assert.equal(await zone.inputValue(), 'Asia/Seoul');
   console.log('Ran a real calendar backup and kept the calendar rule when paused.');
+}
+
+async function verifySkippedCalendarPlan(dialog, history, instance, state, storeRun) {
+  const excludedDate = new Date(Date.now() + 60_000).toISOString().slice(0, 10);
+  await dialog.getByLabel('실행 주기').selectOption('calendar');
+  await dialog.getByLabel('Cron 식', { exact: true }).fill('* * * * *');
+  await dialog.getByLabel('예약 시간대', { exact: true }).fill('UTC');
+  await dialog.getByLabel('제외 날짜 (선택)').fill(excludedDate);
+  await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+  await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  const { plan } = await state();
+  assert.equal(new Date(plan.next_excluded_at * 1000).toISOString().slice(0, 10), excludedDate);
+  const skipped = history.getByText(/건너뜀 · 예약 실행/);
+  await skipped.waitFor({ timeout: 75000 });
+  await instance.getByText('SQLite 예약 백업 건너뜀', { exact: true }).waitFor();
+  await skipped.click();
+  await history.getByText(`달력 제외일 ${excludedDate}의 예약을 건너뛰었습니다.`, { exact: true }).waitFor();
+  await history.getByText(/^예정 시각 /).waitFor();
+  const changed = await state();
+  const [entry] = changed.runs;
+  assert.equal(entry.status, 'skipped');
+  assert.equal(entry.scheduled_at, plan.next_excluded_at);
+  assert.equal(entry.path, '');
+  assert.equal(entry.artifact, null);
+  assert.equal(changed.plan.next_excluded_at, null);
+  assert.equal(changed.plan.next_at, plan.next_at);
+  assert.deepEqual(fs.readdirSync(output), []);
+  await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+  await history.getByText(/무결성 검사 통과 · 수동 실행/).waitFor();
+  const finished = await state();
+  storeRun(finished.runs.find(run => run.trigger_kind === 'manual'));
+  assert.equal(finished.runs.filter(run => run.status === 'skipped').length, 1);
+  await dialog.getByLabel('파일 이름 접두어').fill('revised');
+  await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+  await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  assert.equal((await state()).plan.next_excluded_at, null);
+  console.log('The real Windows scheduler recorded the excluded date once and kept the next eligible time. Manual backup worked.');
 }
 
 async function verifyRetryPlan(dialog, history, state, storeRun) {

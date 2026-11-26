@@ -551,11 +551,13 @@ Windows 앱이 켜져 있을 때 계획을 실행합니다. 종료 중 지난 �
 
 SQLite와 PostgreSQL의 **달력 일정**은 분·시·일·월·요일을 지정하는 5필드 cron 식과 IANA 시간대를 사용합니다. **일정 미리보기**에서 다음 실행 시각을 최대 다섯 개까지 확인합니다. 서머타임으로 사라진 시각은 건너뛰고, 두 번 나타난 시각은 첫 번째에 실행합니다. 사용자가 입력한 휴일과 제외 날짜에는 지난 예약 실행과 자동 재시도도 건너뜁니다. 예약을 중지해도 cron 식, 시간대와 제외 날짜는 보존합니다. [cronexpr 예약 문법](https://docs.rs/cronexpr/latest/cronexpr/)
 
+실행 이력에는 예약과 재시도의 **예정 시각**이 표시됩니다. 달력 제외일에 해당하는 예약과 재시도는 **건너뜀**으로 남습니다. 한 제외일에 여러 cron 시각이 있으면 첫 시각을 기준으로 한 번 기록하고, 앱이 닫혀 있는 동안 지난 여러 제외일은 한 줄로 묶습니다. 밀린 반복 또는 달력 예약을 백업 한 번으로 처리하면 나머지 예약도 한 줄로 남습니다. 정기 예약과 대기 재시도는 각각 예정 시각에 처리합니다. 제외일에도 **지금 백업**으로 실행할 수 있습니다.
+
 PostgreSQL 작업 공간의 **백업 계획**은 Windows에 저장한 자격 증명으로 전체 데이터베이스를 `.backup` 파일로 저장합니다. 작업 공간에 열린 PostgreSQL 세션 없이 실행할 수 있습니다. 운영 계획을 저장하거나 즉시 실행하려면 `PROD`를 입력합니다. 계획은 저장할 때 검토한 PostgreSQL 연결 버전에 묶입니다. **용량 확인**에 표시되는 원본 크기는 서버의 디스크 사용량이며 압축된 파일의 실제 크기는 실행 이력에서 확인할 수 있습니다. [PostgreSQL 크기 함수](https://www.postgresql.org/docs/15/functions-admin.html) · [PostgreSQL pg_dump](https://www.postgresql.org/docs/16/app-pgdump.html)
 
 **백업 연결 경로**에서 직접 TLS 연결이나 같은 프로젝트에서 실행 중인 로컬 SSH 터널을 선택합니다. 계획에 터널과 경유 SSH 연결의 버전 및 순서를 저장합니다. 지정한 경로로 터널을 다시 열면 현재 로컬 포트를 사용하고 PostgreSQL 인증서는 원래 호스트 이름으로 검증합니다. 백업을 실행하는 앱 인스턴스에서 해당 터널을 시작해 둡니다. 터널이 중단되거나 경유 순서가 달라지면 해당 실행을 실패로 기록합니다. 터널이나 연결 정의를 편집하면 계획을 다시 검토합니다. [libpq 연결 설정](https://www.postgresql.org/docs/16/libpq-connect.html)
 
-백업 계획은 최근 실행 40건에 파일 크기, 무결성 검사 결과와 보존 만료일을 표시합니다. SQLite는 온라인 스냅샷을 검사하고 PostgreSQL은 `pg_restore`로 아카이브를 읽어 검사합니다. 새 파일을 게시하기 전에 SHA-256과 Windows 파일 ID를 확인합니다. **파일 지문 확인**은 현재 파일을 생성 당시 값과 대조하고 확인 시각을 기록합니다. 작업 공간 v30 이관은 기존 계획과 실행 이력, 파일 지문을 보존합니다. v26까지 자동 재시도를 사용하던 계획에는 기존과 같은 1회·1분 정책을 적용합니다. [PostgreSQL pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
+백업 계획은 최근 실행 40건에 파일 크기, 무결성 검사 결과와 보존 만료일을 표시합니다. SQLite는 온라인 스냅샷을 검사하고 PostgreSQL은 `pg_restore`로 아카이브를 읽어 검사합니다. 새 파일을 게시하기 전에 SHA-256과 Windows 파일 ID를 확인합니다. **파일 지문 확인**은 현재 파일을 생성 당시 값과 대조하고 확인 시각을 기록합니다. 작업 공간 v31 이관은 기존 계획과 실행 이력, 파일 지문을 보존합니다. v26까지 자동 재시도를 사용하던 계획에는 기존과 같은 1회·1분 정책을 적용합니다. [PostgreSQL pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
 
 **만료 파일** 목록에서 최근 40건보다 오래된 항목도 **더 보기**로 찾을 수 있습니다. Windows의 **만료 파일 삭제**는 보존 기간이 지난 백업 한 개의 경로·용량·지문을 미리 보여 줍니다. 확인은 5분 동안 한 번만 사용합니다. 삭제할 때 저장된 위치·파일 ID·크기·SHA-256을 다시 확인하고, 쓰기나 이름 변경이 겹치지 않도록 연 파일 핸들로 대상을 영구 삭제합니다. 변경되거나 교체된 파일, 링크, 복사한 작업 공간의 백업은 보존합니다. 삭제 결과와 시각을 실행 이력에 기록합니다. 앱이 파일 작업 도중 종료되면 완료 확인 필요로 표시합니다. 공용 감사 기록에는 백업 경로나 지문을 저장하지 않습니다. [Windows 파일 삭제 핸들](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info) · [Windows 파일 ID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info)
 
@@ -570,6 +572,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `STACKPORT_BACKUP_TEST_PHASE=cancel`은 예약된 SQLite 스냅샷을 진행 중에 취소하고 임시 파일 정리, 취소 알림과 다음 실행 시각을 확인합니다. `STACKPORT_POSTGRES_TUNNEL_PLAN_ONLY=1`은 터널에서 응답을 대기 중인 `pg_dump`를 백업 계획에서 취소하고 이전 아카이브가 보존되는지 확인합니다.
 - `STACKPORT_BACKUP_TEST_PHASE=timeout`은 SQLite 예약의 시간 초과 이력, 임시 파일 정리와 재시도 예약을 확인합니다. PostgreSQL 터널 테스트는 연결 확인과 `pg_dump` 대기 중 저장된 시간 제한을 별도로 확인합니다.
 - `STACKPORT_BACKUP_TEST_PHASE=concurrency`와 `STACKPORT_TEST_APP_EXE`로 같은 작업 공간을 연 Windows 앱 두 개의 동시 실행 한도와 중복 실행 차단을 확인합니다. 이어 앱 한 개에서 예약 두 건을 함께 실행하고 세 번째가 대기한 뒤 시작하는지 확인합니다.
+- `STACKPORT_BACKUP_TEST_PHASE=skip`은 실제 달력 제외일을 만나 건너뛴 예약의 이력·알림과 다음 예정 시각을 확인합니다. 같은 날 수동 백업을 실행해 파일 무결성을 확인합니다.
 - `crates/stackport-core/tests/schema.rs`: 복합 키·생성 열·표현식 인덱스·외래 키와 이름 바인딩, 일반 쿼리의 메타데이터 PRAGMA 차단을 검사합니다.
 - `crates/stackport-core/tests/migration.rs`: 이전 형식 백업·이관, 이관 실패 시 원본 보존과 동시 초기화·이관을 검사합니다.
 - `crates/stackport-core/tests/ssh_profiles.rs`: SSH 연결 정의의 저장·검증, 동시 수정 충돌, 감사 기록의 원자성과 프로젝트 삭제를 검사합니다.

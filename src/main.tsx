@@ -359,7 +359,8 @@ function App() {
     const subscribed = listen<[string, string]>("backup-finished", ({ payload: [engine, status] }) => {
       if (!live) return;
       window.clearTimeout(timer);
-      const outcome = status === "succeeded" ? "완료" : status === "cancelled" ? "취소" : status === "timed_out" ? "시간 초과" : "실패";
+      const outcome = status === "succeeded" ? "완료" : status === "cancelled" ? "취소" : status === "timed_out" ? "시간 초과" :
+        status === "skipped" ? "건너뜀" : "실패";
       setBackupNotice(`${engine} 예약 백업 ${outcome}`);
       timer = window.setTimeout(() => setBackupNotice(""), 15000);
     });
