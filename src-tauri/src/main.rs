@@ -5,6 +5,7 @@ mod sqlite_backup_schedule;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
+use stackport_core::{PostgresAuthentication, PostgresCredentialStatus};
 use stackport_core::{SqlParameterPlan, SqlParameterSet, SqlParameterSetScope, SqlParameterSetSummary, SqlParameterSetWrite};
 use stackport_core::{
     ArchivedProject, AuditPage, BackupReport, CsvOptions, DatabaseObject, DiagramTable, EditInput, EditKey, EditPreview, EditResult, ExportQuery,
@@ -1973,11 +1974,35 @@ fn postgres_tunnel_options(tunnels: State<'_, SshTunnelManager>, profile: Postgr
 }
 
 #[tauri::command]
+async fn postgres_credential_status(store: State<'_, Store>, profile: PostgresProfile) -> Result<PostgresCredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.postgres_credential_status(&profile)).await
+}
+
+#[tauri::command]
+async fn forget_postgres_password(store: State<'_, Store>, profile: PostgresProfile) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_postgres_password(&profile)).await
+}
+
+fn postgres_authentication(
+    password: Option<PostgresPassword>, use_saved: Option<bool>, remember: bool,
+) -> Result<PostgresAuthentication, String> {
+    match (password, use_saved.unwrap_or(false), remember) {
+        (None, true, false) => Ok(PostgresAuthentication::Saved),
+        (Some(password), false, remember) => Ok(PostgresAuthentication::Entered { password, remember }),
+        _ => Err("PostgreSQL 암호를 입력하거나 저장한 암호를 선택하세요.".into()),
+    }
+}
+
+#[tauri::command]
 async fn open_postgres(
     postgres: State<'_, PostgresManager>, tunnels: State<'_, SshTunnelManager>, profile: PostgresProfile,
-    password: PostgresPassword, confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
+    password: Option<PostgresPassword>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String, tunnel_id: Option<String>, grid_edit: Option<bool>,
 ) -> Result<PostgresSessionInfo, String> {
-    postgres.open(tunnels.inner(), profile, password, &confirmation, tunnel_id.as_deref(), grid_edit.unwrap_or(false)).await
+    let authentication = postgres_authentication(password, use_saved_password, remember_password.unwrap_or(false))?;
+    postgres.open(tunnels.inner(), profile, authentication, &confirmation, tunnel_id.as_deref(), grid_edit.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -1991,8 +2016,8 @@ async fn wait_postgres_disconnect(postgres: State<'_, PostgresManager>, id: Stri
 }
 
 #[tauri::command]
-async fn open_postgres_monitor(postgres: State<'_, PostgresManager>, id: String, password: PostgresPassword, confirmation: String) -> Result<PostgresSessionInfo, String> {
-    postgres.open_monitor(&id, password, &confirmation).await
+async fn open_postgres_monitor(postgres: State<'_, PostgresManager>, id: String, password: Option<PostgresPassword>, use_saved_password: Option<bool>, confirmation: String) -> Result<PostgresSessionInfo, String> {
+    postgres.open_monitor(&id, postgres_authentication(password, use_saved_password, false)?, &confirmation).await
 }
 
 #[tauri::command]
@@ -2069,9 +2094,10 @@ async fn postgres_schema_diagram(
 async fn create_postgres_backup(
     postgres: State<'_, PostgresManager>, id: String, request: String,
     target: stackport_core::PostgresBackupTarget, contents: stackport_core::PostgresBackupContents,
-    password: PostgresPassword, confirmation: String, destination: String,
+    password: Option<PostgresPassword>, use_saved_password: Option<bool>, confirmation: String, destination: String,
 ) -> Result<stackport_core::PostgresBackupReport, String> {
-    postgres.create_backup(&id, &request, target, contents, password, &confirmation, destination).await
+    let authentication = postgres_authentication(password, use_saved_password, false)?;
+    postgres.create_backup(&id, &request, target, contents, authentication, &confirmation, destination).await
 }
 
 #[tauri::command]
@@ -2097,9 +2123,10 @@ fn cancel_postgres_restore(postgres: State<'_, PostgresManager>, id: String, req
 
 #[tauri::command]
 async fn apply_postgres_restore(postgres: State<'_, PostgresManager>, id: String, request: String, token: String,
-    database_confirmation: String, trusted: bool, password: PostgresPassword, confirmation: String,
+    database_confirmation: String, trusted: bool, password: Option<PostgresPassword>, use_saved_password: Option<bool>, confirmation: String,
 ) -> Result<stackport_core::PostgresRestoreReport, String> {
-    postgres.apply_restore(&id, &request, &token, &database_confirmation, trusted, password, &confirmation).await
+    let authentication = postgres_authentication(password, use_saved_password, false)?;
+    postgres.apply_restore(&id, &request, &token, &database_confirmation, trusted, authentication, &confirmation).await
 }
 
 #[tauri::command]
@@ -3235,6 +3262,8 @@ fn main() {
             update_postgres_profile,
             delete_postgres_profile,
             postgres_tunnel_options,
+            postgres_credential_status,
+            forget_postgres_password,
             open_postgres,
             close_postgres,
             wait_postgres_disconnect,

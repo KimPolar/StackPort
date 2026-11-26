@@ -1,14 +1,17 @@
 import { useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Selection = { kind: "database" } | { kind: "schema"; schema: number } | { kind: "table"; object: number };
 export type PostgresBackupTarget = { selection: Selection; label: string };
 export type PostgresBackupReport = { path: string; size_bytes: number; sha256: string; tool_version: string; audit_warning: boolean };
 type Contents = "all" | "schema" | "data";
 
-export function PostgresBackupDialog({ id, target, connection, source, environment, unavailable, onBusy, onClose, onDone }: {
+export function PostgresBackupDialog({ id, profile, target, connection, source, environment, unavailable, onBusy, onClose, onDone }: {
   id: string;
+  profile: PostgresProfile;
   target: PostgresBackupTarget;
   connection: string;
   source: string;
@@ -20,7 +23,7 @@ export function PostgresBackupDialog({ id, target, connection, source, environme
 }) {
   const [destination, setDestination] = useState("");
   const [contents, setContents] = useState<Contents>("all");
-  const [password, setPassword] = useState("");
+  const credentials = usePostgresCredentials(profile);
   const [confirmation, setConfirmation] = useState("");
   const [running, setRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -34,11 +37,11 @@ export function PostgresBackupDialog({ id, target, connection, source, environme
     if (request.current || unavailable || !destination.trim() || (production && confirmation !== "PROD")) return;
     const token = crypto.randomUUID();
     request.current = token;
-    setRunning(true); setCancelling(false); setError(""); setPassword("");
+    setRunning(true); setCancelling(false); setError("");
     onBusy(true);
     try {
       const report = await invoke<PostgresBackupReport>("create_postgres_backup", {
-        id, request: token, target: target.selection, contents, password, confirmation, destination: destination.trim(),
+        id, request: token, target: target.selection, contents, ...credentials.take(), confirmation, destination: destination.trim(),
       });
       onDone(report);
     } catch (reason) { setError(String(reason)); }
@@ -70,8 +73,7 @@ export function PostgresBackupDialog({ id, target, connection, source, environme
         <input required disabled={blocked} value={destination} onChange={event => setDestination(event.target.value)} placeholder="절대 경로 (.backup)" />
         <button type="button" className="secondary" disabled={blocked} onClick={() => void chooseDirectory()}>폴더 선택</button>
       </span></label>
-      <label className="field">PostgreSQL 암호<input type="password" autoComplete="off" maxLength={4096} disabled={blocked}
-        value={password} onChange={event => setPassword(event.target.value)} /></label>
+      <PostgresPasswordField credentials={credentials} disabled={blocked} />
       {production && <label className="field">운영 확인 문구 PROD<input required autoComplete="off" disabled={blocked}
         value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
       <p className="form-note">설치된 PostgreSQL의 pg_dump와 pg_restore로 압축 아카이브를 로컬에 저장합니다. 저장 폴더의 접근 권한을 확인하세요.</p>

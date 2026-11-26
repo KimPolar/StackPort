@@ -120,6 +120,7 @@ impl Store {
             "연결을 찾을 수 없습니다.",
         )?;
         audit(&tx, &profile, "postgres_profile.delete")?;
+        self.delete_postgres_password_if_present(id)?;
         tx.commit().map_err(db_error)
     }
 }

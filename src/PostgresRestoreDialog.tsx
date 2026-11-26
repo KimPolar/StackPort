@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
+import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Preview = {
   token: string; source: string; database: string; archive_database: string; source_version: string; dump_version: string;
@@ -11,15 +13,15 @@ export type PostgresRestoreReport = { database: string; sha256: string; tables: 
 
 const number = new Intl.NumberFormat("ko-KR");
 
-export function PostgresRestoreDialog({ id, server, environment, unavailable, onBusy, onClose, onRestored }: {
-  id: string; server: string; environment: string; unavailable: string; onBusy: (busy: boolean) => void;
+export function PostgresRestoreDialog({ id, profile, server, environment, unavailable, onBusy, onClose, onRestored }: {
+  id: string; profile: PostgresProfile; server: string; environment: string; unavailable: string; onBusy: (busy: boolean) => void;
   onClose: () => void; onRestored: (report: PostgresRestoreReport) => void;
 }) {
   const [source, setSource] = useState("");
   const [database, setDatabase] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [name, setName] = useState("");
-  const [password, setPassword] = useState("");
+  const credentials = usePostgresCredentials(profile);
   const [confirmation, setConfirmation] = useState("");
   const [trusted, setTrusted] = useState(false);
   const [busy, setBusy] = useState<"preview" | "restore" | null>(null);
@@ -34,7 +36,7 @@ export function PostgresRestoreDialog({ id, server, environment, unavailable, on
 
   function resetPreview() {
     if (preview) void invoke("discard_postgres_restore", { id, token: preview.token }).catch(() => {});
-    setPreview(null); setName(""); setTrusted(false); setConfirmation(""); setPassword("");
+    setPreview(null); setName(""); setTrusted(false); setConfirmation(""); credentials.setPassword("");
   }
 
   function close() {
@@ -58,9 +60,8 @@ export function PostgresRestoreDialog({ id, server, environment, unavailable, on
     setBusy(preview ? "restore" : "preview"); setCancelRequested(false); setError(""); onBusy(true);
     try {
       if (preview) {
-        setPassword("");
         onRestored(await invoke<PostgresRestoreReport>("apply_postgres_restore", {
-          id, request: token, token: preview.token, databaseConfirmation: name, trusted, password, confirmation,
+          id, request: token, token: preview.token, databaseConfirmation: name, trusted, ...credentials.take(), confirmation,
         }));
       } else {
         setPreview(await invoke<Preview>("preview_postgres_restore", {
@@ -109,8 +110,7 @@ export function PostgresRestoreDialog({ id, server, environment, unavailable, on
           onChange={event => setTrusted(event.target.checked)} /> 백업 출처를 확인했고 복원 실행에 동의합니다.</label>
         <label className="field">새 DB 이름 확인<input required disabled={blocked} value={name} autoComplete="off"
           onChange={event => setName(event.target.value)} /></label>
-        <label className="field">PostgreSQL 암호<input type="password" autoComplete="off" maxLength={4096} disabled={blocked}
-          value={password} onChange={event => setPassword(event.target.value)} /></label>
+        <PostgresPasswordField credentials={credentials} disabled={blocked} />
         {production && <label className="field">운영 확인 문구 PROD<input required autoComplete="off" disabled={blocked}
           value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
       </>}

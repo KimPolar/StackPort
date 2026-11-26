@@ -2796,6 +2796,11 @@ async function main() {
   let jump;
   let browser;
   try {
+    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1') {
+      browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL);
+      await verifyStoredCredentials(browser, fixture);
+      return;
+    }
     gateway = await startGateway(fixture.port);
     jump = await startGateway(gateway.port, ['127.0.0.1']);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9331');
@@ -2810,6 +2815,165 @@ async function main() {
     jump?.close();
     gateway?.close();
     fixture.close();
+  }
+}
+
+async function verifyStoredCredentials(browser, fixture) {
+  assert.ok(backupTools);
+  const page = browser.contexts()[0].pages()[0];
+  page.setDefaultTimeout(15000);
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const secret = 'fixture-administrator-password';
+  const project = await command('create_project', { name: 'PostgreSQL 보관 검증' });
+  const input = { name: '암호 보관 검증', host: 'localhost', port: fixture.port, database: 'postgres',
+    username: 'fixture_admin', environment: 'PROD', ca_path: fixture.ca };
+  let profile = await command('create_postgres_profile', { projectId: project.id, input });
+  const status = (target = profile) => command('postgres_credential_status', { profile: target });
+  const auth = { password: null, useSavedPassword: true, confirmation: 'PROD' };
+  const directlyOpen = (target = profile, options = {}) => command('open_postgres', { profile: target, ...auth, ...options });
+  const connect = page.getByRole('dialog', { name: 'PostgreSQL 연결', exact: true });
+  const launch = async () => {
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', { name: 'PostgreSQL 암호 보관 검증 열기', exact: true }).click();
+    await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).click();
+  };
+  const submit = connect.getByRole('button', { name: '연결', exact: true });
+  const remember = connect.getByRole('checkbox', { name: '연결 성공 후 Windows에 암호 저장', exact: true });
+  try {
+    assert.deepEqual(await status(), { supported: true, stored: false, usable: false });
+    const temporary = await directlyOpen(profile, { password: secret, useSavedPassword: false });
+    await command('close_postgres', { id: temporary.id });
+    assert.equal((await status()).stored, false);
+    await launch();
+    await remember.waitFor();
+    assert.equal(await remember.isChecked(), false);
+    await remember.check();
+    await connect.getByLabel('운영 환경 확인').fill('PROD');
+    await connect.getByLabel('PostgreSQL 암호').fill('fixture-invalid-password');
+    await submit.click();
+    await connect.getByRole('alert').getByText(/암호.*거부|28P01/).waitFor();
+    assert.equal((await status()).stored, false);
+    await connect.getByLabel('PostgreSQL 암호').fill(secret);
+    await submit.click();
+    await connect.waitFor({ state: 'detached' });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: true });
+    assert.equal(fs.readFileSync(path.join(process.env.STACKPORT_DATA_DIR, 'workspace.sqlite')).includes(Buffer.from(secret)), false);
+    assert.doesNotMatch(JSON.stringify((await command('list_audit_events', { before: null })).events), /fixture-administrator-password/);
+
+    const clone = await command('duplicate_project', { source: project.id, name: '자격 증명 분리 확인' });
+    const [copied] = await command('list_postgres_profiles', { projectId: clone.id });
+    assert.equal((await status(copied)).stored, false);
+    await command('delete_project', { id: clone.id });
+    await assert.rejects(directlyOpen(profile, { confirmation: '' }), /PROD/);
+    await verifyCredentialInNewProcess(profile, secret);
+
+    await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    await launch();
+    const use = connect.getByRole('checkbox', { name: '저장한 암호 사용', exact: true });
+    await use.waitFor();
+    assert.equal(await use.isChecked(), false);
+    await use.check();
+    assert.equal(await connect.getByLabel('PostgreSQL 암호').count(), 0);
+    await connect.getByLabel('운영 환경 확인').fill('PROD');
+    await submit.click();
+    await connect.waitFor({ state: 'detached' });
+
+    const destination = path.join(root, 'authenticated-backup.backup');
+    await page.getByRole('button', { name: 'DB 백업', exact: true }).click();
+    const backup = page.getByRole('dialog', { name: 'PostgreSQL 백업', exact: true });
+    await backup.getByLabel('새 백업 파일 경로').fill(destination);
+    await backup.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
+    await backup.getByLabel('운영 확인 문구 PROD').fill('PROD');
+    await backup.getByRole('button', { name: '백업 만들기', exact: true }).click();
+    await backup.waitFor({ state: 'detached', timeout: 40000 });
+    assert.equal(fs.readFileSync(destination).subarray(0, 5).toString(), 'PGDMP');
+
+    const database = 'fixture_vault_restore';
+    await page.getByRole('button', { name: '백업 복원', exact: true }).click();
+    const restore = page.getByRole('dialog', { name: 'PostgreSQL 백업 복원', exact: true });
+    await restore.getByRole('textbox', { name: /백업 파일/ }).fill(destination);
+    await restore.getByLabel('새 데이터베이스 이름').fill(database);
+    await restore.getByRole('button', { name: '복원 미리보기', exact: true }).click();
+    await restore.getByLabel('새 DB 이름 확인').fill(database);
+    await restore.getByRole('checkbox', { name: '백업 출처를 확인했고 복원 실행에 동의합니다.' }).check();
+    await restore.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
+    await restore.getByLabel('운영 확인 문구 PROD').fill('PROD');
+    await restore.getByRole('button', { name: '새 DB에 복원', exact: true }).click();
+    await page.getByText('새 DB 복원 완료 · ' + database, { exact: true }).waitFor({ timeout: 45000 });
+    const reader = await command('create_postgres_profile', { projectId: project.id,
+      input: { ...input, name: '복구 데이터 확인', database } });
+    const recovered = await directlyOpen(reader, { password: secret, useSavedPassword: false });
+    try {
+      const object = await command('resolve_postgres_catalog_object', { id: recovered.id, profileId: reader.id, schema: 'report', name: 'quoted table' });
+      const result = await command('postgres_page', { id: recovered.id, object: object.id, rowPage: 0, columnPage: 0 });
+      assert.equal(result.rows[3][1].value, '행 4');
+    } finally { await command('close_postgres', { id: recovered.id }); }
+
+    await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    await launch();
+    await connect.getByRole('button', { name: '저장한 암호 삭제', exact: true }).click();
+    await connect.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+    assert.equal((await status()).stored, false);
+    await assert.rejects(directlyOpen(), /저장된 PostgreSQL 암호가 없습니다/);
+    await connect.getByRole('button', { name: '취소', exact: true }).click();
+
+    const remembered = await directlyOpen(profile, { password: secret, useSavedPassword: false, rememberPassword: true });
+    await command('close_postgres', { id: remembered.id });
+    assert.equal(remembered.credential_warning, null);
+    const previous = profile;
+    profile = await command('update_postgres_profile', { id: profile.id, revision: profile.revision, input: { ...input, name: '설정 변경됨' } });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: false });
+    await assert.rejects(directlyOpen(previous), /연결이 변경/);
+    await assert.rejects(directlyOpen(), /저장된 PostgreSQL 암호가 없습니다/);
+    console.log('Windows credential storage is opt-in, survives a new process, supports TLS backup and restore, and respects profile changes and removal.');
+  } finally {
+    await command('forget_postgres_password', { profile }).catch(() => {});
+  }
+}
+
+async function verifyCredentialInNewProcess(profile, secret) {
+  const executable = process.env.STACKPORT_TEST_APP_EXE;
+  assert.ok(executable);
+  const listener = net.createServer();
+  listener.listen(0, '127.0.0.1');
+  await once(listener, 'listening');
+  const port = listener.address().port;
+  await new Promise(resolve => listener.close(resolve));
+  const child = spawn(executable, [], { cwd: root, windowsHide: true, stdio: 'ignore', env: {
+    ...process.env,
+    WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'second-webview'),
+    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=' + port + ' --disable-background-networking',
+  } });
+  let browser;
+  try {
+    const url = 'http://127.0.0.1:' + port;
+    const deadline = Date.now() + 15000;
+    let ready = false;
+    while (!ready && child.exitCode === null && Date.now() < deadline) {
+      ready = await fetch(url + '/json/version').then(response => response.ok, () => false);
+      if (!ready) await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    assert.ok(ready, 'Second isolated WebView2 instance did not start.');
+    browser = await chromium.connectOverCDP(url);
+    const page = browser.contexts()[0].pages()[0];
+    await page.waitForFunction(() => typeof window.__TAURI_INTERNALS__?.invoke === 'function');
+    const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+    const status = await command('postgres_credential_status', { profile });
+    assert.deepEqual(status, { supported: true, stored: true, usable: true });
+    const session = await command('open_postgres', { profile, useSavedPassword: true, password: null, confirmation: 'PROD' });
+    assert.equal(session.username, profile.settings.username);
+    assert.ok(!JSON.stringify({ status, session }).includes(secret));
+    const monitor = await command('open_postgres_monitor', { id: session.id, useSavedPassword: true, password: null, confirmation: 'PROD' });
+    await command('close_postgres', { id: monitor.id });
+    await command('close_postgres', { id: session.id });
+  } finally {
+    await browser?.close();
+    if (child.exitCode === null && child.signalCode === null) {
+      const closed = once(child, 'exit');
+      child.kill();
+      await closed;
+    }
   }
 }
 

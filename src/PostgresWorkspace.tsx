@@ -11,6 +11,7 @@ import { PostgresObjectStructure, postgresObjectLabels as kindLabels, type Postg
 import { PostgresSearchDialog, type PostgresSearchHit } from "./PostgresSearchDialog";
 import type { PostgresDiagramTable } from "./PostgresSchemaDiagramDialog";
 import { PostgresServerMonitor } from "./PostgresServerMonitor";
+import { PostgresPasswordField, usePostgresCredentials } from "./PostgresPasswordField";
 import { PostgresValueDialog, type PostgresValueFormat, type PostgresValueRow, type PostgresValueTarget } from "./PostgresValueDialog";
 import { gridGeometry, postgresPinLimit, postgresProjection, useGridLayout } from "./GridColumnLayout";
 import { GridColumnLayoutDialog } from "./GridColumnLayoutDialog";
@@ -35,7 +36,7 @@ export type PostgresProfile = { id: string; project_id: string; revision: number
 export type PostgresConnection = { id: string; profileId: string; revision: number };
 export type PostgresProfileAction = ProfileAction<PostgresProfile>;
 type Session = { id: string; version: string; database: string; username: string; encoding: string; timezone: string;
-  tunnel: string | null; tunnel_id: string | null; grid_edit: boolean };
+  tunnel: string | null; tunnel_id: string | null; grid_edit: boolean; credential_warning: string | null };
 type Disconnect = "closed" | "tunnel_stopped" | "tunneled_connection_closed";
 type Schema = { id: number; name: string; accessible: boolean };
 type SchemaPage = { schemas: Schema[]; has_next: boolean };
@@ -172,6 +173,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       </div>
     </div>
     {error && <p className="error-banner" role="alert">{error}</p>}
+    {online && session.credential_warning && <p className="form-note" role="status">{session.credential_warning}</p>}
     {loss && <div className="error-banner postgres-recovery">
       <p role="alert">{loss} {preferredRoute ? "터널 상태를 확인한 뒤 다시 연결하세요." : "다시 연결하세요."}</p>
       {preferredRoute && <button type="button" className="secondary small" onClick={onOpenTunnels}>SSH 터널 열기</button>}
@@ -222,15 +224,15 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
     <div hidden={view !== "sql"}><PostgresSqlWorkspace session={online ? session.id : null} projectId={profile.project_id} environment={environment}
       connection={profile.settings.name} database={session?.database ?? profile.settings.database} editor={editor} onExport={requestExport}
       onQueryActivity={onQueryActivity} /></div>
-    {online && <PostgresServerMonitor key={session.id} workspace={session} environment={environment} database={database} visible={visible && view === "monitor"} />}
+    {online && <PostgresServerMonitor key={session.id} workspace={session} profile={profile} environment={environment} database={database} visible={visible && view === "monitor"} />}
     {exportTarget && <PostgresResultExport profile={profile.settings} projectId={profile.project_id} target={exportTarget}
       unavailable={online && session.id === exportTarget.session ? "" : loss || "PostgreSQL에 다시 연결한 뒤 내보내세요."}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
-    {backup && <PostgresBackupDialog id={backup.id} target={backup.target} connection={name}
+    {backup && <PostgresBackupDialog id={backup.id} profile={profile} target={backup.target} connection={name}
       source={`${endpoint(host, port)} / ${database}`} environment={environment} onBusy={onFileBusy}
       unavailable={activeId === backup.id ? "" : loss || "PostgreSQL에 다시 연결한 뒤 백업을 시작하세요."}
       onClose={() => setBackup(null)} onDone={report => { setBackup(null); setBackupReport(report); }} />}
-    {restoreFor && <PostgresRestoreDialog id={restoreFor} server={endpoint(host, port)} environment={environment}
+    {restoreFor && <PostgresRestoreDialog id={restoreFor} profile={profile} server={endpoint(host, port)} environment={environment}
       unavailable={activeId === restoreFor ? "" : loss || "PostgreSQL에 다시 연결한 뒤 복원하세요."} onBusy={onFileBusy}
       onClose={() => setRestoreFor(null)} onRestored={report => { setRestoreFor(null); setRestoreReport(report); }} />}
     {dialog && <ConnectDialog profile={profile} preferredRoute={preferredRoute} onOpenTunnels={onOpenTunnels} onClose={() => {
@@ -251,7 +253,7 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
   const title = useId();
   const live = useRef(false);
   const pending = useRef(false);
-  const [password, setPassword] = useState("");
+  const credentials = usePostgresCredentials(profile);
   const [confirmation, setConfirmation] = useState("");
   const [route, setRoute] = useState(preferredRoute);
   const [routeRevision, setRouteRevision] = useState(0);
@@ -266,10 +268,10 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (pending.current || unavailable) return;
+    if (pending.current || unavailable || credentials.clearing) return;
     pending.current = true; setBusy(true); setError("");
     try {
-      const session = await invoke<Session>("open_postgres", { profile, password, confirmation, tunnelId: route?.id ?? null, gridEdit });
+      const session = await invoke<Session>("open_postgres", { profile, ...credentials.take(), confirmation, tunnelId: route?.id ?? null, gridEdit });
       if (live.current) onOpened(session);
       else await invoke("close_postgres", { id: session.id });
     } catch (reason) {
@@ -298,14 +300,14 @@ function ConnectDialog({ profile, preferredRoute, onClose, onOpened, onOpenTunne
         <button type="button" className="secondary small" onClick={() => { dialog.current?.close(); onOpenTunnels(); }}>SSH 터널 열기</button>
       </div>}
       {routes.error && <p className="form-error" role="alert">{routes.error}</p>}
-      <label className="field">PostgreSQL 암호<input type="password" autoFocus autoComplete="off" maxLength={4096} value={password} disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
+      <PostgresPasswordField credentials={credentials} disabled={busy} allowRemember autoFocus />
       {environment === "PROD" && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
       <label className="postgres-edit-opt-in"><input type="checkbox" checked={gridEdit} disabled={busy}
         onChange={event => setGridEdit(event.target.checked)} /> 이 연결에서 데이터 그리드 편집 허용</label>
       {busy && <p className="form-note" role="status">PostgreSQL에 연결하는 중…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="secondary" type="button" disabled={busy} onClick={() => dialog.current?.close()}>취소</button>
-        <button className="primary" type="submit" disabled={busy || unavailable}>연결</button></div>
+        <button className="primary" type="submit" disabled={busy || unavailable || credentials.clearing}>연결</button></div>
     </form>
   </dialog>;
 }

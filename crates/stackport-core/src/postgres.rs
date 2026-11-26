@@ -1,5 +1,6 @@
 mod backup;
 mod catalog;
+mod credentials;
 mod diagram;
 mod edit;
 mod export;
@@ -18,6 +19,7 @@ mod value;
 
 pub use backup::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use catalog::{PostgresStructure, PostgresStructureSection};
+pub use credentials::PostgresCredentialStatus;
 pub use diagram::PostgresSchemaDiagram;
 pub use edit::{
     PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome,
@@ -34,7 +36,7 @@ pub use profiles::{PostgresProfile, PostgresProfileInput};
 pub use restore::{PostgresRestorePreview, PostgresRestoreReport};
 pub use search::{PostgresSearchInput, PostgresSearchPage};
 pub use session::{
-    PostgresCatalogObject, PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
+    PostgresAuthentication, PostgresCatalogObject, PostgresDisconnect, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword,
     PostgresSchemaPage, PostgresSessionInfo,
 };
 pub use sql::script::{PostgresScriptInput, PostgresScriptOutcome};

@@ -43,7 +43,7 @@ pub use mongo::{MongoBackupInput, MongoBackupReport, MongoRestoreInput, MongoRes
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use mongo::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
-pub use postgres::{PostgresCatalogObject, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
+pub use postgres::{PostgresAuthentication, PostgresCatalogObject, PostgresCredentialStatus, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresScriptInput, PostgresScriptOutcome, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection};
 pub use postgres::PostgresSchemaDiagram;
 pub use postgres::{PostgresBackupContents, PostgresBackupReport, PostgresBackupTarget};
 pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
@@ -624,7 +624,7 @@ impl Store {
 
     pub fn delete_project(&self, id: &str) -> Result<()> {
         let mut db = self.connect()?;
-        let tx = db.transaction().map_err(db_error)?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(db_error)?;
         let profiles: i64 = tx
             .query_row(
                 "SELECT count(*) FROM profiles WHERE project_id = ?1",
@@ -639,6 +639,7 @@ impl Store {
                 |r| r.get(0),
             )
             .map_err(db_error)?;
+        self.delete_project_postgres_passwords(&tx, id)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;
@@ -993,6 +994,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "oracle-datapump-schema-import-reviewed-prod",
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" => "oracle-datapump-schema-import-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        "postgres.credential.save" | "postgres.credential.delete" => "windows-per-user-postgres-credential",
         "sqlite.backup.delete" => "sqlite-backup-expired-reviewed-fingerprint",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

@@ -60,6 +60,17 @@ const TUNNEL_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 #[serde(transparent)]
 pub struct PostgresPassword(#[serde(deserialize_with = "secret")] pub(super) Zeroizing<String>);
 
+pub enum PostgresAuthentication {
+    Entered { password: PostgresPassword, remember: bool },
+    Saved,
+}
+
+impl From<PostgresPassword> for PostgresAuthentication {
+    fn from(password: PostgresPassword) -> Self {
+        Self::Entered { password, remember: false }
+    }
+}
+
 pub(super) fn secret<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -77,6 +88,7 @@ pub struct PostgresSessionInfo {
     tunnel: Option<String>,
     tunnel_id: Option<String>,
     grid_edit: bool,
+    credential_warning: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -337,26 +349,40 @@ impl PostgresManager {
         &self,
         tunnels: &SshTunnelManager,
         profile: PostgresProfile,
-        password: PostgresPassword,
+        authentication: impl Into<PostgresAuthentication>,
         confirmation: &str,
         tunnel_id: Option<&str>,
         grid_edit: bool,
     ) -> Result<PostgresSessionInfo> {
-        let tls = self.authorize(&profile, &password, confirmation).await?;
+        let tls = self.authorize(&profile, confirmation).await?;
         let settings = &profile.settings;
         let tunnel = tunnel_id
             .map(|id| {
                 tunnels.database_tunnel(id, &profile.project_id, &settings.host, settings.port)
             })
             .transpose()?;
-        self.connect(profile, password, tls, tunnel, grid_edit, None)
-            .await
+        let authentication = authentication.into();
+        let remember = matches!(&authentication, PostgresAuthentication::Entered { remember: true, .. });
+        let password = self.resolve_password(&profile, authentication).await?;
+        let entry = (remember && !password.0.is_empty()).then(|| {
+            (profile.clone(), PostgresPassword(password.0.clone()))
+        });
+        let mut session = self.connect(profile, password, tls, tunnel, grid_edit, None).await?;
+        if let Some((profile, secret)) = entry {
+            let store = self.store.clone();
+            session.credential_warning = match tokio::task::spawn_blocking(move || store.remember_postgres_password(&profile, &secret)).await {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(_) => Some("저장한 암호를 확인할 수 없습니다.".into()),
+            };
+        }
+        Ok(session)
     }
 
     pub async fn open_monitor(
         &self,
         id: &str,
-        password: PostgresPassword,
+        authentication: impl Into<PostgresAuthentication>,
         confirmation: &str,
     ) -> Result<PostgresSessionInfo> {
         let workspace = self.session(id)?;
@@ -370,7 +396,8 @@ impl PostgresManager {
             connection_ended: workspace.connection_ended.clone(),
         };
         drop(workspace);
-        let tls = self.authorize(&profile, &password, confirmation).await?;
+        let tls = self.authorize(&profile, confirmation).await?;
+        let password = self.resolve_password(&profile, authentication.into()).await?;
         self.connect(profile, password, tls, tunnel, false, Some(owner))
             .await
     }
@@ -378,12 +405,8 @@ impl PostgresManager {
     async fn authorize(
         &self,
         profile: &PostgresProfile,
-        password: &PostgresPassword,
         confirmation: &str,
     ) -> Result<TlsConnector> {
-        if password.0.len() > 4096 || password.0.contains('\0') {
-            return Err("PostgreSQL 암호를 확인하세요.".into());
-        }
         if profile.settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
@@ -397,6 +420,22 @@ impl PostgresManager {
         })
         .await
         .map_err(|_| "PostgreSQL 연결 설정을 확인할 수 없습니다.")?
+    }
+
+    async fn resolve_password(&self, profile: &PostgresProfile, authentication: PostgresAuthentication) -> Result<PostgresPassword> {
+        let password = match authentication {
+            PostgresAuthentication::Entered { password, .. } => password,
+            PostgresAuthentication::Saved => {
+                let store = self.store.clone();
+                let expected = profile.clone();
+                tokio::task::spawn_blocking(move || store.saved_postgres_password(&expected))
+                    .await.map_err(|_| "저장된 PostgreSQL 암호를 읽을 수 없습니다.")??
+            }
+        };
+        if password.0.len() > 4096 || password.0.contains('\0') {
+            return Err("PostgreSQL 암호를 확인하세요.".into());
+        }
+        Ok(password)
     }
 
     async fn connect(
@@ -1025,7 +1064,7 @@ impl PostgresManager {
 
     pub async fn create_backup(
         &self, id: &str, request: &str, target: PostgresBackupTarget, contents: PostgresBackupContents,
-        password: PostgresPassword, confirmation: &str, destination: String,
+        authentication: impl Into<PostgresAuthentication>, confirmation: &str, destination: String,
     ) -> Result<PostgresBackupReport> {
         let session = self.session(id)?;
         if session.monitor_of.is_some() {
@@ -1033,7 +1072,8 @@ impl PostgresManager {
         }
         let request = Uuid::parse_str(request).map_err(|_| "올바른 백업 요청 ID가 필요합니다.")?;
         let job = ArchiveJob::start(Arc::clone(&session), request)?;
-        self.authorize(&session.profile, &password, confirmation).await?;
+        self.authorize(&session.profile, confirmation).await?;
+        let password = self.resolve_password(&session.profile, authentication.into()).await?;
         job.check()?;
         let source = timeout(QUERY_TIMEOUT, async {
             let mut client = session.client.lock().await;
@@ -1141,14 +1181,15 @@ impl PostgresManager {
 
     pub async fn apply_restore(
         &self, id: &str, request: &str, token: &str, database_confirmation: &str,
-        trusted: bool, password: PostgresPassword, confirmation: &str,
+        trusted: bool, authentication: impl Into<PostgresAuthentication>, confirmation: &str,
     ) -> Result<PostgresRestoreReport> {
         let session = self.session(id)?;
         let request = Uuid::parse_str(request).map_err(|_| "올바른 복원 요청 ID가 필요합니다.")?;
         let token = Uuid::parse_str(token).map_err(|_| "복원을 다시 미리 보세요.")?;
         let job = Arc::new(ArchiveJob::start(Arc::clone(&session), request)?);
         if !trusted { return Err("백업의 출처와 실행 권한을 확인하세요.".into()); }
-        let tls = self.authorize(&session.profile, &password, confirmation).await?;
+        let tls = self.authorize(&session.profile, confirmation).await?;
+        let password = self.resolve_password(&session.profile, authentication.into()).await?;
         let plan = {
             let mut plan = session.restore_plan.lock().map_err(|_| "복원 미리보기 상태를 확인할 수 없습니다.")?;
             let preview = plan.as_ref().filter(|item| item.token == token && item.expires > Instant::now())
@@ -1683,6 +1724,7 @@ async fn server_info(
         tunnel_id: endpoint.as_ref().map(|route| route.id.clone()),
         tunnel: endpoint.map(|route| route.name),
         grid_edit: session.grid_edit,
+        credential_warning: None,
     })
 }
 

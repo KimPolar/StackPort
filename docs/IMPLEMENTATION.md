@@ -254,7 +254,11 @@ Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만
 
 **명령 콘솔**은 현재 논리 DB에서 지원 목록의 읽기 전용 명령을 한 번에 하나씩 실행합니다. Tab이나 제안 버튼으로 명령 이름을 완성하고, 방향키로 이전 입력을 불러옵니다. 공백을 포함한 인수는 따옴표로 감싸고, 큰따옴표 안의 `\xNN`으로 바이너리 바이트를 지정할 수 있습니다. 단순 문자열·바이트 문자열·정수·배열·NULL을 구분해 표시합니다. 바이트 문자열당 512바이트, 중첩 응답 전체 256개 항목으로 화면 미리보기를 제한합니다. 코어의 RESP 응답 한도를 넘으면 연결을 닫습니다. 실행한 명령과 결과는 연결별로 최근 30건까지 메모리에 남고, 기록을 비우거나 연결을 종료하면 삭제됩니다. `FLUSHDB`, `DEL`, 스크립트, 서버 설정 변경 등은 콘솔에서 차단하고 사유를 표시합니다. [Redis CLI](https://redis.io/docs/latest/develop/tools/cli/) · [RESP](https://redis.io/docs/latest/develop/reference/protocol-spec/)
 
-탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 암호는 연결할 때 입력하며 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
+탐색기의 **PostgreSQL 연결 추가**에서 호스트·포트, 데이터베이스, 사용자 이름과 환경을 프로젝트에 저장합니다. 운영 환경은 `PROD` 확인을 거칩니다. 시스템 신뢰 저장소를 사용하며 사설 CA가 필요하면 PEM 인증서 파일을 함께 지정할 수 있습니다. TLS 1.2 이상에서 서버 인증서의 신뢰 체인과 호스트 이름을 검사합니다. 같은 프로젝트에서 등록한 PostgreSQL 호스트·포트로 전달하는 로컬 SSH 터널이 실행 중이면 **연결 경로**에서 선택할 수 있습니다. SSH 터널을 경유해도 저장된 PostgreSQL 호스트 이름으로 인증서를 검증합니다. [PostgreSQL TLS](https://www.postgresql.org/docs/current/libpq-ssl.html) · [tokio-postgres 연결 옵션](https://docs.rs/tokio-postgres/latest/tokio_postgres/config/struct.Config.html)
+
+Windows에서는 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 성공한 연결의 암호는 현재 Windows 사용자의 자격 증명 관리자에 보관합니다. **저장한 암호 사용**을 선택하면 연결, 서버 모니터, 백업, 복원에 네이티브 코드가 자격 증명을 전달합니다. 백업과 복원에서 `pg_dump`와 `pg_restore`에는 해당 프로세스의 환경으로 전달합니다. 각 작업에서 TLS와 운영 확인을 적용합니다.
+
+저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
 
@@ -780,6 +784,8 @@ $env:STACKPORT_POSTGRES_BIN = '<PostgreSQL 설치 폴더>\bin'
 $env:STACKPORT_TEST_OPENSSL = '<OpenSSL 경로>\openssl.exe'
 node tests/postgres-smoke.cjs
 ```
+
+Windows 자격 증명 검사에서는 `STACKPORT_POSTGRES_CREDENTIAL_ONLY=1`, `STACKPORT_TEST_APP_EXE`에 격리 앱 실행 파일, `STACKPORT_POSTGRES_TOOLS_DIR`에 백업 도구 폴더를 지정합니다. 테스트용 암호만 저장해 별도 앱 프로세스에서 TLS 연결 및 모니터를 열고, 기존 앱에서 백업과 새 DB 복원을 수행한 뒤 저장 항목을 삭제합니다.
 
 SSH 검사는 같은 격리 앱에서 테스트 전용 루프백 서버를 시작합니다. Node 24와 개발 의존성 `ssh2`가 필요하며, 아래 경로는 위에서 만든 테스트 폴더여야 합니다.
 
