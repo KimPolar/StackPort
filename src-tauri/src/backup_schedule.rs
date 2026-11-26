@@ -78,6 +78,11 @@ pub(crate) async fn preview_backup_calendar(input: BackupCalendar) -> Result<Vec
 }
 
 #[tauri::command]
+pub(crate) fn preview_backup_file_name(prefix: String, template: String, postgres: bool, scheduled: bool) -> Result<String, String> {
+    stackport_core::backup_schedule::preview_backup_file_name(&prefix, &template, postgres, scheduled)
+}
+
+#[tauri::command]
 pub(crate) async fn postgres_backup_plan(store: State<'_, Store>, profile_id: String) -> Result<BackupPlanState, String> {
     let store = store.inner().clone();
     super::worker(move || store.postgres_backup_plan(&profile_id)).await

@@ -1,6 +1,6 @@
 use super::{
-    active_profile, backup_directory, confirm_postgres, free_space, read_plan,
-    sqlite_backup_source_size, unix_now, BackupPlanWrite, CalendarSchedule,
+    active_profile, backup_directory, confirm_postgres, effective_file_name_template, file_name,
+    free_space, read_plan, sqlite_backup_source_size, unix_now, BackupPlanWrite, CalendarSchedule,
     DEFAULT_RETRY_DELAY_MINUTES, LATEST_START, MAX_RETRIES, MAX_TIMEOUT_SECONDS,
     NO_CALENDAR_OCCURRENCE,
 };
@@ -24,16 +24,7 @@ pub(super) fn validate_settings(
     now: i64,
 ) -> Result<ValidatedSettings<'_>> {
     let prefix = input.prefix.trim();
-    if prefix.is_empty()
-        || prefix.len() > 40
-        || !prefix
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
-    {
-        return Err(
-            "백업 이름 접두어는 영문, 숫자, 하이픈, 밑줄을 사용해 1~40자로 입력하세요.".into(),
-        );
-    }
+    file_name::validate_prefix(prefix)?;
     if input
         .interval_minutes
         .is_some_and(|minutes| !(1..=43_200).contains(&minutes))
@@ -192,11 +183,16 @@ impl Store {
             if !active_profile(&db, profile_id, postgres)? {
                 return Err("활성 프로젝트의 연결을 선택하세요.".into());
             }
-            if read_plan(&db, profile_id)?.map(|plan| plan.revision) != input.revision {
+            let previous = read_plan(&db, profile_id)?;
+            if previous.as_ref().map(|plan| plan.revision) != input.revision {
                 return Err(
                     "다른 창에서 백업 계획을 수정했습니다. 새로고침하고 다시 검증하세요.".into(),
                 );
             }
+            file_name::validate_template(
+                effective_file_name_template(input, previous.as_ref()),
+                settings.prefix,
+            )?;
             Ok(settings)
         })();
         let Some(settings) = report.check("settings", settings, |_| {

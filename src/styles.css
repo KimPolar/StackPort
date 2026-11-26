@@ -815,6 +815,8 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .dialog.sqlite-backup-plan { width: min(620px, calc(100vw - 32px)); }
 .backup-plan-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
 .backup-plan-fields .field { margin-bottom: 0; }
+.backup-plan-fields + .field { margin-top: 12px; }
+.backup-name-example { display: block; overflow-wrap: anywhere; }
 .sqlite-backup-plan .dialog-actions { flex-wrap: wrap; }
 .backup-validation { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); font-size: 12px; }
 .backup-validation h3 { margin: 0 0 8px; font-size: 14px; }

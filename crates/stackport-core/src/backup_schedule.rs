@@ -1,10 +1,12 @@
 //! Workspace scheduler for verified database backups.
 mod calendar;
 mod execution;
+mod file_name;
 mod history;
 mod validation;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
+pub use file_name::preview_backup_file_name;
 pub(crate) use execution::{Execution, RunControl, Stop};
 pub use history::{BackupHistoryCursor, BackupHistoryFilter, BackupHistoryPage};
 pub use validation::BackupPlanValidation;
@@ -14,7 +16,6 @@ use crate::{
     backup_artifact::{self, ArtifactSummary},
     db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
 };
-use chrono::{DateTime, Utc};
 use rusqlite::hooks::{AuthContext, Authorization};
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ pub(crate) const SCHEMA: &str = "
         workspace_path TEXT NOT NULL,
         directory TEXT NOT NULL,
         prefix TEXT NOT NULL,
+        file_name_template TEXT,
         interval_minutes INTEGER,
         calendar TEXT CHECK (calendar IS NULL OR interval_minutes IS NULL),
         retention_days INTEGER NOT NULL,
@@ -137,6 +139,9 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
         db.execute_batch("ALTER TABLE backup_plans ADD COLUMN next_excluded_at INTEGER;").map_err(db_error)?;
         initialize_exclusion_cursors(db)?;
     }
+    if !has_column("backup_plans", "file_name_template")? {
+        db.execute_batch("ALTER TABLE backup_plans ADD COLUMN file_name_template TEXT;").map_err(db_error)?;
+    }
     if legacy {
         db.execute_batch("INSERT INTO backup_plans
             (profile_id, sqlite_profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at, retry_at)
@@ -203,6 +208,7 @@ pub struct BackupPlanWrite {
     revision: Option<i64>,
     directory: String,
     prefix: String,
+    file_name_template: Option<String>,
     interval_minutes: Option<i64>,
     #[serde(default)]
     calendar: Option<BackupCalendar>,
@@ -227,6 +233,7 @@ pub struct BackupPlan {
     workspace_path: String,
     directory: String,
     prefix: String,
+    file_name_template: String,
     interval_minutes: Option<i64>,
     calendar: Option<BackupCalendar>,
     retention_days: i64,
@@ -449,13 +456,15 @@ impl Store {
                 "다른 창에서 백업 계획을 수정했습니다. 새로고침하고 다시 저장하세요.".into(),
             );
         }
+        let template = effective_file_name_template(&input, previous.as_ref());
+        file_name::validate_template(template, prefix)?;
         let tunnel = route.map(serde_json::to_string).transpose()
             .map_err(|_| "백업 계획의 SSH 터널을 저장할 수 없습니다.")?;
         let calendar = input.calendar.as_ref().map(serde_json::to_string).transpose()
             .map_err(|_| "백업 달력 일정을 저장할 수 없습니다.")?;
         let timeout_seconds = input.timeout_seconds.or_else(|| previous.as_ref().map(|plan| plan.timeout_seconds))
             .unwrap_or(if postgres.is_some() { DEFAULT_POSTGRES_TIMEOUT_SECONDS } else { 0 });
-        let next_excluded_at = match previous {
+        let next_excluded_at = match &previous {
             Some(previous) if input.calendar_enabled && previous.calendar == input.calendar &&
                 (previous.next_at.is_some() || previous.next_excluded_at.is_some()) => previous.next_excluded_at,
             _ => next_excluded_at,
@@ -463,16 +472,17 @@ impl Store {
         tx.execute(
             "INSERT INTO backup_plans
              (profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, file_name_template)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
              ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, workspace_path=excluded.workspace_path,
              directory=excluded.directory, prefix=excluded.prefix, interval_minutes=excluded.interval_minutes,
              retention_days=excluded.retention_days, retry_limit=excluded.retry_limit, retry_delay_minutes=excluded.retry_delay_minutes,
              next_at=excluded.next_at, next_excluded_at=excluded.next_excluded_at, retry_at=NULL, retry_attempt=1, timeout_seconds=excluded.timeout_seconds,
-             postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel, calendar=excluded.calendar",
+             postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel, calendar=excluded.calendar,
+             file_name_template=excluded.file_name_template",
             params![profile_id, revision.unwrap_or(0) + 1, self.backup_workspace_path()?, directory,
                 prefix, input.interval_minutes, input.retention_days, retry_limit, next_at,
-                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at],
+                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, template],
         ).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         self.backup_plan(profile_id, postgres)
@@ -647,15 +657,12 @@ impl Store {
             .ok_or("사용 가능한 백업 실행 잠금을 찾을 수 없습니다.")?;
         let trigger_kind = trigger.kind;
         let retry_attempt = trigger.retry_attempt;
-        let id = Uuid::new_v4().to_string();
-        let timestamp =
-            DateTime::<Utc>::from_timestamp(now, 0).ok_or("백업 시각을 확인할 수 없습니다.")?;
-        let extension = if is_postgres { "backup" } else { "sqlite" };
-        let destination = Path::new(&plan.directory).join(format!(
-            "{}-{}-{id}.{extension}",
-            plan.prefix,
-            timestamp.format("%Y%m%dT%H%M%SZ")
-        ));
+        let run_id = Uuid::new_v4();
+        let file_name = file_name::backup_file_name(
+            &plan.file_name_template, &plan.prefix, now, is_postgres, trigger_kind, run_id,
+        )?;
+        let id = run_id.to_string();
+        let destination = Path::new(&plan.directory).join(file_name);
         let path = destination.to_string_lossy();
         tx.execute(
             "INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path, retry_attempt, worker_slot, scheduled_at)
@@ -885,10 +892,11 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
 fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
     db.query_row(
         "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END, timeout_seconds, next_excluded_at
+                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END, timeout_seconds, next_excluded_at, file_name_template
          FROM backup_plans WHERE profile_id=?1",
         [profile_id], |row| Ok(BackupPlan {
             revision: row.get(0)?, workspace_path: row.get(1)?, directory: row.get(2)?, prefix: row.get(3)?,
+            file_name_template: row.get::<_, Option<String>>(16)?.unwrap_or_else(|| file_name::DEFAULT_TEMPLATE.into()),
             interval_minutes: row.get(4)?, retention_days: row.get(5)?, retry_once: row.get::<_, u8>(6)? > 0,
             retry_limit: row.get(6)?, retry_delay_minutes: row.get(12)?, retry_attempt: row.get(13)?, timeout_seconds: row.get(14)?,
             next_at: row.get(7)?, next_excluded_at: row.get(15)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, requires_review: false,
@@ -898,6 +906,12 @@ fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
                 .map_err(|error| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
         }),
     ).optional().map_err(db_error)
+}
+
+fn effective_file_name_template<'a>(input: &'a BackupPlanWrite, previous: Option<&'a BackupPlan>) -> &'a str {
+    input.file_name_template.as_deref().map(str::trim)
+        .or_else(|| previous.map(|plan| plan.file_name_template.as_str()))
+        .unwrap_or(file_name::DEFAULT_TEMPLATE)
 }
 
 pub(crate) fn active_profile(db: &Connection, profile_id: &str, postgres: bool) -> Result<bool> {
@@ -1067,6 +1081,7 @@ fn free_space(_: &Path) -> Result<Option<u64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use std::fs;
 
     struct Fixture {
@@ -1121,6 +1136,7 @@ mod tests {
                 revision: None,
                 directory: self.output.to_str().unwrap().into(),
                 prefix: "fixture".into(),
+                file_name_template: None,
                 interval_minutes: interval,
                 calendar: None,
                 calendar_enabled: false,
@@ -1185,6 +1201,42 @@ mod tests {
         assert_eq!(history[1].scheduled_at, Some(first + 60));
         assert!(history[1].path.is_empty() && history[1].artifact.is_none());
         assert!(history[1].message.as_deref().unwrap().contains("2건"));
+    }
+
+    #[test]
+    fn v31_plans_keep_the_default_and_legacy_edits_keep_a_saved_name_rule() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, None);
+        let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let old_name = Path::new(&run.path).file_name().unwrap().to_string_lossy();
+        assert!(old_name.starts_with("fixture-") && old_name.ends_with(&format!("-{}.sqlite", run.id)));
+        f.store.connect().unwrap()
+            .execute_batch("ALTER TABLE backup_plans DROP COLUMN file_name_template; PRAGMA user_version=31;").unwrap();
+        let migrated = Store::open(&f.workspace).unwrap();
+        let plan = migrated.sqlite_backup_plan(&f.profile_id).unwrap().plan.unwrap();
+        assert_eq!(plan.file_name_template, file_name::DEFAULT_TEMPLATE);
+        assert_eq!(plan.next_at, Some(first));
+        assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &run.id).is_ok());
+
+        let mut edit = f.plan_input(first, None);
+        edit.revision = Some(plan.revision);
+        edit.file_name_template = Some("../{prefix}".into());
+        assert!(migrated.save_sqlite_backup_plan(&f.profile_id, edit).is_err());
+        let mut edit = f.plan_input(first, None);
+        edit.revision = Some(plan.revision);
+        edit.file_name_template = Some("보관-{engine}-{trigger}-{prefix}".into());
+        let saved = migrated.save_sqlite_backup_plan(&f.profile_id, edit).unwrap().plan.unwrap();
+        let mut legacy_edit = f.plan_input(first, None);
+        legacy_edit.revision = Some(saved.revision);
+        legacy_edit.prefix = "revised".into();
+        let updated = migrated.save_sqlite_backup_plan(&f.profile_id, legacy_edit).unwrap().plan.unwrap();
+        assert_eq!(updated.file_name_template, saved.file_name_template);
+        let named = migrated.run_sqlite_backup_plan(&f.profile_id, updated.revision).unwrap();
+        assert_eq!(Path::new(&named.path).file_name().unwrap().to_str().unwrap(),
+            format!("보관-sqlite-manual-revised-{}.sqlite", named.id));
+        assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &named.id).is_ok());
+        assert!(Path::new(&run.path).is_file());
     }
 
     #[test]

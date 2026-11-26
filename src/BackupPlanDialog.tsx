@@ -9,7 +9,7 @@ type BackupTunnel = TunnelChoice & { revision: number; profiles: (TunnelChoice &
 type Calendar = { expression: string; time_zone: string; excluded_dates: string[] };
 type Occurrence = { at: number; local_time: string };
 type Plan = {
-  revision: number; directory: string; prefix: string; interval_minutes: number | null;
+  revision: number; directory: string; prefix: string; file_name_template: string; interval_minutes: number | null;
   retention_days: number; retry_limit: number; retry_delay_minutes: number; retry_attempt: number | null; timeout_seconds: number;
   next_at: number | null; next_excluded_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
@@ -37,7 +37,7 @@ type Validation = {
 type RemovalPreview = { token: string; path: string; size_bytes: number; sha256: string; expires_at: number };
 type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
-  revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
+  revision: number | null; directory: string; prefix: string; fileNameTemplate: string; scheduled: boolean; next: string;
   mode: "once" | "periodic" | "calendar"; minutes: string; retention: string; retry: boolean;
   retryCount: string; retryMinutes: string; timeoutSeconds: string;
   expression: string; timeZone: string; excluded: string;
@@ -62,6 +62,7 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     revision: plan?.revision ?? null,
     directory: plan ? displayPath(plan.directory) : "",
     prefix: plan?.prefix ?? `${engine}-backup`,
+    fileNameTemplate: plan?.file_name_template ?? "{prefix}-{utc}",
     scheduled: plan ? plan.next_at !== null || plan.next_excluded_at !== null : true,
     next: dateInput(plan?.next_at ?? Math.floor(Date.now() / 1000) + 600),
     mode: plan?.calendar ? "calendar" : plan && plan.interval_minutes === null ? "once" : "periodic",
@@ -86,7 +87,7 @@ function planInput(draft: Draft) {
   const nextAt = draft.scheduled && draft.mode !== "calendar" ? Date.parse(draft.next) / 1000 : null;
   if (nextAt !== null && !Number.isSafeInteger(nextAt)) throw new Error("첫 실행 시각을 입력하세요.");
   return {
-    revision: draft.revision, directory: draft.directory, prefix: draft.prefix,
+    revision: draft.revision, directory: draft.directory, prefix: draft.prefix, file_name_template: draft.fileNameTemplate,
     interval_minutes: draft.mode === "periodic" ? Number(draft.minutes) : null,
     calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
     calendar_enabled: draft.mode === "calendar" && draft.scheduled,
@@ -119,8 +120,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [validation, setValidation] = useState<Validation | null>(null);
   const [preview, setPreview] = useState<Occurrence[]>([]);
+  const [fileNameExample, setFileNameExample] = useState("");
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "validate" | "preview" | "refresh" | "pause" | "file" | "history" | "policy" | "">("");
+  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "validate" | "preview" | "name" | "refresh" | "pause" | "file" | "history" | "policy" | "">("");
   const [cancelRequested, setCancelRequested] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -179,6 +181,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setError("");
     setNotice("");
     setValidation(null);
+    if (key === "prefix" || key === "fileNameTemplate" || key === "scheduled") setFileNameExample("");
     if (key === "directory" || key === "tunnel") setCapacity(null);
     if (key === "mode" || key === "expression" || key === "timeZone" || key === "excluded") setPreview([]);
   }
@@ -197,6 +200,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setSnapshot(state);
     setDraft(form(state.plan, displayPath, engine, tunnels.find(tunnel => tunnel.id === preferredTunnel?.id) ?? preferredTunnel));
     setPreview([]);
+    setFileNameExample("");
     setValidation(null);
     setDirty(false);
   }
@@ -342,7 +346,18 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           <label className="field">보존 기간 (일)<input required type="number" min={1} max={3650} step={1} value={draft.retention}
             disabled={Boolean(busy)} onChange={event => change("retention", event.target.value)} /></label>
         </div>
-        <p className="form-note">파일 이름에 UTC 실행 시각과 고유 ID가 붙습니다. 보존 기간이 지난 파일은 실행 이력에서 검토 후 삭제할 수 있습니다.</p>
+        <label className="field">파일 이름 규칙<span className="file-input">
+          <input required maxLength={120} value={draft.fileNameTemplate} disabled={Boolean(busy)}
+            onChange={event => change("fileNameTemplate", event.target.value)} />
+          <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void perform("name", async () => {
+            setFileNameExample(await invoke<string>("preview_backup_file_name", {
+              prefix: draft.prefix, template: draft.fileNameTemplate, postgres: Boolean(postgres), scheduled: draft.scheduled,
+            }));
+          })}>이름 미리보기</button>
+        </span></label>
+        <p className="form-note">변수 <code>{"{prefix}"}</code> <code>{"{utc}"}</code> <code>{"{date}"}</code> <code>{"{time}"}</code> <code>{"{engine}"}</code> <code>{"{trigger}"}</code>.
+          날짜와 시각은 UTC이며 작업 ID와 확장자는 자동으로 붙습니다.</p>
+        {fileNameExample && <output aria-label="백업 파일 이름 미리보기" className="form-note backup-name-example">{fileNameExample}</output>}
         <label className="files-check"><input type="checkbox" checked={draft.scheduled} disabled={Boolean(busy)}
           onChange={event => change("scheduled", event.target.checked)} /> 예약 실행</label>
         {draft.scheduled && <div className="backup-plan-fields">

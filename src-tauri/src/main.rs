@@ -3387,6 +3387,7 @@ fn main() {
             backup_sqlite,
             backup_schedule::sqlite_backup_plan,
             backup_schedule::preview_backup_calendar,
+            backup_schedule::preview_backup_file_name,
             backup_schedule::sqlite_backup_capacity,
             backup_schedule::save_sqlite_backup_plan,
             backup_schedule::run_sqlite_backup_plan,

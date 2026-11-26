@@ -167,7 +167,7 @@ mod tls;
 pub mod backup_schedule;
 pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 31;
+const SCHEMA_VERSION: i64 = 32;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (

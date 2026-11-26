@@ -11,7 +11,7 @@ const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip', 'history', 'validate'].includes(phase)) {
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip', 'history', 'validate', 'names'].includes(phase)) {
   throw new Error('Set the isolated root and backup test phase.');
 }
 
@@ -86,6 +86,11 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
+        if (phase === 'names') {
+          await verifyFileNames(page, dialog, history, state, profile.id);
+          assert.deepEqual(errors, []);
+          return;
+        }
         if (phase === 'validate') {
           await verifyPlanValidation(dialog, () => state(profile.id));
           assert.deepEqual(errors, []);
@@ -257,6 +262,54 @@ async function verifyPlanValidation(dialog, state) {
   assert.equal((await state()).plan, null);
   assert.deepEqual(fs.readdirSync(output), []);
   console.log('Validated the unsaved SQLite plan and reported missing storage and invalid cron without creating a backup.');
+}
+
+async function verifyFileNames(page, dialog, history, state, profileId) {
+  const field = dialog.getByLabel('파일 이름 규칙');
+  const preview = dialog.getByRole('button', { name: '이름 미리보기', exact: true });
+  const example = dialog.getByLabel('백업 파일 이름 미리보기', { exact: true });
+  assert.equal(await field.inputValue(), '{prefix}-{utc}');
+  await field.fill('../{prefix}');
+  await preview.click();
+  await dialog.getByRole('alert').getByText(/파일 이름 규칙에는/).waitFor();
+  const template = '보관_{engine}_{date}_{trigger}-{prefix}';
+  await field.fill(template);
+  await preview.click();
+  await example.waitFor();
+  assert.match(await example.innerText(), /^보관_sqlite_\d{4}-\d{2}-\d{2}_scheduled-fixture-0{8}-0{4}-0{4}-0{4}-0{12}\.sqlite$/);
+  await dialog.getByLabel('실행 주기').selectOption('once');
+  await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(dateInput(Math.floor(Date.now() / 1000) + 9));
+  await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+  await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+  await history.getByText(/무결성 검사 통과 · 수동 실행/).waitFor();
+  await history.getByText(/무결성 검사 통과 · 예약 실행/).waitFor({ timeout: 18000 });
+  const saved = await state(profileId);
+  assert.equal(saved.plan.file_name_template, template);
+  assert.equal(saved.runs.length, 2);
+  for (const run of saved.runs) {
+    const day = new Date(run.started_at * 1000).toISOString().slice(0, 10);
+    assert.equal(path.basename(run.path), `보관_sqlite_${day}_${run.trigger_kind}-fixture-${run.id}.sqlite`);
+    assert.equal(run.artifact.sha256, createHash('sha256').update(fs.readFileSync(run.path)).digest('hex'));
+    verifySnapshot(run.path);
+  }
+  const scheduled = saved.runs.find(run => run.trigger_kind === 'scheduled');
+  const manual = saved.runs.find(run => run.trigger_kind === 'manual');
+  const metadata = new DatabaseSync(path.join(root, 'workspace', 'workspace.sqlite'));
+  try { metadata.prepare('UPDATE backup_runs SET expires_at=0 WHERE id=?').run(scheduled.id); }
+  finally { metadata.close(); }
+  await dialog.getByRole('button', { name: '만료 파일', exact: true }).click();
+  const details = history.locator('details').filter({ hasText: '예약 실행' });
+  await details.locator('summary').click();
+  await details.getByRole('button', { name: '파일 지문 확인', exact: true }).click();
+  await details.getByRole('status').getByText(/생성 당시 기록과 일치/).waitFor();
+  await details.getByRole('button', { name: '만료 파일 삭제', exact: true }).click();
+  const approval = page.getByRole('dialog', { name: '만료 백업 영구 삭제', exact: true });
+  await approval.getByRole('button', { name: '영구 삭제', exact: true }).click();
+  await approval.waitFor({ state: 'detached' });
+  assert.equal(fs.existsSync(scheduled.path), false);
+  assert.equal(fs.existsSync(manual.path), true);
+  console.log('Stored and rendered the custom SQLite name for manual and scheduled runs, then verified and removed only the reviewed expired file.');
 }
 
 async function verifyWorkspaceHistory(page, dialog, command, profile) {

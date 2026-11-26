@@ -3012,6 +3012,12 @@ async function verifyPostgresBackupHistory(page, command, profile) {
   await page.getByRole('button', { name: '백업 계획', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
   await dialog.getByLabel('저장 폴더').fill(directory);
+  const template = 'archive-{engine}-{trigger}';
+  await dialog.getByLabel('파일 이름 규칙').fill(template);
+  await dialog.getByRole('button', { name: '이름 미리보기', exact: true }).click();
+  const nameExample = dialog.getByLabel('백업 파일 이름 미리보기', { exact: true });
+  await nameExample.waitFor();
+  assert.match(await nameExample.innerText(), /^archive-postgres-scheduled-0{8}-0{4}-0{4}-0{4}-0{12}\.backup$/);
   const validate = dialog.getByRole('button', { name: '계획 검증', exact: true });
   const result = dialog.getByRole('region', { name: '백업 계획 검증 결과', exact: true });
   await validate.click();
@@ -3028,10 +3034,11 @@ async function verifyPostgresBackupHistory(page, command, profile) {
   await dialog.getByRole('button', { name: '닫기', exact: true }).click();
   console.log('Validated PostgreSQL TLS and backup tools after PROD confirmation without saving a plan or archive.');
   const { plan } = await command('save_postgres_backup_plan', { profile, confirmation: 'PROD', tunnel: null, input: {
-    revision: null, directory, prefix: 'history', interval_minutes: null, retention_days: 7, retry_limit: 0, next_at: null,
+    revision: null, directory, prefix: 'history', file_name_template: template, interval_minutes: null, retention_days: 7, retry_limit: 0, next_at: null,
   } });
   const first = await command('run_postgres_backup_plan', { profile, confirmation: 'PROD', revision: plan.revision });
   assert.equal(first.status, 'succeeded');
+  assert.equal(path.basename(first.path), `archive-postgres-manual-${first.id}.backup`);
   await page.reload();
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
   await page.getByRole('button', { name: '백업 실행', exact: true }).click();
@@ -3052,6 +3059,8 @@ async function verifyPostgresBackupHistory(page, command, profile) {
   const latest = state.runs[0];
   assert.notEqual(latest.id, first.id);
   assert.equal(latest.status, 'succeeded');
+  assert.equal(path.basename(latest.path), `archive-postgres-manual-${latest.id}.backup`);
+  assert.equal(fs.existsSync(first.path), true);
   assert.equal(createHash('sha256').update(fs.readFileSync(latest.path)).digest('hex'), latest.artifact.sha256);
   console.log('PostgreSQL reran from history after PROD confirmation and wrote a separate verified archive.');
 }
