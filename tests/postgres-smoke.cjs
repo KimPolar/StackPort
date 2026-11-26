@@ -8,6 +8,7 @@ const path = require('node:path');
 const { crc32 } = require('node:zlib');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { startGateway } = require('./ssh-forward-fixture.cjs');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const bin = process.env.STACKPORT_POSTGRES_BIN;
@@ -3240,32 +3241,7 @@ async function verifyExpiredPostgresBackup(page, run, trigger) {
 }
 
 async function verifyCredentialInNewProcess(profile, secret) {
-  const executable = process.env.STACKPORT_TEST_APP_EXE;
-  assert.ok(executable);
-  const listener = net.createServer();
-  listener.listen(0, '127.0.0.1');
-  await once(listener, 'listening');
-  const port = listener.address().port;
-  await new Promise(resolve => listener.close(resolve));
-  const child = spawn(executable, [], { cwd: root, windowsHide: true, stdio: 'ignore', env: {
-    ...process.env,
-    WEBVIEW2_USER_DATA_FOLDER: path.join(root, 'second-webview'),
-    WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: '--remote-debugging-port=' + port + ' --disable-background-networking',
-  } });
-  let browser;
-  try {
-    const url = 'http://127.0.0.1:' + port;
-    const deadline = Date.now() + 15000;
-    let ready = false;
-    while (!ready && child.exitCode === null && Date.now() < deadline) {
-      ready = await fetch(url + '/json/version').then(response => response.ok, () => false);
-      if (!ready) await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    assert.ok(ready, 'Second isolated WebView2 instance did not start.');
-    browser = await chromium.connectOverCDP(url);
-    const page = browser.contexts()[0].pages()[0];
-    await page.waitForFunction(() => typeof window.__TAURI_INTERNALS__?.invoke === 'function');
-    const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  await withSecondDesktopInstance(root, async command => {
     const status = await command('postgres_credential_status', { profile });
     assert.deepEqual(status, { supported: true, stored: true, usable: true });
     const session = await command('open_postgres', { profile, useSavedPassword: true, password: null, confirmation: 'PROD' });
@@ -3274,14 +3250,7 @@ async function verifyCredentialInNewProcess(profile, secret) {
     const monitor = await command('open_postgres_monitor', { id: session.id, useSavedPassword: true, password: null, confirmation: 'PROD' });
     await command('close_postgres', { id: monitor.id });
     await command('close_postgres', { id: session.id });
-  } finally {
-    await browser?.close();
-    if (child.exitCode === null && child.signalCode === null) {
-      const closed = once(child, 'exit');
-      child.kill();
-      await closed;
-    }
-  }
+  });
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

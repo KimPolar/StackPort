@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use stackport_core::{ResumeLayout, ResumeTool, Store, WorkspaceResume};
 use std::path::{Path, PathBuf};
 
-const CURRENT_WORKSPACE_VERSION: i64 = 29;
+const CURRENT_WORKSPACE_VERSION: i64 = 30;
 
 #[test]
 fn v21_workspaces_gain_backup_plans_after_a_verified_snapshot() {

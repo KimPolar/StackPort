@@ -1,7 +1,8 @@
 use stackport_core::{
     backup_artifact::{RemovalPreview, RemovalResult},
     backup_schedule::{
-        BackupCalendar, BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence, ExpiredBackupPage,
+        BackupCalendar, BackupCapacity, BackupExecutionPolicy, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence,
+        ExpiredBackupPage, MAX_CONCURRENT_BACKUPS,
     },
     BackupTunnelRoute, PostgresProfile, SshTunnelManager, Store,
 };
@@ -11,28 +12,42 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
-pub(crate) struct Scheduler(Sender<()>);
+pub(crate) struct Scheduler(Vec<Sender<()>>);
 
 impl Scheduler {
     pub(crate) fn start(app: AppHandle, store: Store) -> std::io::Result<Self> {
-        let (stop, stopped) = mpsc::channel();
-        std::thread::Builder::new()
-            .name("backup-scheduler".into())
-            .spawn(move || {
-                while let Err(RecvTimeoutError::Timeout) =
-                    stopped.recv_timeout(Duration::from_secs(2))
-                {
-                    if let Ok(Some(run)) = store.run_due_backup(app.state::<SshTunnelManager>().inner()) {
-                        let _ = app.emit("backup-finished", (run.engine, run.status));
+        let mut workers = Vec::with_capacity(usize::from(MAX_CONCURRENT_BACKUPS));
+        for index in 1..=MAX_CONCURRENT_BACKUPS {
+            let (stop, stopped) = mpsc::channel();
+            let app = app.clone();
+            let store = store.clone();
+            std::thread::Builder::new()
+                .name(format!("backup-scheduler-{index}"))
+                .spawn(move || {
+                    while let Err(RecvTimeoutError::Timeout) =
+                        stopped.recv_timeout(Duration::from_secs(2))
+                    {
+                        if let Ok(Some(run)) = store.run_due_backup(app.state::<SshTunnelManager>().inner()) {
+                            let _ = app.emit("backup-finished", (run.engine, run.status));
+                        }
                     }
-                }
-            })?;
-        Ok(Self(stop))
+                })?;
+            workers.push(stop);
+        }
+        Ok(Self(workers))
     }
 
     pub(crate) fn stop(&self) {
-        let _ = self.0.send(());
+        for worker in &self.0 {
+            let _ = worker.send(());
+        }
     }
+}
+
+#[tauri::command]
+pub(crate) async fn set_backup_concurrency(store: State<'_, Store>, revision: i64, max_concurrent: u8) -> Result<BackupExecutionPolicy, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.set_backup_concurrency(revision, max_concurrent)).await
 }
 
 #[tauri::command]

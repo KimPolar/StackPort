@@ -1,5 +1,6 @@
 use crate::Result;
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::{Duration, Instant},
 };
@@ -21,16 +22,15 @@ impl Stop {
 }
 
 #[derive(Default)]
-pub(crate) struct Execution(Mutex<Option<Active>>);
+pub(crate) struct Execution(Mutex<HashMap<String, Active>>);
 
 struct Active {
     profile_id: String,
-    run_id: String,
     control: RunControl,
 }
 
 impl Execution {
-    fn active(&self) -> MutexGuard<'_, Option<Active>> {
+    fn active(&self) -> MutexGuard<'_, HashMap<String, Active>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -43,34 +43,37 @@ impl Execution {
         let deadline = (timeout_seconds > 0)
             .then(|| Instant::now() + Duration::from_secs(u64::from(timeout_seconds)));
         let control = RunControl::new(deadline);
-        *self.active() = Some(Active {
-            profile_id: profile_id.into(),
-            run_id: run_id.into(),
-            control: control.clone(),
-        });
+        self.active().insert(
+            run_id.into(),
+            Active {
+                profile_id: profile_id.into(),
+                control: control.clone(),
+            },
+        );
         Registration {
             execution: self,
+            run_id: run_id.into(),
             control,
         }
     }
 
     pub(super) fn for_run(&self, profile_id: &str, run_id: &str) -> Option<RunControl> {
         self.active()
-            .as_ref()
-            .filter(|run| run.profile_id == profile_id && run.run_id == run_id)
+            .get(run_id)
+            .filter(|run| run.profile_id == profile_id)
             .map(|run| run.control.clone())
     }
 }
 
 pub(super) struct Registration<'a> {
     execution: &'a Execution,
+    run_id: String,
     pub(super) control: RunControl,
 }
 
 impl Drop for Registration<'_> {
     fn drop(&mut self) {
-        // The scheduler holds the workspace lock until the registration is dropped.
-        self.execution.active().take();
+        self.execution.active().remove(&self.run_id);
     }
 }
 

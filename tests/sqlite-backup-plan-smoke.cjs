@@ -6,11 +6,14 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash } = require('node:crypto');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar/retry/cancel/timeout phase.');
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency'].includes(phase)) {
+  throw new Error('Set the isolated root and backup test phase.');
+}
 
 const source = path.join(root, '예약 원본.sqlite');
 const output = path.join(root, '예약 백업');
@@ -83,6 +86,11 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
+        if (phase === 'concurrency') {
+          await verifyConcurrency(dialog, history, command, project.id, profile.id);
+          assert.deepEqual(errors, []);
+          return;
+        }
         if (phase === 'cancel' || phase === 'timeout') {
           const due = await scheduleLargeBackup(db, dialog, phase === 'timeout' ? 1 : 0);
           const verify = phase === 'cancel' ? verifyCancellation : verifyTimeout;
@@ -200,10 +208,89 @@ async function main() {
   } finally { await browser.close(); }
 }
 
-async function scheduleLargeBackup(db, dialog, timeoutSeconds) {
+function seedLargeSnapshot(db, blocks = 256) {
   db.exec(`CREATE TABLE large_snapshot (data BLOB);
-    WITH RECURSIVE blocks(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM blocks WHERE n<256)
+    WITH RECURSIVE blocks(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM blocks WHERE n<${blocks})
     INSERT INTO large_snapshot SELECT zeroblob(1048576) FROM blocks;`);
+}
+
+async function verifyConcurrency(dialog, history, command, projectId, waitingProfile) {
+  const addProfile = async name => {
+    const file = path.join(root, name + '.sqlite');
+    const source = new DatabaseSync(file);
+    try { seedLargeSnapshot(source, 512); } finally { source.close(); }
+    const profile = await command('create_sqlite_profile', { projectId, name, path: file, environment: 'DEV' });
+    return profile.id;
+  };
+  const first = await addProfile('parallel-first');
+  const second = await addProfile('parallel-second');
+  const profiles = [first, second, waitingProfile];
+  const setPlan = (profileId, revision, next_at) => command('save_sqlite_backup_plan', { profileId, input: {
+    revision, directory: output, prefix: 'parallel', interval_minutes: null, retention_days: 7, retry_limit: 0, next_at,
+  } });
+  for (const profileId of profiles) await setPlan(profileId, null, null);
+  const state = (instance, profileId) => instance('sqlite_backup_plan', { profileId });
+  const run = (instance, profileId) => instance('run_sqlite_backup_plan', { profileId, revision: 1 });
+  const cancel = (instance, profileId, runId) => instance('cancel_backup_plan_run', { profileId, runId });
+  const waitForRun = async (instance, profileId) => {
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      const active = (await state(instance, profileId)).runs.find(job => job.can_cancel);
+      if (active) return active;
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    assert.fail('The backup did not start in the expected app instance.');
+  };
+  const limit = dialog.getByLabel('작업 공간 동시 백업 한도');
+  assert.equal(await limit.inputValue(), '1');
+  await limit.selectOption('2');
+  await dialog.getByText('작업 공간의 동시 백업 실행 한도를 저장했습니다.', { exact: true }).waitFor();
+
+  await withSecondDesktopInstance(root, async other => {
+    const policy = (await state(other, first)).execution_policy;
+    assert.equal(policy.max_concurrent, 2);
+    const firstResult = run(command, first);
+    const secondResult = run(other, second);
+    const results = Promise.all([firstResult, secondResult]);
+    void results.catch(() => {});
+    const [firstRun, secondRun] = await Promise.all([waitForRun(command, first), waitForRun(other, second)]);
+    assert.equal((await state(other, first)).runs[0].can_cancel, false);
+    assert.equal((await state(command, second)).runs[0].can_cancel, false);
+    await assert.rejects(run(other, first), /이미 실행 중/);
+    await assert.rejects(run(command, waitingProfile), /실행 한도/);
+
+    await other('set_backup_concurrency', { revision: policy.revision, maxConcurrent: 1 });
+    assert.equal(await cancel(command, first, firstRun.id), true);
+    assert.equal((await firstResult).status, 'cancelled');
+    await assert.rejects(run(other, waitingProfile), /실행 한도/);
+    assert.equal(await cancel(other, second, secondRun.id), true);
+    assert.deepEqual((await results).map(job => job.status), ['cancelled', 'cancelled']);
+    assert.equal((await run(other, waitingProfile)).status, 'succeeded');
+  });
+
+  await limit.locator('option:checked').filter({ hasText: '1개' }).waitFor({ state: 'attached' });
+  await limit.selectOption('2');
+  await dialog.getByText('작업 공간의 동시 백업 실행 한도를 저장했습니다.', { exact: true }).waitFor();
+  const due = Math.floor(Date.now() / 1000) + 8;
+  await setPlan(first, 1, due);
+  await setPlan(second, 1, due);
+  await setPlan(waitingProfile, 1, due + 1);
+  await dialog.getByText('예약 백업 실행 대기 중', { exact: true }).waitFor({ timeout: 17000 });
+  const [firstRun, secondRun] = await Promise.all([waitForRun(command, first), waitForRun(command, second)]);
+  assert.equal(firstRun.trigger_kind, 'scheduled');
+  assert.equal(secondRun.trigger_kind, 'scheduled');
+  const waiting = await state(command, waitingProfile);
+  assert.equal(waiting.plan.next_at, due + 1);
+  assert.equal(waiting.runs.length, 1);
+  assert.equal(await cancel(command, first, firstRun.id), true);
+  assert.equal(await cancel(command, second, secondRun.id), true);
+  await history.getByText(/무결성 검사 통과 · 예약 실행/).waitFor();
+  assert.equal((await state(command, waitingProfile)).plan.next_at, null);
+  console.log('Two Windows instances shared the limit and duplicate protection, then one scheduler ran two plans while a third waited.');
+}
+
+async function scheduleLargeBackup(db, dialog, timeoutSeconds) {
+  seedLargeSnapshot(db);
   await dialog.getByLabel('실행 주기').selectOption('periodic');
   await dialog.getByLabel('간격 (분)', { exact: true }).fill('20');
   const timeout = dialog.getByLabel('최대 실행 시간 (초)', { exact: true });

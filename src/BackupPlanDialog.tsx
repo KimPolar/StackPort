@@ -25,7 +25,8 @@ type Run = {
     removed_at: number | null; owned_here: boolean; removal_supported: boolean;
   } | null;
 };
-type Snapshot = { plan: Plan | null; runs: Run[] };
+type ExecutionPolicy = { revision: number; max_concurrent: number; max_supported: number };
+type Snapshot = { plan: Plan | null; runs: Run[]; execution_policy: ExecutionPolicy };
 type ExpiredPage = { runs: Run[]; next_before: number | null };
 type Capacity = { directory: string; estimated_bytes: number; available_bytes: number | null };
 type RemovalPreview = { token: string; path: string; size_bytes: number; sha256: string; expires_at: number };
@@ -97,7 +98,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [preview, setPreview] = useState<Occurrence[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "preview" | "refresh" | "pause" | "file" | "history" | "">("");
+  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "preview" | "refresh" | "pause" | "file" | "history" | "policy" | "">("");
   const [cancelRequested, setCancelRequested] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -133,7 +134,13 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         if (!live) return;
         setCredential(status);
         setTunnels(routes);
-        setSnapshot(current => (current?.plan?.revision ?? 0) > (state.plan?.revision ?? 0) ? current : state);
+        setSnapshot(current => {
+          if (!current) return state;
+          const latestPlan = (current.plan?.revision ?? 0) > (state.plan?.revision ?? 0) ? current : state;
+          const policy = current.execution_policy.revision > state.execution_policy.revision
+            ? current.execution_policy : state.execution_policy;
+          return { ...latestPlan, execution_policy: policy };
+        });
         setDraft(current => current ?? form(state.plan, displayPath, engine, routes.find(route => route.id === preferredTunnel?.id) ?? preferredTunnel));
       } catch (cause) {
         if (live) setError(String(cause));
@@ -168,6 +175,17 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setDraft(form(state.plan, displayPath, engine, tunnels.find(tunnel => tunnel.id === preferredTunnel?.id) ?? preferredTunnel));
     setPreview([]);
     setDirty(false);
+  }
+
+  function changeConcurrency(maxConcurrent: number) {
+    const policy = snapshot?.execution_policy;
+    if (!policy || maxConcurrent === policy.max_concurrent) return;
+    void perform("policy", async () => {
+      const updated = await invoke<ExecutionPolicy>("set_backup_concurrency", { revision: policy.revision, maxConcurrent });
+      setSnapshot(current => current && updated.revision >= current.execution_policy.revision
+        ? { ...current, execution_policy: updated } : current);
+      setNotice("작업 공간의 동시 백업 실행 한도를 저장했습니다.");
+    });
   }
 
   function save(event: FormEvent) {
@@ -246,9 +264,12 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   }
 
   const plan = snapshot?.plan;
+  const policy = snapshot?.execution_policy;
   const stale = draft && draft.revision !== (plan?.revision ?? null);
   const nextAt = plan?.next_at ? (plan.calendar ? calendarDate(plan.next_at, plan.calendar.time_zone) : dateText(plan.next_at)) : "예약 없음";
   const running = snapshot?.runs.some(run => run.status === "running");
+  const awaitingExecution = plan && !plan.requires_review && !running &&
+    [plan.next_at, plan.retry_at].some(at => at !== null && at <= Date.now() / 1000);
   const cancellable = snapshot?.runs.find(run => run.status === "running" && (run.can_cancel || run.id === cancelRequested));
   const runs = expiredPage?.runs ?? snapshot?.runs ?? [];
 
@@ -333,6 +354,14 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         <label className="field">최대 실행 시간 (초)<input type="number" required min={0} max={86400} step={1}
           value={draft.timeoutSeconds} disabled={Boolean(busy)} onChange={event => change("timeoutSeconds", event.target.value)} /></label>
         <p className="form-note">0초로 설정하면 전체 실행 시간에 제한을 두지 않습니다.</p>
+        {policy && <>
+          <label className="field">작업 공간 동시 백업 한도<select value={policy.max_concurrent} disabled={Boolean(busy)}
+            onChange={event => changeConcurrency(Number(event.target.value))}>
+            {Array.from({ length: policy.max_supported }, (_, index) => index + 1).map(limit =>
+              <option key={limit} value={limit}>{limit}개</option>)}
+          </select></label>
+          <p className="form-note">선택 즉시 이 작업 공간의 새 백업 실행에 적용합니다.</p>
+        </>}
         <label className="files-check"><input type="checkbox" checked={draft.retry} disabled={Boolean(busy)}
           onChange={event => change("retry", event.target.checked)} /> 예약 실패 시 자동 재시도</label>
         {draft.retry && <div className="backup-plan-fields">
@@ -348,6 +377,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           {!plan.requires_review && plan.retry_at !== null && ` · ${plan.retry_attempt}차 재시도 ${plan.calendar
             ? calendarDate(plan.retry_at, plan.calendar.time_zone) : dateText(plan.retry_at)}`}</p>}
         {plan?.requires_review && <p className="form-note" role="status">{postgres ? "현재 연결 설정, 백업 위치와 일정을 검토한 뒤 계획을 다시 저장하세요." : "이 작업 공간의 백업 위치와 일정을 검토한 뒤 계획을 저장하세요."}</p>}
+        {awaitingExecution && <p className="form-note" role="status">예약 백업 실행 대기 중</p>}
         {stale && <p className="form-error" role="alert">다른 창에서 계획이 변경되었습니다. 설정을 새로고침하세요.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {notice && <p className="form-note" role="status">{notice}</p>}

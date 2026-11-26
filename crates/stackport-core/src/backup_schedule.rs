@@ -24,10 +24,18 @@ const MAX_RETRIES: u8 = 5;
 const DEFAULT_RETRY_DELAY_MINUTES: u16 = 1;
 const DEFAULT_POSTGRES_TIMEOUT_SECONDS: u32 = 30 * 60;
 const MAX_TIMEOUT_SECONDS: u32 = 86_400;
+pub const MAX_CONCURRENT_BACKUPS: u8 = 4;
 const LATEST_START: i64 = 4_102_444_800; // 2100-01-01 UTC
 const NO_CALENDAR_OCCURRENCE: &str = "2100년까지 실행할 수 있는 달력 일정이 없습니다.";
 
 pub(crate) const SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS backup_execution_policy (
+        id INTEGER PRIMARY KEY CHECK(id=1),
+        revision INTEGER NOT NULL CHECK(revision>=1),
+        max_concurrent INTEGER NOT NULL CHECK(max_concurrent BETWEEN 1 AND 4)
+    );
+    INSERT INTO backup_execution_policy (id, revision, max_concurrent) VALUES (1, 1, 1)
+        ON CONFLICT(id) DO NOTHING;
     CREATE TABLE IF NOT EXISTS backup_plans (
         profile_id TEXT PRIMARY KEY NOT NULL,
         sqlite_profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
@@ -59,6 +67,7 @@ pub(crate) const SCHEMA: &str = "
         trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('scheduled', 'retry', 'manual')),
         retry_attempt INTEGER NOT NULL DEFAULT 1 CHECK (retry_attempt BETWEEN 1 AND 5),
         status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted', 'cancelled', 'timed_out')),
+        worker_slot INTEGER CHECK(worker_slot BETWEEN 1 AND 4),
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
         expires_at INTEGER,
@@ -147,6 +156,16 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
             DROP TABLE previous_backup_artifacts;
             DROP TABLE previous_backup_runs;").map_err(db_error)?;
     }
+    if !has_column("backup_runs", "worker_slot")? {
+        db.execute_batch("ALTER TABLE backup_runs ADD COLUMN worker_slot INTEGER
+            CHECK(worker_slot BETWEEN 1 AND 4);").map_err(db_error)?;
+    }
+    db.execute_batch("
+        CREATE UNIQUE INDEX IF NOT EXISTS backup_running_profile ON backup_runs(workspace_path, profile_id)
+            WHERE status='running';
+        CREATE UNIQUE INDEX IF NOT EXISTS backup_running_slot ON backup_runs(workspace_path, worker_slot)
+            WHERE status='running' AND worker_slot IS NOT NULL;
+    ").map_err(db_error)?;
     Ok(())
 }
 
@@ -214,6 +233,14 @@ pub struct BackupRun {
 pub struct BackupPlanState {
     plan: Option<BackupPlan>,
     runs: Vec<BackupRun>,
+    execution_policy: BackupExecutionPolicy,
+}
+
+#[derive(Serialize)]
+pub struct BackupExecutionPolicy {
+    revision: i64,
+    max_concurrent: u8,
+    max_supported: u8,
 }
 
 #[derive(Serialize)]
@@ -303,7 +330,20 @@ impl Store {
         for run in runs.iter_mut().filter(|run| run.status == "running") {
             run.can_cancel = self.backup_execution.for_run(profile_id, &run.id).is_some_and(|control| control.can_cancel());
         }
-        Ok(BackupPlanState { plan, runs })
+        let execution_policy = execution_policy(&db)?;
+        Ok(BackupPlanState { plan, runs, execution_policy })
+    }
+
+    pub fn set_backup_concurrency(&self, revision: i64, max_concurrent: u8) -> Result<BackupExecutionPolicy> {
+        if !(1..=MAX_CONCURRENT_BACKUPS).contains(&max_concurrent) {
+            return Err("동시 백업 실행 한도는 1~4개로 설정하세요.".into());
+        }
+        self.connect()?.query_row(
+            "UPDATE backup_execution_policy SET max_concurrent=?1, revision=revision+1 WHERE id=1 AND revision=?2
+             RETURNING revision, max_concurrent",
+            params![max_concurrent, revision], execution_policy_from_row,
+        ).optional().map_err(db_error)?
+            .ok_or_else(|| "다른 창에서 동시 실행 한도를 변경했습니다. 값을 확인하고 다시 선택하세요.".into())
     }
 
     pub fn cancel_backup_plan_run(&self, profile_id: &str, run_id: &str) -> bool {
@@ -475,7 +515,7 @@ impl Store {
 
     fn run_backup_plan(&self, profile_id: &str, revision: i64, postgres_revision: Option<i64>, tunnels: Option<&SshTunnelManager>) -> Result<BackupRun> {
         self.process_backup(Some((profile_id, revision, postgres_revision)), unix_now()?, tunnels)?
-            .ok_or_else(|| "다른 백업 계획이 실행 중입니다. 완료된 뒤 다시 시도하세요.".into())
+            .ok_or_else(|| "작업 공간의 동시 백업 실행 한도에 도달했습니다. 완료된 뒤 다시 시도하세요.".into())
     }
 
     pub fn pause_sqlite_backup_plan(
@@ -528,21 +568,31 @@ impl Store {
                 return Ok(None);
             }
         }
-        let Some(_lock) = workspace_lock(Path::new(&workspace))? else {
+        // Older app instances take this same lock exclusively. Hold a shared lock so they cannot
+        // recover or run jobs while workers of this version are active.
+        let Some(_compatibility_lock) = backup_lock(&Path::new(&workspace).with_extension("backup.lock"), true)? else {
             return Ok(None);
         };
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        // Holding the workspace lock proves no other process still owns a running job.
-        tx.execute(
-            "UPDATE backup_runs SET status='interrupted', finished_at=?1,
-             message='이전 앱이 백업을 완료하기 전에 종료되었습니다. 생성된 파일이 있으면 별도로 검증하세요.'
-             WHERE workspace_path=?2 AND status='running'",
-            params![now, workspace],
-        ).map_err(db_error)?;
+        let slots = (1..=MAX_CONCURRENT_BACKUPS)
+            .map(|slot| backup_lock(&worker_lock_path(Path::new(&workspace), slot), false))
+            .collect::<Result<Vec<_>>>()?;
+        recover_backup_runs(&tx, &workspace, now, &slots)?;
+        let occupied = slots.iter().filter(|slot| slot.is_none()).count();
         let profile_id = match manual {
-            Some((id, _, _)) => id.to_owned(),
+            Some((id, _, _)) => {
+                let running: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM backup_runs WHERE profile_id=?1 AND workspace_path=?2 AND status='running')",
+                    params![id, workspace], |row| row.get(0),
+                ).map_err(db_error)?;
+                if running {
+                    tx.commit().map_err(db_error)?;
+                    return Err("이 연결의 백업이 이미 실행 중입니다.".into());
+                }
+                id.to_owned()
+            }
             None => match due_profile(&tx, &workspace, now)? {
                 Some(id) => id,
                 None => {
@@ -551,6 +601,13 @@ impl Store {
                 }
             },
         };
+        if occupied >= usize::from(execution_policy(&tx)?.max_concurrent) {
+            tx.commit().map_err(db_error)?;
+            return Ok(None);
+        }
+        let (worker_slot, _worker_lock) = (1..=MAX_CONCURRENT_BACKUPS).zip(slots)
+            .find_map(|(slot, lock)| lock.map(|lock| (slot, lock)))
+            .ok_or("사용 가능한 백업 실행 잠금을 찾을 수 없습니다.")?;
         let plan = read_plan(&tx, &profile_id)?.ok_or("백업 계획을 저장하세요.")?;
         let is_postgres = plan.postgres_revision.is_some();
         if !active_profile(&tx, &profile_id, is_postgres)?
@@ -616,9 +673,9 @@ impl Store {
         ));
         let path = destination.to_string_lossy();
         tx.execute(
-            "INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path, retry_attempt)
-             VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
-            params![id, profile_id, workspace, trigger_kind, now, path, retry_attempt.unwrap_or(1)],
+            "INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path, retry_attempt, worker_slot)
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, ?8)",
+            params![id, profile_id, workspace, trigger_kind, now, path, retry_attempt.unwrap_or(1), worker_slot],
         ).map_err(db_error)?;
         let registration = self.backup_execution.start(&profile_id, &id, plan.timeout_seconds);
         let control = &registration.control;
@@ -798,6 +855,7 @@ fn due_profile(db: &Connection, workspace: &str, now: i64) -> Result<Option<Stri
          LEFT JOIN postgres_profiles pg ON pg.id=b.postgres_profile_id
          WHERE b.workspace_path=?1 AND (b.next_at<=?2 OR b.retry_at<=?2)
          AND NOT EXISTS(SELECT 1 FROM project_archives a WHERE a.project_id=coalesce(p.project_id, pg.project_id))
+         AND NOT EXISTS(SELECT 1 FROM backup_runs r WHERE r.profile_id=b.profile_id AND r.workspace_path=?1 AND r.status='running')
          ORDER BY min(coalesce(b.next_at, 9223372036854775807), coalesce(b.retry_at, 9223372036854775807)), b.profile_id LIMIT 1",
         params![workspace, now], |row| row.get(0),
     ).optional().map_err(db_error)
@@ -829,15 +887,50 @@ fn capacity(directory: &Path, estimated_bytes: u64) -> Result<BackupCapacity> {
     })
 }
 
-fn workspace_lock(workspace: &Path) -> Result<Option<File>> {
+fn execution_policy(db: &Connection) -> Result<BackupExecutionPolicy> {
+    db.query_row(
+        "SELECT revision, max_concurrent FROM backup_execution_policy WHERE id=1",
+        [], execution_policy_from_row,
+    ).map_err(db_error)
+}
+
+fn execution_policy_from_row(row: &Row<'_>) -> rusqlite::Result<BackupExecutionPolicy> {
+    Ok(BackupExecutionPolicy { revision: row.get(0)?, max_concurrent: row.get(1)?, max_supported: MAX_CONCURRENT_BACKUPS })
+}
+
+fn recover_backup_runs(db: &Connection, workspace: &str, now: i64, slots: &[Option<File>]) -> Result<()> {
+    let mut statement = db.prepare("SELECT id, worker_slot FROM backup_runs WHERE workspace_path=?1 AND status='running'")
+        .map_err(db_error)?;
+    let candidates = statement.query_map([workspace], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<u8>>(1)?)))
+        .map_err(db_error)?.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)?;
+    for (id, slot) in candidates {
+        // A slot lock we acquired proves that no worker owns the recorded run.
+        let owner_absent = slot.and_then(|slot| slots.get(usize::from(slot.saturating_sub(1)))).is_none_or(Option::is_some);
+        if owner_absent {
+            db.execute("UPDATE backup_runs SET status='interrupted', finished_at=?1,
+                message='이전 앱이 백업을 완료하기 전에 종료되었습니다. 생성된 파일이 있으면 별도로 검증하세요.' WHERE id=?2",
+                params![now, id]).map_err(db_error)?;
+        }
+    }
+    Ok(())
+}
+
+fn worker_lock_path(workspace: &Path, slot: u8) -> PathBuf {
+    let mut path = workspace.as_os_str().to_owned();
+    path.push(format!(".backup-worker-{slot}.lock"));
+    path.into()
+}
+
+fn backup_lock(path: &Path, shared: bool) -> Result<Option<File>> {
     let lock = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(workspace.with_extension("backup.lock"))
+        .open(path)
         .map_err(|_| "백업 실행 잠금 파일을 열 수 없습니다.")?;
-    match lock.try_lock() {
+    let result = if shared { lock.try_lock_shared() } else { lock.try_lock() };
+    match result {
         Ok(()) => Ok(Some(lock)),
         Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(_)) => Err("다른 앱과 백업 실행을 조정할 수 없습니다.".into()),
@@ -966,6 +1059,18 @@ mod tests {
         }
     }
 
+    fn wait_for_active(store: &Store, profile_id: &str) -> BackupRun {
+        let started = std::time::Instant::now();
+        loop {
+            let state = store.sqlite_backup_plan(profile_id).unwrap();
+            if let Some(run) = state.runs.into_iter().find(|run| run.can_cancel) {
+                return run;
+            }
+            assert!(started.elapsed() < Duration::from_secs(3));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn due_schedule_survives_restart_and_coalesces_missed_intervals() {
         let f = Fixture::new();
@@ -1052,7 +1157,7 @@ mod tests {
         let now = unix_now().unwrap();
         f.plan(now + 120, None);
         let scope = f.store.backup_workspace_path().unwrap();
-        let held = workspace_lock(Path::new(&scope)).unwrap().unwrap();
+        let held = backup_lock(&Path::new(&scope).with_extension("backup.lock"), false).unwrap().unwrap();
         f.store.connect().unwrap().execute(
             "INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path)
              VALUES('orphan', ?1, ?2, 'manual', 'running', ?3, 'fixture.sqlite')",
@@ -1068,6 +1173,67 @@ mod tests {
     }
 
     #[test]
+    fn active_profiles_share_the_workspace_limit_and_only_abandoned_slots_are_recovered() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, Some(60));
+        let add_profile = |name, due| {
+            let path = f.root.path().join(format!("{name}.sqlite"));
+            let source = Connection::open(&path).unwrap();
+            source.execute_batch("CREATE TABLE document(value TEXT); INSERT INTO document VALUES ('extra');").unwrap();
+            let profile = f.store.create_sqlite_profile(&f.project_id, name, path.to_str().unwrap(), "DEV").unwrap();
+            f.store.save_sqlite_backup_plan(&profile.id, f.plan_input(due, None)).unwrap();
+            (profile.id, source)
+        };
+        let (second, second_source) = add_profile("second", first + 1);
+        let (third, _third_source) = add_profile("third", first + 2);
+        let other = Store::open(&f.workspace).unwrap();
+        let policy = f.current().execution_policy;
+        assert_eq!(policy.max_concurrent, 1);
+        assert!(other.set_backup_concurrency(policy.revision, MAX_CONCURRENT_BACKUPS + 1).is_err());
+        let enabled = other.set_backup_concurrency(policy.revision, 2).unwrap();
+        assert!(f.store.set_backup_concurrency(policy.revision, 1).is_err());
+        assert_eq!(f.current().execution_policy.max_concurrent, 2);
+
+        f._source.execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;").unwrap();
+        second_source.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let work = f.store.clone();
+        let first_task = std::thread::spawn(move || work.process_backup(None, first + 2, None).unwrap().unwrap());
+        let first_run = wait_for_active(&f.store, &f.profile_id);
+        let work = f.store.clone();
+        let second_task = std::thread::spawn(move || work.process_backup(None, first + 2, None).unwrap().unwrap());
+        let second_run = wait_for_active(&f.store, &second);
+        assert!(f.current().runs[0].can_cancel);
+        assert!(!other.sqlite_backup_plan(&second).unwrap().runs[0].can_cancel);
+        assert!(other.run_sqlite_backup_plan(&f.profile_id, 1).err().unwrap().contains("이미 실행 중"));
+        assert!(other.run_sqlite_backup_plan(&third, 1).err().unwrap().contains("실행 한도"));
+
+        let scope = f.store.backup_workspace_path().unwrap();
+        other.connect().unwrap().execute(
+            "INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path, worker_slot)
+             VALUES ('orphaned-slot', ?1, ?2, 'manual', 'running', ?3, 'missing.sqlite', 3)",
+            params![third, scope, first],
+        ).unwrap();
+        assert!(other.process_backup(None, first + 2, None).unwrap().is_none());
+        let waiting = other.sqlite_backup_plan(&third).unwrap();
+        assert_eq!(waiting.runs[0].status, "interrupted");
+        assert_eq!(waiting.plan.unwrap().next_at, Some(first + 2));
+        assert_eq!(f.current().runs[0].status, "running");
+        assert_eq!(other.sqlite_backup_plan(&second).unwrap().runs[0].status, "running");
+
+        other.set_backup_concurrency(enabled.revision, 1).unwrap();
+        assert!(f.store.cancel_backup_plan_run(&f.profile_id, &first_run.id));
+        f._source.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(first_task.join().unwrap().status, "cancelled");
+        assert!(other.process_backup(None, first + 2, None).unwrap().is_none());
+        assert!(f.store.cancel_backup_plan_run(&second, &second_run.id));
+        second_source.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(second_task.join().unwrap().status, "cancelled");
+        let third_run = other.process_backup(None, first + 2, None).unwrap().unwrap();
+        assert_eq!((third_run.profile_id, third_run.status.as_str()), (third, "succeeded"));
+    }
+
+    #[test]
     fn scheduled_cancellation_is_scoped_and_does_not_queue_a_retry() {
         let f = Fixture::new();
         let first = unix_now().unwrap() + 120;
@@ -1075,14 +1241,7 @@ mod tests {
         f._source.execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;").unwrap();
         let worker = f.store.clone();
         let task = std::thread::spawn(move || worker.process_backup(None, first, None).unwrap().unwrap());
-        let started = std::time::Instant::now();
-        let active = loop {
-            if let Some(run) = f.current().runs.into_iter().find(|run| run.can_cancel) {
-                break run;
-            }
-            assert!(started.elapsed() < std::time::Duration::from_secs(3));
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
+        let active = wait_for_active(&f.store, &f.profile_id);
         let another_instance = Store::open(&f.workspace).unwrap();
         assert!(!another_instance.sqlite_backup_plan(&f.profile_id).unwrap().runs[0].can_cancel);
         assert!(!another_instance.cancel_backup_plan_run(&f.profile_id, &active.id));
@@ -1389,7 +1548,8 @@ mod tests {
                 SELECT 'cancelled-run', profile_id, workspace_path, 'manual', 'cancelled', started_at-2, started_at-1, 'cancelled.sqlite'
                     FROM backup_runs;
                 UPDATE backup_plans SET retry_at=next_at+60, retry_attempt=4 WHERE sqlite_profile_id IS NOT NULL;
-                CREATE TEMP TABLE saved_runs AS SELECT rowid AS original_rowid, * FROM backup_runs;
+                CREATE TEMP TABLE saved_runs AS SELECT rowid AS original_rowid, id, profile_id, workspace_path, trigger_kind,
+                    retry_attempt, status, started_at, finished_at, expires_at, path, size_bytes, message FROM backup_runs;
                 CREATE TEMP TABLE saved_artifacts AS SELECT * FROM backup_artifacts;
                 DROP TABLE backup_artifacts; DROP TABLE backup_runs;
                 ALTER TABLE backup_plans DROP COLUMN timeout_seconds;").unwrap();
@@ -1416,6 +1576,31 @@ mod tests {
         assert_eq!(db.query_row("SELECT rowid FROM backup_runs WHERE id=?1", [&run.id], |row| row.get::<_, i64>(0)).unwrap(), 17);
         assert_eq!(db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &run.id).is_ok());
+    }
+
+    #[test]
+    fn v29_migration_defaults_to_one_worker_and_recovers_legacy_runs() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, None);
+        let completed = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let scope = f.store.backup_workspace_path().unwrap();
+        {
+            let db = f.store.connect().unwrap();
+            db.execute("INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path)
+                VALUES ('previous-worker', ?1, ?2, 'manual', 'running', ?3, 'orphan.sqlite')",
+                params![f.profile_id, scope, first - 10]).unwrap();
+            db.execute_batch("DROP INDEX backup_running_slot; DROP INDEX backup_running_profile;
+                ALTER TABLE backup_runs DROP COLUMN worker_slot;
+                DROP TABLE backup_execution_policy; PRAGMA user_version=29;").unwrap();
+        }
+        let migrated = Store::open(&f.workspace).unwrap();
+        assert!(migrated.process_backup(None, first - 1, None).unwrap().is_none());
+        let state = migrated.sqlite_backup_plan(&f.profile_id).unwrap();
+        assert_eq!(state.execution_policy.max_concurrent, 1);
+        assert!(state.runs.iter().any(|run| run.id == "previous-worker" && run.status == "interrupted"));
+        assert_eq!(state.plan.unwrap().next_at, Some(first));
+        assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &completed.id).is_ok());
     }
 
     #[cfg(windows)]
