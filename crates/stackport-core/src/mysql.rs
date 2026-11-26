@@ -1,3 +1,4 @@
+mod backup;
 mod edit;
 mod export;
 mod grid;
@@ -8,6 +9,7 @@ mod sql;
 mod structure;
 mod tls;
 
+pub use backup::{MysqlBackupInput, MysqlBackupReport};
 pub use edit::{MysqlEditChange, MysqlEditOutcome, MysqlEditPreview, MysqlRowStamp};
 pub use export::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
@@ -147,6 +149,7 @@ struct Session {
     pending_edit: AsyncMutex<Option<edit::PendingEdit>>,
     engine: &'static str,
     profile_id: String,
+    profile_revision: i64,
     project_id: String,
     environment: String,
     tunnel: Option<DatabaseTunnel>,
@@ -282,6 +285,7 @@ impl MysqlManager {
                     engine,
                     connection: AsyncMutex::new(Some(connection)),
                     profile_id: profile.id,
+                    profile_revision: profile.revision,
                     project_id: profile.project_id,
                     environment: settings.environment,
                     tunnel: tunnel.clone(),

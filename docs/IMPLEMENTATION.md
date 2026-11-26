@@ -170,6 +170,12 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **조회 SQL**에는 입력값 대신 실제 바인딩에 사용한 매개변수를 표시합니다. **저장된 조건**에서 현재 필터 값과 정렬을 로컬 작업 공간에 보관하고 다시 적용할 수 있습니다. 메타데이터 v16은 기존 SQLite·PostgreSQL 조건의 이름, 범위와 개정 번호를 유지하면서 MySQL 계열 연결을 지원합니다.
 
+MySQL·MariaDB 직접 연결에서 **DB 백업** 또는 **테이블 백업**으로 구조, 데이터, 또는 둘 다를 새 로컬 SQL 파일에 저장합니다. 서버와 주·부 버전이 같은 `mysqldump` 또는 `mariadb-dump`가 필요합니다. 테이블이나 뷰의 조회 권한과 함께 전체 DB의 트리거·루틴·이벤트를 읽을 권한이 필요할 수 있습니다. 연결 설정의 TLS 호스트·CA·클라이언트 인증서를 적용하고 백업 암호는 실행할 때 입력합니다. 운영 연결은 `PROD`를 확인합니다. [MySQL mysqldump](https://dev.mysql.com/doc/refman/8.4/en/mysqldump.html) · [MariaDB mariadb-dump](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
+
+데이터 백업은 InnoDB의 단일 트랜잭션에서 `utf8mb4`와 바이너리의 16진수 표현을 사용합니다. 다른 스토리지 엔진의 일반 테이블은 구조만 백업할 수 있습니다. 스냅샷 도중 테이블의 DDL 변경은 피해야 합니다. 전체 DB 구조에는 원본 DB 이름과 기본 문자셋·콜레이션이 포함됩니다. SQL을 복원할 환경에는 원본 정의가 참조하는 객체와 `DEFINER` 계정이 필요할 수 있습니다. 결과에는 파일 크기, SHA-256, 서버와 도구 버전을 표시합니다. 중단하거나 실패하면 임시 파일을 정리합니다. 감사는 연결·환경과 작업 결과를 기록합니다.
+
+복원 검증은 격리된 서버에서 같은 제품의 `mysql` 또는 `mariadb` 클라이언트로 SQL을 읽습니다. 전체 DB 구조가 담긴 파일은 백업에 포함된 DB 이름으로 복원합니다. 테이블 백업은 문자셋과 콜레이션을 맞춘 검증 DB를 선택한 뒤 읽습니다. 구조와 데이터를 따로 저장했다면 구조를 먼저 복원합니다. [MySQL SQL 덤프 복원](https://dev.mysql.com/doc/refman/8.4/en/reloading-sql-format-dumps.html) · [MariaDB 덤프 복원](https://mariadb.com/docs/server/clients-and-utilities/backup-restore-and-import-clients/mariadb-dump)
+
 연결할 때 **이 연결에서 데이터 그리드 편집 허용**을 선택하면, 표시 가능한 기본 키가 있는 InnoDB 테이블의 **데이터 미리보기**에서 한 행의 여러 셀을 편집할 수 있습니다. 복합 기본 키는 위치를 찾는 데 사용합니다. 일반 텍스트·수치·날짜·시간 값, 빈 문자열, NULL, 서버 기본값을 구분하며 기본 키와 생성 열은 읽기 전용입니다. **변경 미리보기**에서 현재 값과 입력값을 비교하고, 운영 환경에서는 `PROD`를 다시 입력해 적용합니다.
 
 적용 시 별도 쓰기 트랜잭션에서 대상을 잠그고, 조회 가능한 열 전체의 지문과 테이블 구조를 다시 확인합니다. 제약 위반, 값 변환 경고, 동시 변경이 있으면 적용을 중단합니다. 감사 기록에는 대상과 결과를 남기며, 커밋 결과를 확인할 수 없으면 데이터 그리드를 갱신합니다. [MySQL 트랜잭션](https://dev.mysql.com/doc/refman/8.4/en/commit.html) · [MariaDB 행 잠금](https://mariadb.com/docs/server/reference/sql-statements/data-manipulation/selecting-data/for-update)
@@ -687,6 +693,8 @@ Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상�
 실제 계정에 대한 Windows 검사는 `tests/snowflake-smoke.cjs`를 사용합니다. 시험용 계정의 `STACKPORT_SNOWFLAKE_TEST_ACCOUNT`, `STACKPORT_SNOWFLAKE_TEST_DATABASE`, `STACKPORT_SNOWFLAKE_TEST_SCHEMA`, `STACKPORT_SNOWFLAKE_TEST_OBJECT`, `STACKPORT_SNOWFLAKE_TEST_TOKEN`을 지정합니다. 객체에는 미리보기에 사용할 행이 한 개 이상 있어야 합니다. 필요하면 `STACKPORT_SNOWFLAKE_TEST_WAREHOUSE`, `STACKPORT_SNOWFLAKE_TEST_ROLE`, OAuth 사용 시 `STACKPORT_SNOWFLAKE_TEST_AUTH=oauth`를 지정합니다. 현재 역할에 객체 정의가 공개된 경우 `STACKPORT_SNOWFLAKE_TEST_DEFINITION=1`로 원문 복사와 파일 저장을 검증합니다. 소량의 시험 데이터로 `STACKPORT_SNOWFLAKE_TEST_EXPORT=1`을 설정하면 전체 결과의 JSON 저장도 검증합니다. 격리된 Windows 앱의 디버깅 주소는 `STACKPORT_CDP_URL`로 지정합니다.
 
 MySQL 계열 E2E는 `tests/mysql-smoke.cjs`를 사용합니다. `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MYSQL_BIN`에 Windows ZIP에서 꺼낸 `mysqld.exe` 또는 `mariadbd.exe`의 절대 경로, `STACKPORT_MYSQL_ENGINE`에 `MySQL` 또는 `MariaDB`를 지정합니다. 테스트용 앱에 `STACKPORT_CDP_URL`을 연결하고 필요한 경우 `STACKPORT_TEST_OPENSSL`을 설정합니다. MySQL 8.4.13과 MariaDB 11.8.10에서 TLS 서버 검증과 `REQUIRE X509` 클라이언트 인증, SSH 점프 경유 및 터널 중단 후 재연결, 예상 실행 계획과 실제 분석 및 중단, 테이블·뷰 탐색, 그리드 필터·정렬과 조건 재적용, 읽기 전용 SQL 실행과 중단·시간 초과 후 재조회, 50행·128열을 넘는 전체 결과 저장, CSV·JSON 값 보존과 내보내기 중단을 확인합니다. 스크립트의 범위, 프로시저의 여러 결과 집합, 운영 환경 확인과 계정 권한, 저장점·커밋·롤백, 중단과 서버 시간 초과 후의 데이터도 검증합니다.
+
+`STACKPORT_MYSQL_BACKUP_ONLY=1`은 논리 백업과 복원 검증을 실행합니다. Windows 앱과 MySQL 8.4.13·MariaDB 11.4.10을 사용해 클라이언트 인증서가 필요한 계정의 SQL 백업, SHA-256, 같은 경로 저장 차단, 사전 취소와 권한 검사를 확인했습니다. 생성한 SQL을 복원해 한글·바이너리·큰 정수 값, 뷰·트리거·루틴·이벤트와 기본 콜레이션을 확인했습니다.
 
 같은 테스트에서 복합 기본 키 행의 여러 셀을 미리 보고 적용하거나 취소합니다. 조회 미리보기 범위를 벗어난 값 변경, 테이블 구조 변경, 제약·길이 오류가 적용을 막는지 확인합니다.
 

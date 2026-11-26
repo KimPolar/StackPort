@@ -24,6 +24,7 @@ mod ports;
 pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 mod mysql;
+pub use mysql::{MysqlBackupInput, MysqlBackupReport};
 pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::MysqlPlan;

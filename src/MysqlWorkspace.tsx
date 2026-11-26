@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Activity, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
+import { Activity, Archive, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
+import { MysqlBackupDialog, type MysqlBackupTarget } from "./MysqlBackupDialog";
 import { MysqlGridEditDialog, type MysqlEditOutcome, type MysqlEditTarget, type MysqlRowStamp } from "./MysqlGridEditDialog";
 import { MysqlObjectStructure, mysqlStructureLabels, type MysqlObjectInfo, type MysqlStructure, type MysqlStructureSection } from "./MysqlObjectStructure";
 import type { MysqlProfile } from "./MysqlProfileDialog";
@@ -61,6 +62,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   const [objectPage, setObjectPage] = useState(0);
   const [rowPage, setRowPage] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
+  const [backupTarget, setBackupTarget] = useState<MysqlBackupTarget | null>(null);
   const [exportTarget, setExportTarget] = useState<MysqlExportTarget | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [editTarget, setEditTarget] = useState<MysqlEditTarget | null>(null);
@@ -73,6 +75,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   const production = settings.environment === "PROD";
   const sqlOpen = mode === "sql";
   const monitorOpen = mode === "monitor";
+  const backupUnavailable = session?.tunnel ? "백업 도구는 직접 연결에서 사용할 수 있습니다." : undefined;
 
   const routeArgs = useMemo(() => login ? { profileId: profile.id, revision: profile.revision } : null,
     [login, profile.id, profile.revision]);
@@ -106,7 +109,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
 
   const loseConnection = useCallback((id: string, message: string) => {
     if (active.current !== id) return;
-    active.current = null; setSession(null); setExportTarget(null); setError(message);
+    active.current = null; setSession(null); setBackupTarget(null); setExportTarget(null); setError(message);
     void invoke("close_mysql", { id }).catch(() => {});
   }, []);
 
@@ -175,7 +178,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   async function disconnect() {
     const id = active.current;
     if (!id) return;
-    active.current = null; setSession(null); setExportTarget(null); chooseDatabase(null); setError("");
+    active.current = null; setSession(null); setBackupTarget(null); setExportTarget(null); chooseDatabase(null); setError("");
     setMode("objects");
     try { await invoke("close_mysql", { id }); }
     catch (cause) { if (mounted.current) setError(String(cause)); }
@@ -246,7 +249,10 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
           <Pager page={schemaPage} loading={schemas.loading} hasNext={schemas.data?.has_next === true} onPage={setSchemaPage} />
         </section>
         {database && <section className="results-card" aria-label="MySQL 테이블과 뷰">
-          <div className="panel-heading"><h2 title={database}>{database}</h2></div>
+          <div className="panel-heading"><h2 title={database}>{database}</h2>
+            <button type="button" className="secondary small" title={backupUnavailable} disabled={Boolean(backupUnavailable)}
+              onClick={() => setBackupTarget({ database, table: null })}><Archive size={14} aria-hidden /> DB 백업</button>
+          </div>
           <Search key={database} label="테이블 및 뷰 검색" onSearch={value => { setObjectSearch(value); setObjectPage(0); }} />
           <ReadNotice loading={objects.loading} error={objects.error} empty={objects.data?.items.length === 0} />
           <ul className="mysql-catalog-items">{objects.data?.items.map(item => <li key={item.name}>
@@ -273,6 +279,9 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
             {view === "rows" && database && <button type="button" className="secondary small" disabled={!rows.data}
               onClick={() => beginExport({ kind: "table", database, table: object.name, clauses: tableQuery })}>
               <Download size={14} aria-hidden /> 결과 내보내기</button>}
+            {object.kind === "BASE TABLE" && database && <button type="button" className="secondary small"
+              disabled={Boolean(backupUnavailable)} title={backupUnavailable} onClick={() => setBackupTarget({ database, table: object.name })}>
+              <Archive size={14} aria-hidden /> 테이블 백업</button>}
           </div>
           {view === "columns" && <>
             <ReadNotice loading={structure.loading} error={structure.error} />
@@ -303,6 +312,8 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
       </div>
     </div></div>}
     {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}
+    {session && backupTarget && <MysqlBackupDialog id={session.id} engine={session.engine} target={backupTarget}
+      connection={settings.name} environment={settings.environment} onClose={() => setBackupTarget(null)} />}
     {session && exportTarget && <MysqlResultExport id={session.id} profile={settings} target={exportTarget}
       onClose={() => setExportTarget(null)} onExported={report => { setExportTarget(null); setExportReport(report); }} />}
     {editTarget && <MysqlGridEditDialog target={editTarget} environment={settings.environment}

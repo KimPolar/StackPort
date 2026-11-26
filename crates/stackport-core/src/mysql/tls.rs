@@ -14,12 +14,32 @@ pub(super) fn options(settings: &MysqlSettings) -> Result<SslOpts> {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
+    let mut options = SslOpts::default()
+        .with_disable_built_in_roots(true)
+        .with_root_certs(
+            trusted_certificates(settings)?
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
+    if let (Some(certificate), Some(key)) =
+        (&settings.client_certificate_path, &settings.client_key_path)
+    {
+        let certificate = identity_file(certificate, "클라이언트 인증서")?;
+        let key = identity_file(key, "클라이언트 개인 키")?;
+        options =
+            options.with_client_identity(Some(ClientIdentity::new(certificate.into(), key.into())));
+    }
+    Ok(options)
+}
+
+pub(super) fn trusted_certificates(settings: &MysqlSettings) -> Result<Vec<Vec<u8>>> {
     let mut roots = RootCertStore::empty();
     let mut certificates = Vec::new();
     // The driver uses its bundled roots by default. Keep the platform's configured roots.
     for certificate in rustls_native_certs::load_native_certs().certs {
         if roots.add(certificate.clone()).is_ok() {
-            certificates.push(certificate.as_ref().to_vec().into());
+            certificates.push(certificate.as_ref().to_vec());
         }
     }
     if let Some(path) = &settings.ca_path {
@@ -33,7 +53,7 @@ pub(super) fn options(settings: &MysqlSettings) -> Result<SslOpts> {
         if ca.is_empty() {
             return Err("MySQL CA 인증서 파일이 비어 있습니다.".into());
         }
-        certificates.push(ca.into());
+        certificates.push(ca);
     }
     if certificates.is_empty() {
         return Err(
@@ -41,18 +61,7 @@ pub(super) fn options(settings: &MysqlSettings) -> Result<SslOpts> {
                 .into(),
         );
     }
-    let mut options = SslOpts::default()
-        .with_disable_built_in_roots(true)
-        .with_root_certs(certificates);
-    if let (Some(certificate), Some(key)) =
-        (&settings.client_certificate_path, &settings.client_key_path)
-    {
-        let certificate = identity_file(certificate, "클라이언트 인증서")?;
-        let key = identity_file(key, "클라이언트 개인 키")?;
-        options =
-            options.with_client_identity(Some(ClientIdentity::new(certificate.into(), key.into())));
-    }
-    Ok(options)
+    Ok(certificates)
 }
 
 fn identity_file(path: &str, label: &str) -> Result<PathBuf> {

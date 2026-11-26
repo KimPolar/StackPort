@@ -1612,6 +1612,12 @@ fn mysql_export_progress(mysql: State<'_, stackport_core::MysqlManager>, id: Str
     -> Result<Option<u64>, String> { mysql.export_progress(&id, &request_id) }
 
 #[tauri::command]
+async fn create_mysql_backup(mysql: State<'_, stackport_core::MysqlManager>, id: String, request: String,
+    input: stackport_core::MysqlBackupInput) -> Result<stackport_core::MysqlBackupReport, String> {
+    mysql.backup(&id, request, input).await
+}
+
+#[tauri::command]
 fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String, select_only: Option<bool>,
     with_scope: Option<bool>) -> Result<ParameterDiscovery<usize>, String> {
     let select_only = select_only.unwrap_or_default();
@@ -2709,6 +2715,16 @@ async fn choose_backup_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+async fn choose_mysql_backup_tools() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("MySQL 계열 백업 도구 폴더 선택")
+            .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
 async fn choose_result_export_directory() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
@@ -3016,6 +3032,7 @@ fn main() {
             mysql_server_activity,
             export_mysql,
             mysql_export_progress,
+            create_mysql_backup,
             mysql_sql_parameters,
             mysql_script_parameters,
             mysql_script_review,
@@ -3170,6 +3187,7 @@ fn main() {
             choose_ssh_identity_file,
             choose_ssh_profile_export_directory,
             choose_backup_directory,
+            choose_mysql_backup_tools,
             choose_result_export_directory,
             backup_sqlite,
             preview_sqlite_restore,

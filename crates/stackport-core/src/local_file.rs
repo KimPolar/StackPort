@@ -105,6 +105,10 @@ impl NewFile {
             .map_err(|error| format!("임시 파일을 열 수 없습니다: {error}"))
     }
 
+    pub(crate) fn staging_path(&self) -> &Path {
+        self.file.path()
+    }
+
     pub(crate) fn publish(self) -> Result<()> {
         self.file
             .as_file()
