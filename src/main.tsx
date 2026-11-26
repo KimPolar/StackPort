@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft, ArrowLeftRight, ArrowRight, Archive, Boxes, ChevronDown, ChevronRight,
@@ -17,6 +18,7 @@ import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout"
 import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
+import { SqliteBackupPlanDialog } from "./SqliteBackupPlanDialog";
 import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
 import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
 import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, sqliteCopyCell, useGridRowSelection } from "./GridRowSelection";
@@ -296,6 +298,8 @@ function App() {
   const [error, setError] = useState("");
   const [formError, setFormError] = useState("");
   const [backupReport, setBackupReport] = useState<BackupReport | null>(null);
+  const [backupPlanOpen, setBackupPlanOpen] = useState(false);
+  const [backupNotice, setBackupNotice] = useState("");
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -348,6 +352,23 @@ function App() {
   drafts.current = sqlTabSets;
   const project = projects.find(item => item.id === projectId);
   const profile = profiles.find(item => item.id === profileId && item.project_id === projectId);
+  useEffect(() => {
+    if (!desktop) return;
+    let timer: number | undefined;
+    let live = true;
+    const subscribed = listen<string>("sqlite-backup-finished", ({ payload }) => {
+      if (!live) return;
+      window.clearTimeout(timer);
+      setBackupNotice(payload === "succeeded" ? "SQLite 예약 백업 완료" : "SQLite 예약 백업 실패");
+      timer = window.setTimeout(() => setBackupNotice(""), 15000);
+    });
+    void subscribed.catch(() => {});
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+      void subscribed.then(unlisten => unlisten(), () => {});
+    };
+  }, []);
   const sqlTarget = profile && project ? {
     profileId: profile.id, projectId: project.id, projectName: project.name, profileName: profile.name,
   } : null;
@@ -2070,6 +2091,7 @@ function App() {
         dataPath={runtime ? displayPath(runtime.data_directory) : undefined}
         terminalTabs={terminalTabCount} rdpWindows={rdpClientCount} tunnels={sshTunnelCount}
         sqlite={cancelling ? "cancelling" : querying ? "running" : null}
+        backup={backupNotice}
         postgres={{ connected: postgresConnection !== null, query: postgresActivity }}
         openTerminal={() => showTool("terminal")} openRdp={() => showTool("rdp")} openTunnels={openTunnels} openPostgres={() => showTool("workspace")} />
     </div>
@@ -2132,6 +2154,8 @@ function App() {
       {modal === "backup" && <><p className="confirm-copy">원본: <strong>{profile?.name}</strong><br />{profile && displayPath(profile.path)}</p><label className="field">새 백업 파일 경로<span className="file-input"><input required disabled={saving} value={path} onChange={e => setPath(e.target.value)} placeholder="절대 경로를 입력하세요" /><button type="button" className="secondary" disabled={saving} onClick={async () => { try { const folder = await call<string | null>("choose_backup_directory"); if (folder) setPath(`${folder}${folder.endsWith("\\") || folder.endsWith("/") ? "" : folder.includes("\\") ? "\\" : "/"}stackport-backup.sqlite`); } catch (e) { setFormError(errorText(e)); } }}>폴더 선택</button></span></label><p className="form-note">전체 데이터베이스를 백업하고 무결성을 검사합니다. 기존 파일은 덮어쓰지 않습니다. 백업은 암호화되지 않으므로 저장 폴더의 접근 권한을 확인하세요.</p></>}
       {modal === "deleteProject" && <p className="confirm-copy"><strong>{project?.name}</strong> 프로젝트와 SQLite 연결 {profiles.length}개, SSH 연결 {sshProfiles.length}개, SQL 초안 및 템플릿을 삭제합니다. 원본 데이터베이스 파일과 SSH 호스트 키 신뢰 기록, 열린 SSH 세션은 유지됩니다.</p>}
       {modal === "deleteProfile" && <p className="confirm-copy"><strong>{profile?.name}</strong> 연결 정의와 SQL 초안을 삭제합니다. 원본 데이터베이스 파일은 삭제되지 않습니다.</p>}
+      {modal === "backup" && <button type="button" className="secondary small" disabled={saving}
+        onClick={() => { setModal(null); setBackupPlanOpen(true); }}>백업 계획</button>}
       {formError && <p className="form-error" role="alert">{formError}</p>}
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={() => setModal(null)}>취소</button><button type="submit" disabled={saving} className={modal.startsWith("delete") ? "danger" : "primary"}>{saving ? "처리 중…" : modal.startsWith("delete") ? "삭제" : modal === "backup" ? "백업 만들기" : modal === "duplicateProject" ? "프로젝트 복제" : modal === "duplicateProfile" ? "복제" : modal === "archiveProject" ? "프로젝트 보관" : "저장"}</button></div>
     </form></Dialog>}
@@ -2190,6 +2214,7 @@ function App() {
         if (result && executedQuery) void executeQuery(executedQuery, result.page);
       }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
+    {backupPlanOpen && profile && <SqliteBackupPlanDialog key={profile.id} profile={profile} displayPath={displayPath} onClose={() => setBackupPlanOpen(false)} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
     {resultComparison && resultComparison.tabId === sqlDraft?.id && <React.Suspense fallback={null}>
       <SqlResultComparison sources={resultComparison.sources} initial={resultComparison.initial} onClose={() => setResultComparison(null)} />

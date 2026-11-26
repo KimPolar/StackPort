@@ -2,6 +2,29 @@ use rusqlite::Connection;
 use stackport_core::{ResumeLayout, ResumeTool, Store, WorkspaceResume};
 use std::path::{Path, PathBuf};
 
+#[test]
+fn v21_workspaces_gain_backup_plans_after_a_verified_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    let store = Store::open(&path).unwrap();
+    let project = store.create_project("기존 프로젝트").unwrap();
+    drop(store);
+    let old = Connection::open(&path).unwrap();
+    old.execute_batch("DROP TABLE backup_runs; DROP TABLE backup_plans; PRAGMA user_version=21;").unwrap();
+    drop(old);
+
+    let migrated = Store::open(&path).unwrap();
+    assert_eq!(migrated.list_projects().unwrap(), [project]);
+    let current = Connection::open(&path).unwrap();
+    assert_eq!(current.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 22);
+    assert_eq!(current.query_row("SELECT count(*) FROM backup_plans", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    let backup = std::fs::read_dir(dir.path()).unwrap().map(|entry| entry.unwrap().path())
+        .find(|file| file.file_name().unwrap().to_string_lossy().starts_with("workspace.sqlite.v21-")).unwrap();
+    let previous = Connection::open(backup).unwrap();
+    assert_eq!(previous.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0)).unwrap(), 21);
+    assert_eq!(previous.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0)).unwrap(), "ok");
+}
+
 fn create_v1(path: &Path, conflict: bool) {
     let db = Connection::open(path).unwrap();
     db.execute_batch("CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT NOT NULL);
@@ -81,7 +104,7 @@ fn migration_keeps_a_verified_v1_backup_and_preserves_profiles() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
             .unwrap(),
-        21
+        22
     );
     assert_eq!(
         db.query_row("SELECT count(*) FROM audit_events", [], |r| r
@@ -135,7 +158,7 @@ fn version_two_migration_preserves_a_verified_backup_and_existing_history() {
     assert_eq!(
         db.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        21
+        22
     );
     let saved = v2_backups(dir.path());
     assert_eq!(saved.len(), 1);

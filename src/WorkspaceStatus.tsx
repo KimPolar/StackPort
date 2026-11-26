@@ -6,14 +6,14 @@ function queryStatus(engine: string, activity: QueryActivity) {
   return activity ? `${engine} 쿼리 ${activity === "cancelling" ? "취소" : "실행"} 중` : "";
 }
 
-export function WorkspaceStatus({ hidden, desktop, storage, dataPath, version, terminalTabs, rdpWindows, tunnels, sqlite, postgres,
+export function WorkspaceStatus({ hidden, desktop, storage, dataPath, version, terminalTabs, rdpWindows, tunnels, sqlite, postgres, backup,
   openTerminal, openRdp, openTunnels, openPostgres }: {
   hidden: boolean; desktop: boolean; storage: string; dataPath?: string; version?: string;
   terminalTabs: number; rdpWindows: number; tunnels: number;
-  sqlite: QueryActivity; postgres: { connected: boolean; query: QueryActivity };
+  sqlite: QueryActivity; postgres: { connected: boolean; query: QueryActivity }; backup: string;
   openTerminal: () => void; openRdp: () => void; openTunnels: () => void; openPostgres: () => void;
 }) {
-  const tasks = [queryStatus("SQLite", sqlite), queryStatus("PostgreSQL", postgres.query)].filter(Boolean);
+  const tasks = [queryStatus("SQLite", sqlite), queryStatus("PostgreSQL", postgres.query), backup].filter(Boolean);
 
   return <footer className="statusbar" id="workspace-status" hidden={hidden} aria-label="작업 공간 상태">
     <span className="workspace-storage" title={dataPath ?? storage}>{storage}</span>

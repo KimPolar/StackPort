@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod data_location;
+mod sqlite_backup_schedule;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
@@ -2941,6 +2942,7 @@ fn main() {
             app.manage(sql_server::Manager::new(store.clone()));
             app.manage(oracle::Manager::new(store.clone()));
             app.manage(snowflake::Manager::new(store.clone()));
+            app.manage(sqlite_backup_schedule::Scheduler::start(app.handle().clone(), store.clone())?);
             app.manage(store);
             app.manage(Arc::new(TerminalManager::default()));
             app.manage(Arc::new(SshManager::new(location.directory.clone())));
@@ -3354,6 +3356,11 @@ fn main() {
             choose_mysql_restore_sql,
             choose_result_export_directory,
             backup_sqlite,
+            sqlite_backup_schedule::sqlite_backup_plan,
+            sqlite_backup_schedule::sqlite_backup_capacity,
+            sqlite_backup_schedule::save_sqlite_backup_plan,
+            sqlite_backup_schedule::run_sqlite_backup_plan,
+            sqlite_backup_schedule::pause_sqlite_backup_plan,
             preview_sqlite_restore,
             choose_sqlite_restore_destination,
             restore_sqlite
@@ -3362,6 +3369,7 @@ fn main() {
     match run {
         Ok(app) => app.run(|handle, event| {
             if matches!(event, RunEvent::Exit) {
+                handle.state::<sqlite_backup_schedule::Scheduler>().stop();
                 handle.state::<SshTunnelManager>().shutdown();
                 handle.state::<Arc<RdpManager>>().shutdown();
             }

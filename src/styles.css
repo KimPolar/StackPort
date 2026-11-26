@@ -797,3 +797,12 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .table-wrap tr[data-grid-selected="true"] > :is(th, td) { background: var(--surface-selected); }
 .app-shell[data-density="compact"] .terminal-tab [role="tab"] { min-height: 28px; padding-block: 4px; }
 .app-shell[data-density="compact"] .terminal-screen { padding: 8px; }
+.dialog.sqlite-backup-plan { width: min(620px, calc(100vw - 32px)); }
+.backup-plan-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; margin-top: 12px; }
+.backup-plan-fields .field { margin-bottom: 0; }
+.sqlite-backup-plan .dialog-actions { flex-wrap: wrap; }
+.backup-run-history { padding: 0 21px 20px; }
+.backup-run-history h3 { margin-top: 0; font-size: 14px; }
+.backup-run-history details { padding: 8px 0; border-top: 1px solid var(--border); font-size: 12px; }
+.backup-run-history summary { cursor: pointer; font-variant-numeric: tabular-nums; }
+.backup-run-history details p { margin: 6px 0; color: var(--text-muted); overflow-wrap: anywhere; }

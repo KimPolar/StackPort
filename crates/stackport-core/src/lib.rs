@@ -164,8 +164,9 @@ mod relational_object_search;
 pub use relational_object_search::RelationalObjectSearch;
 mod native_table_filter;
 mod tls;
+pub mod backup_schedule;
 
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -450,6 +451,7 @@ impl Store {
                 tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -518,6 +520,7 @@ impl Store {
                     tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 }
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
+                tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
