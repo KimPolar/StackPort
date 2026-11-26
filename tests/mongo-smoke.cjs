@@ -16,6 +16,7 @@ const python = process.env.STACKPORT_TEST_PYTHON || 'python';
 const secret = 'stackport-mongo-catalog-test';
 const editSecret = 'stackport-mongo-edit-test';
 const indexSecret = 'stackport-mongo-index-test';
+const archiveSecret = 'stackport-mongo-archive-test';
 const replica = process.env.STACKPORT_MONGO_REPLICA === '1';
 const toolsDirectory = process.env.STACKPORT_MONGO_TOOLS_BIN;
 const log = path.join(root, 'mongo-server.log');
@@ -248,9 +249,11 @@ async function verify(page, port, ca) {
 
   const editProfile = await alternate({ name: '편집 검증', username: 'document_editor' });
   const indexProfile = await alternate({ name: '인덱스 검증', username: 'index_editor' });
+  const archiveProfile = toolsDirectory ? await alternate({ name: '아카이브 검증', username: 'archive_restorer',
+    uri: profile.settings.uri.replace('/visible?', '/?') }) : null;
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
-  const fixtureAction = action => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, action]);
+  const fixtureAction = (...action) => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, ...action]);
   await verifyMongoImportCommands(command, open, profile, editProfile, fixtureAction);
   if (toolsDirectory) await verifyMongoArchiveCommands(command, open, profile, indexProfile, fixtureAction);
   await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
@@ -298,6 +301,11 @@ async function verify(page, port, ca) {
   await verifyNamespaceEditor(page, workspace, detail);
   await verifyCollectionRenameEditor(page, workspace, detail);
   await verifyCollectionDropEditor(page, workspace, detail, 'ui_renamed');
+  if (archiveProfile) {
+    const archive = await verifyMongoDatabaseArchive(command, () => open(archiveProfile, archiveSecret, 'PROD', false, false, true), fixtureAction);
+    await explorer.getByRole('button', { name: 'MongoDB 아카이브 검증 열기', exact: true }).click();
+    await verifyMongoDatabaseArchiveEditor(page, workspace, archive);
+  }
   const audit = [];
   let cursor = null;
   do {
@@ -320,7 +328,10 @@ async function verify(page, port, ca) {
     assert.ok(archiveEvents.some(event => event.operation === 'mongo.archive.restore' && event.outcome === 'succeeded'
       && event.object_name === 'visible.archive_recovered' && event.affected_count === 23
       && event.policy === 'mongo-archive-new-collection-prod-reviewed'));
-    assert.doesNotMatch(JSON.stringify(archiveEvents), /mongo-roundtrip|archive\.gz|stackport-mongo-index-test/u);
+    assert.ok(archiveEvents.some(event => event.operation === 'mongo.archive.restore.database' && event.outcome === 'succeeded'
+      && /^restore_full_[a-f0-9]{32}$/.test(event.object_name) && event.affected_count === 2
+      && event.policy === 'mongo-archive-new-database-prod-reviewed'));
+    assert.doesNotMatch(JSON.stringify(archiveEvents), /mongo-roundtrip|archive\.gz|stackport-mongo-(?:index|archive)-test/u);
   }
   for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
     assert.ok(edits.some(event => event.operation === `mongo.document.${kind}` && event.outcome === 'succeeded'));
@@ -627,6 +638,9 @@ async function verifyMongoArchiveCommands(command, open, reader, administrator, 
     await assert.rejects(preview('incomplete_archive', corrupt), /형식 또는 무결성/);
     await assert.rejects(preview('records'), /이미 있습니다/);
     await assert.rejects(preview('archive_denied', source, backupConnection.id), /컬렉션·뷰 관리를 허용/);
+    await assert.rejects(command('preview_mongo_restore', { id, request: await request(), input: {
+      database: 'restore_no_access', collection: null, directory: toolsDirectory, source: all,
+    } }), /권한/);
     const changedSource = path.join(root, 'mongo-changing.archive.gz');
     fs.copyFileSync(source, changedSource);
     const changed = await preview('archive_source_changed', changedSource);
@@ -656,11 +670,99 @@ async function verifyMongoArchiveCommands(command, open, reader, administrator, 
     });
     assert.equal(outcome.report.rows, 23);
     assert.deepEqual(fs.readFileSync(exportFile), fs.readFileSync(path.join(root, 'mongo-all.json')));
-    const indexes = name => command('mongo_indexes', { id, database, collection: name });
+    const indexes = name => readSortedIndexes(command, { id, database, collection: name });
     assert.deepEqual(await indexes(restored.collection), await indexes('records'));
   } finally {
     for (const connection of [backupConnection, restoredConnection]) await command('close_mongo', { id: connection.id });
   }
+}
+
+async function readSortedIndexes(command, target) {
+  const indexes = await command('mongo_indexes', target);
+  return { ...indexes, items: indexes.items.toSorted((left, right) => left.name.localeCompare(right.name)) };
+}
+
+async function verifyMongoDatabaseArchive(command, open, fixtureAction) {
+  const { id, database: selected } = await open();
+  assert.equal(selected, null);
+  const database = 'archive_data';
+  const source = path.join(root, 'mongo-whole-db.archive.gz');
+  const request = () => command('prepare_query');
+  const preview = async prefix => command('preview_mongo_restore', { id, request: await request(), input: {
+    source, directory: toolsDirectory, database: prefix, collection: null,
+  } });
+  const apply = async (review, confirmation = 'PROD', sourceCollection = null) => command('apply_mongo_restore', {
+    id, request: await request(), token: review.token, sourceDatabase: database, sourceCollection, password: archiveSecret, confirmation,
+  });
+  const documents = (db, collection) => command('mongo_documents', { id, database: db, collection, query: { sort_field: '_id' } });
+  const indexes = db => readSortedIndexes(command, { id, database: db, collection: 'readings' });
+  const definitions = (db, collection) => command('mongo_namespace_definition', { id, database: db, collection });
+  try {
+    const dump = await command('create_mongo_backup', { id, request: await request(), input: {
+      database, collection: null, directory: toolsDirectory, destination: source, password: archiveSecret, confirmation: 'PROD',
+    } });
+    const telemetry = dump.namespaces.find(item => item.collection === 'telemetry');
+    assert.equal(telemetry.kind, 'timeseries');
+    assert.ok(telemetry.documents > 0);
+    assert.equal(dump.namespaces.find(item => item.collection === 'empty_telemetry').documents, 0);
+    assert.equal(dump.namespaces.find(item => item.collection === 'selected_projection').view_on, 'selected_readings');
+    await assert.rejects(preview('invalid*prefix'), /데이터베이스의 이름 앞부분/);
+    const race = await preview('restore_race');
+    fixtureAction('occupy_restore_database', race.target_database);
+    await assert.rejects(apply(race), /이미 컬렉션이나 뷰가 있습니다/);
+    assert.deepEqual((await documents(race.target_database, 'readings')).items.map(item => JSON.parse(item.json)._id), ['other-client']);
+
+    const review = await preview('restore_full');
+    const expected = { name: database, collections: 4, views: 2, documents: 2, buckets: telemetry.documents };
+    assert.deepEqual(review.database_sources, [expected]);
+    assert.match(review.target_database, /^restore_full_[a-f0-9]{32}$/);
+    assert.equal(review.sha256, dump.sha256);
+    const listed = await command('mongo_databases', { id, search: review.target_database, page: 0 });
+    assert.deepEqual(listed.items, []);
+    await assert.rejects(apply(review, ''), /PROD/);
+    await assert.rejects(apply(review, 'PROD', 'readings'), /검토한 원본 MongoDB 데이터베이스/);
+    const restored = await apply(review);
+    assert.deepEqual(restored, { database: review.target_database, documents: 2, sha256: dump.sha256,
+      audit_warning: false, restored_database: expected });
+    await assert.rejects(apply(review), /검토가 만료됐거나 변경/);
+    for (const collection of ['readings', 'empty', 'selected_readings', 'selected_projection', 'telemetry', 'empty_telemetry']) {
+      assert.deepEqual(await documents(restored.database, collection), await documents(database, collection));
+      assert.deepEqual(JSON.parse(await definitions(restored.database, collection)), JSON.parse(await definitions(database, collection)));
+    }
+    assert.deepEqual(await indexes(restored.database), await indexes(database));
+    assert.deepEqual((await command('mongo_databases', { id, search: restored.database, page: 0 })).items, [restored.database]);
+    return source;
+  } finally {
+    await command('close_mongo', { id });
+  }
+}
+
+async function verifyMongoDatabaseArchiveEditor(page, workspace, archive) {
+  await workspace.getByRole('button', { name: 'MongoDB 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'MongoDB 연결', exact: true });
+  await login.getByLabel('MongoDB 암호').fill(archiveSecret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('checkbox', { name: '이 연결에서 컬렉션·뷰 관리 허용', exact: true }).check();
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: '복원', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'MongoDB 복원', exact: true });
+  await dialog.getByLabel('MongoDB Database Tools 폴더').fill(toolsDirectory);
+  await dialog.getByLabel('복원 아카이브 경로').fill(archive);
+  await dialog.getByLabel('새 데이터베이스 이름 앞부분').fill('복구_in_ui');
+  await dialog.getByRole('button', { name: '아카이브 검토', exact: true }).click();
+  await dialog.getByRole('heading', { name: '복원 아카이브 검토' }).waitFor();
+  const revealed = (await dialog.locator('.confirm-copy').innerText()).match(/복구_in_ui_[a-f0-9]{32}/u)?.[0];
+  assert.ok(revealed);
+  await dialog.getByText('복원할 객체', { exact: true }).click();
+  await dialog.getByText('selected_projection · 뷰 원본 selected_readings', { exact: true }).waitFor();
+  await dialog.getByLabel('MongoDB 암호').fill(archiveSecret);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await dialog.getByRole('button', { name: '검토한 데이터베이스 복원', exact: true }).click();
+  await workspace.getByText('MongoDB 복원 완료', { exact: true }).waitFor();
+  await workspace.getByRole('button', { name: revealed, exact: true }).waitFor();
+  await workspace.getByRole('button', { name: 'selected_projection 뷰', exact: true }).click();
+  await workspace.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '9223372036854775807' }).waitFor();
 }
 
 async function verifyMongoArchiveEditor(page, workspace, detail) {

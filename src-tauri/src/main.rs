@@ -1077,9 +1077,9 @@ async fn preview_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, i
 
 #[tauri::command]
 async fn apply_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, id: String, request: String, token: String,
-    source_database: String, source_collection: String, password: stackport_core::MongoPassword, confirmation: String)
+    source_database: String, source_collection: Option<String>, password: stackport_core::MongoPassword, confirmation: String)
     -> Result<stackport_core::MongoRestoreReport, String> {
-    mongo.apply_restore_archive(&id, request, &token, &source_database, &source_collection, password, &confirmation).await
+    mongo.apply_restore_archive(&id, request, &token, &source_database, source_collection.as_deref(), password, &confirmation).await
 }
 
 #[tauri::command]

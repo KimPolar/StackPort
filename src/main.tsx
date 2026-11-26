@@ -2324,6 +2324,7 @@ const auditOperationNames: Record<string, string> = {
   "mongo.export.json": "MongoDB 문서 JSON 내보내기",
   "mongo.archive.backup": "MongoDB 아카이브 백업",
   "mongo.archive.restore": "MongoDB 아카이브 복원",
+  "mongo.archive.restore.database": "MongoDB 데이터베이스 복원",
   "mongo.archive.restore.unconfirmed": "MongoDB 아카이브 복원 결과 미확인",
   "mongo.import.json": "MongoDB 문서 JSON 가져오기",
   "mongo.import.json.unconfirmed": "MongoDB 문서 가져오기 결과 미확인",

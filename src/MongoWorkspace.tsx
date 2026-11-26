@@ -154,8 +154,8 @@ function Browse({ session, projectId, profileName, environment, needsPassword, o
       <Catalog<string> title="데이터베이스" command="mongo_databases" args={databaseArgs} revision={revision}
         name={item => item} selected={database} onOpen={item => { setDatabase(item); setCollection(null); }}
         action={(archiveDatabase || session.allow_namespaces) && <div className="mongo-actions">
-          {archiveDatabase && <button type="button" className="secondary small" onClick={() => { setArchiveResult(null); setArchiveOpen(true); }}>
-            {session.allow_namespaces ? "백업·복원" : "백업"}
+          {(archiveDatabase || session.allow_namespaces) && <button type="button" className="secondary small" onClick={() => { setArchiveResult(null); setArchiveOpen(true); }}>
+            {!archiveDatabase ? "복원" : session.allow_namespaces ? "백업·복원" : "백업"}
           </button>}
           {session.allow_namespaces && <button type="button" className="secondary small"
             onClick={() => { setNamespaceNotice(""); setCreating(true); }}>컬렉션·뷰 만들기</button>}
@@ -179,13 +179,14 @@ function Browse({ session, projectId, profileName, environment, needsPassword, o
       environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
     {collectionAction && <MongoCollectionActionDialog id={session.id} {...collectionAction} environment={environment}
       onBusy={onBusy} onClose={() => setCollectionAction(null)} onDone={collectionActionDone} />}
-    {archiveOpen && archiveDatabase && <MongoArchiveDialog id={session.id} database={archiveDatabase}
+    {archiveOpen && <MongoArchiveDialog id={session.id} database={archiveDatabase}
       currentCollection={mutableCollection ? collection?.name : undefined} environment={environment}
       allowRestore={session.allow_namespaces} needsPassword={needsPassword} onBusy={onBusy} onClose={() => setArchiveOpen(false)}
       onDone={result => {
         setArchiveOpen(false); setArchiveResult(result);
         if (result.kind === "restore") {
-          setDatabase(result.report.database); setCollection({ name: result.report.collection, kind: "collection" });
+          setDatabase(result.report.database);
+          setCollection(result.report.collection ? { name: result.report.collection, kind: "collection" } : null);
           setRevision(value => value + 1);
         }
       }} />}

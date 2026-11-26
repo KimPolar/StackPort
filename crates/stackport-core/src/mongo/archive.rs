@@ -2,6 +2,7 @@ use crate::Result;
 use bson::raw::RawDocumentBuf;
 use flate2::bufread::GzDecoder;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -24,6 +25,12 @@ pub(super) struct Namespace {
     pub(super) kind: String,
     pub(super) documents: u64,
     pub(super) restore_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) view_on: Option<String>,
+    #[serde(skip)]
+    pub(super) database_restore_supported: bool,
+    #[serde(skip)]
+    pub(super) indexes: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -189,17 +196,54 @@ fn read_archive(
         } else {
             metadata.kind
         };
-        let restore_supported = kind == "collection"
-            && ordinary_metadata(&metadata.metadata)
-            && super::backup::check_database(&metadata.db).is_ok()
+        let fields = serde_json::from_str::<Value>(&metadata.metadata).ok();
+        let options = fields
+            .as_ref()
+            .and_then(|fields| fields.get("options"))
+            .and_then(Value::as_object);
+        let view_on = options
+            .and_then(|options| options.get("viewOn"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let name_supported = super::backup::check_database(&metadata.db).is_ok()
             && !metadata.collection.starts_with("system.")
             && !metadata.collection.contains(['\\', '*', '$']);
+        let restore_supported =
+            kind == "collection" && name_supported && ordinary_metadata(fields.as_ref());
+        let database_restore_supported = restore_supported
+            || (name_supported
+                && options.is_some_and(|options| {
+                    if options.contains_key("encryptedFields") {
+                        return false;
+                    }
+                    match kind.as_str() {
+                        "timeseries" => options.get("timeseries").is_some_and(Value::is_object),
+                        "view" => {
+                            view_on.as_ref().is_some_and(|source| !source.is_empty())
+                                && options.get("pipeline").is_some_and(Value::is_array)
+                        }
+                        _ => false,
+                    }
+                }));
+        let indexes = fields
+            .as_ref()
+            .and_then(|fields| fields.get("indexes"))
+            .and_then(Value::as_array)
+            .and_then(|indexes| {
+                indexes
+                    .iter()
+                    .map(|index| index.get("name")?.as_str().map(str::to_owned))
+                    .collect()
+            });
         namespaces.push(Namespace {
             database: metadata.db,
             collection: metadata.collection,
+            restore_supported,
             kind,
             documents: 0,
-            restore_supported,
+            view_on,
+            database_restore_supported,
+            indexes,
         });
     }
     let aliases: HashMap<_, _> = namespaces
@@ -257,11 +301,8 @@ fn read_archive(
     Ok((header, namespaces))
 }
 
-fn ordinary_metadata(metadata: &str) -> bool {
-    let Ok(fields) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    fields.as_object().is_some_and(|fields| {
+fn ordinary_metadata(metadata: Option<&Value>) -> bool {
+    metadata.and_then(Value::as_object).is_some_and(|fields| {
         fields.get("options").is_none_or(|options| {
             options.as_object().is_some_and(|options| {
                 ["viewOn", "timeseries", "encryptedFields"]

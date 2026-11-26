@@ -1,4 +1,6 @@
 import sys
+import re
+from datetime import datetime, timezone
 from time import monotonic, sleep
 from uuid import uuid4
 
@@ -42,6 +44,10 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         sys.exit(0)
     if action == ['occupy_restore_destination']:
         client.visible.archive_race.insert_one({'_id': 'other-client', 'keep': True})
+        sys.exit(0)
+    if len(action) == 2 and action[0] == 'occupy_restore_database':
+        assert re.fullmatch('restore_race_[0-9a-f]{32}', action[1])
+        client[action[1]].readings.insert_one({'_id': 'other-client', 'keep': True})
         sys.exit(0)
     if action == ['recreate_validation_collection']:
         client.namespace_new.drop_collection('validated_items')
@@ -155,3 +161,17 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     client.admin.command('createUser', 'index_editor', pwd='stackport-mongo-index-test',
                          roles=[{'role': 'readWrite', 'db': 'visible'}, {'role': 'dbAdmin', 'db': 'visible'},
                                 {'role': 'readWrite', 'db': 'namespace_new'}, {'role': 'dbAdmin', 'db': 'namespace_new'}])
+    source = client.archive_data
+    source.readings.insert_many([{'_id': 1, 'reading': Int64(9223372036854775807)}, {'_id': 2, 'reading': Int64(8)}])
+    source.readings.create_index('reading', name='reading_idx')
+    source.create_collection('empty')
+    source.create_collection('selected_readings', viewOn='readings', pipeline=[{'$match': {'_id': 1}}])
+    source.create_collection('selected_projection', viewOn='selected_readings', pipeline=[{'$project': {'reading': 1}}])
+    source.create_collection('telemetry', timeseries={'timeField': 'instant', 'metaField': 'station'})
+    source.create_collection('empty_telemetry', timeseries={'timeField': 'instant', 'metaField': 'station'})
+    source.telemetry.insert_many([
+        {'_id': number, 'instant': datetime(2026, 1, 1, number, tzinfo=timezone.utc), 'station': station}
+        for number, station in enumerate(['Seoul', 'Busan', 'Seoul'])
+    ])
+    client.admin.command('createUser', 'archive_restorer', pwd='stackport-mongo-archive-test',
+                         roles=['restore', 'readWriteAnyDatabase', 'dbAdminAnyDatabase'])

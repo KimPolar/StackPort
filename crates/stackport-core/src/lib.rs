@@ -993,6 +993,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "mongo.archive.backup" => "mongo-native-archive-no-overwrite",
         "mongo.archive.restore" | "mongo.archive.restore.unconfirmed" if record.environment == Some("PROD") => "mongo-archive-new-collection-prod-reviewed",
         "mongo.archive.restore" | "mongo.archive.restore.unconfirmed" => "mongo-archive-new-collection-reviewed",
+        "mongo.archive.restore.database" if record.environment == Some("PROD") => "mongo-archive-new-database-prod-reviewed",
+        "mongo.archive.restore.database" => "mongo-archive-new-database-reviewed",
         "mongo.import.json" | "mongo.import.json.unconfirmed" | "mongo.import.csv" | "mongo.import.csv.unconfirmed" if record.environment == Some("PROD") => "mongo-document-import-uuid-prod-reviewed",
         "mongo.import.json" | "mongo.import.json.unconfirmed" | "mongo.import.csv" | "mongo.import.csv.unconfirmed" => "mongo-document-import-uuid-reviewed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
