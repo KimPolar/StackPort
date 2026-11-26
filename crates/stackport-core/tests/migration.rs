@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use stackport_core::{ResumeLayout, ResumeTool, Store, WorkspaceResume};
 use std::path::{Path, PathBuf};
 
-const CURRENT_WORKSPACE_VERSION: i64 = 32;
+const CURRENT_WORKSPACE_VERSION: i64 = 33;
 
 #[test]
 fn v21_workspaces_gain_backup_plans_after_a_verified_snapshot() {
@@ -325,7 +325,7 @@ fn version_five_migration_preserves_workspace_resume_and_creates_sftp_profiles()
         layout: ResumeLayout::Tool { tool: ResumeTool::Files },
     }).unwrap();
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
+    db.execute_batch("DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; DROP TABLE sftp_sync_profiles; PRAGMA user_version=5;").unwrap();
     drop(db);
 
     let migrated = Store::open(&path).unwrap();
@@ -348,7 +348,7 @@ fn version_six_migration_preserves_existing_tables_before_adding_templates() {
     let store = Store::open(&path).unwrap();
     let project = store.create_project("기존 프로젝트").unwrap();
     let db = Connection::open(&path).unwrap();
-    db.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; PRAGMA user_version=6;").unwrap();
+    db.execute_batch("DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; DROP TABLE ssh_tunnels; DROP TABLE sql_templates; PRAGMA user_version=6;").unwrap();
     drop(db);
     let migrated = Store::open(&path).unwrap();
     assert_eq!(migrated.list_projects().unwrap(), vec![project.clone()]);

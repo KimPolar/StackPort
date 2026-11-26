@@ -1518,6 +1518,122 @@ async function verifySqlEditor(page, workspace) {
   await toggle.click();
 }
 
+async function verifyBackupPlan(page, server) {
+  const password = 'fixture-scheduled-backup-password';
+  admin(server.port, `
+    CREATE DATABASE plan_fixture CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    CREATE TABLE plan_fixture.sample (id INT PRIMARY KEY, payload VARBINARY(8)) ENGINE=InnoDB;
+    INSERT INTO plan_fixture.sample VALUES (17,0x00faff);
+    CREATE USER 'plan_user'@'%' IDENTIFIED BY '${password}' REQUIRE X509;
+    GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON plan_fixture.* TO 'plan_user'@'%';
+    ${maria ? "GRANT SELECT ON mysql.proc TO 'plan_user'@'%';" : "GRANT SHOW_ROUTINE ON *.* TO 'plan_user'@'%';"}
+  `);
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: engine + ' 백업 계획 검증' });
+  const input = { name: '예약 백업 검증', host: 'localhost', port: server.port, database: 'plan_fixture',
+    username: 'plan_user', environment: 'PROD', tls: true, ca_path: server.ca,
+    client_certificate_path: server.clientCertificate, client_key_path: server.clientKey };
+  let profile = await command('create_mysql_profile', { projectId: project.id, input });
+  const backupFolder = path.join(root, 'archives');
+  fs.mkdirSync(backupFolder);
+  const login = () => command('open_mysql', { profileId: profile.id, revision: profile.revision,
+    password, confirmation: 'PROD', rememberPassword: true });
+  const state = () => command('mysql_backup_plan', { profileId: profile.id });
+  const named = label => ({ name: label, exact: true });
+  const planArgs = () => ({ profileId: profile.id, profileRevision: profile.revision, confirmation: 'PROD', tools: binaryDir });
+  const planInput = { revision: null, directory: backupFolder, prefix: 'fixture', file_name_template: '{engine}-{prefix}-{trigger}',
+    interval_minutes: null, retention_days: 7, retry_limit: 0, timeout_seconds: 60, next_at: null };
+
+  try {
+    await assert.rejects(command('save_mysql_backup_plan', { ...planArgs(), input: planInput }), /Windows 자격 증명/);
+    const opened = await login();
+    assert.equal(opened.credential_warning, null);
+    await command('close_mysql', { id: opened.id });
+    await assert.rejects(command('save_mysql_backup_plan', { ...planArgs(), input: planInput, confirmation: '' }), /PROD/);
+
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', named('MySQL 예약 백업 검증 열기')).click();
+    const workspace = page.getByRole('region', named('MySQL 작업 공간'));
+    await workspace.getByRole('button', named('백업 계획')).click();
+    const dialog = page.getByRole('dialog', named('MySQL · MariaDB 백업 계획'));
+    const confirm = dialog.getByLabel('운영 백업 확인 (PROD 입력)', { exact: true });
+    await dialog.getByLabel('백업 도구 폴더').fill(binaryDir);
+    await dialog.getByLabel('저장 폴더').fill(backupFolder);
+    await dialog.getByLabel('파일 이름 접두어').fill(planInput.prefix);
+    await dialog.getByLabel('파일 이름 규칙').fill(planInput.file_name_template);
+    await dialog.getByRole('checkbox', named('예약 실행')).uncheck();
+    await dialog.getByRole('button', named('이름 미리보기')).click();
+    assert.match(await dialog.getByLabel('백업 파일 이름 미리보기').textContent(), /^mysql-fixture-manual-.+\.sql$/);
+    await confirm.fill('PROD');
+    await dialog.getByRole('button', named('계획 검증')).click();
+    const validation = dialog.getByRole('region', named('백업 계획 검증 결과'));
+    await validation.getByText(/덤프 도구/).waitFor();
+    assert.equal(await validation.getByText('실패', { exact: true }).count(), 0);
+    await dialog.getByRole('button', named('계획 저장')).click();
+    await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+    await confirm.fill('PROD');
+    await dialog.getByRole('button', named('지금 백업')).click();
+    await dialog.getByText('백업을 만들고 무결성을 확인했습니다.', { exact: true }).waitFor();
+
+    const saved = await state();
+    const manual = saved.runs.find(run => run.trigger_kind === 'manual');
+    assert.equal(manual.status, 'succeeded');
+    assert.match(path.basename(manual.path), /^mysql-fixture-manual-.+\.sql$/);
+    await command('verify_sqlite_backup_file', { profileId: profile.id, runId: manual.id });
+    const start = Math.floor(Date.now() / 1000) + 7;
+    await command('save_mysql_backup_plan', { ...planArgs(), input: { ...planInput, revision: saved.plan.revision, next_at: start } });
+    let scheduled;
+    const deadline = Date.now() + 30_000;
+    while (!scheduled && Date.now() < deadline) {
+      const snapshot = await state();
+      scheduled = snapshot.runs.find(run => run.trigger_kind === 'scheduled' && run.status !== 'running');
+      if (!scheduled) await delay(300);
+    }
+    assert.ok(scheduled, 'Scheduled backup did not reach a terminal status.');
+    assert.equal(scheduled.status, 'succeeded', scheduled.message);
+    assert.equal(scheduled.scheduled_at, start);
+    assert.match(path.basename(scheduled.path), /^mysql-fixture-scheduled-.+\.sql$/);
+    const archive = fs.readFileSync(scheduled.path);
+    assert.equal(scheduled.size_bytes, archive.length);
+    assert.equal(scheduled.artifact.sha256, createHash('sha256').update(archive).digest('hex'));
+    assert.ok(scheduled.expires_at >= scheduled.finished_at + 7 * 86400);
+    const { entries } = await command('list_backup_history', { filter: { project_id: project.id }, before: null });
+    assert.ok(entries.some(run => run.id === scheduled.id && run.engine === 'MySQL · MariaDB' && run.profile_name === input.name));
+
+    await dialog.getByRole('button', named('닫기')).click();
+    await page.getByRole('button', named('작업 기록')).click();
+    await page.getByRole('button', named('백업 실행')).click();
+    const history = page.getByRole('region', named('백업 실행 기록'));
+    const entry = history.getByRole('listitem').filter({ hasText: 'MySQL · MariaDB · 예약 실행' });
+    await entry.getByRole('button', named('백업 계획 열기')).click();
+    await dialog.getByLabel('백업 도구 폴더').waitFor();
+    assert.equal(path.normalize(await dialog.getByLabel('백업 도구 폴더').inputValue()), path.normalize(binaryDir));
+    await dialog.getByRole('button', named('닫기')).click();
+
+    const { DatabaseSync } = require('node:sqlite');
+    const metadata = new DatabaseSync(path.join(process.env.STACKPORT_DATA_DIR, 'workspace.sqlite'));
+    try { metadata.prepare('UPDATE backup_runs SET expires_at=0 WHERE id=?').run(manual.id); }
+    finally { metadata.close(); }
+    const removal = await command('preview_sqlite_backup_removal', { profileId: profile.id, runId: manual.id });
+    assert.equal(removal.sha256, manual.artifact.sha256);
+    const removed = await command('remove_sqlite_backup_file', { token: removal.token, confirmed: true });
+    assert.equal(removed.audit_warning, false);
+    assert.equal(fs.existsSync(manual.path), false);
+    assert.equal(fs.existsSync(scheduled.path), true);
+
+    admin(server.port, 'DROP DATABASE plan_fixture;');
+    admin(server.port, archive);
+    assert.equal(admin(server.port, 'SELECT id, HEX(payload) FROM plan_fixture.sample;').trim(), '17\t00FAFF');
+    profile = await command('update_mysql_profile', { id: profile.id, revision: profile.revision, input: { ...input, name: '설정 변경됨' } });
+    const updated = await state();
+    assert.equal(updated.plan.requires_review, true);
+    await assert.rejects(command('run_mysql_backup_plan', { ...planArgs(), revision: updated.plan.revision }), /계획을 검토/);
+  } finally {
+    await command('forget_mysql_password', { profileId: profile.id, revision: profile.revision });
+  }
+}
+
 async function verifyCredentials(page, server) {
   const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
   const project = await command('create_project', { name: 'MySQL 암호 보관 검증' });
@@ -1609,6 +1725,11 @@ async function main() {
     server = await fixture();
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     const page = browser.contexts()[0].pages()[0];
+    if (process.env.STACKPORT_MYSQL_PLAN_ONLY === '1') {
+      await verifyBackupPlan(page, server);
+      console.log(`${engine} Windows backup plan passed (validated tools, manual and scheduled SQL, digest, history, revision review and restored data).`);
+      return;
+    }
     if (process.env.STACKPORT_MYSQL_CREDENTIAL_ONLY === '1') {
       await verifyCredentials(page, server);
       console.log(`${engine} Windows credential flow passed (opt-in, failed login, production confirmation, restart, profile changes and deletion).`);

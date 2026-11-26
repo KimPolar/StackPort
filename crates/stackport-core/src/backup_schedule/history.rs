@@ -75,11 +75,12 @@ impl Store {
         let tx = db.transaction().map_err(db_error)?;
         let mut entries = {
             let mut query = tx.prepare(&format!(
-                "SELECT {RUN_COLUMNS}, project.id, project.name, coalesce(s.name, pg.name), archive.project_id IS NOT NULL
+                "SELECT {RUN_COLUMNS}, project.id, project.name, coalesce(s.name, pg.name, my.name), archive.project_id IS NOT NULL
                  {RUN_TABLES}
                  LEFT JOIN profiles s ON s.id=p.sqlite_profile_id
                  LEFT JOIN postgres_profiles pg ON pg.id=p.postgres_profile_id
-                 JOIN projects project ON project.id=coalesce(s.project_id, pg.project_id)
+                 LEFT JOIN mysql_profiles my ON my.id=p.mysql_profile_id
+                 JOIN projects project ON project.id=coalesce(s.project_id, pg.project_id, my.project_id)
                  LEFT JOIN project_archives archive ON archive.project_id=project.id
                  WHERE r.workspace_path=?2 AND (?1 IS NULL OR project.id=?1)
                  AND (?3 IS NULL OR r.status=?3) AND (?4 IS NULL OR r.trigger_kind=?4)

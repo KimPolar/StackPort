@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     backup_artifact::Evidence,
-    backup_schedule::{active_profile, confirm_backup_directory, RunControl, Stop},
+    backup_schedule::{active_profile, confirm_backup_directory, PlanEngine, RunControl, Stop},
     insert_audit, ssh_tunnel::DatabaseTunnel, AuditRecord, BackupTunnelRoute, Result, SshTunnelManager, Store,
 };
 use postgres_native_tls::MakeTlsConnector;
@@ -49,7 +49,7 @@ impl Store {
             if super::find_profile(&db, profile_id)? != profile || profile.revision != expected_revision {
                 return Err("PostgreSQL 연결 설정이 변경되었습니다. 백업 계획을 다시 저장하세요.".into());
             }
-            if !active_profile(&db, profile_id, true)? {
+            if !active_profile(&db, profile_id, PlanEngine::Postgres)? {
                 return Err("활성 프로젝트의 PostgreSQL 연결을 선택하세요.".into());
             }
             if let Some(route) = route {

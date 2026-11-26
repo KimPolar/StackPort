@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Archive, ArchiveRestore, Code2, Database, Download, Plug, RefreshCw, ShieldCheck, Table2 } from "lucide-react";
+import { BackupPlanDialog } from "./BackupPlanDialog";
 import { Dialog } from "./Dialog";
 import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { DatabasePreviewGrid, type DatabasePreviewValue as MysqlValue } from "./DatabasePreviewGrid";
@@ -41,8 +42,9 @@ type Sample = {
   edit?: { rows: (MysqlRowStamp | null)[]; keys: string[]; columns: string[] };
 };
 
-export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
+export function MysqlWorkspace({ profile, editor, onOpenTunnels, displayPath, onFileBusy }: {
   profile: MysqlProfile; editor: SqlEditorState; onOpenTunnels: () => void;
+  displayPath: (value: string) => string; onFileBusy: (busy: boolean) => void;
 }) {
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
@@ -66,6 +68,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
   const [rowPage, setRowPage] = useState(0);
   const [tableQuery, setTableQuery] = useState(emptyTableQueryClauses);
   const [backupTarget, setBackupTarget] = useState<MysqlBackupTarget | null>(null);
+  const [backupPlanOpen, setBackupPlanOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [exportTarget, setExportTarget] = useState<MysqlExportTarget | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
@@ -224,6 +227,7 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
           {session?.tunnel && ` · SSH 터널 ${session.tunnel.name}`}</p>
       </div>
       <div className="header-actions">
+        <button type="button" className="secondary" onClick={() => setBackupPlanOpen(true)}><Archive size={15} aria-hidden /> 백업 계획</button>
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> {session?.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
         {session ? <><button type="button" className="secondary" aria-pressed={sqlOpen} onClick={() => setMode(sqlOpen ? "objects" : "sql")}><Code2 size={15} aria-hidden /> SQL 편집기</button>
           <button type="button" className="secondary" aria-pressed={monitorOpen} onClick={() => setMode(monitorOpen ? "objects" : "monitor")}><Activity size={15} aria-hidden /> 서버 모니터</button>
@@ -321,6 +325,9 @@ export function MysqlWorkspace({ profile, editor, onOpenTunnels }: {
     {session && monitorOpen && <MysqlServerMonitor key={session.id} id={session.id} />}
     {session && backupTarget && <MysqlBackupDialog id={session.id} engine={session.engine} target={backupTarget}
       connection={settings.name} environment={settings.environment} onClose={() => setBackupTarget(null)} />}
+    {backupPlanOpen && <BackupPlanDialog mysql={profile} profile={{ id: profile.id, name: settings.name,
+      environment: settings.environment, path: `${networkAddressText(settings)}${settings.database ? ` / ${settings.database}` : ""}` }}
+      displayPath={displayPath} onFileBusy={onFileBusy} onClose={() => setBackupPlanOpen(false)} />}
     {session && restoring && <MysqlRestoreDialog id={session.id} engine={session.engine}
       server={`${settings.name} · ${networkAddressText(settings)}`} environment={settings.environment}
       onClose={() => setRestoring(false)} onResult={() => setRevision(value => value + 1)} />}

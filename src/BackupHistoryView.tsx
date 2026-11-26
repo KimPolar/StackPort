@@ -4,18 +4,19 @@ import { RefreshCw } from "lucide-react";
 import {
   BackupPlanDialog, backupRunStatus, backupRunTrigger, formatBackupSize, formatBackupTime, type BackupRun,
 } from "./BackupPlanDialog";
+import type { MysqlProfile } from "./MysqlProfileDialog";
 import type { PostgresProfile } from "./PostgresWorkspace";
 import { networkAddressText } from "./quickConnect";
 
 type HistoryEntry = BackupRun & {
-  engine: "SQLite" | "PostgreSQL";
+  engine: "SQLite" | "PostgreSQL" | "MySQL · MariaDB";
   project_id: string; project_name: string; profile_id: string; profile_name: string; archived: boolean;
 };
 type HistoryProject = { id: string; name: string; archived: boolean };
 type Cursor = { started_at: number; rowid: number };
 type HistoryPage = { entries: HistoryEntry[]; projects: HistoryProject[]; next_before: Cursor | null };
 type SQLiteProfile = { id: string; name: string; path: string; environment: string };
-type PlanTarget = { projectId: string; profile: SQLiteProfile; postgres?: PostgresProfile };
+type PlanTarget = { projectId: string; profile: SQLiteProfile; postgres?: PostgresProfile; mysql?: MysqlProfile };
 
 export type BackupHistoryViewProps = {
   displayPath: (path: string) => string;
@@ -85,6 +86,14 @@ export function BackupHistoryView({ displayPath, onFileBusy, onOpenTunnels }: Ba
         const { id, settings } = postgres;
         const { name, environment, database } = settings;
         setTarget({ projectId, postgres, profile: { id, name, environment, path: networkAddressText(settings) + " / " + database } });
+      } else if (entry.engine === "MySQL · MariaDB") {
+        const profiles = await invoke<MysqlProfile[]>("list_mysql_profiles", { projectId });
+        const mysql = profiles.find(profile => profile.id === entry.profile_id);
+        if (!mysql) throw new Error("백업 계획의 연결을 찾을 수 없습니다.");
+        const { id, settings } = mysql;
+        const { name, environment, database } = settings;
+        const path = networkAddressText(settings) + (database ? ` / ${database}` : "");
+        setTarget({ projectId, mysql, profile: { id, name, environment, path } });
       } else {
         const profiles = await invoke<SQLiteProfile[]>("list_profiles", { projectId });
         const profile = profiles.find(item => item.id === entry.profile_id);
@@ -152,7 +161,7 @@ export function BackupHistoryView({ displayPath, onFileBusy, onOpenTunnels }: Ba
         }}>이전 기록 더 보기</button>
       </div></div>
     </div>
-    {target && <BackupPlanDialog key={target.profile.id} profile={target.profile} postgres={target.postgres}
+    {target && <BackupPlanDialog key={target.profile.id} profile={target.profile} postgres={target.postgres} mysql={target.mysql}
       displayPath={displayPath} onClose={() => setTarget(null)} onFileBusy={onFileBusy}
       onOpenTunnels={() => onOpenTunnels(target.projectId)} />}
   </section>;

@@ -78,8 +78,12 @@ pub(crate) async fn preview_backup_calendar(input: BackupCalendar) -> Result<Vec
 }
 
 #[tauri::command]
-pub(crate) fn preview_backup_file_name(prefix: String, template: String, postgres: bool, scheduled: bool) -> Result<String, String> {
-    stackport_core::backup_schedule::preview_backup_file_name(&prefix, &template, postgres, scheduled)
+pub(crate) fn preview_backup_file_name(prefix: String, template: String, postgres: bool, mysql: Option<bool>, scheduled: bool) -> Result<String, String> {
+    if mysql.unwrap_or(false) {
+        stackport_core::backup_schedule::preview_mysql_backup_file_name(&prefix, &template, scheduled)
+    } else {
+        stackport_core::backup_schedule::preview_backup_file_name(&prefix, &template, postgres, scheduled)
+    }
 }
 
 #[tauri::command]
@@ -121,6 +125,42 @@ pub(crate) async fn run_postgres_backup_plan(app: AppHandle, store: State<'_, St
 pub(crate) async fn pause_postgres_backup_plan(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<BackupPlanState, String> {
     let store = store.inner().clone();
     super::worker(move || store.pause_postgres_backup_plan(&profile_id, revision)).await
+}
+
+#[tauri::command]
+pub(crate) async fn mysql_backup_plan(store: State<'_, Store>, profile_id: String) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.mysql_backup_plan(&profile_id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn mysql_backup_capacity(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, directory: String) -> Result<BackupCapacity, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.mysql_backup_capacity(&profile_id, profile_revision, &confirmation, &directory)).await
+}
+
+#[tauri::command]
+pub(crate) async fn validate_mysql_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, tools: String, input: BackupPlanWrite) -> Result<BackupPlanValidation, String> {
+    let store = store.inner().clone();
+    super::worker(move || Ok(store.validate_mysql_backup_plan(&profile_id, profile_revision, &confirmation, &tools, &input))).await
+}
+
+#[tauri::command]
+pub(crate) async fn save_mysql_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, tools: String, input: BackupPlanWrite) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.save_mysql_backup_plan(&profile_id, profile_revision, &confirmation, &tools, input)).await
+}
+
+#[tauri::command]
+pub(crate) async fn run_mysql_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, revision: i64, confirmation: String) -> Result<BackupRun, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.run_mysql_backup_plan(&profile_id, profile_revision, revision, &confirmation)).await
+}
+
+#[tauri::command]
+pub(crate) async fn pause_mysql_backup_plan(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.pause_mysql_backup_plan(&profile_id, revision)).await
 }
 
 #[tauri::command]

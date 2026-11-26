@@ -7,6 +7,7 @@ mod monitor;
 mod plan;
 pub(crate) mod profiles;
 mod restore;
+mod schedule;
 mod sql;
 mod structure;
 mod tls;
@@ -20,6 +21,7 @@ pub use plan::MysqlPlan;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
 pub use restore::{MysqlRestoreInput, MysqlRestorePreview, MysqlRestoreReport};
+pub(crate) use schedule::{backup_database, scheduled_backup_source, scheduled_backup_tools, tools_directory};
 pub use sql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use structure::{MysqlStructure, MysqlStructureSection};
 

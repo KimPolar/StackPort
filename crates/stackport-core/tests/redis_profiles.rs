@@ -13,7 +13,7 @@ fn upgrades_v13_and_copies_redis_profiles_with_the_project() {
     drop(store);
     let db = Connection::open(&path).unwrap();
     legacy_presets::restore_legacy_preset_schema(&db, false);
-    db.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=13;")
+    db.execute_batch("DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=13;")
         .unwrap();
     drop(db);
 

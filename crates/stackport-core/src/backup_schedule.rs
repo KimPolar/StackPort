@@ -6,7 +6,7 @@ mod history;
 mod validation;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
-pub use file_name::preview_backup_file_name;
+pub use file_name::{preview_backup_file_name, preview_mysql_backup_file_name};
 pub(crate) use execution::{Execution, RunControl, Stop};
 pub use history::{BackupHistoryCursor, BackupHistoryFilter, BackupHistoryPage};
 pub use validation::BackupPlanValidation;
@@ -14,7 +14,7 @@ use validation::{validate_settings, ValidatedSettings};
 use calendar::CalendarSchedule;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
-    db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
+    db_error, mysql, open_user_db, postgres, BackupTunnelRoute, MysqlProfile, PostgresProfile, Result, SshTunnelManager, Store,
 };
 use rusqlite::hooks::{AuthContext, Authorization};
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
@@ -34,6 +34,28 @@ pub const MAX_CONCURRENT_BACKUPS: u8 = 4;
 const LATEST_START: i64 = 4_102_444_800; // 2100-01-01 UTC
 const NO_CALENDAR_OCCURRENCE: &str = "2100년까지 실행할 수 있는 달력 일정이 없습니다.";
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanEngine { Sqlite, Postgres, Mysql }
+
+impl PlanEngine {
+    fn label(self) -> &'static str {
+        match self { Self::Sqlite => "SQLite", Self::Postgres => "PostgreSQL", Self::Mysql => "MySQL · MariaDB" }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PlanTarget<'a> { Sqlite, Postgres(&'a PostgresProfile), Mysql(&'a MysqlProfile) }
+
+impl PlanTarget<'_> {
+    fn engine(self) -> PlanEngine {
+        match self { Self::Sqlite => PlanEngine::Sqlite, Self::Postgres(_) => PlanEngine::Postgres, Self::Mysql(_) => PlanEngine::Mysql }
+    }
+
+    fn revision(self) -> Option<i64> {
+        match self { Self::Sqlite => None, Self::Postgres(profile) => Some(profile.revision), Self::Mysql(profile) => Some(profile.revision) }
+    }
+}
+
 pub(crate) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS backup_execution_policy (
         id INTEGER PRIMARY KEY CHECK(id=1),
@@ -48,6 +70,9 @@ pub(crate) const SCHEMA: &str = "
         postgres_profile_id TEXT REFERENCES postgres_profiles(id) ON DELETE CASCADE,
         postgres_revision INTEGER,
         postgres_tunnel TEXT CHECK (postgres_tunnel IS NULL OR postgres_profile_id IS NOT NULL),
+        mysql_profile_id TEXT REFERENCES mysql_profiles(id) ON DELETE CASCADE,
+        mysql_revision INTEGER CHECK (mysql_revision IS NULL OR mysql_revision>0),
+        mysql_tools_directory TEXT,
         revision INTEGER NOT NULL,
         workspace_path TEXT NOT NULL,
         directory TEXT NOT NULL,
@@ -64,9 +89,12 @@ pub(crate) const SCHEMA: &str = "
         next_excluded_at INTEGER,
         retry_at INTEGER,
         CHECK (
-            (sqlite_profile_id IS NOT NULL AND sqlite_profile_id=profile_id AND postgres_profile_id IS NULL AND postgres_revision IS NULL)
-            OR (postgres_profile_id IS NOT NULL AND postgres_profile_id=profile_id AND sqlite_profile_id IS NULL AND postgres_revision IS NOT NULL AND postgres_revision>0)
-        )
+            (sqlite_profile_id IS NOT NULL AND sqlite_profile_id=profile_id AND postgres_profile_id IS NULL AND postgres_revision IS NULL AND mysql_profile_id IS NULL)
+            OR (postgres_profile_id IS NOT NULL AND postgres_profile_id=profile_id AND sqlite_profile_id IS NULL AND postgres_revision IS NOT NULL AND postgres_revision>0 AND mysql_profile_id IS NULL)
+            OR (mysql_profile_id IS NOT NULL AND mysql_profile_id=profile_id AND sqlite_profile_id IS NULL AND postgres_profile_id IS NULL AND postgres_revision IS NULL)
+        ),
+        CHECK ((mysql_profile_id IS NULL AND mysql_revision IS NULL AND mysql_tools_directory IS NULL)
+            OR (mysql_profile_id IS NOT NULL AND mysql_revision IS NOT NULL AND mysql_tools_directory IS NOT NULL))
     );
     CREATE TABLE IF NOT EXISTS backup_runs (
         id TEXT PRIMARY KEY NOT NULL,
@@ -179,6 +207,9 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
             DROP TABLE previous_backup_artifacts;
             DROP TABLE previous_backup_runs;").map_err(db_error)?;
     }
+    if !has_column("backup_plans", "mysql_profile_id")? {
+        migrate_mysql_plans(db)?;
+    }
     db.execute_batch("
         CREATE UNIQUE INDEX IF NOT EXISTS backup_running_profile ON backup_runs(workspace_path, profile_id)
             WHERE status='running';
@@ -186,6 +217,34 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
             WHERE status='running' AND worker_slot IS NOT NULL;
     ").map_err(db_error)?;
     Ok(())
+}
+
+fn migrate_mysql_plans(db: &Connection) -> Result<()> {
+    db.execute_batch("ALTER TABLE backup_artifacts RENAME TO previous_backup_artifacts;
+        ALTER TABLE backup_runs RENAME TO previous_backup_runs;
+        ALTER TABLE backup_plans RENAME TO previous_backup_plans;
+        DROP INDEX IF EXISTS backup_runs_recent;
+        DROP INDEX IF EXISTS backup_running_profile;
+        DROP INDEX IF EXISTS backup_running_slot;").map_err(db_error)?;
+    db.execute_batch(SCHEMA).map_err(db_error)?;
+    db.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
+    db.execute_batch("INSERT INTO backup_plans (profile_id, sqlite_profile_id, postgres_profile_id,
+            postgres_revision, postgres_tunnel, revision, workspace_path, directory, prefix, file_name_template,
+            interval_minutes, calendar, retention_days, retry_limit, retry_delay_minutes, retry_attempt,
+            timeout_seconds, next_at, next_excluded_at, retry_at)
+        SELECT profile_id, sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel,
+            revision, workspace_path, directory, prefix, file_name_template, interval_minutes, calendar,
+            retention_days, retry_limit, retry_delay_minutes, retry_attempt, timeout_seconds, next_at,
+            next_excluded_at, retry_at FROM previous_backup_plans;
+        INSERT INTO backup_runs (rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt,
+            status, worker_slot, started_at, finished_at, expires_at, path, size_bytes, message, scheduled_at)
+        SELECT rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt, status, worker_slot,
+            started_at, finished_at, expires_at, path, size_bytes, message, scheduled_at FROM previous_backup_runs;
+        INSERT INTO backup_artifacts (run_id, sha256, file_id, engine_version, verified_at, removal_started_at, removed_at)
+        SELECT run_id, sha256, file_id, engine_version, verified_at, removal_started_at, removed_at FROM previous_backup_artifacts;
+        DROP TABLE previous_backup_artifacts;
+        DROP TABLE previous_backup_runs;
+        DROP TABLE previous_backup_plans;").map_err(db_error)
 }
 
 fn initialize_exclusion_cursors(db: &Connection) -> Result<()> {
@@ -228,6 +287,9 @@ pub struct BackupPlan {
     revision: i64,
     #[serde(skip)]
     postgres_revision: Option<i64>,
+    #[serde(skip)]
+    mysql_revision: Option<i64>,
+    mysql_tools_directory: Option<String>,
     tunnel: Option<BackupTunnelRoute>,
     #[serde(skip)]
     workspace_path: String,
@@ -246,6 +308,14 @@ pub struct BackupPlan {
     next_excluded_at: Option<i64>,
     retry_at: Option<i64>,
     requires_review: bool,
+}
+
+impl BackupPlan {
+    fn engine(&self) -> PlanEngine {
+        if self.mysql_revision.is_some() { PlanEngine::Mysql }
+        else if self.postgres_revision.is_some() { PlanEngine::Postgres }
+        else { PlanEngine::Sqlite }
+    }
 }
 
 #[derive(Serialize)]
@@ -323,24 +393,39 @@ impl Store {
 
     pub fn sqlite_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
         self.profile(profile_id)?;
-        self.backup_plan(profile_id, None)
+        self.backup_plan(profile_id, PlanTarget::Sqlite)
     }
 
     pub fn postgres_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
         let profile = self.postgres_profile(profile_id)?;
-        self.backup_plan(profile_id, Some(&profile))
+        self.backup_plan(profile_id, PlanTarget::Postgres(&profile))
     }
 
-    fn backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>) -> Result<BackupPlanState> {
+    pub fn mysql_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
+        let profile = mysql::profiles::find(&self.connect()?, profile_id)?;
+        self.backup_plan(profile_id, PlanTarget::Mysql(&profile))
+    }
+
+    pub fn mysql_backup_capacity(&self, profile_id: &str, revision: i64, confirmation: &str, directory: &str) -> Result<BackupCapacity> {
+        let profile = self.mysql_profile(profile_id, revision)?;
+        confirm_mysql(&profile, confirmation)?;
+        let directory = backup_directory(directory)?;
+        let (_, size) = mysql::scheduled_backup_source(self, &profile)?;
+        capacity(&directory, size)
+    }
+
+    fn backup_plan(&self, profile_id: &str, target: PlanTarget<'_>) -> Result<BackupPlanState> {
         let workspace_path = self.backup_workspace_path()?;
         let db = self.connect()?;
         let mut plan = read_plan(&db, profile_id)?;
         if let Some(plan) = &mut plan {
             plan.requires_review = plan.workspace_path != workspace_path
-                || plan.postgres_revision != postgres.map(|profile| profile.revision)
-                || plan.tunnel.as_ref().is_some_and(|route| postgres.is_none_or(|profile| {
-                    route.verify_saved(&db, &profile.project_id, &profile.settings.host, profile.settings.port).is_err()
-                }));
+                || plan.engine() != target.engine()
+                || plan.postgres_revision.or(plan.mysql_revision) != target.revision()
+                || plan.tunnel.as_ref().is_some_and(|route| match target {
+                    PlanTarget::Postgres(profile) => route.verify_saved(&db, &profile.project_id, &profile.settings.host, profile.settings.port).is_err(),
+                    _ => true,
+                });
         }
         let mut statement = db
             .prepare(&format!(
@@ -411,7 +496,7 @@ impl Store {
         profile_id: &str,
         input: BackupPlanWrite,
     ) -> Result<BackupPlanState> {
-        self.save_backup_plan(profile_id, None, None, input)
+        self.save_backup_plan(profile_id, PlanTarget::Sqlite, None, None, input)
     }
 
     pub fn save_postgres_backup_plan(&self, profile: &PostgresProfile, confirmation: &str, input: BackupPlanWrite, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<BackupPlanState> {
@@ -422,14 +507,26 @@ impl Store {
         if let Some((manager, reviewed)) = route {
             manager.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)?;
         }
-        self.save_backup_plan(&profile.id, Some(profile), route.map(|(_, reviewed)| reviewed), input)
+        self.save_backup_plan(&profile.id, PlanTarget::Postgres(profile), route.map(|(_, reviewed)| reviewed), None, input)
     }
 
-    fn save_backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>, route: Option<&BackupTunnelRoute>, input: BackupPlanWrite) -> Result<BackupPlanState> {
+    pub fn save_mysql_backup_plan(&self, profile_id: &str, profile_revision: i64, confirmation: &str, tools: &str, input: BackupPlanWrite) -> Result<BackupPlanState> {
+        let profile = self.mysql_profile(profile_id, profile_revision)?;
+        confirm_mysql(&profile, confirmation)?;
+        mysql::backup_database(&profile)?;
+        if !self.mysql_credential_status(profile_id, profile_revision)?.usable {
+            return Err("예약 백업에는 이 MySQL 연결의 Windows 자격 증명이 필요합니다.".into());
+        }
+        let tools = mysql::tools_directory(tools)?;
+        self.save_backup_plan(profile_id, PlanTarget::Mysql(&profile), None, Some(&tools.to_string_lossy()), input)
+    }
+
+    fn save_backup_plan(&self, profile_id: &str, target: PlanTarget<'_>, route: Option<&BackupTunnelRoute>, mysql_tools: Option<&str>, input: BackupPlanWrite) -> Result<BackupPlanState> {
+        let engine = target.engine();
         let now = unix_now()?;
         let ValidatedSettings { prefix, retry_limit, retry_delay_minutes, next_at, next_excluded_at } =
             validate_settings(&input, now)?;
-        let directory = if postgres.is_some() {
+        let directory = if engine != PlanEngine::Sqlite {
             backup_directory(&input.directory)?.to_string_lossy().into_owned()
         } else {
             self.sqlite_backup_capacity(profile_id, &input.directory)?.directory
@@ -438,7 +535,7 @@ impl Store {
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        if let Some(expected) = postgres {
+        if let PlanTarget::Postgres(expected) = target {
             if postgres::find_profile(&tx, profile_id)? != *expected {
                 return Err("PostgreSQL 연결 설정이 변경되었습니다. 백업 계획을 다시 검토하세요.".into());
             }
@@ -446,7 +543,12 @@ impl Store {
                 route.verify_saved(&tx, &expected.project_id, &expected.settings.host, expected.settings.port)?;
             }
         }
-        if !active_profile(&tx, profile_id, postgres.is_some())? {
+        if let PlanTarget::Mysql(expected) = target {
+            if mysql::profiles::find(&tx, profile_id)? != *expected {
+                return Err("MySQL 연결 설정이 변경되었습니다. 백업 계획을 다시 검토하세요.".into());
+            }
+        }
+        if !active_profile(&tx, profile_id, engine)? {
             return Err("활성 프로젝트의 연결을 선택하세요.".into());
         }
         let previous = read_plan(&tx, profile_id)?;
@@ -463,7 +565,7 @@ impl Store {
         let calendar = input.calendar.as_ref().map(serde_json::to_string).transpose()
             .map_err(|_| "백업 달력 일정을 저장할 수 없습니다.")?;
         let timeout_seconds = input.timeout_seconds.or_else(|| previous.as_ref().map(|plan| plan.timeout_seconds))
-            .unwrap_or(if postgres.is_some() { DEFAULT_POSTGRES_TIMEOUT_SECONDS } else { 0 });
+            .unwrap_or(if engine != PlanEngine::Sqlite { DEFAULT_POSTGRES_TIMEOUT_SECONDS } else { 0 });
         let next_excluded_at = match &previous {
             Some(previous) if input.calendar_enabled && previous.calendar == input.calendar &&
                 (previous.next_at.is_some() || previous.next_excluded_at.is_some()) => previous.next_excluded_at,
@@ -472,20 +574,25 @@ impl Store {
         tx.execute(
             "INSERT INTO backup_plans
              (profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, file_name_template)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, file_name_template,
+              mysql_profile_id, mysql_revision, mysql_tools_directory)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, workspace_path=excluded.workspace_path,
              directory=excluded.directory, prefix=excluded.prefix, interval_minutes=excluded.interval_minutes,
              retention_days=excluded.retention_days, retry_limit=excluded.retry_limit, retry_delay_minutes=excluded.retry_delay_minutes,
              next_at=excluded.next_at, next_excluded_at=excluded.next_excluded_at, retry_at=NULL, retry_attempt=1, timeout_seconds=excluded.timeout_seconds,
              postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel, calendar=excluded.calendar,
-             file_name_template=excluded.file_name_template",
+             file_name_template=excluded.file_name_template, mysql_revision=excluded.mysql_revision, mysql_tools_directory=excluded.mysql_tools_directory",
             params![profile_id, revision.unwrap_or(0) + 1, self.backup_workspace_path()?, directory,
                 prefix, input.interval_minutes, input.retention_days, retry_limit, next_at,
-                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, template],
+                (engine == PlanEngine::Sqlite).then_some(profile_id), (engine == PlanEngine::Postgres).then_some(profile_id),
+                if let PlanTarget::Postgres(profile) = target { Some(profile.revision) } else { None },
+                tunnel, calendar, retry_delay_minutes, timeout_seconds, next_excluded_at, template,
+                (engine == PlanEngine::Mysql).then_some(profile_id),
+                if let PlanTarget::Mysql(profile) = target { Some(profile.revision) } else { None }, mysql_tools],
         ).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
-        self.backup_plan(profile_id, postgres)
+        self.backup_plan(profile_id, target)
     }
 
     pub fn run_sqlite_backup_plan(&self, profile_id: &str, revision: i64) -> Result<BackupRun> {
@@ -498,11 +605,17 @@ impl Store {
         if self.postgres_profile(&profile.id)? != *profile {
             return Err("PostgreSQL 연결 설정이 변경되었습니다. 백업 계획을 다시 검토하세요.".into());
         }
-        self.run_backup_plan(&profile.id, revision, Some(profile.revision), Some(tunnels))
+        self.run_backup_plan(&profile.id, revision, Some((PlanEngine::Postgres, profile.revision)), Some(tunnels))
     }
 
-    fn run_backup_plan(&self, profile_id: &str, revision: i64, postgres_revision: Option<i64>, tunnels: Option<&SshTunnelManager>) -> Result<BackupRun> {
-        self.process_backup(Some((profile_id, revision, postgres_revision)), unix_now()?, tunnels)?
+    pub fn run_mysql_backup_plan(&self, profile_id: &str, profile_revision: i64, revision: i64, confirmation: &str) -> Result<BackupRun> {
+        let profile = self.mysql_profile(profile_id, profile_revision)?;
+        confirm_mysql(&profile, confirmation)?;
+        self.run_backup_plan(profile_id, revision, Some((PlanEngine::Mysql, profile_revision)), None)
+    }
+
+    fn run_backup_plan(&self, profile_id: &str, revision: i64, source_revision: Option<(PlanEngine, i64)>, tunnels: Option<&SshTunnelManager>) -> Result<BackupRun> {
+        self.process_backup(Some((profile_id, revision, source_revision)), unix_now()?, tunnels)?
             .ok_or_else(|| "작업 공간의 동시 백업 실행 한도에 도달했습니다. 완료된 뒤 다시 시도하세요.".into())
     }
 
@@ -512,15 +625,20 @@ impl Store {
         revision: i64,
     ) -> Result<BackupPlanState> {
         self.profile(profile_id)?;
-        self.pause_backup_plan(profile_id, revision, None)
+        self.pause_backup_plan(profile_id, revision, PlanTarget::Sqlite)
     }
 
     pub fn pause_postgres_backup_plan(&self, profile_id: &str, revision: i64) -> Result<BackupPlanState> {
         let profile = self.postgres_profile(profile_id)?;
-        self.pause_backup_plan(profile_id, revision, Some(&profile))
+        self.pause_backup_plan(profile_id, revision, PlanTarget::Postgres(&profile))
     }
 
-    fn pause_backup_plan(&self, profile_id: &str, revision: i64, postgres: Option<&PostgresProfile>) -> Result<BackupPlanState> {
+    pub fn pause_mysql_backup_plan(&self, profile_id: &str, revision: i64) -> Result<BackupPlanState> {
+        let profile = mysql::profiles::find(&self.connect()?, profile_id)?;
+        self.pause_backup_plan(profile_id, revision, PlanTarget::Mysql(&profile))
+    }
+
+    fn pause_backup_plan(&self, profile_id: &str, revision: i64, target: PlanTarget<'_>) -> Result<BackupPlanState> {
         let updated = self
             .connect()?
             .execute(
@@ -532,7 +650,7 @@ impl Store {
         if updated != 1 {
             return Err("백업 계획이 변경되었습니다. 새로고침하고 다시 시도하세요.".into());
         }
-        self.backup_plan(profile_id, postgres)
+        self.backup_plan(profile_id, target)
     }
 
     pub fn run_due_backup(&self, tunnels: &SshTunnelManager) -> Result<Option<BackupRun>> {
@@ -541,7 +659,7 @@ impl Store {
 
     fn process_backup(
         &self,
-        manual: Option<(&str, i64, Option<i64>)>,
+        manual: Option<(&str, i64, Option<(PlanEngine, i64)>)>,
         now: i64,
         tunnels: Option<&SshTunnelManager>,
     ) -> Result<Option<BackupRun>> {
@@ -590,10 +708,11 @@ impl Store {
             },
         };
         let plan = read_plan(&tx, &profile_id)?.ok_or("백업 계획을 저장하세요.")?;
-        let is_postgres = plan.postgres_revision.is_some();
-        if !active_profile(&tx, &profile_id, is_postgres)?
+        let engine = plan.engine();
+        let planned_source = plan.postgres_revision.or(plan.mysql_revision).map(|revision| (engine, revision));
+        if !active_profile(&tx, &profile_id, engine)?
             || plan.workspace_path != workspace
-            || manual.is_some_and(|(_, revision, postgres_revision)| revision != plan.revision || postgres_revision != plan.postgres_revision)
+            || manual.is_some_and(|(_, revision, source_revision)| revision != plan.revision || source_revision != planned_source)
         {
             return Err(
                 "백업 계획의 연결 또는 설정이 변경되었습니다. 계획을 검토하고 다시 시도하세요."
@@ -659,7 +778,7 @@ impl Store {
         let retry_attempt = trigger.retry_attempt;
         let run_id = Uuid::new_v4();
         let file_name = file_name::backup_file_name(
-            &plan.file_name_template, &plan.prefix, now, is_postgres, trigger_kind, run_id,
+            &plan.file_name_template, &plan.prefix, now, engine, trigger_kind, run_id,
         )?;
         let id = run_id.to_string();
         let destination = Path::new(&plan.directory).join(file_name);
@@ -675,6 +794,8 @@ impl Store {
 
         let result = if let Some(revision) = plan.postgres_revision {
             self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id, plan.tunnel.as_ref(), tunnels, control)
+        } else if let (Some(revision), Some(tools)) = (plan.mysql_revision, &plan.mysql_tools_directory) {
+            self.execute_mysql_backup(&profile_id, revision, &plan.directory, tools, &path, &id, control)
         } else { control.check()
             .and_then(|()| self.sqlite_backup_capacity_with(&profile_id, &plan.directory, Some(control)))
             .and_then(|capacity| {
@@ -768,7 +889,7 @@ impl Store {
             id,
             profile_id,
             status: status.into(),
-            engine: engine_label(is_postgres),
+            engine: engine.label(),
             can_cancel: false,
             trigger_kind: trigger_kind.into(),
             retry_attempt,
@@ -863,7 +984,8 @@ fn record_skipped(
 const RUN_COLUMNS: &str =
     "r.id, r.profile_id, r.status, r.trigger_kind, r.started_at, r.finished_at,
     r.expires_at, r.path, r.size_bytes, r.message, a.sha256, a.engine_version, a.verified_at,
-    a.removal_started_at, a.removed_at, r.workspace_path = ?2, a.file_id IS NOT NULL, r.rowid, p.postgres_revision IS NOT NULL,
+    a.removal_started_at, a.removed_at, r.workspace_path = ?2, a.file_id IS NOT NULL, r.rowid,
+    CASE WHEN p.mysql_profile_id IS NOT NULL THEN 'MySQL · MariaDB' WHEN p.postgres_profile_id IS NOT NULL THEN 'PostgreSQL' ELSE 'SQLite' END,
     CASE WHEN r.trigger_kind='retry' THEN r.retry_attempt END, r.scheduled_at";
 
 const RUN_TABLES: &str =
@@ -874,7 +996,11 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
         id: row.get(0)?,
         profile_id: row.get(1)?,
         status: row.get(2)?,
-        engine: engine_label(row.get(18)?),
+        engine: match row.get_ref(18)?.as_str()? {
+            "MySQL · MariaDB" => PlanEngine::Mysql.label(),
+            "PostgreSQL" => PlanEngine::Postgres.label(),
+            _ => PlanEngine::Sqlite.label(),
+        },
         can_cancel: false,
         trigger_kind: row.get(3)?,
         retry_attempt: row.get(19)?,
@@ -892,14 +1018,16 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
 fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
     db.query_row(
         "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END, timeout_seconds, next_excluded_at, file_name_template
+                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END, timeout_seconds, next_excluded_at, file_name_template,
+                mysql_revision, mysql_tools_directory
          FROM backup_plans WHERE profile_id=?1",
         [profile_id], |row| Ok(BackupPlan {
             revision: row.get(0)?, workspace_path: row.get(1)?, directory: row.get(2)?, prefix: row.get(3)?,
             file_name_template: row.get::<_, Option<String>>(16)?.unwrap_or_else(|| file_name::DEFAULT_TEMPLATE.into()),
             interval_minutes: row.get(4)?, retention_days: row.get(5)?, retry_once: row.get::<_, u8>(6)? > 0,
             retry_limit: row.get(6)?, retry_delay_minutes: row.get(12)?, retry_attempt: row.get(13)?, timeout_seconds: row.get(14)?,
-            next_at: row.get(7)?, next_excluded_at: row.get(15)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, requires_review: false,
+            next_at: row.get(7)?, next_excluded_at: row.get(15)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, mysql_revision: row.get(17)?,
+            mysql_tools_directory: row.get(18)?, requires_review: false,
             tunnel: row.get::<_, Option<String>>(10)?.map(|json| serde_json::from_str(&json)
                 .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
             calendar: row.get::<_, Option<String>>(11)?.map(|json| serde_json::from_str(&json)
@@ -914,8 +1042,12 @@ fn effective_file_name_template<'a>(input: &'a BackupPlanWrite, previous: Option
         .unwrap_or(file_name::DEFAULT_TEMPLATE)
 }
 
-pub(crate) fn active_profile(db: &Connection, profile_id: &str, postgres: bool) -> Result<bool> {
-    let table = if postgres { "postgres_profiles" } else { "profiles" };
+pub(crate) fn active_profile(db: &Connection, profile_id: &str, engine: PlanEngine) -> Result<bool> {
+    let table = match engine {
+        PlanEngine::Sqlite => "profiles",
+        PlanEngine::Postgres => "postgres_profiles",
+        PlanEngine::Mysql => "mysql_profiles",
+    };
     db.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM {table} p WHERE p.id=?1
          AND NOT EXISTS(SELECT 1 FROM project_archives a WHERE a.project_id=p.project_id))"),
@@ -929,8 +1061,9 @@ fn due_profile(db: &Connection, workspace: &str, now: i64) -> Result<Option<Stri
     db.query_row(
         "SELECT b.profile_id FROM backup_plans b LEFT JOIN profiles p ON p.id=b.sqlite_profile_id
          LEFT JOIN postgres_profiles pg ON pg.id=b.postgres_profile_id
+         LEFT JOIN mysql_profiles my ON my.id=b.mysql_profile_id
          WHERE b.workspace_path=?1 AND (b.next_at<=?2 OR b.retry_at<=?2 OR b.next_excluded_at<=?2)
-         AND NOT EXISTS(SELECT 1 FROM project_archives a WHERE a.project_id=coalesce(p.project_id, pg.project_id))
+         AND NOT EXISTS(SELECT 1 FROM project_archives a WHERE a.project_id=coalesce(p.project_id, pg.project_id, my.project_id))
          AND NOT EXISTS(SELECT 1 FROM backup_runs r WHERE r.profile_id=b.profile_id AND r.workspace_path=?1 AND r.status='running')
          ORDER BY min(coalesce(b.next_at, 9223372036854775807), coalesce(b.retry_at, 9223372036854775807),
             coalesce(b.next_excluded_at, 9223372036854775807)), b.profile_id LIMIT 1",
@@ -938,8 +1071,11 @@ fn due_profile(db: &Connection, workspace: &str, now: i64) -> Result<Option<Stri
     ).optional().map_err(db_error)
 }
 
-fn engine_label(postgres: bool) -> &'static str {
-    if postgres { "PostgreSQL" } else { "SQLite" }
+fn confirm_mysql(profile: &MysqlProfile, confirmation: &str) -> Result<()> {
+    if profile.settings.environment == "PROD" && confirmation != "PROD" {
+        return Err("운영 MySQL 백업을 승인하려면 PROD를 입력하세요.".into());
+    }
+    Ok(())
 }
 
 fn confirm_postgres(profile: &PostgresProfile, confirmation: &str) -> Result<()> {
@@ -1201,6 +1337,50 @@ mod tests {
         assert_eq!(history[1].scheduled_at, Some(first + 60));
         assert!(history[1].path.is_empty() && history[1].artifact.is_none());
         assert!(history[1].message.as_deref().unwrap().contains("2건"));
+    }
+
+    #[test]
+    fn v32_migration_keeps_existing_plans_and_their_file_evidence() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, Some(60));
+        let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let stored_id = 129;
+        {
+            let db = f.store.connect().unwrap();
+            db.execute("UPDATE backup_runs SET rowid=?1 WHERE id=?2", params![stored_id, run.id]).unwrap();
+            db.execute_batch("CREATE TEMP TABLE saved_plans AS SELECT profile_id, sqlite_profile_id, postgres_profile_id,
+                    postgres_revision, postgres_tunnel, revision, workspace_path, directory, prefix, file_name_template,
+                    interval_minutes, calendar, retention_days, retry_limit, retry_delay_minutes, retry_attempt,
+                    timeout_seconds, next_at, next_excluded_at, retry_at FROM backup_plans;
+                CREATE TEMP TABLE saved_runs AS SELECT rowid AS original_rowid, * FROM backup_runs;
+                CREATE TEMP TABLE saved_artifacts AS SELECT * FROM backup_artifacts;
+                DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans;
+                CREATE TABLE backup_plans (
+                    profile_id TEXT PRIMARY KEY NOT NULL, sqlite_profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
+                    postgres_profile_id TEXT REFERENCES postgres_profiles(id) ON DELETE CASCADE, postgres_revision INTEGER, postgres_tunnel TEXT,
+                    revision INTEGER, workspace_path TEXT, directory TEXT, prefix TEXT, file_name_template TEXT,
+                    interval_minutes INTEGER, calendar TEXT, retention_days INTEGER, retry_limit INTEGER, retry_delay_minutes INTEGER,
+                    retry_attempt INTEGER, timeout_seconds INTEGER, next_at INTEGER, next_excluded_at INTEGER, retry_at INTEGER);
+                INSERT INTO backup_plans SELECT * FROM saved_plans;").unwrap();
+            let (_, runs) = SCHEMA.split_once("CREATE TABLE IF NOT EXISTS backup_runs").unwrap();
+            db.execute_batch(&format!("CREATE TABLE IF NOT EXISTS backup_runs{runs}")).unwrap();
+            db.execute_batch(backup_artifact::SCHEMA).unwrap();
+            db.execute_batch("INSERT INTO backup_runs (rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt,
+                    status, worker_slot, started_at, finished_at, expires_at, path, size_bytes, message, scheduled_at) SELECT * FROM saved_runs;
+                INSERT INTO backup_artifacts SELECT * FROM saved_artifacts;
+                PRAGMA user_version=32;").unwrap();
+        }
+        let migrated = Store::open(&f.workspace).unwrap();
+        let state = migrated.sqlite_backup_plan(&f.profile_id).unwrap();
+        let plan = state.plan.unwrap();
+        assert_eq!(plan.next_at, Some(first));
+        assert!(!plan.requires_review);
+        assert_eq!(state.runs[0].artifact.as_ref().unwrap().sha256, run.artifact.unwrap().sha256);
+        let db = migrated.connect().unwrap();
+        assert_eq!(db.query_row("SELECT rowid FROM backup_runs WHERE id=?1", [&run.id], |r| r.get::<_, i64>(0)).unwrap(), stored_id);
+        assert_eq!(db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        migrated.verify_sqlite_backup_file(&f.profile_id, &run.id).unwrap();
     }
 
     #[test]

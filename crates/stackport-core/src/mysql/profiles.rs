@@ -142,6 +142,14 @@ pub(crate) fn list(db: &Connection, project_id: &str) -> Result<Vec<MysqlProfile
 }
 
 pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<MysqlProfile> {
+    let profile = find(db, id)?;
+    if profile.revision != revision {
+        return Err("MySQL 연결이 변경되었습니다. 다시 선택하세요.".into());
+    }
+    Ok(profile)
+}
+
+pub(crate) fn find(db: &Connection, id: &str) -> Result<MysqlProfile> {
     let stored = db
         .query_row(
             &format!("SELECT {COLUMNS} FROM mysql_profiles WHERE id=?1"),
@@ -151,9 +159,6 @@ pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<MysqlP
         .optional()
         .map_err(db_error)?
         .ok_or("저장된 MySQL 계열 연결을 찾을 수 없습니다.")?;
-    if stored.2 != revision {
-        return Err("MySQL 연결이 변경되었습니다. 다시 선택하세요.".into());
-    }
     decode(stored)
 }
 

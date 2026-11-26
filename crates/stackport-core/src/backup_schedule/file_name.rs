@@ -1,4 +1,4 @@
-use super::unix_now;
+use super::{unix_now, PlanEngine};
 use crate::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -40,13 +40,21 @@ pub fn preview_backup_file_name(
     postgres: bool,
     scheduled: bool,
 ) -> Result<String> {
+    preview_file_name(prefix, template, if postgres { PlanEngine::Postgres } else { PlanEngine::Sqlite }, scheduled)
+}
+
+pub fn preview_mysql_backup_file_name(prefix: &str, template: &str, scheduled: bool) -> Result<String> {
+    preview_file_name(prefix, template, PlanEngine::Mysql, scheduled)
+}
+
+fn preview_file_name(prefix: &str, template: &str, engine: PlanEngine, scheduled: bool) -> Result<String> {
     validate_template(template.trim(), prefix.trim())?;
     let trigger = if scheduled { "scheduled" } else { "manual" };
     backup_file_name(
         template.trim(),
         prefix.trim(),
         unix_now()?,
-        postgres,
+        engine,
         trigger,
         Uuid::nil(),
     )
@@ -56,15 +64,15 @@ pub(super) fn backup_file_name(
     template: &str,
     prefix: &str,
     at: i64,
-    postgres: bool,
+    engine: PlanEngine,
     trigger: &str,
     id: Uuid,
 ) -> Result<String> {
     let time = DateTime::<Utc>::from_timestamp(at, 0).ok_or("백업 시각을 확인할 수 없습니다.")?;
-    let (engine, extension) = if postgres {
-        ("postgres", "backup")
-    } else {
-        ("sqlite", "sqlite")
+    let (engine, extension) = match engine {
+        PlanEngine::Postgres => ("postgres", "backup"),
+        PlanEngine::Sqlite => ("sqlite", "sqlite"),
+        PlanEngine::Mysql => ("mysql", "sql"),
     };
     let stem = render_stem(template, prefix, time, engine, trigger)?;
     Ok(format!("{stem}-{id}.{extension}"))
@@ -128,7 +136,7 @@ mod tests {
             .timestamp();
         let id = Uuid::nil();
         assert_eq!(
-            backup_file_name(DEFAULT_TEMPLATE, "source", at, false, "manual", id).unwrap(),
+            backup_file_name(DEFAULT_TEMPLATE, "source", at, PlanEngine::Sqlite, "manual", id).unwrap(),
             format!("source-20260105T060708Z-{id}.sqlite")
         );
         assert_eq!(
@@ -136,7 +144,7 @@ mod tests {
                 "백업_{engine}_{date}_{time}_{trigger}-{prefix}",
                 "source",
                 at,
-                true,
+                PlanEngine::Postgres,
                 "retry",
                 id
             )

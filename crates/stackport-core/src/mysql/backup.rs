@@ -1,5 +1,5 @@
 use super::{require_identifier, tls, MysqlManager, MysqlPassword, MysqlSettings, ReadError};
-use crate::{insert_audit, local_file::NewFile, AuditRecord, Result};
+use crate::{backup_artifact::{file_identity, Evidence}, insert_audit, local_file::NewFile, AuditRecord, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use mysql_async::prelude::Queryable;
 use rustls::pki_types::{pem::PemObject, CertificateDer};
@@ -9,7 +9,7 @@ use std::{
     env,
     fs::{self, File},
     io::{BufReader, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -21,7 +21,7 @@ const TOOL_FAILED: &str =
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Contents {
+pub(super) enum Contents {
     All,
     Schema,
     Data,
@@ -30,22 +30,22 @@ enum Contents {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MysqlBackupInput {
-    database: String,
-    table: Option<String>,
-    contents: Contents,
-    directory: String,
-    destination: String,
-    password: MysqlPassword,
-    confirmation: String,
+    pub(super) database: String,
+    pub(super) table: Option<String>,
+    pub(super) contents: Contents,
+    pub(super) directory: String,
+    pub(super) destination: String,
+    pub(super) password: MysqlPassword,
+    pub(super) confirmation: String,
 }
 
 #[derive(Serialize)]
 pub struct MysqlBackupReport {
     path: String,
-    size_bytes: u64,
+    pub(super) size_bytes: u64,
     sha256: String,
     server_version: String,
-    tool_version: String,
+    pub(super) tool_version: String,
     audit_warning: bool,
 }
 
@@ -64,13 +64,7 @@ impl MysqlManager {
         if session.environment == "PROD" && input.confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
-        require_identifier(&input.database)?;
-        if ["mysql", "information_schema", "performance_schema", "sys"]
-            .iter()
-            .any(|schema| input.database.eq_ignore_ascii_case(schema))
-        {
-            return Err("사용자 데이터베이스를 선택하세요.".into());
-        }
+        require_user_database(&input.database)?;
         if let Some(table) = &input.table {
             require_identifier(table)?;
         }
@@ -158,7 +152,7 @@ impl MysqlManager {
                 Err(_) => ("mysql.backup", "failed"),
             };
             let audit_warning = audit(operation, outcome).is_err();
-            result.map(|report| MysqlBackupReport {
+            result.map(|(report, _)| MysqlBackupReport {
                 audit_warning,
                 ..report
             })
@@ -168,24 +162,36 @@ impl MysqlManager {
     }
 }
 
-fn create(
+pub(super) fn require_user_database(database: &str) -> Result<()> {
+    require_identifier(database)?;
+    if ["mysql", "information_schema", "performance_schema", "sys"]
+        .iter().any(|schema| database.eq_ignore_ascii_case(schema))
+    {
+        return Err("사용자 데이터베이스를 선택하세요.".into());
+    }
+    Ok(())
+}
+
+pub(super) fn dump_tool(directory: &Path, maria: bool) -> Result<PathBuf> {
+    if !directory.is_absolute() {
+        return Err("백업 도구 폴더의 절대 경로를 지정하세요.".into());
+    }
+    let name = if maria { "mariadb-dump" } else { "mysqldump" };
+    fs::canonicalize(directory.join(format!("{name}{}", env::consts::EXE_SUFFIX)))
+        .map_err(|_| format!("선택한 폴더에서 {name} 실행 파일을 찾을 수 없습니다."))
+}
+
+pub(super) fn create(
     input: MysqlBackupInput,
     settings: &MysqlSettings,
     engine: &str,
     server_version: String,
     check: &impl Fn() -> Result<()>,
     before_publish: impl FnOnce() -> Result<()>,
-) -> Result<MysqlBackupReport> {
+) -> Result<(MysqlBackupReport, Evidence)> {
     let file = NewFile::stage(&input.destination, Some("sql"), ".stackport-mysql-")?;
     let maria = engine == "MariaDB";
-    let directory = Path::new(input.directory.trim());
-    if !directory.is_absolute() {
-        return Err("백업 도구 폴더의 절대 경로를 지정하세요.".into());
-    }
-    let executable = if maria { "mariadb-dump" } else { "mysqldump" };
-    let executable =
-        fs::canonicalize(directory.join(format!("{executable}{}", env::consts::EXE_SUFFIX)))
-            .map_err(|_| format!("선택한 폴더에서 {executable} 실행 파일을 찾을 수 없습니다."))?;
+    let executable = dump_tool(Path::new(input.directory.trim()), maria)?;
     let scratch = tempfile::Builder::new()
         .prefix("stackport-mysql-")
         .tempdir()
@@ -235,17 +241,19 @@ fn create(
     }
     run(command, check, TOOL_FAILED)?;
     drop(input.password);
-    let (size_bytes, sha256) = digest(file.writer()?, check)?;
+    let stage = file.writer()?;
+    let file_id = file_identity(&stage);
+    let (size_bytes, sha256) = digest(stage, check)?;
     before_publish()?;
     file.publish()?;
-    Ok(MysqlBackupReport {
+    Ok((MysqlBackupReport {
         path: input.destination.trim().to_owned(),
         size_bytes,
-        sha256,
+        sha256: sha256.clone(),
         server_version,
         tool_version,
         audit_warning: false,
-    })
+    }, Evidence { sha256, file_id }))
 }
 
 pub(super) fn client_command(executable: &Path, directory: &Path, maria: bool) -> Command {

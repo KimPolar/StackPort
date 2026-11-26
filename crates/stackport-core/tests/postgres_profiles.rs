@@ -121,7 +121,7 @@ fn migration_from_nine_preserves_saved_tunnels_and_the_pre_migration_backup() {
     Connection::open(&path)
         .unwrap()
         .execute_batch(
-            "DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=9;",
+            "DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; DROP TABLE postgres_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=9;",
         )
         .unwrap();
 
@@ -198,7 +198,7 @@ fn version_ten_backup_preserves_existing_profiles_after_success_or_failure() {
                     .contains(".v10-")
             })
             .unwrap();
-        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 32 })] {
+        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 33 })] {
             let db = Connection::open(file).unwrap();
             assert_eq!(
                 db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

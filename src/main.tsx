@@ -1724,7 +1724,8 @@ function App() {
         onBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
     {mysqlProfile && networkSqlEditor && <div hidden={historyOpen}>
-      <MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} editor={networkSqlEditor} onOpenTunnels={openTunnels} />
+      <MysqlWorkspace key={`${mysqlProfile.id}:${mysqlProfile.revision}`} profile={mysqlProfile} editor={networkSqlEditor}
+        onOpenTunnels={openTunnels} displayPath={displayPath} onFileBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
     {mongoProfile && <div hidden={historyOpen}><MongoWorkspace key={`${mongoProfile.id}:${mongoProfile.revision}`} profile={mongoProfile}
       onBusy={busy => { localFileBusy.current = busy; }} /></div>}
@@ -2363,6 +2364,10 @@ const auditOperationNames: Record<string, string> = {
   "mongo.archive.restore.unconfirmed": "MongoDB 아카이브 복원 결과 미확인",
   "mysql.backup": "MySQL 계열 SQL 백업",
   "mysql.backup.cancel": "MySQL 계열 SQL 백업 중단",
+  "mysql.backup.schedule": "MySQL 계열 계획 백업",
+  "mysql.backup.schedule.cancel": "MySQL 계열 계획 백업 중단",
+  "mysql.backup.schedule.timeout": "MySQL 계열 계획 백업 시간 초과",
+  "mysql.backup.delete": "만료된 MySQL 계열 백업 삭제",
   "mysql.restore": "MySQL 계열 SQL 복원",
   "mysql.restore.partial": "MySQL 계열 SQL 부분 복원",
   "mysql.restore.unconfirmed": "MySQL 계열 SQL 복원 결과 미확인",

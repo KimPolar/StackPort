@@ -13,7 +13,7 @@ fn migrates_v14_and_keeps_mysql_profiles_project_scoped() {
     drop(store);
     let db = Connection::open(&path).unwrap();
     legacy_presets::restore_legacy_preset_schema(&db, false);
-    db.execute_batch("DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=14;")
+    db.execute_batch("DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=14;")
         .unwrap();
     drop(db);
 

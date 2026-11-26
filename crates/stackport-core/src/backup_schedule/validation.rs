@@ -1,10 +1,10 @@
 use super::{
-    active_profile, backup_directory, confirm_postgres, effective_file_name_template, file_name,
+    active_profile, backup_directory, confirm_mysql, confirm_postgres, effective_file_name_template, file_name,
     free_space, read_plan, sqlite_backup_source_size, unix_now, BackupPlanWrite, CalendarSchedule,
     DEFAULT_RETRY_DELAY_MINUTES, LATEST_START, MAX_RETRIES, MAX_TIMEOUT_SECONDS,
-    NO_CALENDAR_OCCURRENCE,
+    NO_CALENDAR_OCCURRENCE, PlanEngine,
 };
-use crate::{postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store};
+use crate::{mysql, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store};
 use serde::Serialize;
 use std::{
     io::Write,
@@ -132,7 +132,7 @@ impl Store {
         profile_id: &str,
         input: &BackupPlanWrite,
     ) -> BackupPlanValidation {
-        self.validate_backup_plan(profile_id, false, input, |report| {
+        self.validate_backup_plan(profile_id, PlanEngine::Sqlite, input, |report| {
             let source = self
                 .profile(profile_id)
                 .and_then(|profile| sqlite_backup_source_size(Path::new(&profile.path), None));
@@ -149,7 +149,7 @@ impl Store {
         input: &BackupPlanWrite,
         route: Option<(&SshTunnelManager, &BackupTunnelRoute)>,
     ) -> BackupPlanValidation {
-        self.validate_backup_plan(&profile.id, true, input, |report| {
+        self.validate_backup_plan(&profile.id, PlanEngine::Postgres, input, |report| {
             let source = confirm_postgres(profile, confirmation)
                 .and_then(|()| postgres::scheduled_backup_source(self, profile, route));
             let (major, size) = report.check("source", source, |(major, _)| {
@@ -169,10 +169,33 @@ impl Store {
         })
     }
 
+    pub fn validate_mysql_backup_plan(
+        &self,
+        profile_id: &str,
+        revision: i64,
+        confirmation: &str,
+        tools: &str,
+        input: &BackupPlanWrite,
+    ) -> BackupPlanValidation {
+        self.validate_backup_plan(profile_id, PlanEngine::Mysql, input, |report| {
+            let source = self.mysql_profile(profile_id, revision).and_then(|profile| {
+                confirm_mysql(&profile, confirmation)?;
+                mysql::scheduled_backup_source(self, &profile)
+            });
+            let (server, size) = report.check("source", source, |(version, _)| {
+                format!("MySQL 계열 서버 {version}에 연결해 시작 데이터베이스를 확인했습니다.")
+            })?;
+            report.check("tools", mysql::scheduled_backup_tools(tools, &server), |version| {
+                format!("덤프 도구 {version}을 확인했습니다.")
+            });
+            Some(size)
+        })
+    }
+
     fn validate_backup_plan(
         &self,
         profile_id: &str,
-        postgres: bool,
+        engine: PlanEngine,
         input: &BackupPlanWrite,
         read_source: impl FnOnce(&mut BackupPlanValidation) -> Option<u64>,
     ) -> BackupPlanValidation {
@@ -180,7 +203,7 @@ impl Store {
         let settings = (|| {
             let settings = validate_settings(input, unix_now()?)?;
             let db = self.connect()?;
-            if !active_profile(&db, profile_id, postgres)? {
+            if !active_profile(&db, profile_id, engine)? {
                 return Err("활성 프로젝트의 연결을 선택하세요.".into());
             }
             let previous = read_plan(&db, profile_id)?;
@@ -211,8 +234,8 @@ impl Store {
                 Ok(available) => {
                     report.available_bytes = available;
                     match (available, report.estimated_bytes) {
-                        (Some(available), Some(estimated)) if available < estimated && postgres => {
-                            report.push("space", "warning", "여유 공간이 원본 크기보다 작습니다. 압축 후 백업 크기는 달라질 수 있습니다.");
+                        (Some(available), Some(estimated)) if available < estimated && engine != PlanEngine::Sqlite => {
+                            report.push("space", "warning", "여유 공간이 원본 크기보다 작습니다. 원본 크기와 백업 파일 크기는 달라질 수 있습니다.");
                         }
                         (Some(available), Some(estimated)) if available < estimated => {
                             report.push(
