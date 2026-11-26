@@ -25,6 +25,7 @@ pub use ports::{local_ports, LocalPort, PortEndpoint, PortSnapshot};
 mod postgres;
 mod mysql;
 pub use mysql::{MysqlBackupInput, MysqlBackupReport};
+pub use mysql::{MysqlRestoreInput, MysqlRestorePreview, MysqlRestoreReport};
 pub use mysql::{MysqlCatalogPage, MysqlColumn, MysqlGridQuery, MysqlManager, MysqlObject, MysqlPassword, MysqlProfile, MysqlSessionInfo, MysqlSettings, MysqlTable};
 pub use mysql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use mysql::MysqlPlan;
@@ -957,6 +958,9 @@ impl Store {
 
 fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
     let policy = match record.operation {
+        "mysql.backup" | "mysql.backup.cancel" => "mysql-native-sql-no-overwrite",
+        "mysql.restore" | "mysql.restore.partial" | "mysql.restore.unconfirmed" if record.environment == Some("PROD") => "mysql-native-new-database-prod-reviewed",
+        "mysql.restore" | "mysql.restore.partial" | "mysql.restore.unconfirmed" => "mysql-native-new-database-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

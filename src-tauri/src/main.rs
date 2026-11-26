@@ -1618,6 +1618,24 @@ async fn create_mysql_backup(mysql: State<'_, stackport_core::MysqlManager>, id:
 }
 
 #[tauri::command]
+async fn preview_mysql_restore(mysql: State<'_, stackport_core::MysqlManager>, id: String, request: String,
+    input: stackport_core::MysqlRestoreInput) -> Result<stackport_core::MysqlRestorePreview, String> {
+    mysql.preview_restore(&id, &request, input).await
+}
+
+#[tauri::command]
+async fn apply_mysql_restore(mysql: State<'_, stackport_core::MysqlManager>, id: String, request: String, token: String,
+    database_confirmation: String, trusted: bool, password: stackport_core::MysqlPassword, confirmation: String)
+    -> Result<stackport_core::MysqlRestoreReport, String> {
+    mysql.apply_restore(&id, request, &token, &database_confirmation, trusted, password, &confirmation).await
+}
+
+#[tauri::command]
+fn discard_mysql_restore(mysql: State<'_, stackport_core::MysqlManager>, id: String, token: String) -> Result<(), String> {
+    mysql.discard_restore(&id, &token)
+}
+
+#[tauri::command]
 fn mysql_sql_parameters(mysql: State<'_, stackport_core::MysqlManager>, id: String, sql: String, select_only: Option<bool>,
     with_scope: Option<bool>) -> Result<ParameterDiscovery<usize>, String> {
     let select_only = select_only.unwrap_or_default();
@@ -2718,8 +2736,19 @@ async fn choose_backup_directory() -> Result<Option<String>, String> {
 async fn choose_mysql_backup_tools() -> Result<Option<String>, String> {
     worker(|| {
         Ok(rfd::FileDialog::new()
-            .set_title("MySQL 계열 백업 도구 폴더 선택")
+            .set_title("MySQL 계열 도구 폴더 선택")
             .pick_folder()
+            .map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
+async fn choose_mysql_restore_sql() -> Result<Option<String>, String> {
+    worker(|| {
+        Ok(rfd::FileDialog::new()
+            .set_title("복원할 SQL 백업 파일 선택")
+            .add_filter("SQL 백업", &["sql"])
+            .pick_file()
             .map(|path| path.to_string_lossy().into_owned()))
     }).await
 }
@@ -3033,6 +3062,9 @@ fn main() {
             export_mysql,
             mysql_export_progress,
             create_mysql_backup,
+            preview_mysql_restore,
+            apply_mysql_restore,
+            discard_mysql_restore,
             mysql_sql_parameters,
             mysql_script_parameters,
             mysql_script_review,
@@ -3188,6 +3220,7 @@ fn main() {
             choose_ssh_profile_export_directory,
             choose_backup_directory,
             choose_mysql_backup_tools,
+            choose_mysql_restore_sql,
             choose_result_export_directory,
             backup_sqlite,
             preview_sqlite_restore,

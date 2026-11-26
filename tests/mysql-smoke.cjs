@@ -290,8 +290,9 @@ async function verifyBackup(page, server) {
     CREATE DATABASE backup_fixture CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     CREATE DATABASE backup_mixed;
     CREATE DATABASE backup_recovered CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
-    CREATE TABLE backup_fixture.\`orders\`\`archive\` (id BIGINT UNSIGNED PRIMARY KEY, title VARCHAR(50), payload VARBINARY(5)) ENGINE=InnoDB;
-    INSERT INTO backup_fixture.\`orders\`\`archive\` VALUES (18446744073709551615, CONVERT(0xED959CEAB880 USING utf8mb4), 0x00ff0a);
+    CREATE TABLE backup_fixture.\`orders\`\`archive\` (id BIGINT UNSIGNED PRIMARY KEY, title VARCHAR(50), payload VARBINARY(5), notes LONGTEXT) ENGINE=InnoDB;
+    INSERT INTO backup_fixture.\`orders\`\`archive\` VALUES
+      (18446744073709551615, CONVERT(0xED959CEAB880 USING utf8mb4), 0x00ff0a, REPEAT(CONVERT(0xED959C USING utf8mb4), 50000));
     CREATE VIEW backup_fixture.visible_orders AS SELECT id FROM backup_fixture.\`orders\`\`archive\`;
     USE backup_fixture;
     CREATE TRIGGER title_default BEFORE INSERT ON \`orders\`\`archive\`
@@ -407,6 +408,126 @@ async function verifyBackup(page, server) {
   assert.ok(backups.filter(event => event.outcome === 'succeeded').length >= 4);
   assert.doesNotMatch(JSON.stringify(backups), /backup_fixture|database\.sql|logical-backup-password/);
   assert.deepEqual(errors, []);
+}
+
+async function verifyAppRestore(page, server) {
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: engine + ' 앱 복원 검증' });
+  const password = maria ? rootPassword : '';
+  const file = name => path.join(root, name);
+  const inputs = { source: file('database.sql'), schema: null, directory: binaryDir, database: 'backup_fixture' };
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await chooseDatabase(page, 'MySQL · MariaDB');
+  const create = page.getByRole('dialog', { name: 'MySQL 계열 연결 추가', exact: true });
+  await create.getByLabel('연결 이름').fill(engine + ' 복원 서버');
+  await create.getByLabel('호스트 이름 또는 IP').fill('localhost');
+  await create.getByLabel('포트').fill(String(server.port));
+  await create.getByLabel('사용자 이름').fill('root');
+  await create.getByLabel('시작 데이터베이스 (선택)').fill('visible_db');
+  await create.getByLabel('환경').selectOption('PROD');
+  await create.getByLabel('CA 인증서 경로 (선택)').fill(server.ca);
+  await create.getByRole('button', { name: '저장', exact: true }).click();
+  await create.waitFor({ state: 'detached' });
+  const [profile] = await command('list_mysql_profiles', { projectId: project.id });
+  const { id } = await command('open_mysql', { profileId: profile.id, revision: profile.revision, password, confirmation: 'PROD' });
+  const preview = async (changed = {}, request) => command('preview_mysql_restore', {
+    id, request: request ?? await command('prepare_query'), input: { ...inputs, ...changed },
+  });
+  const apply = async (plan, changed = {}) => command('apply_mysql_restore', {
+    id, request: await command('prepare_query'), token: plan.token, databaseConfirmation: plan.database,
+    password, confirmation: 'PROD', trusted: true, ...changed,
+  });
+  const sha256 = data => createHash('sha256').update(data).digest('hex');
+  const schema = file('테이블 구조.sql');
+  const data = file('table-data.sql');
+  const table = { source: data, schema, database: 'backup_pair' };
+  try {
+    await assert.rejects(preview(), /같은 이름/);
+    await assert.rejects(preview({ database: 'other_name' }), /원본 이름.*backup_fixture/);
+    await assert.rejects(preview({ ...table, schema: null }), /구조 전용 SQL/);
+    const cancelled = await command('prepare_query');
+    assert.equal(await command('cancel_query', { token: cancelled }), true);
+    await assert.rejects(preview(table, cancelled), /중단/);
+
+    const collision = await preview({ ...table, database: 'restore_collision' });
+    admin(server.port, 'CREATE DATABASE restore_collision; CREATE TABLE restore_collision.sentinel (id INT); INSERT INTO restore_collision.sentinel VALUES (42);');
+    await assert.rejects(apply(collision), /같은 이름/);
+    assert.equal(admin(server.port, 'SELECT id FROM restore_collision.sentinel;').trim(), '42');
+
+    const copied = file('immutable-review.sql');
+    fs.copyFileSync(data, copied);
+    const plan = await preview({ ...table, source: copied });
+    assert.deepEqual(plan.tables, ['orders`archive']);
+    assert.equal(plan.archive.sha256, sha256(fs.readFileSync(data)));
+    assert.equal(plan.schema.sha256, sha256(fs.readFileSync(schema)));
+    assert.equal(plan.data_only, true);
+    await assert.rejects(apply(plan, { trusted: false }), /백업 출처/);
+    await assert.rejects(apply(plan, { databaseConfirmation: 'wrong' }), /새 DB 이름/);
+    await assert.rejects(apply(plan, { confirmation: '' }), /PROD/);
+    fs.writeFileSync(copied, 'The source was edited after review.');
+    const result = await apply(plan);
+    assert.equal(result.status, 'verified', JSON.stringify(result));
+    assert.deepEqual([result.tables, result.views, result.rows], [1, 0, 1]);
+    assert.equal(result.archive_sha256, plan.archive.sha256);
+    assert.equal(result.schema_sha256, plan.schema.sha256);
+    assert.equal(result.audit_warning, false);
+    await assert.rejects(apply(plan), /미리보기/);
+    assert.equal(admin(server.port, 'SELECT id, HEX(title), HEX(payload), OCTET_LENGTH(notes) FROM backup_pair.`orders``archive`;').trim(),
+      '18446744073709551615\tED959CEAB880\t00FF0A\t150000');
+
+    const structure = await apply(await preview({ source: schema, database: 'backup_structure' }));
+    assert.deepEqual([structure.status, structure.tables, structure.views, structure.rows], ['verified', 1, 0, 0]);
+
+    const failing = file('fixture-failed-restore.sql');
+    const synthetic = fs.readFileSync(data, 'utf8').replace('-- Dump completed on ', 'INSERT INTO missing_fixture_table VALUES (1);\n-- Dump completed on ');
+    fs.writeFileSync(failing, synthetic);
+    const partial = await apply(await preview({ ...table, source: failing, database: 'backup_partial' }));
+    assert.equal(partial.status, 'partial', JSON.stringify(partial));
+    assert.match(partial.message, /일부 데이터/);
+    assert.equal(admin(server.port, 'SELECT COUNT(*) FROM backup_partial.`orders``archive`;').trim(), '1');
+  } finally {
+    await command('close_mysql', { id });
+  }
+
+  // backup_fixture was created by this isolated fixture, and the same name is embedded in the whole DB dump.
+  admin(server.port, 'DROP DATABASE backup_fixture;');
+  const workspace = page.getByRole('region', { name: 'MySQL 작업 공간', exact: true });
+  await workspace.getByRole('button', { name: 'MySQL 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'MySQL 계열 연결', exact: true });
+  await login.getByLabel('MySQL 암호').fill(password);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'DB 복원', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: engine + ' SQL 백업 복원', exact: true });
+  await dialog.getByLabel('SQL 백업 파일', { exact: true }).fill(inputs.source);
+  await dialog.getByLabel('새 데이터베이스 이름', { exact: true }).fill(inputs.database);
+  await dialog.getByLabel('복원 도구 폴더', { exact: true }).fill(binaryDir);
+  await dialog.getByRole('button', { name: '복원 미리보기', exact: true }).click();
+  await dialog.getByText(sha256(fs.readFileSync(inputs.source)), { exact: true }).waitFor();
+  const submit = dialog.getByRole('button', { name: '새 DB에 복원', exact: true });
+  assert.equal(await submit.isDisabled(), true);
+  await dialog.getByRole('checkbox', { name: /백업 출처를 확인했고/ }).check();
+  await dialog.getByLabel('새 DB 이름 확인').fill(inputs.database);
+  await dialog.getByLabel(engine + ' 암호', { exact: true }).fill(password);
+  assert.equal(await submit.isDisabled(), true);
+  await dialog.getByLabel('운영 확인 문구 PROD').fill('PROD');
+  await submit.click();
+  await dialog.getByRole('status').filter({ hasText: '복원과 검증을 완료했습니다.' }).waitFor();
+  await dialog.getByText('테이블 1개 · 뷰 1개 · 행 1개', { exact: true }).waitFor();
+  await dialog.getByText(sha256(fs.readFileSync(inputs.source)), { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  assert.equal(admin(server.port, 'SELECT COUNT(*) FROM backup_fixture.visible_orders; CALL backup_fixture.order_count();').trim().replace(/\r/g, ''), '1\n1');
+  assert.equal(admin(server.port, "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='backup_fixture';").trim(), 'utf8mb4_bin');
+  assert.equal(admin(server.port, "SELECT STATUS FROM information_schema.EVENTS WHERE EVENT_SCHEMA='backup_fixture' AND EVENT_NAME='backup_event';").trim(), 'DISABLED');
+  assert.equal(admin(server.port, "SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='backup_fixture';").trim(), '1');
+  const { events } = await command('list_audit_events', { before: null });
+  const restore = events.filter(event => event.operation.startsWith('mysql.restore'));
+  assert.equal(restore.filter(event => event.outcome === 'succeeded').length, 3);
+  assert.equal(restore.filter(event => event.operation === 'mysql.restore.partial' && event.outcome === 'failed').length, 1);
+  assert.ok(restore.every(event => event.policy === 'mysql-native-new-database-prod-reviewed'));
+  assert.doesNotMatch(JSON.stringify(restore), /backup_fixture|missing_fixture_table|database\.sql|mariadb-root-test/);
 }
 
 async function verifyGridWrites(command, reader, profile, port) {
@@ -1408,6 +1529,8 @@ async function main() {
     }
     await verifyBackup(page, server);
     console.log(`${engine} Windows logical backup and native SQL restore passed.`);
+    await verifyAppRestore(page, server);
+    console.log(`${engine} Windows app restore passed (reviewed snapshot, database conflict, partial result, and verified counts).`);
   } catch (cause) {
     const log = path.join(root, 'server.log');
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3000));

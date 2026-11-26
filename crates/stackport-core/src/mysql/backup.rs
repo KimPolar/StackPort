@@ -121,12 +121,12 @@ impl MysqlManager {
             };
             check()?;
             let profile = store.mysql_profile(&session.profile_id, session.profile_revision)?;
-            let audit = |outcome| {
+            let audit = |operation, outcome| {
                 insert_audit(
                     &store.connect()?,
                     AuditRecord {
                         correlation_id: &request,
-                        operation: "mysql.backup",
+                        operation,
                         project_id: Some(&session.project_id),
                         profile_id: Some(&session.profile_id),
                         environment: Some(&session.environment),
@@ -136,7 +136,7 @@ impl MysqlManager {
                     },
                 )
             };
-            audit("started")?;
+            audit("mysql.backup", "started")?;
             let result = create(
                 input,
                 &profile.settings,
@@ -152,12 +152,12 @@ impl MysqlManager {
                     Ok(())
                 },
             );
-            let outcome = match &result {
-                Ok(_) => "succeeded",
-                Err(error) if error == CANCELLED => "cancelled",
-                Err(_) => "failed",
+            let (operation, outcome) = match &result {
+                Ok(_) => ("mysql.backup", "succeeded"),
+                Err(error) if error == CANCELLED => ("mysql.backup.cancel", "failed"),
+                Err(_) => ("mysql.backup", "failed"),
             };
-            let audit_warning = audit(outcome).is_err();
+            let audit_warning = audit(operation, outcome).is_err();
             result.map(|report| MysqlBackupReport {
                 audit_warning,
                 ..report
@@ -191,26 +191,26 @@ fn create(
         .tempdir()
         .map_err(|_| "MySQL 백업의 임시 폴더를 만들 수 없습니다.")?;
     let tool_version = find_version(&executable, scratch.path(), maria, &server_version, check)?;
-    let mut command = dump_command(&executable, scratch.path(), maria);
+    let mut command = client_command(&executable, scratch.path(), maria);
     command
         .args([
-            "--protocol=TCP",
-            "--default-character-set=utf8mb4",
             "--skip-lock-tables",
             "--skip-add-locks",
             "--skip-add-drop-table",
             "--quick",
             "--hex-blob",
         ])
-        .arg(format!("--host={}", settings.host))
-        .arg(format!("--port={}", settings.port))
-        .arg(format!("--user={}", settings.username))
         .arg(format!(
             "--result-file={}",
             native_path(file.staging_path())?
-        ))
-        .env("MYSQL_PWD", input.password.0.as_str());
-    configure_tls(&mut command, settings, scratch.path(), maria)?;
+        ));
+    configure_connection(
+        &mut command,
+        settings,
+        &input.password,
+        scratch.path(),
+        maria,
+    )?;
     if !maria {
         command.args(["--set-gtid-purged=OFF", "--no-tablespaces"]);
     }
@@ -248,7 +248,7 @@ fn create(
     })
 }
 
-fn dump_command(executable: &Path, directory: &Path, maria: bool) -> Command {
+pub(super) fn client_command(executable: &Path, directory: &Path, maria: bool) -> Command {
     let mut command = Command::new(executable);
     command
         .current_dir(directory)
@@ -274,7 +274,7 @@ fn dump_command(executable: &Path, directory: &Path, maria: bool) -> Command {
     command
 }
 
-fn find_version(
+pub(super) fn find_version(
     executable: &Path,
     scratch: &Path,
     maria: bool,
@@ -282,7 +282,7 @@ fn find_version(
     check: &impl Fn() -> Result<()>,
 ) -> Result<String> {
     let file = tempfile::tempfile_in(scratch).map_err(|_| "백업 도구 버전을 읽을 수 없습니다.")?;
-    let mut command = dump_command(executable, scratch, maria);
+    let mut command = client_command(executable, scratch, maria);
     command.arg("--version").stdout(Stdio::from(
         file.try_clone()
             .map_err(|_| "백업 도구 버전을 읽을 수 없습니다.")?,
@@ -319,15 +319,8 @@ fn find_version(
         .nth(1)
         .unwrap_or_default()
         .trim_end_matches(',');
-    let server_version = if maria {
-        server_version
-            .strip_prefix("5.5.5-")
-            .unwrap_or(server_version)
-    } else {
-        server_version
-    };
     let tool_series = release_series(tool_version);
-    if output.contains("MariaDB") != maria
+    if tool_version.contains("MariaDB") != maria
         || tool_series.is_none()
         || tool_series != release_series(server_version)
     {
@@ -336,7 +329,8 @@ fn find_version(
     Ok(tool_version.to_owned())
 }
 
-fn release_series(version: &str) -> Option<(u32, u32)> {
+pub(super) fn release_series(version: &str) -> Option<(u32, u32)> {
+    let version = version.strip_prefix("5.5.5-").unwrap_or(version);
     let mut parts = version.split('.');
     let major = parts.next()?.parse().ok()?;
     let minor = parts.next()?.parse().ok()?;
@@ -346,6 +340,22 @@ fn release_series(version: &str) -> Option<(u32, u32)> {
         .first()
         .is_some_and(u8::is_ascii_digit)
         .then_some((major, minor))
+}
+
+pub(super) fn configure_connection(
+    command: &mut Command,
+    settings: &MysqlSettings,
+    password: &MysqlPassword,
+    scratch: &Path,
+    maria: bool,
+) -> Result<()> {
+    command
+        .args(["--protocol=TCP", "--default-character-set=utf8mb4"])
+        .arg(format!("--host={}", settings.host))
+        .arg(format!("--port={}", settings.port))
+        .arg(format!("--user={}", settings.username))
+        .env("MYSQL_PWD", password.0.as_str());
+    configure_tls(command, settings, scratch, maria)
 }
 
 fn configure_tls(
@@ -417,7 +427,11 @@ fn native_path(path: &Path) -> Result<String> {
     Ok(path.strip_prefix(r"\\?\").unwrap_or(path).to_owned())
 }
 
-fn run(mut command: Command, check: &impl Fn() -> Result<()>, failure: &str) -> Result<()> {
+pub(super) fn run(
+    mut command: Command,
+    check: &impl Fn() -> Result<()>,
+    failure: &str,
+) -> Result<()> {
     check()?;
     #[cfg(windows)]
     let job = crate::terminal::ProcessJob::new()?;

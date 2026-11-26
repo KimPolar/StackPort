@@ -5,6 +5,7 @@ mod grid;
 mod monitor;
 mod plan;
 pub(crate) mod profiles;
+mod restore;
 mod sql;
 mod structure;
 mod tls;
@@ -16,6 +17,7 @@ pub use monitor::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use plan::MysqlPlan;
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{MysqlProfile, MysqlSettings};
+pub use restore::{MysqlRestoreInput, MysqlRestorePreview, MysqlRestoreReport};
 pub use sql::{MysqlScriptInput, MysqlScriptOutcome, MysqlScriptScope, MysqlSqlParameter, MysqlSqlResult};
 pub use structure::{MysqlStructure, MysqlStructureSection};
 
@@ -147,6 +149,7 @@ struct Session {
     monitor: AsyncMutex<Option<monitor::MonitorConnection>>,
     grid_edit: bool,
     pending_edit: AsyncMutex<Option<edit::PendingEdit>>,
+    pending_restore: Mutex<Option<restore::Plan>>,
     engine: &'static str,
     profile_id: String,
     profile_revision: i64,
@@ -282,6 +285,7 @@ impl MysqlManager {
                     monitor: AsyncMutex::new(None),
                     grid_edit,
                     pending_edit: AsyncMutex::new(None),
+                    pending_restore: Mutex::default(),
                     engine,
                     connection: AsyncMutex::new(Some(connection)),
                     profile_id: profile.id,
