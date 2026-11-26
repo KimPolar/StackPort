@@ -9,12 +9,12 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
-    "SP-BK-012": "Windows SQLite·PostgreSQL 저장 폴더·이름 접두어·보존 만료일·용량 확인, 단발·반복 예약, 실행 취소·예약 중지·즉시 실행·최근 40건 이력·만료 파일 삭제, PostgreSQL 직접 TLS 또는 검토한 로컬 SSH 경로",
+    "SP-BK-012": "Windows SQLite·PostgreSQL 저장 폴더·이름 접두어·보존 만료일·용량 확인, 단발·반복 예약, 최대 실행 시간·실행 취소·예약 중지·즉시 실행·최근 40건 이력·만료 파일 삭제, PostgreSQL 직접 TLS 또는 검토한 로컬 SSH 경로",
     "SP-AU-001": "앱에 저장된 SQLite·PostgreSQL 연결의 검증된 전체 백업을 수동 또는 예약 실행",
     "SP-AU-003": "SQLite·PostgreSQL 백업의 단발·분 간격 반복, IANA 시간대를 지정한 5필드 cron, 서머타임과 사용자가 입력한 휴일·제외 날짜 처리",
-    "SP-AU-006": "작업 공간별 저장 백업 계획의 동시 실행 방지, 계획별 0~5회·1~1,440분 재시도 정책과 실행 차수, 예정분과 대기 중인 재시도 중지, 실행 중인 SQLite·PostgreSQL 백업 취소",
+    "SP-AU-006": "작업 공간별 저장 백업 계획의 동시 실행 방지, 계획별 0~5회·1~1,440분 재시도 정책과 실행 차수, SQLite·PostgreSQL 백업의 실행 시간 제한·취소와 예정분·대기 재시도 중지",
     "SP-AU-007": "Windows 앱이 실행 중일 때 SQLite·PostgreSQL 예약을 처리하고, 앱이 닫힌 동안 지난 예약을 다음 실행에서 한 번 처리",
-    "SP-AU-008": "SQLite·PostgreSQL 백업의 실행 중·성공·실패·취소·완료 확인 필요 상태, 파일 크기·실행 시각·오류 원인 이력",
+    "SP-AU-008": "SQLite·PostgreSQL 백업의 실행 중·성공·실패·취소·시간 초과·완료 확인 필요 상태, 파일 크기·시작 시각·실행 시간·오류 원인 이력",
     "SP-AU-009": "Windows 상태 표시줄에 SQLite·PostgreSQL 예약 백업 및 재시도의 성공·실패 알림",
     "SP-AU-012": "SQLite·PostgreSQL 백업 계획의 원본 크기·사용 가능 공간 확인, 다음 달력 일정 미리보기 및 즉시 백업",
     "SP-AU-016": "SQLite·PostgreSQL 백업 계획의 파일별 보존 만료일, 검토한 만료 파일 삭제와 결과 이력",
@@ -203,7 +203,7 @@ PARTIAL = {
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
-    "SP-AT-025": "작업 공간 이관 전 검증된 백업과 실패 시 원본 보존, v28 이관 후 기존 계획·예약 이력·파일 지문 및 대기 재시도 보존",
+    "SP-AT-025": "작업 공간 이관 전 검증된 백업과 실패 시 원본 보존, v29 이관 후 기존 계획·예약 이력·파일 지문 및 대기 재시도 보존",
     "SP-SEC-013": "Windows SQLite 예약 백업에 생성 지문 저장, 보존 기간 이후 미리보기와 파일 ID·경로·크기·SHA-256 재확인 및 대상 핸들로 영구 삭제",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 격리 파일 복원, PostgreSQL 새 DB 행·복합 외래 키·SHA-256·오류 롤백, MySQL·MariaDB 앱 격리 복원에서 객체·행·SHA-256·이름 충돌·부분 결과 검증, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰의 내용·정의·인덱스 비교, Redis 격리 RDB에서 DB 0·3·31 키 수와 만료 확인 및 별도 검증 서버에서 RDB·AOF 값과 TTL 확인, SQL Server 앱의 BAK 생성·체크섬과 격리 새 DB 복원 행·큰 정수·바이너리·파일 경로·충돌 검증, Oracle 앱의 세 가지 방식 가져오기와 대상 스키마·테이블스페이스·기존 행 보존·38자리 숫자·RAW·유니코드 대조",

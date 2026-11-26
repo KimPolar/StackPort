@@ -3055,8 +3055,9 @@ async function verifyTunneledPostgresBackupPlan(page, command, project, profile,
     await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
     await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
     await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
-    const { plan } = await planState();
+    let { plan } = await planState();
     assert.deepEqual(plan.tunnel, approved);
+    assert.equal(plan.timeout_seconds, 1800);
 
     await stop();
     await dialog.getByText('이 계획에 사용할 SSH 터널을 시작하세요.', { exact: true }).waitFor();
@@ -3123,6 +3124,28 @@ async function verifyTunneledPostgresBackupPlan(page, command, project, profile,
     assert.match(interrupted.message, /SSH 터널이 중단되었습니다/);
     assert.equal(fs.readdirSync(directory).length, 1, 'No interrupted archive or staging file is retained');
     assert.equal((await start()).status, 'open');
+
+    const timeout = dialog.getByLabel('최대 실행 시간 (초)', { exact: true });
+    assert.equal(await timeout.inputValue(), '1800');
+    await timeout.fill('3');
+    await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+    await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+    await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+    ({ plan } = await planState());
+    assert.equal(plan.timeout_seconds, 3);
+    for (const offset of [1, 2]) {
+      stallReplyAt = gateway.forwarded() + offset;
+      await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+      await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+      await waitForStalledForward();
+      await dialog.getByText(/시간 초과 · 수동 실행/).nth(offset - 1).waitFor();
+      const finished = await planState();
+      assert.equal(finished.runs[0].status, 'timed_out');
+      assert.equal(finished.runs[0].artifact, null);
+      assert.equal(finished.plan.retry_at, null);
+      assert.equal(fs.readdirSync(directory).length, 1);
+    }
+    console.log('The saved PostgreSQL deadline stopped stalled TLS preflight and pg_dump, keeping the earlier verified archive.');
 
     await command('update_ssh_tunnel', { id: tunnel.id, revision: tunnel.revision, input: { ...tunnel.settings, name: '검토가 필요한 터널' } });
     assert.equal((await planState()).plan.requires_review, true);

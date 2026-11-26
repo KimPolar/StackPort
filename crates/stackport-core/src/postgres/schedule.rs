@@ -5,11 +5,11 @@ use super::{
 };
 use crate::{
     backup_artifact::Evidence,
-    backup_schedule::{active_profile, confirm_backup_directory, RunControl},
+    backup_schedule::{active_profile, confirm_backup_directory, RunControl, Stop},
     insert_audit, ssh_tunnel::DatabaseTunnel, AuditRecord, BackupTunnelRoute, Result, SshTunnelManager, Store,
 };
 use postgres_native_tls::MakeTlsConnector;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const TUNNEL_STOPPED: &str = "백업 계획의 SSH 터널이 중단되었습니다. 터널을 시작한 뒤 다시 시도하세요.";
 
@@ -69,7 +69,6 @@ impl Store {
             let password = self.saved_postgres_password(&profile)?;
             let (major, _) = source_details(&profile, &password, false, tunnel.as_ref(), Some(control))?;
             verify_profile()?;
-            let deadline = Instant::now() + backup::TIME_LIMIT;
             backup::create_with(
                 &profile.settings,
                 Source { major, selection: None, tunnel_port: tunnel.as_ref().map(|route| route.endpoint().port) },
@@ -78,8 +77,7 @@ impl Store {
                 path.to_owned(),
                 || {
                     control.check()?;
-                    ensure_tunnel_running(tunnel.as_ref())?;
-                    (Instant::now() < deadline).then_some(()).ok_or_else(|| "PostgreSQL 백업 실행 시간이 초과되었습니다.".into())
+                    ensure_tunnel_running(tunnel.as_ref())
                 },
                 || {
                     verify_profile()?;
@@ -90,7 +88,11 @@ impl Store {
             )
         })();
         let result = control.finish().and(result);
-        let operation = if control.is_cancelled() { "postgres.backup.schedule.cancel" } else { "postgres.backup.schedule" };
+        let operation = match control.stopped() {
+            Some(Stop::Cancelled) => "postgres.backup.schedule.cancel",
+            Some(Stop::TimedOut) => "postgres.backup.schedule.timeout",
+            None => "postgres.backup.schedule",
+        };
         let warning = audit(operation, if result.is_ok() { "succeeded" } else { "failed" }).err()
             .map(|_| "PostgreSQL 백업 작업 기록을 저장할 수 없습니다.".into());
         result.map(|(report, evidence)| (report.size_bytes, evidence, report.tool_version, warning))
@@ -128,9 +130,9 @@ fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measur
                 .map_err(|_| "PostgreSQL 데이터베이스 크기를 확인할 수 없습니다.")?;
             Ok((major, size))
         });
-        let cancelled = async {
+        let stopped = async {
             match control {
-                Some(control) => control.wait_cancelled().await,
+                Some(control) => control.wait_stopped().await,
                 None => std::future::pending().await,
             }
         };
@@ -142,7 +144,7 @@ fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measur
         };
         let result = tokio::select! {
             biased;
-            message = cancelled => return Err(message.into()),
+            reason = stopped => return Err(reason.message().into()),
             _ = tunnel_ended => return Err(TUNNEL_STOPPED.into()),
             response = read => response,
         };

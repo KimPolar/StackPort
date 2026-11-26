@@ -10,7 +10,7 @@ const { chooseDatabase } = require('./database-picker.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar/retry/cancel phase.');
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar/retry/cancel/timeout phase.');
 
 const source = path.join(root, '예약 원본.sqlite');
 const output = path.join(root, '예약 백업');
@@ -83,8 +83,10 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
-        if (phase === 'cancel') {
-          await verifyCancellation(db, dialog, history, instance, () => state(profile.id));
+        if (phase === 'cancel' || phase === 'timeout') {
+          const due = await scheduleLargeBackup(db, dialog, phase === 'timeout' ? 1 : 0);
+          const verify = phase === 'cancel' ? verifyCancellation : verifyTimeout;
+          await verify(db, dialog, history, instance, () => state(profile.id), due);
           assert.deepEqual(errors, []);
           return;
         }
@@ -198,16 +200,23 @@ async function main() {
   } finally { await browser.close(); }
 }
 
-async function verifyCancellation(db, dialog, history, instance, state) {
+async function scheduleLargeBackup(db, dialog, timeoutSeconds) {
   db.exec(`CREATE TABLE large_snapshot (data BLOB);
     WITH RECURSIVE blocks(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM blocks WHERE n<256)
     INSERT INTO large_snapshot SELECT zeroblob(1048576) FROM blocks;`);
   await dialog.getByLabel('실행 주기').selectOption('periodic');
   await dialog.getByLabel('간격 (분)', { exact: true }).fill('20');
+  const timeout = dialog.getByLabel('최대 실행 시간 (초)', { exact: true });
+  assert.equal(await timeout.inputValue(), '0');
+  if (timeoutSeconds) await timeout.fill(String(timeoutSeconds));
   const due = Math.floor(Date.now() / 1000) + 8;
   await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(dateInput(due));
   await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
   await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  return due;
+}
+
+async function verifyCancellation(db, dialog, history, instance, state, due) {
   const cancel = dialog.getByRole('button', { name: '백업 취소', exact: true });
   await cancel.waitFor({ timeout: 18000 });
   const active = (await state()).runs[0];
@@ -228,6 +237,27 @@ async function verifyCancellation(db, dialog, history, instance, state) {
   assert.deepEqual(fs.readdirSync(output), []);
   assert.equal(db.prepare('SELECT count(*) AS n FROM large_snapshot').get().n, 256);
   console.log('Cancelled an in-flight SQLite snapshot from the desktop, cleaned staging, and kept the next scheduled run without a retry.');
+}
+
+async function verifyTimeout(db, dialog, history, instance, state, due) {
+  const timedOut = history.getByText(/시간 초과 · 예약 실행/);
+  await timedOut.waitFor({ timeout: 18000 });
+  await instance.getByText('SQLite 예약 백업 시간 초과', { exact: true }).waitFor();
+  await timedOut.click();
+  await history.getByText('백업 실행 제한 시간(1초)을 초과했습니다.', { exact: true }).waitFor();
+  await history.getByText(/^실행 시간 \d+초$/).waitFor();
+  const { plan, runs: [run] } = await state();
+  assert.equal(plan.timeout_seconds, 1);
+  assert.equal(plan.next_at, due + 1200);
+  assert.equal(plan.retry_at, run.finished_at + 60);
+  assert.equal(plan.retry_attempt, 1);
+  assert.equal(run.status, 'timed_out');
+  assert.equal(run.can_cancel, false);
+  assert.equal(run.artifact, null);
+  assert.equal(await dialog.getByRole('button', { name: '백업 취소', exact: true }).count(), 0);
+  assert.deepEqual(fs.readdirSync(output), []);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM large_snapshot').get().n, 256);
+  console.log('SQLite exceeded its saved one-second limit, cleaned staging, and queued a retry with the next schedule intact.');
 }
 
 async function verifyCalendarPlan(dialog, history, state, storeRun) {

@@ -3,9 +3,8 @@ mod calendar;
 mod execution;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
-pub(crate) use execution::{Execution, RunControl};
+pub(crate) use execution::{Execution, RunControl, Stop};
 use calendar::CalendarSchedule;
-use execution::CANCELLED_MESSAGE;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
     db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
@@ -17,12 +16,14 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
 const MAX_RETRIES: u8 = 5;
 const DEFAULT_RETRY_DELAY_MINUTES: u16 = 1;
+const DEFAULT_POSTGRES_TIMEOUT_SECONDS: u32 = 30 * 60;
+const MAX_TIMEOUT_SECONDS: u32 = 86_400;
 const LATEST_START: i64 = 4_102_444_800; // 2100-01-01 UTC
 const NO_CALENDAR_OCCURRENCE: &str = "2100년까지 실행할 수 있는 달력 일정이 없습니다.";
 
@@ -43,6 +44,7 @@ pub(crate) const SCHEMA: &str = "
         retry_limit INTEGER NOT NULL CHECK (retry_limit BETWEEN 0 AND 5),
         retry_delay_minutes INTEGER NOT NULL DEFAULT 1 CHECK (retry_delay_minutes BETWEEN 1 AND 1440),
         retry_attempt INTEGER NOT NULL DEFAULT 1 CHECK (retry_attempt BETWEEN 1 AND 5),
+        timeout_seconds INTEGER NOT NULL DEFAULT 0 CHECK (timeout_seconds BETWEEN 0 AND 86400),
         next_at INTEGER,
         retry_at INTEGER,
         CHECK (
@@ -56,7 +58,7 @@ pub(crate) const SCHEMA: &str = "
         workspace_path TEXT NOT NULL,
         trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('scheduled', 'retry', 'manual')),
         retry_attempt INTEGER NOT NULL DEFAULT 1 CHECK (retry_attempt BETWEEN 1 AND 5),
-        status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted', 'cancelled')),
+        status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted', 'cancelled', 'timed_out')),
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
         expires_at INTEGER,
@@ -109,6 +111,12 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
         db.execute_batch("ALTER TABLE backup_runs ADD COLUMN retry_attempt INTEGER NOT NULL DEFAULT 1
             CHECK (retry_attempt BETWEEN 1 AND 5);").map_err(db_error)?;
     }
+    if !has_column("backup_plans", "timeout_seconds")? {
+        db.execute_batch("ALTER TABLE backup_plans ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 0
+            CHECK (timeout_seconds BETWEEN 0 AND 86400);").map_err(db_error)?;
+        db.execute("UPDATE backup_plans SET timeout_seconds=?1 WHERE postgres_profile_id IS NOT NULL",
+            [DEFAULT_POSTGRES_TIMEOUT_SECONDS]).map_err(db_error)?;
+    }
     if legacy {
         db.execute_batch("INSERT INTO backup_plans
             (profile_id, sqlite_profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at, retry_at)
@@ -121,7 +129,7 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
             DROP TABLE legacy_backup_plans;").map_err(db_error)?;
     }
     let old_run_status: bool = db.query_row(
-        "SELECT instr(sql, 'cancelled')=0 FROM sqlite_schema WHERE type='table' AND name='backup_runs'",
+        "SELECT instr(sql, 'timed_out')=0 FROM sqlite_schema WHERE type='table' AND name='backup_runs'",
         [], |row| row.get(0),
     ).map_err(db_error)?;
     if old_run_status {
@@ -157,6 +165,7 @@ pub struct BackupPlanWrite {
     retry_once: bool,
     retry_limit: Option<u8>,
     retry_delay_minutes: Option<u16>,
+    timeout_seconds: Option<u32>,
     next_at: Option<i64>,
 }
 
@@ -177,6 +186,7 @@ pub struct BackupPlan {
     retry_limit: u8,
     retry_delay_minutes: u16,
     retry_attempt: Option<u8>,
+    timeout_seconds: u32,
     next_at: Option<i64>,
     retry_at: Option<i64>,
     requires_review: bool,
@@ -225,17 +235,29 @@ impl Store {
         profile_id: &str,
         directory: &str,
     ) -> Result<BackupCapacity> {
+        self.sqlite_backup_capacity_with(profile_id, directory, None)
+    }
+
+    fn sqlite_backup_capacity_with(
+        &self,
+        profile_id: &str,
+        directory: &str,
+        control: Option<&RunControl>,
+    ) -> Result<BackupCapacity> {
         let profile = self.profile(profile_id)?;
         let directory = backup_directory(directory)?;
         let source = open_user_db(Path::new(&profile.path))?;
         // This read-only connection runs only the two fixed size PRAGMAs.
         source.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-        let pages: u64 = source
-            .pragma_query_value(None, "page_count", |r| r.get(0))
-            .map_err(db_error)?;
-        let page_size: u64 = source
-            .pragma_query_value(None, "page_size", |r| r.get(0))
-            .map_err(db_error)?;
+        let page_value = |pragma| {
+            if let Some(control) = control {
+                control.check()?;
+                source.busy_timeout(control.bounded_wait(Duration::from_secs(5))).map_err(db_error)?;
+            }
+            source.pragma_query_value(None, pragma, |row| row.get::<_, u64>(0)).map_err(db_error)
+        };
+        let pages = page_value("page_count")?;
+        let page_size = page_value("page_size")?;
         let estimated_bytes = pages
             .checked_mul(page_size)
             .ok_or("원본 데이터베이스 크기를 확인할 수 없습니다.")?;
@@ -365,6 +387,9 @@ impl Store {
         if retry_limit > MAX_RETRIES || !(1..=1_440).contains(&retry_delay_minutes) {
             return Err("재시도는 최대 5회, 간격은 1~1,440분으로 입력하세요.".into());
         }
+        if input.timeout_seconds.is_some_and(|seconds| seconds > MAX_TIMEOUT_SECONDS) {
+            return Err("최대 실행 시간은 0~86,400초로 입력하세요.".into());
+        }
         if input.calendar.is_some() && (input.next_at.is_some() || input.interval_minutes.is_some()) {
             return Err("달력 일정과 단발·간격 예약은 함께 저장할 수 없습니다.".into());
         }
@@ -404,7 +429,8 @@ impl Store {
         if !active_profile(&tx, profile_id, postgres.is_some())? {
             return Err("활성 프로젝트의 연결을 선택하세요.".into());
         }
-        let revision = read_plan(&tx, profile_id)?.map(|plan| plan.revision);
+        let previous = read_plan(&tx, profile_id)?;
+        let revision = previous.as_ref().map(|plan| plan.revision);
         if revision != input.revision {
             return Err(
                 "다른 창에서 백업 계획을 수정했습니다. 새로고침하고 다시 저장하세요.".into(),
@@ -414,19 +440,21 @@ impl Store {
             .map_err(|_| "백업 계획의 SSH 터널을 저장할 수 없습니다.")?;
         let calendar = input.calendar.as_ref().map(serde_json::to_string).transpose()
             .map_err(|_| "백업 달력 일정을 저장할 수 없습니다.")?;
+        let timeout_seconds = input.timeout_seconds.or_else(|| previous.map(|plan| plan.timeout_seconds))
+            .unwrap_or(if postgres.is_some() { DEFAULT_POSTGRES_TIMEOUT_SECONDS } else { 0 });
         tx.execute(
             "INSERT INTO backup_plans
              (profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, timeout_seconds)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, workspace_path=excluded.workspace_path,
              directory=excluded.directory, prefix=excluded.prefix, interval_minutes=excluded.interval_minutes,
              retention_days=excluded.retention_days, retry_limit=excluded.retry_limit, retry_delay_minutes=excluded.retry_delay_minutes,
-             next_at=excluded.next_at, retry_at=NULL, retry_attempt=1,
+             next_at=excluded.next_at, retry_at=NULL, retry_attempt=1, timeout_seconds=excluded.timeout_seconds,
              postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel, calendar=excluded.calendar",
             params![profile_id, revision.unwrap_or(0) + 1, self.backup_workspace_path()?, directory,
                 prefix, input.interval_minutes, input.retention_days, retry_limit, next_at,
-                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar, retry_delay_minutes],
+                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar, retry_delay_minutes, timeout_seconds],
         ).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         self.backup_plan(profile_id, postgres)
@@ -592,14 +620,14 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
             params![id, profile_id, workspace, trigger_kind, now, path, retry_attempt.unwrap_or(1)],
         ).map_err(db_error)?;
-        let registration = self.backup_execution.start(&profile_id, &id);
+        let registration = self.backup_execution.start(&profile_id, &id, plan.timeout_seconds);
         let control = &registration.control;
         tx.commit().map_err(db_error)?;
 
         let result = if let Some(revision) = plan.postgres_revision {
             self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id, plan.tunnel.as_ref(), tunnels, control)
         } else { control.check()
-            .and_then(|()| self.sqlite_backup_capacity(&profile_id, &plan.directory))
+            .and_then(|()| self.sqlite_backup_capacity_with(&profile_id, &plan.directory, Some(control)))
             .and_then(|capacity| {
                 if capacity.directory != plan.directory {
                     return Err(
@@ -647,7 +675,7 @@ impl Store {
                     Some(artifact),
                 )
             }
-            Err(_) if control.is_cancelled() => ("cancelled", None, None, Some(CANCELLED_MESSAGE.into()), None),
+            Err(error) if control.stopped() == Some(Stop::Cancelled) => ("cancelled", None, None, Some(error), None),
             Err(error) => {
                 let next_retry = match trigger_kind {
                     "scheduled" => Some(1),
@@ -664,7 +692,11 @@ impl Store {
                         ).map_err(db_error)?;
                     }
                 }
-                ("failed", None, None, Some(error), None)
+                if control.stopped() == Some(Stop::TimedOut) {
+                    ("timed_out", None, None, Some(format!("백업 실행 제한 시간({}초)을 초과했습니다.", plan.timeout_seconds)), None)
+                } else {
+                    ("failed", None, None, Some(error), None)
+                }
             }
         };
         let updated = tx.execute(
@@ -734,12 +766,12 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
 fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
     db.query_row(
         "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_limit, next_at,
-                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END
+                retry_at, postgres_revision, postgres_tunnel, calendar, retry_delay_minutes, CASE WHEN retry_at IS NOT NULL THEN retry_attempt END, timeout_seconds
          FROM backup_plans WHERE profile_id=?1",
         [profile_id], |row| Ok(BackupPlan {
             revision: row.get(0)?, workspace_path: row.get(1)?, directory: row.get(2)?, prefix: row.get(3)?,
             interval_minutes: row.get(4)?, retention_days: row.get(5)?, retry_once: row.get::<_, u8>(6)? > 0,
-            retry_limit: row.get(6)?, retry_delay_minutes: row.get(12)?, retry_attempt: row.get(13)?,
+            retry_limit: row.get(6)?, retry_delay_minutes: row.get(12)?, retry_attempt: row.get(13)?, timeout_seconds: row.get(14)?,
             next_at: row.get(7)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, requires_review: false,
             tunnel: row.get::<_, Option<String>>(10)?.map(|json| serde_json::from_str(&json)
                 .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
@@ -908,23 +940,25 @@ mod tests {
 
         fn plan(&self, first: i64, interval: Option<i64>) {
             self.store
-                .save_sqlite_backup_plan(
-                    &self.profile_id,
-                    BackupPlanWrite {
-                        revision: None,
-                        directory: self.output.to_str().unwrap().into(),
-                        prefix: "fixture".into(),
-                        interval_minutes: interval,
-                        calendar: None,
-                        calendar_enabled: false,
-                        retention_days: 7,
-                        retry_once: true,
-                        retry_limit: None,
-                        retry_delay_minutes: None,
-                        next_at: Some(first),
-                    },
-                )
+                .save_sqlite_backup_plan(&self.profile_id, self.plan_input(first, interval))
                 .unwrap();
+        }
+
+        fn plan_input(&self, first: i64, interval: Option<i64>) -> BackupPlanWrite {
+            BackupPlanWrite {
+                revision: None,
+                directory: self.output.to_str().unwrap().into(),
+                prefix: "fixture".into(),
+                interval_minutes: interval,
+                calendar: None,
+                calendar_enabled: false,
+                retention_days: 7,
+                retry_once: true,
+                retry_limit: None,
+                retry_delay_minutes: None,
+                timeout_seconds: None,
+                next_at: Some(first),
+            }
         }
 
         fn current(&self) -> BackupPlanState {
@@ -1066,6 +1100,45 @@ mod tests {
         let plan = reopened.plan.unwrap();
         assert_eq!(plan.retry_at, None);
         assert_eq!(plan.next_at, Some(first + 3600));
+    }
+
+    #[test]
+    fn scheduled_timeout_survives_an_older_plan_edit_and_retries_with_a_fresh_deadline() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        let mut input = f.plan_input(first, Some(60));
+        input.timeout_seconds = Some(MAX_TIMEOUT_SECONDS + 1);
+        assert!(f.store.save_sqlite_backup_plan(&f.profile_id, input).is_err());
+        let mut input = f.plan_input(first, Some(60));
+        input.timeout_seconds = Some(1);
+        f.store.save_sqlite_backup_plan(&f.profile_id, input).unwrap();
+        let mut legacy_edit = f.plan_input(first, Some(60));
+        legacy_edit.revision = Some(1);
+        let saved = f.store.save_sqlite_backup_plan(&f.profile_id, legacy_edit).unwrap();
+        assert_eq!(saved.plan.unwrap().timeout_seconds, 1);
+
+        f._source.execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;").unwrap();
+        let started = std::time::Instant::now();
+        let run = f.store.process_backup(None, first, None).unwrap().unwrap();
+        f._source.execute_batch("ROLLBACK").unwrap();
+        assert!(started.elapsed() < Duration::from_secs(4));
+        assert_eq!(run.status, "timed_out");
+        assert!(run.message.unwrap().contains("(1초)"));
+        assert!(run.artifact.is_none());
+        assert_eq!(fs::read_dir(&f.output).unwrap().count(), 0);
+        assert!(!f.store.cancel_backup_plan_run(&f.profile_id, &run.id));
+
+        let reopened = Store::open(&f.workspace).unwrap();
+        let state = reopened.sqlite_backup_plan(&f.profile_id).unwrap();
+        assert_eq!(state.runs[0].status, "timed_out");
+        let plan = state.plan.unwrap();
+        assert_eq!(plan.timeout_seconds, 1);
+        assert_eq!(plan.next_at, Some(first + 3600));
+        assert_eq!(plan.retry_at, Some(run.finished_at.unwrap() + 60));
+        let retry = reopened.process_backup(None, plan.retry_at.unwrap(), None).unwrap().unwrap();
+        assert_eq!((retry.status.as_str(), retry.trigger_kind.as_str()), ("succeeded", "retry"));
+        assert!(retry.artifact.is_some());
+        assert_eq!(reopened.sqlite_backup_plan(&f.profile_id).unwrap().plan.unwrap().retry_at, None);
     }
 
     #[test]
@@ -1294,34 +1367,53 @@ mod tests {
     }
 
     #[test]
-    fn v27_migration_preserves_retry_history_and_file_evidence() {
+    fn v28_migration_preserves_cancelled_runs_retry_history_and_file_evidence() {
         let f = Fixture::new();
         let first = unix_now().unwrap() + 120;
         f.plan(first, Some(60));
         let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let postgres = f.store.create_postgres_profile(&f.project_id, crate::PostgresProfileInput {
+            name: "기존 PostgreSQL 계획".into(), host: "localhost".into(), port: 5432,
+            database: "postgres".into(), username: "test".into(), environment: "DEV".into(), ca_path: None,
+        }).unwrap();
         {
             let db = f.store.connect().unwrap();
+            db.execute(
+                "INSERT INTO backup_plans (profile_id, postgres_profile_id, postgres_revision, revision, workspace_path,
+                 directory, prefix, retention_days, retry_limit, next_at)
+                 VALUES (?1, ?1, ?2, 1, ?3, ?4, 'original', 7, 1, ?5)",
+                params![postgres.id, postgres.revision, f.store.backup_workspace_path().unwrap(), f.output.to_string_lossy(), first],
+            ).unwrap();
             db.execute_batch("UPDATE backup_runs SET rowid=17, trigger_kind='retry', retry_attempt=3;
-                UPDATE backup_plans SET retry_at=next_at+60, retry_attempt=4;
+                INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, finished_at, path)
+                SELECT 'cancelled-run', profile_id, workspace_path, 'manual', 'cancelled', started_at-2, started_at-1, 'cancelled.sqlite'
+                    FROM backup_runs;
+                UPDATE backup_plans SET retry_at=next_at+60, retry_attempt=4 WHERE sqlite_profile_id IS NOT NULL;
                 CREATE TEMP TABLE saved_runs AS SELECT rowid AS original_rowid, * FROM backup_runs;
                 CREATE TEMP TABLE saved_artifacts AS SELECT * FROM backup_artifacts;
-                DROP TABLE backup_artifacts; DROP TABLE backup_runs;").unwrap();
-            db.execute_batch(&SCHEMA.replace(", 'cancelled'", "")).unwrap();
+                DROP TABLE backup_artifacts; DROP TABLE backup_runs;
+                ALTER TABLE backup_plans DROP COLUMN timeout_seconds;").unwrap();
+            db.execute_batch(&SCHEMA.replace(", 'timed_out'", "")).unwrap();
             db.execute_batch(backup_artifact::SCHEMA).unwrap();
             db.execute_batch("INSERT INTO backup_runs (rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt,
                 status, started_at, finished_at, expires_at, path, size_bytes, message) SELECT * FROM saved_runs;
                 INSERT INTO backup_artifacts SELECT * FROM saved_artifacts;
-                PRAGMA user_version=27;").unwrap();
+                PRAGMA user_version=28;").unwrap();
         }
         let migrated = Store::open(&f.workspace).unwrap();
         let state = migrated.sqlite_backup_plan(&f.profile_id).unwrap();
         let plan = state.plan.unwrap();
+        assert_eq!(plan.timeout_seconds, 0);
         assert_eq!((plan.next_at, plan.retry_at, plan.retry_attempt), (Some(first), Some(first + 60), Some(4)));
         let old_run = &state.runs[0];
         assert_eq!((old_run.id.as_str(), old_run.retry_attempt), (run.id.as_str(), Some(3)));
         assert_eq!(old_run.artifact.as_ref().unwrap().sha256, run.artifact.unwrap().sha256);
+        assert_eq!((state.runs[1].id.as_str(), state.runs[1].status.as_str()), ("cancelled-run", "cancelled"));
+        let postgres_plan = migrated.postgres_backup_plan(&postgres.id).unwrap().plan.unwrap();
+        assert_eq!(postgres_plan.timeout_seconds, DEFAULT_POSTGRES_TIMEOUT_SECONDS);
+        assert_eq!(postgres_plan.next_at, Some(first));
         let db = migrated.connect().unwrap();
-        assert_eq!(db.query_row("SELECT rowid FROM backup_runs", [], |row| row.get::<_, i64>(0)).unwrap(), 17);
+        assert_eq!(db.query_row("SELECT rowid FROM backup_runs WHERE id=?1", [&run.id], |row| row.get::<_, i64>(0)).unwrap(), 17);
         assert_eq!(db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
         assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &run.id).is_ok());
     }

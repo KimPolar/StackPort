@@ -1,14 +1,24 @@
 use crate::Result;
-use std::sync::{
-    atomic::{AtomicU8, Ordering},
-    Arc, Mutex, MutexGuard, PoisonError,
+use std::{
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
 };
 use tokio::sync::Notify;
 
-const RUNNING: u8 = 0;
-const CANCELLED: u8 = 1;
-const FINISHING: u8 = 2;
-pub(super) const CANCELLED_MESSAGE: &str = "백업 실행을 취소했습니다.";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stop {
+    Cancelled,
+    TimedOut,
+}
+
+impl Stop {
+    pub(crate) fn message(self) -> &'static str {
+        match self {
+            Self::Cancelled => "백업 실행을 취소했습니다.",
+            Self::TimedOut => "설정한 최대 백업 실행 시간을 초과했습니다.",
+        }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Execution(Mutex<Option<Active>>);
@@ -24,8 +34,15 @@ impl Execution {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(super) fn start(&self, profile_id: &str, run_id: &str) -> Registration<'_> {
-        let control = RunControl::default();
+    pub(super) fn start(
+        &self,
+        profile_id: &str,
+        run_id: &str,
+        timeout_seconds: u32,
+    ) -> Registration<'_> {
+        let deadline = (timeout_seconds > 0)
+            .then(|| Instant::now() + Duration::from_secs(u64::from(timeout_seconds)));
+        let control = RunControl::new(deadline);
         *self.active() = Some(Active {
             profile_id: profile_id.into(),
             run_id: run_id.into(),
@@ -57,62 +74,106 @@ impl Drop for Registration<'_> {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct RunControl(Arc<RunState>);
 
-#[derive(Default)]
 struct RunState {
-    phase: AtomicU8,
+    phase: Mutex<Phase>,
+    deadline: Option<Instant>,
     cancelled: Notify,
 }
 
+#[derive(Clone, Copy)]
+enum Phase {
+    Running,
+    Stopped(Stop),
+    Finishing,
+}
+
 impl RunControl {
+    fn new(deadline: Option<Instant>) -> Self {
+        Self(Arc::new(RunState {
+            phase: Mutex::new(Phase::Running),
+            deadline,
+            cancelled: Notify::new(),
+        }))
+    }
+
+    // Observe the deadline and any phase change under the same lock.
+    fn advance(&self, next: Phase) -> Phase {
+        let mut phase = self.0.phase.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.0.deadline.is_some_and(|at| Instant::now() >= at)
+            && matches!(*phase, Phase::Running)
+        {
+            *phase = Phase::Stopped(Stop::TimedOut);
+        }
+        let current = *phase;
+        if matches!(current, Phase::Running) {
+            *phase = next;
+        }
+        current
+    }
+
     pub(super) fn can_cancel(&self) -> bool {
-        self.0.phase.load(Ordering::Acquire) == RUNNING
+        matches!(self.advance(Phase::Running), Phase::Running)
     }
 
     pub(super) fn request_cancel(&self) -> bool {
-        if self
-            .0
-            .phase
-            .compare_exchange(RUNNING, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
+        if matches!(
+            self.advance(Phase::Stopped(Stop::Cancelled)),
+            Phase::Running
+        ) {
             self.0.cancelled.notify_one();
             return true;
         }
         false
     }
 
-    pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.phase.load(Ordering::Acquire) == CANCELLED
+    pub(crate) fn stopped(&self) -> Option<Stop> {
+        match self.advance(Phase::Running) {
+            Phase::Stopped(reason) => Some(reason),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn bounded_wait(&self, max: Duration) -> Duration {
+        self.0.deadline.map_or(max, |at| {
+            // SQLite accepts whole milliseconds. Rounding up keeps a deadline-bound wait from ending early.
+            max.min(at.saturating_duration_since(Instant::now()) + Duration::from_millis(1))
+        })
     }
 
     pub(crate) fn check(&self) -> Result<()> {
-        if self.is_cancelled() {
-            Err(CANCELLED_MESSAGE.into())
-        } else {
-            Ok(())
+        match self.stopped() {
+            Some(reason) => Err(reason.message().into()),
+            None => Ok(()),
         }
     }
 
-    pub(crate) async fn wait_cancelled(&self) -> &'static str {
-        if !self.is_cancelled() {
-            self.0.cancelled.notified().await;
+    pub(crate) async fn wait_stopped(&self) -> Stop {
+        if let Some(reason) = self.stopped() {
+            return reason;
         }
-        CANCELLED_MESSAGE
+        let deadline = async {
+            match self.0.deadline {
+                Some(at) => tokio::time::sleep_until(at.into()).await,
+                None => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            _ = self.0.cancelled.notified() => Stop::Cancelled,
+            _ = deadline => match self.stopped() {
+                Some(reason) => reason,
+                None => std::future::pending().await,
+            },
+        }
     }
 
     pub(crate) fn finish(&self) -> Result<()> {
-        // The same transition protects publication and terminal failures from late cancellation.
-        let previous =
-            self.0
-                .phase
-                .compare_exchange(RUNNING, FINISHING, Ordering::AcqRel, Ordering::Acquire);
-        if previous == Err(CANCELLED) {
-            Err(CANCELLED_MESSAGE.into())
-        } else {
-            Ok(())
+        // Freeze the result immediately before publication or on an earlier failure.
+        match self.advance(Phase::Finishing) {
+            Phase::Stopped(reason) => Err(reason.message().into()),
+            _ => Ok(()),
         }
     }
 }
@@ -123,14 +184,22 @@ mod tests {
 
     #[test]
     fn cancellation_and_publication_are_mutually_exclusive() {
-        let cancelled = RunControl::default();
+        let cancelled = RunControl::new(None);
         assert!(cancelled.request_cancel());
         assert!(!cancelled.request_cancel());
         assert!(cancelled.finish().is_err());
 
-        let finishing = RunControl::default();
+        let finishing = RunControl::new(None);
         finishing.finish().unwrap();
         assert!(!finishing.request_cancel());
         assert!(finishing.finish().is_ok());
+    }
+
+    #[test]
+    fn an_expired_deadline_beats_a_late_cancel_or_publication() {
+        let expired = RunControl::new(Some(Instant::now()));
+        assert!(!expired.request_cancel());
+        assert!(expired.finish().is_err());
+        assert_eq!(expired.stopped(), Some(Stop::TimedOut));
     }
 }

@@ -359,7 +359,7 @@ function App() {
     const subscribed = listen<[string, string]>("backup-finished", ({ payload: [engine, status] }) => {
       if (!live) return;
       window.clearTimeout(timer);
-      const outcome = status === "succeeded" ? "완료" : status === "cancelled" ? "취소" : "실패";
+      const outcome = status === "succeeded" ? "완료" : status === "cancelled" ? "취소" : status === "timed_out" ? "시간 초과" : "실패";
       setBackupNotice(`${engine} 예약 백업 ${outcome}`);
       timer = window.setTimeout(() => setBackupNotice(""), 15000);
     });
@@ -2434,6 +2434,7 @@ const auditOperationNames: Record<string, string> = {
   "postgres.backup": "PostgreSQL 백업",
   "postgres.backup.schedule": "PostgreSQL 계획 백업",
   "postgres.backup.schedule.cancel": "PostgreSQL 계획 백업", "sqlite.backup.cancel": "SQLite 백업",
+  "postgres.backup.schedule.timeout": "PostgreSQL 계획 백업", "sqlite.backup.timeout": "SQLite 백업",
   "postgres.backup.delete": "만료된 PostgreSQL 백업 삭제",
   "postgres.restore": "PostgreSQL 백업 복원",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
@@ -2454,7 +2455,7 @@ const auditOperationNames: Record<string, string> = {
   "sftp.edit": "SFTP 편집 저장", "sftp.edit.cancel": "SFTP 편집 저장",
   "sftp.edit.copy": "SFTP 편집본 새 이름 저장", "sftp.edit.copy.cancel": "SFTP 편집본 새 이름 저장",
 };
-const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단" };
+const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단", timed_out: "시간 초과" };
 
 function AuditPanel({ onBack }: { onBack: () => void }) {
   const [cursors, setCursors] = useState<(number | null)[]>([null]);
@@ -2485,9 +2486,10 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
           event.operation === "postgres.sql.script.cancel" || event.operation === "postgres.backup.schedule.cancel" ||
           event.operation === "sqlite.backup.cancel" ||
           (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
-        const outcome = cancelled ? "cancelled" : event.outcome;
+        const timedOut = event.operation === "postgres.backup.schedule.timeout" || event.operation === "sqlite.backup.timeout";
+        const outcome = cancelled ? "cancelled" : timedOut ? "timed_out" : event.outcome;
         return <li key={event.id}>
-          <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${outcome}`}>{auditOutcomeNames[outcome] ?? outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
+          <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${timedOut ? "failed" : outcome}`}>{auditOutcomeNames[outcome] ?? outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>
         </li>;
       })}</ul> : <p className="audit-empty">아직 기록된 작업이 없습니다.</p>}
       <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>

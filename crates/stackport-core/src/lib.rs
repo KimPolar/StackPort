@@ -167,7 +167,7 @@ mod tls;
 pub mod backup_schedule;
 pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -955,8 +955,9 @@ impl Store {
         };
         insert_audit(&self.connect()?, audit("sqlite.backup", "started", None))?;
         let result = open_user_db(Path::new(&profile.path)).and_then(|source| {
-            if control.is_some() {
-                source.busy_timeout(Duration::from_millis(100)).map_err(db_error)?;
+            if let Some(control) = control {
+                control.check()?;
+                source.busy_timeout(control.bounded_wait(Duration::from_millis(100))).map_err(db_error)?;
             }
             snapshot_sqlite_with(&source, Path::new(destination.trim()), None, control, inspect)
         });
@@ -964,10 +965,10 @@ impl Store {
             Some(control) => control.finish().and(result),
             None => result,
         };
-        let operation = if control.is_some_and(backup_schedule::RunControl::is_cancelled) {
-            "sqlite.backup.cancel"
-        } else {
-            "sqlite.backup"
+        let operation = match control.and_then(backup_schedule::RunControl::stopped) {
+            Some(backup_schedule::Stop::Cancelled) => "sqlite.backup.cancel",
+            Some(backup_schedule::Stop::TimedOut) => "sqlite.backup.timeout",
+            None => "sqlite.backup",
         };
         let outcome = if result.is_ok() {
             "succeeded"
@@ -1007,11 +1008,12 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" if record.environment == Some("PROD") =>
             "oracle-datapump-schema-import-reviewed-prod",
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" => "oracle-datapump-schema-import-reviewed",
-        "sqlite.backup" | "sqlite.backup.cancel" => "sqlite-snapshot-no-overwrite",
+        "sqlite.backup" | "sqlite.backup.cancel" | "sqlite.backup.timeout" => "sqlite-snapshot-no-overwrite",
         "postgres.credential.save" | "postgres.credential.delete" => "windows-per-user-postgres-credential",
         "sqlite.backup.delete" => "sqlite-backup-expired-reviewed-fingerprint",
         "postgres.backup.delete" => "postgres-backup-expired-reviewed-fingerprint",
-        "postgres.backup.schedule" | "postgres.backup.schedule.cancel" => "postgres-backup-stored-credential-verified-tls",
+        "postgres.backup.schedule" | "postgres.backup.schedule.cancel" | "postgres.backup.schedule.timeout" =>
+            "postgres-backup-stored-credential-verified-tls",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
@@ -1173,7 +1175,7 @@ fn snapshot_sqlite_with<T>(
             }
         }
         if let Some(control) = control.cloned() {
-            target.progress_handler(10_000, Some(move || control.is_cancelled()));
+            target.progress_handler(10_000, Some(move || control.stopped().is_some()));
         }
         let mut check = target.prepare("PRAGMA integrity_check").map_err(db_error)?;
         let results = check
@@ -1185,6 +1187,7 @@ fn snapshot_sqlite_with<T>(
             return Err("백업 무결성 검사에 실패했습니다. 백업 파일을 게시하지 않았습니다.".into());
         }
     }
+    check()?;
     temporary
         .as_file()
         .sync_all()

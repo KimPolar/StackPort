@@ -10,13 +10,13 @@ type Calendar = { expression: string; time_zone: string; excluded_dates: string[
 type Occurrence = { at: number; local_time: string };
 type Plan = {
   revision: number; directory: string; prefix: string; interval_minutes: number | null;
-  retention_days: number; retry_limit: number; retry_delay_minutes: number; retry_attempt: number | null;
+  retention_days: number; retry_limit: number; retry_delay_minutes: number; retry_attempt: number | null; timeout_seconds: number;
   next_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
   calendar: Calendar | null;
 };
 type Run = {
-  id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled"; trigger_kind: "scheduled" | "retry" | "manual";
+  id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled" | "timed_out"; trigger_kind: "scheduled" | "retry" | "manual";
   can_cancel: boolean;
   retry_attempt: number | null;
   started_at: number; finished_at: number | null; expires_at: number | null; path: string; size_bytes: number | null; message: string | null;
@@ -33,11 +33,11 @@ type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
   revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
   mode: "once" | "periodic" | "calendar"; minutes: string; retention: string; retry: boolean;
-  retryCount: string; retryMinutes: string;
+  retryCount: string; retryMinutes: string; timeoutSeconds: string;
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
-const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨" };
+const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과" };
 const trigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
@@ -65,6 +65,7 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     retry: (plan?.retry_limit ?? 1) > 0,
     retryCount: String(Math.max(1, plan?.retry_limit ?? 1)),
     retryMinutes: String(plan?.retry_delay_minutes ?? 1),
+    timeoutSeconds: String(plan?.timeout_seconds ?? (engine === "postgres" ? 1800 : 0)),
     tunnel: plan ? plan.tunnel : initialTunnel,
   };
 }
@@ -185,7 +186,8 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
         calendar_enabled: draft.mode === "calendar" && draft.scheduled,
         retention_days: Number(draft.retention), retry_limit: draft.retry ? Number(draft.retryCount) : 0,
-        retry_delay_minutes: draft.retry ? Number(draft.retryMinutes) : undefined, next_at: nextAt,
+        retry_delay_minutes: draft.retry ? Number(draft.retryMinutes) : undefined,
+        timeout_seconds: Number(draft.timeoutSeconds), next_at: nextAt,
       } }));
       setConfirmation("");
       setNotice("백업 계획을 저장했습니다.");
@@ -204,6 +206,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         apply(await invoke<Snapshot>(`${engine}_backup_plan`, { profileId }));
         if (result.status === "succeeded") setNotice("백업을 만들고 무결성을 확인했습니다.");
         else if (result.status === "cancelled") setNotice("백업을 취소했습니다.");
+        else if (result.status === "timed_out") setNotice(result.message ?? "백업 실행 시간이 초과되었습니다.");
         else setNotice("백업 결과를 아래 실행 이력에서 확인하세요.");
       } finally { onFileBusy?.(false); }
     });
@@ -327,6 +330,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
             {preview.map(item => <li key={item.at}><time dateTime={new Date(item.at * 1000).toISOString()}>{item.local_time}</time></li>)}
           </ul>}
         </>}
+        <label className="field">최대 실행 시간 (초)<input type="number" required min={0} max={86400} step={1}
+          value={draft.timeoutSeconds} disabled={Boolean(busy)} onChange={event => change("timeoutSeconds", event.target.value)} /></label>
+        <p className="form-note">0초로 설정하면 전체 실행 시간에 제한을 두지 않습니다.</p>
         <label className="files-check"><input type="checkbox" checked={draft.retry} disabled={Boolean(busy)}
           onChange={event => change("retry", event.target.checked)} /> 예약 실패 시 자동 재시도</label>
         {draft.retry && <div className="backup-plan-fields">
@@ -374,6 +380,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         {runs.length ? runs.map(run => <details key={run.id}>
           <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]}{run.retry_attempt !== null && ` (${run.retry_attempt}차)`} · {dateText(run.started_at)}</summary>
           <p>{displayPath(run.path)}</p>
+          {run.finished_at !== null && <p>실행 시간 {(run.finished_at - run.started_at).toLocaleString("ko-KR")}초</p>}
           {run.size_bytes !== null && <p>백업 크기 {size(run.size_bytes)}
             {run.expires_at !== null && " · 보존 만료 " + dateText(run.expires_at)}</p>}
           {run.message && <p>{run.message}</p>}
