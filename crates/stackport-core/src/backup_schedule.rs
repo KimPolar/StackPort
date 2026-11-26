@@ -1,7 +1,7 @@
 //! Workspace scheduler for verified database backups.
 use crate::{
     backup_artifact::{self, ArtifactSummary},
-    db_error, open_user_db, postgres, PostgresProfile, Result, Store,
+    db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::hooks::{AuthContext, Authorization};
@@ -23,6 +23,7 @@ pub(crate) const SCHEMA: &str = "
         sqlite_profile_id TEXT REFERENCES profiles(id) ON DELETE CASCADE,
         postgres_profile_id TEXT REFERENCES postgres_profiles(id) ON DELETE CASCADE,
         postgres_revision INTEGER,
+        postgres_tunnel TEXT CHECK (postgres_tunnel IS NULL OR postgres_profile_id IS NOT NULL),
         revision INTEGER NOT NULL,
         workspace_path TEXT NOT NULL,
         directory TEXT NOT NULL,
@@ -68,6 +69,14 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
     }
     db.execute_batch(SCHEMA).map_err(db_error)?;
     db.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
+    let has_tunnels: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('backup_plans') WHERE name='postgres_tunnel')",
+        [], |row| row.get(0),
+    ).map_err(db_error)?;
+    if !has_tunnels {
+        db.execute_batch("ALTER TABLE backup_plans ADD COLUMN postgres_tunnel TEXT
+            CHECK (postgres_tunnel IS NULL OR postgres_profile_id IS NOT NULL);").map_err(db_error)?;
+    }
     if legacy {
         db.execute_batch("INSERT INTO backup_plans
             (profile_id, sqlite_profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at)
@@ -98,6 +107,7 @@ pub struct BackupPlan {
     revision: i64,
     #[serde(skip)]
     postgres_revision: Option<i64>,
+    tunnel: Option<BackupTunnelRoute>,
     #[serde(skip)]
     workspace_path: String,
     directory: String,
@@ -168,9 +178,9 @@ impl Store {
         capacity(&directory, estimated_bytes)
     }
 
-    pub fn postgres_backup_capacity(&self, profile: &PostgresProfile, directory: &str) -> Result<BackupCapacity> {
+    pub fn postgres_backup_capacity(&self, profile: &PostgresProfile, directory: &str, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<BackupCapacity> {
         let directory = backup_directory(directory)?;
-        capacity(&directory, postgres::scheduled_backup_size(self, profile)?)
+        capacity(&directory, postgres::scheduled_backup_size(self, profile, route)?)
     }
 
     pub fn sqlite_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
@@ -180,15 +190,19 @@ impl Store {
 
     pub fn postgres_backup_plan(&self, profile_id: &str) -> Result<BackupPlanState> {
         let profile = self.postgres_profile(profile_id)?;
-        self.backup_plan(profile_id, Some(profile.revision))
+        self.backup_plan(profile_id, Some(&profile))
     }
 
-    fn backup_plan(&self, profile_id: &str, postgres_revision: Option<i64>) -> Result<BackupPlanState> {
+    fn backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>) -> Result<BackupPlanState> {
         let workspace_path = self.backup_workspace_path()?;
         let db = self.connect()?;
         let mut plan = read_plan(&db, profile_id)?;
         if let Some(plan) = &mut plan {
-            plan.requires_review = plan.workspace_path != workspace_path || plan.postgres_revision != postgres_revision;
+            plan.requires_review = plan.workspace_path != workspace_path
+                || plan.postgres_revision != postgres.map(|profile| profile.revision)
+                || plan.tunnel.as_ref().is_some_and(|route| postgres.is_none_or(|profile| {
+                    route.verify_saved(&db, &profile.project_id, &profile.settings.host, profile.settings.port).is_err()
+                }));
         }
         let mut statement = db
             .prepare(&format!(
@@ -239,18 +253,21 @@ impl Store {
         profile_id: &str,
         input: BackupPlanWrite,
     ) -> Result<BackupPlanState> {
-        self.save_backup_plan(profile_id, None, input)
+        self.save_backup_plan(profile_id, None, None, input)
     }
 
-    pub fn save_postgres_backup_plan(&self, profile: &PostgresProfile, confirmation: &str, input: BackupPlanWrite) -> Result<BackupPlanState> {
+    pub fn save_postgres_backup_plan(&self, profile: &PostgresProfile, confirmation: &str, input: BackupPlanWrite, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<BackupPlanState> {
         confirm_postgres(profile, confirmation)?;
         if !self.postgres_credential_status(profile)?.usable {
             return Err("예약 백업에는 이 PostgreSQL 연결의 Windows 자격 증명이 필요합니다.".into());
         }
-        self.save_backup_plan(&profile.id, Some(profile), input)
+        if let Some((manager, reviewed)) = route {
+            manager.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)?;
+        }
+        self.save_backup_plan(&profile.id, Some(profile), route.map(|(_, reviewed)| reviewed), input)
     }
 
-    fn save_backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>, input: BackupPlanWrite) -> Result<BackupPlanState> {
+    fn save_backup_plan(&self, profile_id: &str, postgres: Option<&PostgresProfile>, route: Option<&BackupTunnelRoute>, input: BackupPlanWrite) -> Result<BackupPlanState> {
         let now = unix_now()?;
         let prefix = input.prefix.trim();
         if prefix.is_empty()
@@ -291,6 +308,9 @@ impl Store {
             if postgres::find_profile(&tx, profile_id)? != *expected {
                 return Err("PostgreSQL 연결 설정이 변경되었습니다. 백업 계획을 다시 검토하세요.".into());
             }
+            if let Some(route) = route {
+                route.verify_saved(&tx, &expected.project_id, &expected.settings.host, expected.settings.port)?;
+            }
         }
         if !active_profile(&tx, profile_id, postgres.is_some())? {
             return Err("활성 프로젝트의 연결을 선택하세요.".into());
@@ -301,38 +321,40 @@ impl Store {
                 "다른 창에서 백업 계획을 수정했습니다. 새로고침하고 다시 저장하세요.".into(),
             );
         }
+        let tunnel = route.map(serde_json::to_string).transpose()
+            .map_err(|_| "백업 계획의 SSH 터널을 저장할 수 없습니다.")?;
         tx.execute(
             "INSERT INTO backup_plans
              (profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at,
-              sqlite_profile_id, postgres_profile_id, postgres_revision)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, workspace_path=excluded.workspace_path,
              directory=excluded.directory, prefix=excluded.prefix, interval_minutes=excluded.interval_minutes,
              retention_days=excluded.retention_days, retry_once=excluded.retry_once, next_at=excluded.next_at, retry_at=NULL,
-             postgres_revision=excluded.postgres_revision",
+             postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel",
             params![profile_id, revision.unwrap_or(0) + 1, self.backup_workspace_path()?, directory,
                 prefix, input.interval_minutes, input.retention_days, input.retry_once, input.next_at,
-                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision)],
+                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel],
         ).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
-        self.backup_plan(profile_id, postgres.map(|profile| profile.revision))
+        self.backup_plan(profile_id, postgres)
     }
 
     pub fn run_sqlite_backup_plan(&self, profile_id: &str, revision: i64) -> Result<BackupRun> {
         self.profile(profile_id)?;
-        self.run_backup_plan(profile_id, revision, None)
+        self.run_backup_plan(profile_id, revision, None, None)
     }
 
-    pub fn run_postgres_backup_plan(&self, profile: &PostgresProfile, revision: i64, confirmation: &str) -> Result<BackupRun> {
+    pub fn run_postgres_backup_plan(&self, profile: &PostgresProfile, revision: i64, confirmation: &str, tunnels: &SshTunnelManager) -> Result<BackupRun> {
         confirm_postgres(profile, confirmation)?;
         if self.postgres_profile(&profile.id)? != *profile {
             return Err("PostgreSQL 연결 설정이 변경되었습니다. 백업 계획을 다시 검토하세요.".into());
         }
-        self.run_backup_plan(&profile.id, revision, Some(profile.revision))
+        self.run_backup_plan(&profile.id, revision, Some(profile.revision), Some(tunnels))
     }
 
-    fn run_backup_plan(&self, profile_id: &str, revision: i64, postgres_revision: Option<i64>) -> Result<BackupRun> {
-        self.process_backup(Some((profile_id, revision, postgres_revision)), unix_now()?)?
+    fn run_backup_plan(&self, profile_id: &str, revision: i64, postgres_revision: Option<i64>, tunnels: Option<&SshTunnelManager>) -> Result<BackupRun> {
+        self.process_backup(Some((profile_id, revision, postgres_revision)), unix_now()?, tunnels)?
             .ok_or_else(|| "다른 백업 계획이 실행 중입니다. 완료된 뒤 다시 시도하세요.".into())
     }
 
@@ -347,10 +369,10 @@ impl Store {
 
     pub fn pause_postgres_backup_plan(&self, profile_id: &str, revision: i64) -> Result<BackupPlanState> {
         let profile = self.postgres_profile(profile_id)?;
-        self.pause_backup_plan(profile_id, revision, Some(profile.revision))
+        self.pause_backup_plan(profile_id, revision, Some(&profile))
     }
 
-    fn pause_backup_plan(&self, profile_id: &str, revision: i64, postgres_revision: Option<i64>) -> Result<BackupPlanState> {
+    fn pause_backup_plan(&self, profile_id: &str, revision: i64, postgres: Option<&PostgresProfile>) -> Result<BackupPlanState> {
         let updated = self
             .connect()?
             .execute(
@@ -362,17 +384,18 @@ impl Store {
         if updated != 1 {
             return Err("백업 계획이 변경되었습니다. 새로고침하고 다시 시도하세요.".into());
         }
-        self.backup_plan(profile_id, postgres_revision)
+        self.backup_plan(profile_id, postgres)
     }
 
-    pub fn run_due_backup(&self) -> Result<Option<BackupRun>> {
-        self.process_backup(None, unix_now()?)
+    pub fn run_due_backup(&self, tunnels: &SshTunnelManager) -> Result<Option<BackupRun>> {
+        self.process_backup(None, unix_now()?, Some(tunnels))
     }
 
     fn process_backup(
         &self,
         manual: Option<(&str, i64, Option<i64>)>,
         now: i64,
+        tunnels: Option<&SshTunnelManager>,
     ) -> Result<Option<BackupRun>> {
         let workspace = self.backup_workspace_path()?;
         let mut db = self.connect()?;
@@ -463,7 +486,7 @@ impl Store {
         tx.commit().map_err(db_error)?;
 
         let result = if let Some(revision) = plan.postgres_revision {
-            self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id)
+            self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id, plan.tunnel.as_ref(), tunnels)
         } else { self
             .sqlite_backup_capacity(&profile_id, &plan.directory)
             .and_then(|capacity| {
@@ -585,12 +608,14 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
 
 fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
     db.query_row(
-        "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at, postgres_revision
+        "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at, postgres_revision, postgres_tunnel
          FROM backup_plans WHERE profile_id=?1",
         [profile_id], |row| Ok(BackupPlan {
             revision: row.get(0)?, workspace_path: row.get(1)?, directory: row.get(2)?, prefix: row.get(3)?,
             interval_minutes: row.get(4)?, retention_days: row.get(5)?, retry_once: row.get(6)?,
             next_at: row.get(7)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, requires_review: false,
+            tunnel: row.get::<_, Option<String>>(10)?.map(|json| serde_json::from_str(&json)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
         }),
     ).optional().map_err(db_error)
 }
@@ -781,12 +806,12 @@ mod tests {
         f.plan(first, Some(1));
         let reopened = Store::open(&f.workspace).unwrap();
         assert!(reopened
-            .process_backup(None, first - 1)
+            .process_backup(None, first - 1, None)
             .unwrap()
             .is_none());
         let overdue = first + 125;
         let run = reopened
-            .process_backup(None, overdue)
+            .process_backup(None, overdue, None)
             .unwrap()
             .unwrap();
         assert_eq!(run.status, "succeeded");
@@ -794,7 +819,7 @@ mod tests {
         assert_eq!(run.expires_at, Some(overdue + 7 * 86_400));
         assert_eq!(f.current().plan.unwrap().next_at, Some(first + 180));
         assert!(reopened
-            .process_backup(None, overdue)
+            .process_backup(None, overdue, None)
             .unwrap()
             .is_none());
         let backup = Connection::open(&run.path).unwrap();
@@ -812,20 +837,20 @@ mod tests {
         f.plan(first, None);
         let gone = f.root.path().join("removed-backups");
         fs::rename(&f.output, &gone).unwrap();
-        let run = f.store.process_backup(None, first).unwrap().unwrap();
+        let run = f.store.process_backup(None, first, None).unwrap().unwrap();
         assert_eq!(run.status, "failed");
         let plan = f.current().plan.unwrap();
         assert_eq!(plan.next_at, None);
         assert_eq!(plan.retry_at, Some(first + RETRY_DELAY));
         assert!(f
             .store
-            .process_backup(None, first + RETRY_DELAY - 1)
+            .process_backup(None, first + RETRY_DELAY - 1, None)
             .unwrap()
             .is_none());
         fs::rename(&gone, &f.output).unwrap();
         let retry = f
             .store
-            .process_backup(None, first + RETRY_DELAY)
+            .process_backup(None, first + RETRY_DELAY, None)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -835,7 +860,7 @@ mod tests {
         assert_eq!(f.current().plan.unwrap().retry_at, None);
         assert!(f
             .store
-            .process_backup(None, first + 180)
+            .process_backup(None, first + 180, None)
             .unwrap()
             .is_none());
 
@@ -867,10 +892,10 @@ mod tests {
         ).unwrap();
         let other = Store::open(&f.workspace).unwrap();
         assert!(other.run_sqlite_backup_plan(&f.profile_id, 1).is_err());
-        assert!(other.process_backup(None, now).unwrap().is_none());
+        assert!(other.process_backup(None, now, None).unwrap().is_none());
         assert_eq!(f.current().runs[0].status, "running");
         drop(held);
-        assert!(other.process_backup(None, now).unwrap().is_none());
+        assert!(other.process_backup(None, now, None).unwrap().is_none());
         assert_eq!(f.current().runs[0].status, "interrupted");
     }
 
@@ -889,15 +914,40 @@ mod tests {
                 .unwrap()
                 .requires_review
         );
-        assert!(copy.process_backup(None, first).unwrap().is_none());
+        assert!(copy.process_backup(None, first, None).unwrap().is_none());
         assert!(copy.run_sqlite_backup_plan(&f.profile_id, 1).is_err());
         f.store.archive_project(&f.project_id).unwrap();
         assert!(f
             .store
-            .process_backup(None, first)
+            .process_backup(None, first, None)
             .unwrap()
             .is_none());
         assert!(f.store.run_sqlite_backup_plan(&f.profile_id, 1).is_err());
+    }
+
+    #[test]
+    fn v24_postgres_plans_preserve_their_direct_route() {
+        let f = Fixture::new();
+        let profile = f.store.create_postgres_profile(&f.project_id, crate::PostgresProfileInput {
+            name: "기존 PostgreSQL".into(), host: "localhost".into(), port: 5432,
+            database: "postgres".into(), username: "test".into(), environment: "DEV".into(), ca_path: None,
+        }).unwrap();
+        let planned = unix_now().unwrap() + 180;
+        {
+            let db = f.store.connect().unwrap();
+            db.execute(
+                "INSERT INTO backup_plans (profile_id, postgres_profile_id, postgres_revision, revision, workspace_path,
+                 directory, prefix, retention_days, retry_once, next_at) VALUES (?1, ?1, ?2, 1, ?3, ?4, 'original', 7, 1, ?5)",
+                params![profile.id, profile.revision, f.store.backup_workspace_path().unwrap(), f.output.to_string_lossy(), planned],
+            ).unwrap();
+            db.execute_batch("ALTER TABLE backup_plans DROP COLUMN postgres_tunnel; PRAGMA user_version=24;").unwrap();
+        }
+        let migrated = Store::open(&f.workspace).unwrap();
+        let plan = migrated.postgres_backup_plan(&profile.id).unwrap().plan.unwrap();
+        assert_eq!(plan.next_at, Some(planned));
+        assert_eq!(plan.postgres_revision, Some(profile.revision));
+        assert!(!plan.requires_review);
+        assert!(plan.tunnel.is_none());
     }
 
     #[test]
@@ -905,7 +955,7 @@ mod tests {
         let f = Fixture::new();
         let first = unix_now().unwrap() + 120;
         f.plan(first, Some(60));
-        let run = f.store.process_backup(None, first).unwrap().unwrap();
+        let run = f.store.process_backup(None, first, None).unwrap().unwrap();
         let rowid: i64;
         {
             let db = f.store.connect().unwrap();

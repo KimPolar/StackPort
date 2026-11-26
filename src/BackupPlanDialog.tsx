@@ -4,9 +4,12 @@ import { Dialog } from "./Dialog";
 import type { PostgresProfile } from "./PostgresWorkspace";
 
 type Profile = { id: string; name: string; path: string; environment: string };
+type TunnelChoice = { id: string; name: string };
+type BackupTunnel = TunnelChoice & { revision: number; profiles: (TunnelChoice & { revision: number })[] };
 type Plan = {
   revision: number; directory: string; prefix: string; interval_minutes: number | null;
   retention_days: number; retry_once: boolean; next_at: number | null; retry_at: number | null; requires_review: boolean;
+  tunnel: BackupTunnel | null;
 };
 type Run = {
   id: string; status: "running" | "succeeded" | "failed" | "interrupted"; trigger_kind: "scheduled" | "retry" | "manual";
@@ -24,6 +27,7 @@ type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
   revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
   periodic: boolean; minutes: string; retention: string; retry: boolean;
+  tunnel: TunnelChoice | BackupTunnel | null;
 };
 const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요" };
 const trigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
@@ -37,7 +41,7 @@ function dateInput(seconds: number) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
 }
 
-function form(plan: Plan | null, displayPath: (value: string) => string, engine: string): Draft {
+function form(plan: Plan | null, displayPath: (value: string) => string, engine: string, initialTunnel: TunnelChoice | null): Draft {
   return {
     revision: plan?.revision ?? null,
     directory: plan ? displayPath(plan.directory) : "",
@@ -48,12 +52,19 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     minutes: String(plan?.interval_minutes ?? 1440),
     retention: String(plan?.retention_days ?? 30),
     retry: plan?.retry_once ?? true,
+    tunnel: plan ? plan.tunnel : initialTunnel,
   };
 }
 
-export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFileBusy }: {
+function matchesTunnel(selected: TunnelChoice | BackupTunnel, running: BackupTunnel) {
+  return "revision" in selected && selected.revision === running.revision && selected.profiles.length === running.profiles.length &&
+    selected.profiles.every((item, index) => item.id === running.profiles[index].id && item.revision === running.profiles[index].revision);
+}
+
+export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFileBusy, preferredTunnel = null, onOpenTunnels }: {
   profile: Profile; postgres?: PostgresProfile; displayPath: (value: string) => string; onClose: () => void;
   onFileBusy?: (busy: boolean) => void;
+  preferredTunnel?: TunnelChoice | null; onOpenTunnels?: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -66,6 +77,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [fileFeedback, setFileFeedback] = useState<{ runId: string; text: string; error: boolean } | null>(null);
   const [expiredPage, setExpiredPage] = useState<ExpiredPage | null>(null);
   const [credential, setCredential] = useState<CredentialStatus | null>(null);
+  const [tunnels, setTunnels] = useState<BackupTunnel[]>([]);
   const [confirmation, setConfirmation] = useState("");
   const profileId = profile.id;
   const engine = postgres ? "postgres" : "sqlite";
@@ -73,6 +85,10 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const production = Boolean(postgres && profile.environment === "PROD");
   const needsCredential = Boolean(postgres && !credential?.usable);
   const approvalMissing = production && confirmation !== "PROD";
+  const selectedTunnel = draft?.tunnel;
+  const runningTunnel = tunnels.find(tunnel => tunnel.id === selectedTunnel?.id);
+  const reviewedTunnel = selectedTunnel && runningTunnel && matchesTunnel(selectedTunnel, runningTunnel) ? runningTunnel : null;
+  const routeUnavailable = Boolean(selectedTunnel && !reviewedTunnel);
 
   useEffect(() => {
     let live = true;
@@ -81,14 +97,16 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
       if (loading) return;
       loading = true;
       try {
-        const [state, status] = await Promise.all([
+        const [state, status, routes] = await Promise.all([
           invoke<Snapshot>(`${engine}_backup_plan`, { profileId }),
           postgres ? invoke<CredentialStatus>("postgres_credential_status", { profile: postgres }) : null,
+          postgres ? invoke<BackupTunnel[]>("postgres_backup_tunnel_options", { profile: postgres }) : [],
         ]);
         if (!live) return;
         setCredential(status);
+        setTunnels(routes);
         setSnapshot(current => (current?.plan?.revision ?? 0) > (state.plan?.revision ?? 0) ? current : state);
-        setDraft(current => current ?? form(state.plan, displayPath, engine));
+        setDraft(current => current ?? form(state.plan, displayPath, engine, routes.find(route => route.id === preferredTunnel?.id) ?? preferredTunnel));
       } catch (cause) {
         if (live) setError(String(cause));
       } finally { loading = false; }
@@ -96,14 +114,14 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     void poll();
     const timer = window.setInterval(() => void poll(), 2500);
     return () => { live = false; window.clearInterval(timer); };
-  }, [profileId, displayPath, engine, postgres]);
+  }, [profileId, displayPath, engine, postgres, preferredTunnel]);
 
   function change<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft(current => current && { ...current, [key]: value });
     setDirty(true);
     setError("");
     setNotice("");
-    if (key === "directory") setCapacity(null);
+    if (key === "directory" || key === "tunnel") setCapacity(null);
   }
 
   async function perform(task: typeof busy, action: () => Promise<void>) {
@@ -118,20 +136,20 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
 
   function apply(state: Snapshot) {
     setSnapshot(state);
-    setDraft(form(state.plan, displayPath, engine));
+    setDraft(form(state.plan, displayPath, engine, tunnels.find(tunnel => tunnel.id === preferredTunnel?.id) ?? preferredTunnel));
     setDirty(false);
   }
 
   function save(event: FormEvent) {
     event.preventDefault();
-    if (!draft || needsCredential || approvalMissing) return;
+    if (!draft || needsCredential || approvalMissing || routeUnavailable) return;
     const nextAt = draft.scheduled ? Date.parse(draft.next) / 1000 : null;
     if (nextAt !== null && (!Number.isSafeInteger(nextAt) || nextAt <= Date.now() / 1000)) {
       setError("첫 실행 시각을 현재보다 늦게 지정하세요.");
       return;
     }
     void perform("save", async () => {
-      const target = postgres ? { profile: postgres, confirmation } : { profileId };
+      const target = postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
       apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...target, input: {
         revision: draft.revision, directory: draft.directory, prefix: draft.prefix,
         interval_minutes: draft.periodic ? Number(draft.minutes) : null,
@@ -144,7 +162,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
 
   function runNow() {
     const plan = snapshot?.plan;
-    if (!plan || dirty || needsCredential || approvalMissing) return;
+    if (!plan || dirty || needsCredential || approvalMissing || routeUnavailable) return;
     void perform("run", async () => {
       const target = postgres ? { profile: postgres, confirmation } : { profileId };
       setConfirmation("");
@@ -191,7 +209,20 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
       <form onSubmit={save} aria-busy={Boolean(busy)}>
         <p className="confirm-copy"><strong>{profile.name}</strong> <span className={"environment " + profile.environment.toLowerCase()}>{profile.environment}</span><br />
           {displayPath(profile.path)}</p>
-        {postgres && <p className="form-note">이 계획은 Windows에 저장한 암호와 직접 TLS 연결을 사용합니다. 전체 데이터베이스를 .backup 파일로 저장합니다.</p>}
+        {postgres && <>
+          <label className="field">백업 연결 경로<select value={selectedTunnel?.id ?? ""} disabled={Boolean(busy)}
+            onChange={event => change("tunnel", tunnels.find(tunnel => tunnel.id === event.target.value) ?? null)}>
+            <option value="">직접 TLS 연결</option>
+            {selectedTunnel && !runningTunnel && <option value={selectedTunnel.id} disabled>{selectedTunnel.name} · 시작 필요</option>}
+            {tunnels.map(tunnel => <option key={tunnel.id} value={tunnel.id}>{tunnel.name} · {tunnel.profiles.map(item => item.name).join(" → ")}</option>)}
+          </select></label>
+          {routeUnavailable && <div className="postgres-recovery">
+            <p className="form-note" role="status">{runningTunnel ? "현재 터널 경로를 검토하고 계획에 적용하세요." : "이 계획에 사용할 SSH 터널을 시작하세요."}</p>
+            {runningTunnel ? <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => change("tunnel", runningTunnel)}>현재 SSH 경로 적용</button>
+              : onOpenTunnels && <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => { onClose(); onOpenTunnels(); }}>SSH 터널 열기</button>}
+          </div>}
+          <p className="form-note">Windows에 저장한 암호를 사용해 전체 데이터베이스를 .backup 파일로 저장합니다. SSH 터널을 선택한 계획은 해당 경로가 실행 중이어야 합니다.</p>
+        </>}
         {postgres && credential && !credential.usable && <p className="form-note" role="status">{credential.supported
           ? "PostgreSQL에 연결할 때 Windows에 암호를 저장하면 이 계획을 사용할 수 있습니다."
           : "PostgreSQL 계획 백업에는 Windows 자격 증명 관리자가 필요합니다."}</p>}
@@ -202,9 +233,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
             if (path) change("directory", path);
           })}>폴더 선택</button>
         </span></label>
-        <button type="button" className="secondary small" disabled={Boolean(busy) || !draft.directory.trim() || needsCredential}
+        <button type="button" className="secondary small" disabled={Boolean(busy) || !draft.directory.trim() || needsCredential || routeUnavailable}
           onClick={() => void perform("capacity", async () => setCapacity(await invoke<Capacity>(`${engine}_backup_capacity`,
-            { ...(postgres ? { profile: postgres } : { profileId }), directory: draft.directory })))}>
+            { ...(postgres ? { profile: postgres, tunnel: reviewedTunnel } : { profileId }), directory: draft.directory })))}>
           용량 확인
         </button>
         {capacity && <p className="form-note" role="status">{postgres ? "원본 크기" : "예상 크기"} {size(capacity.estimated_bytes)}
@@ -249,9 +280,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
               apply(await invoke<Snapshot>(`pause_${engine}_backup_plan`, { profileId, revision: plan.revision }));
               setNotice("예약 실행을 중지했습니다.");
             })}>예약 중지</button>}
-          <button type="button" className="secondary" disabled={Boolean(busy || !plan || plan.requires_review || dirty || stale || running || needsCredential || approvalMissing)}
+          <button type="button" className="secondary" disabled={Boolean(busy || !plan || plan.requires_review || dirty || stale || running || needsCredential || approvalMissing || routeUnavailable)}
             onClick={runNow}>{busy === "run" ? "백업 중…" : "지금 백업"}</button>
-          <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || approvalMissing)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
+          <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || approvalMissing || routeUnavailable)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
         </div>
       </form>
       <section className="backup-run-history" aria-label="백업 실행 이력">

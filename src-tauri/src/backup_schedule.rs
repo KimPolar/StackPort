@@ -3,13 +3,13 @@ use stackport_core::{
     backup_schedule::{
         BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, ExpiredBackupPage,
     },
-    PostgresProfile, Store,
+    BackupTunnelRoute, PostgresProfile, SshTunnelManager, Store,
 };
 use std::{
     sync::mpsc::{self, RecvTimeoutError, Sender},
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) struct Scheduler(Sender<()>);
 
@@ -22,7 +22,7 @@ impl Scheduler {
                 while let Err(RecvTimeoutError::Timeout) =
                     stopped.recv_timeout(Duration::from_secs(2))
                 {
-                    if let Ok(Some(run)) = store.run_due_backup() {
+                    if let Ok(Some(run)) = store.run_due_backup(app.state::<SshTunnelManager>().inner()) {
                         let _ = app.emit("backup-finished", (run.engine, run.status));
                     }
                 }
@@ -42,21 +42,32 @@ pub(crate) async fn postgres_backup_plan(store: State<'_, Store>, profile_id: St
 }
 
 #[tauri::command]
-pub(crate) async fn postgres_backup_capacity(store: State<'_, Store>, profile: PostgresProfile, directory: String) -> Result<BackupCapacity, String> {
+pub(crate) async fn postgres_backup_capacity(app: AppHandle, store: State<'_, Store>, profile: PostgresProfile, directory: String, tunnel: Option<BackupTunnelRoute>) -> Result<BackupCapacity, String> {
     let store = store.inner().clone();
-    super::worker(move || store.postgres_backup_capacity(&profile, &directory)).await
+    super::worker(move || {
+        let manager = app.state::<SshTunnelManager>();
+        store.postgres_backup_capacity(&profile, &directory, tunnel.as_ref().map(|route| (manager.inner(), route)))
+    }).await
 }
 
 #[tauri::command]
-pub(crate) async fn save_postgres_backup_plan(store: State<'_, Store>, profile: PostgresProfile, confirmation: String, input: BackupPlanWrite) -> Result<BackupPlanState, String> {
-    let store = store.inner().clone();
-    super::worker(move || store.save_postgres_backup_plan(&profile, &confirmation, input)).await
+pub(crate) fn postgres_backup_tunnel_options(tunnels: State<'_, SshTunnelManager>, profile: PostgresProfile) -> Result<Vec<BackupTunnelRoute>, String> {
+    tunnels.local_backup_routes(&profile.project_id, &profile.settings.host, profile.settings.port)
 }
 
 #[tauri::command]
-pub(crate) async fn run_postgres_backup_plan(store: State<'_, Store>, profile: PostgresProfile, revision: i64, confirmation: String) -> Result<BackupRun, String> {
+pub(crate) async fn save_postgres_backup_plan(app: AppHandle, store: State<'_, Store>, profile: PostgresProfile, confirmation: String, input: BackupPlanWrite, tunnel: Option<BackupTunnelRoute>) -> Result<BackupPlanState, String> {
     let store = store.inner().clone();
-    super::worker(move || store.run_postgres_backup_plan(&profile, revision, &confirmation)).await
+    super::worker(move || {
+        let manager = app.state::<SshTunnelManager>();
+        store.save_postgres_backup_plan(&profile, &confirmation, input, tunnel.as_ref().map(|route| (manager.inner(), route)))
+    }).await
+}
+
+#[tauri::command]
+pub(crate) async fn run_postgres_backup_plan(app: AppHandle, store: State<'_, Store>, profile: PostgresProfile, revision: i64, confirmation: String) -> Result<BackupRun, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.run_postgres_backup_plan(&profile, revision, &confirmation, app.state::<SshTunnelManager>().inner())).await
 }
 
 #[tauri::command]

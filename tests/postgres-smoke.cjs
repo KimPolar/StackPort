@@ -2796,9 +2796,10 @@ async function main() {
   let jump;
   let browser;
   try {
-    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1') {
+    const tunnelPlan = process.env.STACKPORT_POSTGRES_TUNNEL_PLAN_ONLY === '1';
+    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1' || tunnelPlan) {
       browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL);
-      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1');
+      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1', tunnelPlan);
       return;
     }
     gateway = await startGateway(fixture.port);
@@ -2818,7 +2819,7 @@ async function main() {
   }
 }
 
-async function verifyStoredCredentials(browser, fixture, testPlan) {
+async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan) {
   assert.ok(backupTools);
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
@@ -2869,6 +2870,10 @@ async function verifyStoredCredentials(browser, fixture, testPlan) {
     await verifyCredentialInNewProcess(profile, secret);
 
     await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    if (tunnelPlan) {
+      await verifyTunneledPostgresBackupPlan(page, command, project, profile, fixture);
+      return;
+    }
     const scheduled = testPlan ? await verifyPostgresBackupPlan(page, command, profile) : null;
     await launch();
     const use = connect.getByRole('checkbox', { name: '저장한 암호 사용', exact: true });
@@ -2954,6 +2959,125 @@ async function verifyStoredCredentials(browser, fixture, testPlan) {
     console.log('Windows credential storage is opt-in, survives a new process, supports TLS backup and restore, and respects profile changes and removal.');
   } finally {
     await command('forget_postgres_password', { profile }).catch(() => {});
+  }
+}
+
+async function verifyTunneledPostgresBackupPlan(page, command, project, profile, fixture) {
+  let stallReplyAt = Infinity;
+  const gateway = await startGateway(fixture.port, ['localhost'], { stallReply: count => count === stallReplyAt });
+  const jump = await startGateway(gateway.port, ['127.0.0.1']);
+  const directory = path.join(root, 'tunneled postgres backups');
+  fs.mkdirSync(directory);
+  let tunnel;
+  try {
+    const createSsh = (name, server) => command('create_ssh_profile', { projectId: project.id, input: {
+      name, host: '127.0.0.1', port: server.port, username: 'fixture', environment: 'DEV',
+    } });
+    const target = await createSsh('백업 게이트웨이', gateway);
+    const first = await createSsh('백업 경유 서버', jump);
+    tunnel = await command('create_ssh_tunnel', { projectId: project.id, input: {
+      name: '예약 백업 터널', ssh_profile_id: target.id, kind: 'local', listen_port: 0, target_host: 'localhost', target_port: fixture.port,
+    } });
+    const authentication = { kind: 'password', password: 'fixture-gateway' };
+    const start = (withJump = true) => command('start_ssh_tunnel', { tunnel, profile: target, authentication,
+      hops: withJump ? [{ profile: first, authentication }] : [], confirmation: '' });
+    const stop = () => command('stop_ssh_tunnel', { id: tunnel.id });
+    for (const server of [jump, gateway]) {
+      const trust = await start();
+      assert.equal(trust.status, 'trust_required');
+      assert.ok(trust.host.keys.some(key => key.fingerprint === server.fingerprint));
+      await command('trust_ssh_host', { token: trust.host.token, fingerprint: server.fingerprint, confirmation: '' });
+    }
+    assert.equal((await start()).status, 'open');
+    await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).click();
+    const connect = page.getByRole('dialog', { name: 'PostgreSQL 연결', exact: true });
+    await connect.getByLabel('연결 경로').selectOption(tunnel.id);
+    await connect.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
+    await connect.getByLabel('운영 환경 확인').fill('PROD');
+    await connect.getByRole('button', { name: '연결', exact: true }).click();
+    await page.getByText(/TLS 연결됨.*SSH 터널 예약 백업 터널/).waitFor();
+    await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).waitFor();
+
+    const planState = () => command('postgres_backup_plan', { profileId: profile.id });
+    await page.getByRole('button', { name: '백업 계획', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+    const route = dialog.getByLabel('백업 연결 경로');
+    await route.getByRole('option', { name: /예약 백업 터널.*백업 경유 서버.*백업 게이트웨이/ }).waitFor({ state: 'attached' });
+    assert.equal(await route.inputValue(), tunnel.id);
+    await dialog.getByLabel('저장 폴더').fill(directory);
+    const beforeCapacity = gateway.forwarded();
+    await dialog.getByRole('button', { name: '용량 확인', exact: true }).click();
+    await dialog.getByText(/원본 크기 .*사용 가능/).waitFor();
+    assert.ok(gateway.forwarded() > beforeCapacity);
+    const approved = (await command('postgres_backup_tunnel_options', { profile }))[0];
+    assert.deepEqual(approved.profiles.map(item => item.id), [first.id, target.id]);
+    const input = { revision: null, directory, prefix: 'route-test', interval_minutes: null, retention_days: 7, retry_once: true, next_at: null };
+    await assert.rejects(command('save_postgres_backup_plan', { profile, confirmation: 'PROD', input,
+      tunnel: { ...approved, profiles: [...approved.profiles].reverse() } }), /경로가 백업 계획과 다릅니다/);
+    await dialog.getByLabel('실행 주기').selectOption('once');
+    const next = new Date(Date.now() + 12000);
+    await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(new Date(next.getTime() - next.getTimezoneOffset() * 60000).toISOString().slice(0, 19));
+    await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+    await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+    await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+    const { plan } = await planState();
+    assert.deepEqual(plan.tunnel, approved);
+
+    await stop();
+    await dialog.getByText('이 계획에 사용할 SSH 터널을 시작하세요.', { exact: true }).waitFor();
+    await dialog.getByText(/실패 · 예약 실행/).waitFor({ timeout: 22000 });
+    const failed = (await planState()).runs[0];
+    assert.match(failed.message, /로컬 SSH 터널을 시작/);
+    assert.equal(failed.artifact, null);
+    assert.equal(fs.readdirSync(directory).length, 0, 'The reachable direct database must never be used as a fallback');
+    assert.equal((await planState()).plan.retry_at - failed.finished_at, 60);
+
+    assert.equal((await start(false)).status, 'open');
+    await dialog.getByRole('button', { name: '현재 SSH 경로 적용', exact: true }).waitFor();
+    const manual = () => command('run_postgres_backup_plan', { profile, confirmation: 'PROD', revision: plan.revision });
+    const mismatched = await manual();
+    assert.equal(mismatched.status, 'failed');
+    assert.match(mismatched.message, /경로가 백업 계획과 다릅니다/);
+    assert.equal(fs.readdirSync(directory).length, 0);
+    await stop();
+    assert.equal((await start()).status, 'open');
+    const beforeRetry = gateway.forwarded();
+    console.log('Stopped and alternate SSH routes were rejected, waiting for the approved route retry.');
+    await dialog.getByText(/무결성 검사 통과 · 자동 재시도/).waitFor({ timeout: 85000 });
+    const success = (await planState()).runs.find(item => item.trigger_kind === 'retry');
+    assert.equal(success.status, 'succeeded');
+    assert.ok(gateway.forwarded() >= beforeRetry + 2, 'Both TLS preflight and pg_dump use the tunnel');
+    assert.equal(createHash('sha256').update(fs.readFileSync(success.path)).digest('hex'), success.artifact.sha256);
+    const archiveContent = execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--data-only', '--schema=report', '--file=-', success.path],
+      { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    assert.match(archiveContent, /행 4/);
+
+    stallReplyAt = gateway.forwarded() + 2; // Allow the TLS preflight, then stall pg_dump's connection.
+    const inProgress = manual();
+    const deadline = Date.now() + 8000;
+    while (gateway.forwarded() < stallReplyAt && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    assert.equal(gateway.forwarded(), stallReplyAt);
+    await stop();
+    const interrupted = await inProgress;
+    assert.equal(interrupted.status, 'failed');
+    assert.match(interrupted.message, /SSH 터널이 중단되었습니다/);
+    assert.equal(fs.readdirSync(directory).length, 1, 'No interrupted archive or staging file is retained');
+    assert.equal((await start()).status, 'open');
+
+    await command('update_ssh_tunnel', { id: tunnel.id, revision: tunnel.revision, input: { ...tunnel.settings, name: '검토가 필요한 터널' } });
+    assert.equal((await planState()).plan.requires_review, true);
+    const changed = await manual();
+    assert.equal(changed.status, 'failed');
+    assert.match(changed.message, /SSH 터널 또는 경유 설정이 변경/);
+    assert.equal(fs.readdirSync(directory).length, 1);
+    console.log('Verified saved SSH hop order, tunnel-only retry, PostgreSQL TLS archive contents, and tunnel revision checks.');
+  } finally {
+    if (tunnel) await command('stop_ssh_tunnel', { id: tunnel.id }).catch(() => {});
+    jump.close();
+    gateway.close();
   }
 }
 

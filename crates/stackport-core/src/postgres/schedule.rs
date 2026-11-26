@@ -6,14 +6,20 @@ use super::{
 use crate::{
     backup_artifact::Evidence,
     backup_schedule::{active_profile, confirm_backup_directory},
-    insert_audit, AuditRecord, Result, Store,
+    insert_audit, ssh_tunnel::DatabaseTunnel, AuditRecord, BackupTunnelRoute, Result, SshTunnelManager, Store,
 };
 use postgres_native_tls::MakeTlsConnector;
 use std::time::{Duration, Instant};
 
-pub(crate) fn scheduled_backup_size(store: &Store, profile: &PostgresProfile) -> Result<u64> {
+const TUNNEL_STOPPED: &str = "백업 계획의 SSH 터널이 중단되었습니다. 터널을 시작한 뒤 다시 시도하세요.";
+
+pub(crate) fn scheduled_backup_size(store: &Store, profile: &PostgresProfile, route: Option<(&SshTunnelManager, &BackupTunnelRoute)>) -> Result<u64> {
     let password = store.saved_postgres_password(profile)?;
-    source_details(profile, &password, true).map(|(_, size)| size)
+    let tunnel = route.map(|(manager, reviewed)| {
+        reviewed.verify_saved(&store.connect()?, &profile.project_id, &profile.settings.host, profile.settings.port)?;
+        manager.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)
+    }).transpose()?;
+    source_details(profile, &password, true, tunnel.as_ref()).map(|(_, size)| size)
 }
 
 impl Store {
@@ -24,6 +30,8 @@ impl Store {
         directory: &str,
         path: &str,
         run_id: &str,
+        route: Option<&BackupTunnelRoute>,
+        tunnels: Option<&SshTunnelManager>,
     ) -> Result<(u64, Evidence, String, Option<String>)> {
         let db = self.connect()?;
         let profile = super::find_profile(&db, profile_id)?;
@@ -33,6 +41,9 @@ impl Store {
             }
             if !active_profile(&db, profile_id, true)? {
                 return Err("활성 프로젝트의 PostgreSQL 연결을 선택하세요.".into());
+            }
+            if let Some(route) = route {
+                route.verify_saved(&db, &profile.project_id, &profile.settings.host, profile.settings.port)?;
             }
             Ok(())
         };
@@ -50,20 +61,27 @@ impl Store {
         let result = (|| {
             verify_profile()?;
             confirm_backup_directory(directory)?;
+            let tunnel = route.map(|reviewed| {
+                tunnels.ok_or(TUNNEL_STOPPED)?.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)
+            }).transpose()?;
             let password = self.saved_postgres_password(&profile)?;
-            let (major, _) = source_details(&profile, &password, false)?;
+            let (major, _) = source_details(&profile, &password, false, tunnel.as_ref())?;
             verify_profile()?;
             let deadline = Instant::now() + backup::TIME_LIMIT;
             backup::create_with(
                 &profile.settings,
-                Source { major, selection: None, tunnel_port: None },
+                Source { major, selection: None, tunnel_port: tunnel.as_ref().map(|route| route.endpoint().port) },
                 password,
                 PostgresBackupContents::All,
                 path.to_owned(),
-                || (Instant::now() < deadline).then_some(()).ok_or_else(|| "PostgreSQL 백업 실행 시간이 초과되었습니다.".into()),
+                || {
+                    ensure_tunnel_running(tunnel.as_ref())?;
+                    (Instant::now() < deadline).then_some(()).ok_or_else(|| "PostgreSQL 백업 실행 시간이 초과되었습니다.".into())
+                },
                 || {
                     verify_profile()?;
-                    confirm_backup_directory(directory)
+                    confirm_backup_directory(directory)?;
+                    ensure_tunnel_running(tunnel.as_ref())
                 },
             )
         })();
@@ -73,15 +91,21 @@ impl Store {
     }
 }
 
-fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measure_size: bool) -> Result<(u32, u64)> {
+fn ensure_tunnel_running(tunnel: Option<&DatabaseTunnel>) -> Result<()> {
+    if tunnel.is_some_and(|route| !route.running()) { return Err(TUNNEL_STOPPED.into()); }
+    Ok(())
+}
+
+fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measure_size: bool, tunnel: Option<&DatabaseTunnel>) -> Result<(u32, u64)> {
+    ensure_tunnel_running(tunnel)?;
     let settings = &profile.settings;
     let tls = MakeTlsConnector::new(tls_connector(settings.ca_path.as_deref())?);
-    let mut config = connection_config(settings, password, None, "StackPort Backup Plan");
+    let mut config = connection_config(settings, password, tunnel.map(|route| route.endpoint().port), "StackPort Backup Plan");
     config.options("-c default_transaction_read_only=on -c search_path=pg_catalog -c statement_timeout=8000");
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
         .map_err(|_| "PostgreSQL 백업 연결을 준비할 수 없습니다.")?;
     runtime.block_on(async {
-        tokio::time::timeout(Duration::from_secs(15), async {
+        let read = tokio::time::timeout(Duration::from_secs(15), async {
             let (client, connection) = config.connect(tls).await.map_err(connect_error)?;
             let driver = tokio::spawn(connection);
             let sql = if measure_size {
@@ -97,6 +121,15 @@ fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measur
             let size = u64::try_from(field::<i64>(&row, 1)?)
                 .map_err(|_| "PostgreSQL 데이터베이스 크기를 확인할 수 없습니다.")?;
             Ok((major, size))
-        }).await.map_err(|_| "PostgreSQL 백업 연결 확인 시간이 초과되었습니다.")?
+        });
+        let result = if let Some(route) = tunnel {
+            tokio::select! {
+                biased;
+                _ = route.ended() => return Err(TUNNEL_STOPPED.into()),
+                response = read => response,
+            }
+        } else { read.await };
+        ensure_tunnel_running(tunnel)?;
+        result.map_err(|_| "PostgreSQL 백업 연결 확인 시간이 초과되었습니다.")?
     })
 }

@@ -237,7 +237,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       unavailable={activeId === backup.id ? "" : loss || "PostgreSQL에 다시 연결한 뒤 백업을 시작하세요."}
       onClose={() => setBackup(null)} onDone={report => { setBackup(null); setBackupReport(report); }} />}
     {backupPlanOpen && <BackupPlanDialog key={profile.revision} profile={{ id: profile.id, name, environment, path: `${endpoint(host, port)} / ${database}` }}
-      postgres={profile} displayPath={displayFilePath} onFileBusy={onFileBusy} onClose={() => setBackupPlanOpen(false)} />}
+      postgres={profile} displayPath={displayFilePath} onFileBusy={onFileBusy} preferredTunnel={preferredRoute} onOpenTunnels={onOpenTunnels}
+      onClose={() => setBackupPlanOpen(false)} />}
     {restoreFor && <PostgresRestoreDialog id={restoreFor} profile={profile} server={endpoint(host, port)} environment={environment}
       unavailable={activeId === restoreFor ? "" : loss || "PostgreSQL에 다시 연결한 뒤 복원하세요."} onBusy={onFileBusy}
       onClose={() => setRestoreFor(null)} onRestored={report => { setRestoreFor(null); setRestoreReport(report); }} />}

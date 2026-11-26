@@ -3391,6 +3391,7 @@ fn main() {
             backup_schedule::run_sqlite_backup_plan,
             backup_schedule::pause_sqlite_backup_plan,
             backup_schedule::postgres_backup_plan,
+            backup_schedule::postgres_backup_tunnel_options,
             backup_schedule::postgres_backup_capacity,
             backup_schedule::save_postgres_backup_plan,
             backup_schedule::run_postgres_backup_plan,

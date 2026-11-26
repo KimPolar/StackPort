@@ -13,7 +13,7 @@ function gatewayHostKey() {
   throw new Error('Could not generate a valid SSH fixture host key.');
 }
 
-async function startGateway(target, targetHosts = ['localhost']) {
+async function startGateway(target, targetHosts = ['localhost'], { stallReply = () => false } = {}) {
   const { privateKey, publicKey } = gatewayHostKey();
   const fingerprint = 'SHA256:' + createHash('sha256').update(publicKey).digest('base64').replace(/=+$/, '');
   const clients = new Set();
@@ -39,6 +39,7 @@ async function startGateway(target, targetHosts = ['localhost']) {
         channel.once('close', () => socket.destroy());
         socket.once('close', () => channel.destroy());
         socket.pipe(channel).pipe(socket);
+        if (stallReply(forwards)) socket.pause();
       });
     }));
   }).listen(0, '127.0.0.1');

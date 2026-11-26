@@ -3,9 +3,10 @@ mod socks;
 use super::{SavedSshTunnel, SshTunnelKind};
 use crate::{
     ssh_transport::{self, Endpoint, ForwardedChannel, RemoteForward, SshRoute, FORWARD_LOOPBACK},
-    Result, SshManager, SshProfile, SshRouteHop, SshRouteResult, Store, MAX_SSH_HOPS,
+    db_error, Result, SshManager, SshProfile, SshRouteHop, SshRouteResult, Store, MAX_SSH_HOPS,
 };
-use serde::Serialize;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io,
@@ -47,7 +48,7 @@ struct Stats {
     tunnel: SavedSshTunnel,
     listen_port: u16,
     gateway: SshProfile,
-    hops: Vec<String>,
+    hops: Vec<SshProfile>,
     created: Instant,
     clients: AtomicU32,
     sent: AtomicU64,
@@ -89,6 +90,50 @@ pub struct LocalTunnelEndpoint {
     pub port: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BackupTunnelRoute {
+    pub id: String,
+    name: String,
+    revision: i64,
+    profiles: Vec<BackupSshProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct BackupSshProfile {
+    id: String,
+    name: String,
+    revision: i64,
+}
+
+impl BackupTunnelRoute {
+    pub(crate) fn verify_saved(&self, db: &Connection, project: &str, host: &str, port: u16) -> Result<()> {
+        let changed = "저장한 백업의 SSH 터널 또는 경유 설정이 변경되었습니다. 계획을 다시 검토하세요.";
+        let tunnel = super::load_tunnel(db, &self.id).map_err(|_| changed)?;
+        if tunnel.revision != self.revision
+            || tunnel.project_id != project
+            || tunnel.settings.kind != SshTunnelKind::Local
+            || tunnel.settings.target_host.as_deref() != Some(host)
+            || tunnel.settings.target_port != Some(port)
+            || self.profiles.last().is_none_or(|target| target.id != tunnel.settings.ssh_profile_id)
+            || self.profiles.len() > MAX_SSH_HOPS + 1
+        {
+            return Err(changed.into());
+        }
+        for profile in &self.profiles {
+            let exists: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ssh_profiles WHERE id=?1 AND project_id=?2 AND revision=?3)",
+                params![profile.id, project, profile.revision], |row| row.get(0),
+            ).map_err(db_error)?;
+            if !exists {
+                return Err(changed.into());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct DatabaseTunnel {
     stats: Arc<Stats>,
@@ -96,6 +141,14 @@ pub(crate) struct DatabaseTunnel {
 }
 
 impl DatabaseTunnel {
+    fn backup_route(&self) -> BackupTunnelRoute {
+        let tunnel = &self.stats.tunnel;
+        let profiles = self.stats.hops.iter().chain(std::iter::once(&self.stats.gateway))
+            .map(|profile| BackupSshProfile { id: profile.id.clone(), name: profile.name.clone(), revision: profile.revision })
+            .collect();
+        BackupTunnelRoute { id: tunnel.id.clone(), name: tunnel.settings.name.clone(), revision: tunnel.revision, profiles }
+    }
+
     pub(crate) fn endpoint(&self) -> LocalTunnelEndpoint {
         LocalTunnelEndpoint {
             id: self.stats.tunnel.id.clone(),
@@ -147,17 +200,35 @@ impl SshTunnelManager {
         host: &str,
         port: u16,
     ) -> Result<Vec<LocalTunnelEndpoint>> {
+        let mut routes: Vec<_> = self.database_routes(project, host, port)?.iter().map(DatabaseTunnel::endpoint).collect();
+        routes.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(routes)
+    }
+
+    pub fn local_backup_routes(&self, project: &str, host: &str, port: u16) -> Result<Vec<BackupTunnelRoute>> {
+        let mut routes: Vec<_> = self.database_routes(project, host, port)?.iter().map(DatabaseTunnel::backup_route).collect();
+        routes.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(routes)
+    }
+
+    fn database_routes(&self, project: &str, host: &str, port: u16) -> Result<Vec<DatabaseTunnel>> {
         let sessions = self
             .sessions
             .lock()
             .map_err(|_| "실행 중인 터널을 읽을 수 없습니다.")?;
-        let mut routes: Vec<_> = sessions
+        Ok(sessions
             .values()
             .filter_map(|session| session.database_tunnel(project, host, port))
-            .map(|route| route.endpoint())
-            .collect();
-        routes.sort_by(|left, right| left.name.cmp(&right.name));
-        Ok(routes)
+            .collect())
+    }
+
+    pub(crate) fn backup_tunnel(&self, expected: &BackupTunnelRoute, project: &str, host: &str, port: u16) -> Result<DatabaseTunnel> {
+        let tunnel = self.database_tunnel(&expected.id, project, host, port)
+            .map_err(|_| "백업 계획의 로컬 SSH 터널을 시작하세요.")?;
+        if tunnel.backup_route() != *expected {
+            return Err("실행 중인 SSH 터널의 경로가 백업 계획과 다릅니다. 계획 또는 경유 서버를 확인하세요.".into());
+        }
+        Ok(tunnel)
     }
 
     pub(crate) fn database_tunnel(
@@ -248,7 +319,7 @@ impl SshTunnelManager {
             tunnel,
             listen_port,
             gateway: profiles[0].clone(),
-            hops: profiles[1..].iter().map(|item| item.name.clone()).collect(),
+            hops: profiles[1..].to_vec(),
             created: Instant::now(),
             clients: AtomicU32::new(0),
             sent: AtomicU64::new(0),
@@ -442,7 +513,7 @@ impl Stats {
             tunnel: self.tunnel.clone(),
             listen_port: self.listen_port,
             gateway: self.gateway.clone(),
-            hops: self.hops.clone(),
+            hops: self.hops.iter().map(|profile| profile.name.clone()).collect(),
             phase: state.phase,
             clients: self.clients.load(Relaxed),
             sent_bytes: self.sent.load(Relaxed).to_string(),
