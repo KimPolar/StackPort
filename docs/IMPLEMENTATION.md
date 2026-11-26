@@ -208,6 +208,12 @@ MariaDB의 SELECT 전용 계정에는 키 열과 CHECK를 별도 카탈로그에
 
 **서버 모니터**는 연결된 단독 서버의 `INFO`로 메모리·클라이언트·초당 작업·복제 상태와 DB별 키 수·만료 설정·평균 TTL을 읽습니다. `SLOWLOG GET` 권한이 있으면 최근 20건의 명령 이름, 시각, 실행 시간을 볼 수 있습니다. 명령 인수, 클라이언트 주소와 이름은 화면이나 작업 기록에 전달하지 않습니다. 슬로로그 권한이 제한된 계정도 다른 서버 통계를 계속 볼 수 있습니다. [Redis INFO](https://redis.io/docs/latest/commands/info/) · [Redis SLOWLOG GET](https://redis.io/docs/latest/commands/slowlog-get/)
 
+**서버 모니터 → 백업 관리**에서 RDB의 최근 저장 상태와 AOF의 활성화·재작성 상태를 확인합니다. `CONFIG GET`을 허용한 연결에서는 서버 데이터 폴더와 파일 또는 AOF 폴더 이름도 표시합니다. 연결할 때 **백업 관리 허용**을 선택한 경우에만 모든 논리 DB에 적용되는 `BGSAVE` 또는 `BGREWRITEAOF`를 요청할 수 있습니다. 서버 명령 권한과 범위 확인이 필요하며 `PROD`는 실행할 때 다시 입력합니다. 작업이 겹치면 재확인을 안내하고, 요청 접수와 서버의 작업 완료를 구분합니다. 서버의 작업 횟수나 상태로 완료를 확인하지 못하면 결과 미확인으로 표시합니다. 감사에는 연결과 요청·결과를 기록합니다. [Redis BGSAVE](https://redis.io/docs/latest/commands/bgsave/) · [Redis BGREWRITEAOF](https://redis.io/docs/latest/commands/bgrewriteaof/)
+
+RDB 복사에는 서버 파일 읽기 권한과 SFTP 등 별도 전송 수단이 필요합니다. 완료된 RDB는 호환 버전의 격리된 검증 서버에 복사해 `dir`과 `dbfilename`을 맞추고 AOF를 끈 상태에서 시작합니다. AOF 재작성은 실행 서버의 로그를 정리합니다. Redis 7 이상에서 AOF를 확보하려면 재작성과 쓰기가 중지된 시점의 AOF 폴더를 매니페스트와 함께 복사합니다. 이전 버전은 해당 시점의 단일 AOF 파일을 복사합니다. 호환되는 검증 서버의 파일 설정을 맞춰 AOF를 켠 상태에서 시작한 뒤 키와 만료 상태를 확인합니다. [Redis 영속성과 복구](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)
+
+Windows 앱과 TLS·ACL을 적용한 Redis 8.4.7 테스트 연결에서 RDB·AOF 완료, 읽기 전용과 서버 ACL의 실행 차단, `PROD` 확인, 요청 응답 유실의 결과 미확인을 검증했습니다. 생성된 RDB와 재작성된 AOF 폴더를 각각 격리된 Redis에 읽혀 논리 DB 0·3의 키와 만료 시간이 복원되는지 확인했습니다.
+
 **Pub/Sub**는 별도 연결에서 채널 이름 하나 또는 패턴 하나를 구독합니다. Redis 논리 DB와 관계없이 서버 전체의 채널에 연결합니다. 연결이 끊기면 재접속을 시도하며, 실패할 때마다 다음 연결까지 대기 시간을 1초에서 늘려 최대 15초까지 기다립니다. 중단된 동안의 메시지는 다시 받지 못합니다. 구독 암호와 최근 100개의 수신 기록은 구독 세션 동안 메모리에 보관합니다. 메시지의 첫 512바이트를 텍스트 또는 HEX로 표시하고, 기록을 비우거나 구독을 종료할 수 있습니다. [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/)
 
 **메시지 발행**은 연결할 때 별도로 허용합니다. 채널과 UTF-8 메시지(최대 64 KiB)를 검토하고, 운영 환경에서는 `PROD`를 다시 입력한 뒤 한 번 보냅니다. 작업 기록에는 연결·환경·결과와 서버가 보고한 수신자 수를 남깁니다. 채널·메시지·암호는 기록에 저장하지 않습니다. 발행 응답 전에 연결이 끊기면 결과 미확인 상태를 표시합니다. [Redis PUBLISH](https://redis.io/docs/latest/commands/publish/)

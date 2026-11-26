@@ -48,6 +48,7 @@ pub use postgres::{PostgresRestorePreview, PostgresRestoreReport};
 pub use redis::{RedisKeyPage, RedisManager, RedisPassword, RedisProfile, RedisScanInput, RedisServerSnapshot, RedisSessionInfo, RedisSettings, RedisValueInput, RedisValuePage};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus, RedisKeyDeletePreview};
 pub use redis::{RedisPublishReport, RedisSubscriptionSnapshot};
+pub use redis::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersistenceReport};
 pub use redis::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};
@@ -983,6 +984,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "redis.key.edit" | "redis.key.edit.unconfirmed" => "redis-key-edit-reviewed-transaction",
         "redis.key.delete" | "redis.key.delete.unconfirmed" => "redis-selected-keys-delete-reviewed-transaction",
         "redis.pubsub.publish" | "redis.pubsub.publish.unconfirmed" => "redis-pubsub-publish-confirmed",
+        "redis.persistence.rdb" | "redis.persistence.aof" | "redis.persistence.rdb.unconfirmed" | "redis.persistence.aof.unconfirmed" => "redis-server-persistence-confirmed",
         "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" if record.environment == Some("PROD") => "mongo-typed-document-prod-reviewed",
         "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" => "mongo-typed-document-reviewed",
         "mongo.namespace.drop_collection" | "mongo.namespace.drop_collection.unconfirmed" if record.environment == Some("PROD") => "mongo-collection-drop-uuid-prod-reviewed",

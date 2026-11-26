@@ -163,13 +163,14 @@ PARTIAL = {
     "SP-BK-011": "PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",
     "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인, MongoDB 원본과 새 대상·서버와 도구 버전·객체 목록과 뷰 원본·문서 수·SHA-256 검토",
     "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 아카이브 체크섬과 복원된 객체 유형·인덱스 이름·문서·시계열 버킷 수 및 단일 컬렉션 UUID 확인",
-    "SP-BK-017": "PostgreSQL 백업의 로컬 파일 경로와 복원할 서버·새 DB를 표시하고 CREATEDB 권한 확인, MongoDB 백업의 로컬 파일 경로와 실제 새 데이터베이스·컬렉션 이름 표시 및 목록 조회 권한 확인",
+    "SP-BK-017": "PostgreSQL 백업의 로컬 파일 경로와 복원할 서버·새 DB를 표시하고 CREATEDB 권한 확인, MongoDB 백업의 로컬 파일 경로와 실제 새 데이터베이스·컬렉션 이름 표시 및 목록 조회 권한 확인, Redis 서버 파일 경로와 별도 전송·읽기 권한 안내",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
     "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, JSON 명령을 확인한 서버의 JSON 타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
     "SP-NS-011": "String 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가, 지원 서버에서 64 KiB 이하 JSON 문서 조회·검토 후 교체, UTF-8·HEX 미리보기와 키 TTL 설정·해제",
     "SP-NS-012": "읽기 전용 명령 콘솔, Tab 명령 완성, RESP 응답 타입·HEX 표시, 연결별 최근 30건과 방향키 재입력, 변경·삭제·관리 명령 차단 사유",
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
+    "SP-NS-015": "단독 서버의 RDB·AOF 상태와 서버 경로 조회, 세션별 허용·서버 권한·운영 승인으로 RDB 스냅샷과 AOF 재작성 요청 및 완료 확인",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, JSON.GET·JSON.SET 확인과 권한으로 명령 정보를 읽을 수 없는 상태 처리, 서버 지원 여부에 따른 JSON 필터·편집 UI",
     "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 미리보기와 동시 변경 차단, MongoDB 단일 문서·인덱스·일반 컬렉션 삭제 검토, 인덱스 영향 또는 전체 문서·인덱스·의존 뷰 표시, 컬렉션 UUID와 검토 정보 재확인, DELETE·DROP 및 PROD 승인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
@@ -189,7 +190,7 @@ PARTIAL = {
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
-    "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰를 새 DB로 복원하고 내용·정의·인덱스 비교",
+    "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰 복원 및 내용·정의·인덱스 비교, 격리된 Redis의 RDB·AOF 복원에서 두 논리 DB의 값과 TTL 확인",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 새 데이터베이스의 첫 컬렉션과 유효성 규칙·읽기 전용 뷰 생성, 서버에 저장된 유효성 규칙과 뷰 정의 조회, 검토를 거친 유효성 규칙 변경·제거와 뷰 원본·파이프라인 수정, 일반 컬렉션의 동일 데이터베이스 내 이름 변경과 삭제, 인덱스 생성·숨김과 TTL 변경·삭제",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
@@ -198,6 +199,7 @@ PARTIAL = {
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
     "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 또는 CSV로 내보내기, BSON 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 BSON 매핑, mongodump 아카이브 생성과 일반 컬렉션 또는 데이터베이스 복원",
     "SP-BK-009": "MongoDB JSON·CSV 가져오기와 내보내기, mongodump로 데이터베이스나 일반 컬렉션 백업, 서버·도구 버전을 확인하고 mongorestore로 새 컬렉션 또는 새 데이터베이스에 복원",
+    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 호환 서버에 격리 복원하는 절차 안내",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -569,6 +571,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mongo/backup.rs; crates/stackport-core/src/mongo/restore.rs; crates/stackport-core/src/mongo/restore/database.rs; src/MongoArchiveDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
+            if requirement_id in {"SP-NS-015", "SP-BK-010", "SP-BK-017", "SP-SEC-011", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/redis/persistence.rs; src/RedisPersistenceDialog.tsx; tests/redis-smoke.cjs"
             if requirement_id == "SP-NS-012":
                 evidence += "; crates/stackport-core/src/redis/console.rs; src/RedisConsoleDialog.tsx"
             if requirement_id in {"SP-NS-013", "SP-AT-018"}:

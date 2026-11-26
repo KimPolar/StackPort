@@ -3,6 +3,7 @@ mod edit;
 mod json;
 mod keys;
 mod monitor;
+mod persistence;
 pub(crate) mod profiles;
 mod pubsub;
 mod resp;
@@ -10,6 +11,7 @@ mod resp;
 pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};
 pub use monitor::RedisServerSnapshot;
+pub use persistence::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersistenceReport};
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{RedisProfile, RedisSettings};
 pub use pubsub::{RedisPublishReport, RedisSubscriptionSnapshot};
@@ -53,6 +55,7 @@ pub struct RedisSessionInfo {
     version: String,
     allow_edits: bool,
     allow_publish: bool,
+    allow_persistence: bool,
     json_support: json::Support,
 }
 
@@ -61,7 +64,9 @@ struct Session {
     profile: RedisProfile,
     allow_edits: bool,
     allow_publish: bool,
+    allow_persistence: bool,
     json_support: json::Support,
+    persistence: AsyncMutex<Option<persistence::Job>>,
     subscription: AsyncMutex<Option<pubsub::Subscription>>,
     _permit: OwnedSemaphorePermit,
 }
@@ -89,6 +94,7 @@ impl RedisManager {
         confirmation: &str,
         allow_edits: bool,
         allow_publish: bool,
+        allow_persistence: bool,
     ) -> Result<RedisSessionInfo> {
         if password.0.len() > 4096 {
             return Err("Redis 암호가 너무 깁니다.".into());
@@ -129,7 +135,9 @@ impl RedisManager {
                     profile,
                     allow_edits,
                     allow_publish,
+                    allow_persistence,
                     json_support,
+                    persistence: AsyncMutex::new(None),
                     subscription: AsyncMutex::new(None),
                     _permit: permit,
                 }),
@@ -140,6 +148,7 @@ impl RedisManager {
             version,
             allow_edits,
             allow_publish,
+            allow_persistence,
             json_support,
         })
     }

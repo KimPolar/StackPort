@@ -41,12 +41,13 @@ function memory(bytes: number | null) {
   return `${numbers.format(bytes)} ${unit[index]}`;
 }
 
-export function RedisServerMonitor({ id, selectedDatabase, target, onClose, onFailure }: {
+export function RedisServerMonitor({ id, selectedDatabase, target, onClose, onFailure, onPersistence }: {
   id: string;
   selectedDatabase: number;
   target: string;
   onClose: () => void;
   onFailure: (message: string) => boolean;
+  onPersistence: () => void;
 }) {
   const [revision, setRevision] = useState(0);
   const args = useMemo(() => ({ id }), [id]);
@@ -57,6 +58,7 @@ export function RedisServerMonitor({ id, selectedDatabase, target, onClose, onFa
     <div className="redis-monitor-body" aria-busy={loading}>
       <div className="redis-monitor-toolbar">
         <p>{target}{data && <> · <span>조회 {timestamp(data.sampled_at_seconds)}</span></>}</p>
+        <button type="button" className="secondary small" onClick={onPersistence}>백업 관리</button>
         <button type="button" className="secondary small" disabled={loading} onClick={() => setRevision(value => value + 1)}>
           <RefreshCw size={14} aria-hidden /> 새로 고침</button>
       </div>

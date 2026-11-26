@@ -6,6 +6,7 @@ import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditTarget, type RedisEditReport } from "./RedisEditDialog";
 import { RedisServerMonitor } from "./RedisServerMonitor";
+import { RedisPersistenceDialog } from "./RedisPersistenceDialog";
 import { RedisPubSubDialog } from "./RedisPubSubDialog";
 import { RedisConsoleDialog, type RedisConsoleEntry } from "./RedisConsoleDialog";
 import { useNativeRead } from "./usePostgresRead";
@@ -23,7 +24,7 @@ type KeyPage = { keys: Key[]; cursor: string; total: number | null };
 type Position = { kind: "index"; index: number } | { kind: "scan"; cursor: string } | { kind: "stream"; after: string };
 type Value = { kind: string; ttl_ms: number | null; memory_bytes: number | null; length: number | null;
   columns: string[]; rows: RedisBytes[][]; next: Position | null };
-type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean; json_support: JsonSupport };
+type Session = { id: string; engine: string; version: string; allow_edits: boolean; allow_publish: boolean; allow_persistence: boolean; json_support: JsonSupport };
 const number = new Intl.NumberFormat("ko-KR");
 
 function hasJsonFilter(support: JsonSupport | undefined) {
@@ -35,6 +36,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [session, setSession] = useState<Session | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
+  const [persistenceOpen, setPersistenceOpen] = useState(false);
   const [pubsubOpen, setPubsubOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleHistory, setConsoleHistory] = useState<RedisConsoleEntry[]>([]);
@@ -42,6 +44,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
   const [allowPublish, setAllowPublish] = useState(false);
+  const [allowPersistence, setAllowPersistence] = useState(false);
   const [editor, setEditor] = useState<RedisEditTarget | null>(null);
   const [editReport, setEditReport] = useState<(RedisEditReport & { deleted: boolean }) | null>(null);
   const [selectingKeys, setSelectingKeys] = useState(false);
@@ -81,7 +84,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     const id = active.current;
     if (id) {
       active.current = null; setSession(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false);
-      setConsoleOpen(false); setConsoleHistory([]); setError(message);
+      setConsoleOpen(false); setPersistenceOpen(false); setConsoleHistory([]); setError(message);
       void invoke("close_redis", { id }).catch(() => {});
     }
     return true;
@@ -103,7 +106,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (connecting.current) return;
     connecting.current = true; setPending(true); setError(""); setPassword("");
     try {
-      const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowPublish });
+      const opened = await invoke<Session>("open_redis", { profileId: profile.id, revision: profile.revision,
+        password, confirmation, allowEdits, allowPublish, allowPersistence });
       if (!mounted.current) { await invoke("close_redis", { id: opened.id }); return; }
       active.current = opened.id;
       if (!hasJsonFilter(opened.json_support)) {
@@ -120,7 +124,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
     if (!id) return;
     active.current = null;
     setSession(null); setSelected(null); setEditor(null); setEditReport(null); setMonitorOpen(false); setPubsubOpen(false);
-    setConsoleOpen(false); setConsoleHistory([]); setError("");
+    setConsoleOpen(false); setPersistenceOpen(false); setConsoleHistory([]); setError("");
     try { await invoke("close_redis", { id }); }
     catch (reason) { if (mounted.current) setError(String(reason)); }
   }
@@ -157,7 +161,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setConsoleOpen(true)}>
           <SquareTerminal size={15} aria-hidden /> 명령 콘솔</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
-          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowPublish(false); setConnectOpen(true); }}>
+          <button type="button" className="primary" onClick={() => { setError(""); setConfirmation(""); setAllowEdits(false); setAllowPublish(false); setAllowPersistence(false); setConnectOpen(true); }}>
             <Plug size={15} aria-hidden /> Redis 연결</button>}
       </div>
     </div>
@@ -244,6 +248,8 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
           onChange={event => setAllowEdits(event.target.checked)} /> 이 연결에서 키 편집 허용</label>
         <label className="redis-edit-permission"><input type="checkbox" checked={allowPublish} disabled={pending}
           onChange={event => setAllowPublish(event.target.checked)} /> 이 연결에서 메시지 발행 허용</label>
+        <label className="redis-edit-permission"><input type="checkbox" checked={allowPersistence} disabled={pending}
+          onChange={event => setAllowPersistence(event.target.checked)} /> 이 연결에서 백업 관리 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP 연결로 암호와 데이터를 평문으로 전송합니다.</p>}
         {production && <label className="field">운영 환경 확인<input value={confirmation} required disabled={pending}
           autoComplete="off" placeholder="PROD" onChange={event => setConfirmation(event.target.value)} /></label>}
@@ -262,7 +268,11 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       }} />}
     {monitorOpen && session && <RedisServerMonitor id={session.id} selectedDatabase={settings.database}
       target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`}
-      onFailure={handleFailure} onClose={() => setMonitorOpen(false)} />}
+      onFailure={handleFailure} onClose={() => setMonitorOpen(false)}
+      onPersistence={() => { setMonitorOpen(false); setPersistenceOpen(true); }} />}
+    {persistenceOpen && session && <RedisPersistenceDialog id={session.id} allowPersistence={session.allow_persistence}
+      target={`${settings.name} · ${settings.environment} · ${networkAddressText(settings)}`} environment={settings.environment}
+      onBusy={onBusy} onFailure={handleFailure} onClose={() => setPersistenceOpen(false)} />}
     {pubsubOpen && session && <RedisPubSubDialog id={session.id} allowPublish={session.allow_publish} environment={settings.environment}
       target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
     {consoleOpen && session && <RedisConsoleDialog id={session.id} history={consoleHistory}

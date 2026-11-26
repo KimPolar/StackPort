@@ -1685,9 +1685,10 @@ async fn delete_redis_profile(store: State<'_, Store>, id: String, revision: i64
 #[tauri::command]
 async fn open_redis(redis: State<'_, stackport_core::RedisManager>, profile_id: String, revision: i64,
     password: stackport_core::RedisPassword, confirmation: String, allow_edits: Option<bool>,
-    allow_publish: Option<bool>,
+    allow_publish: Option<bool>, allow_persistence: Option<bool>,
 ) -> Result<stackport_core::RedisSessionInfo, String> {
-    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false), allow_publish.unwrap_or(false)).await
+    redis.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or(false), allow_publish.unwrap_or(false),
+        allow_persistence.unwrap_or(false)).await
 }
 
 #[tauri::command]
@@ -1708,6 +1709,19 @@ async fn redis_server_snapshot(
 ) -> Result<stackport_core::RedisServerSnapshot, String> {
     redis.server_snapshot(&id).await
 }
+
+#[tauri::command]
+async fn redis_persistence_info(redis: State<'_, stackport_core::RedisManager>, id: String)
+    -> Result<stackport_core::RedisPersistenceInfo, String> { redis.persistence_info(&id).await }
+
+#[tauri::command]
+async fn redis_start_persistence(redis: State<'_, stackport_core::RedisManager>, id: String,
+    kind: stackport_core::RedisPersistenceKind, confirmed: bool, confirmation: String)
+    -> Result<stackport_core::RedisPersistenceReport, String> { redis.start_persistence(&id, kind, confirmed, &confirmation).await }
+
+#[tauri::command]
+async fn redis_persistence_report(redis: State<'_, stackport_core::RedisManager>, id: String)
+    -> Result<stackport_core::RedisPersistenceReport, String> { redis.persistence_report(&id).await }
 
 #[tauri::command]
 fn redis_console_commands() -> Vec<stackport_core::RedisConsoleCommand> {
@@ -2995,6 +3009,9 @@ fn main() {
             redis_keys,
             redis_value,
             redis_server_snapshot,
+            redis_persistence_info,
+            redis_start_persistence,
+            redis_persistence_report,
             redis_console_commands,
             redis_run_console,
             redis_start_subscription,

@@ -142,6 +142,7 @@ async function proxy(port) {
     subscriptionCount: () => subscribers.size,
     interruptNextExec: () => { interruptCommand = Buffer.from('$4\r\nEXEC\r\n'); },
     interruptNextPublish: () => { interruptCommand = Buffer.from('$7\r\nPUBLISH\r\n'); },
+    interruptNextSnapshot: () => { interruptCommand = Buffer.from('$6\r\nBGSAVE\r\n'); },
     close: () => { dropClients(); listener.close(); } };
 }
 
@@ -170,8 +171,8 @@ async function verify(browser, serverPort, secure, hasJson) {
   const [profile] = await command('list_redis_profiles', { projectId: project.id });
   assert.ok(!JSON.stringify(profile).includes(secret));
   assert.equal(profile.settings.database, 3);
-  const open = (item, password = secret, confirmation = 'PROD', allowEdits, allowPublish) => command('open_redis', {
-    profileId: item.id, revision: item.revision, password, confirmation, allowEdits, allowPublish,
+  const open = (item, password = secret, confirmation = 'PROD', allowEdits, allowPublish, allowPersistence) => command('open_redis', {
+    profileId: item.id, revision: item.revision, password, confirmation, allowEdits, allowPublish, allowPersistence,
   });
   const alternate = (name, change) => command('create_redis_profile', { projectId: project.id, input: { ...profile.settings, ...change, name } });
   await assert.rejects(open(profile, secret, ''), /PROD/);
@@ -245,6 +246,7 @@ async function verify(browser, serverPort, secure, hasJson) {
   await command('close_redis', { id });
   await assert.rejects(scan('0', '*'), /연결이 닫혔습니다/);
   const writer = await alternate('편집 검증', { username: 'fixture_writer' });
+  const backup = await alternate('백업 검증', { username: 'fixture_backup' });
   const logSession = await open(writer);
   const withLog = await command('redis_server_snapshot', { id: logSession.id });
   assert.equal(withLog.slow_log.status, 'available');
@@ -256,6 +258,7 @@ async function verify(browser, serverPort, secure, hasJson) {
   await verifyPubSub({ command, open, profile, writer, secure, serverPort });
   await verifyEdits({ command, open, profile, writer, serverPort, secure });
   await verifyKeyLifecycle({ command, open, profile, writer, serverPort, secure });
+  await verifyPersistence({ command, open, profile, backup, serverPort, secure });
 
   await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'Redis 연결', exact: true });
@@ -294,12 +297,144 @@ async function verify(browser, serverPort, secure, hasJson) {
   await verifyEditDialog(page, workspace);
   await verifyKeyLifecycleDialog(page, workspace);
   await verifyPubSubDialog(page, workspace, secure);
+  await page.getByRole('button', { name: 'Redis 백업 검증 열기', exact: true }).click();
+  await verifyPersistenceDialog(page, workspace);
   await page.getByRole('button', { name: '작업 기록', exact: true }).click();
   await page.getByRole('heading', { name: '작업 기록', exact: true }).waitFor();
   await page.getByText('Redis 키 삭제', { exact: true }).first().waitFor();
   await page.getByText('Redis 키 삭제 결과 미확인', { exact: true }).waitFor();
+  await page.getByText('Redis RDB 스냅샷', { exact: true }).first().waitFor();
   if (hasJson) await verifyJson({ page, command, open, plain, serverPort });
   assert.deepEqual(errors, []);
+}
+
+function redisRaw(port, ...args) {
+  return execFileSync(path.join(path.dirname(binary), 'redis-cli.exe'),
+    ['-h', '127.0.0.1', '-p', String(port), '--raw', ...args],
+    { cwd: root, windowsHide: true, encoding: 'utf8', timeout: 12_000 }).trim();
+}
+
+async function verifyPersistence({ command, open, profile, backup, serverPort, secure }) {
+  const info = id => command('redis_persistence_info', { id });
+  const start = (id, kind = 'rdb', confirmed = true, confirmation = 'PROD') =>
+    command('redis_start_persistence', { id, kind, confirmed, confirmation });
+  const limited = await open(profile);
+  const denied = await open(profile, secret, 'PROD', false, false, true);
+  const { id } = await open(backup, secret, 'PROD', false, false, true);
+  try {
+    assert.equal((await info(limited.id)).directory, null);
+    await assert.rejects(start(limited.id), /백업 관리를 허용/);
+    await assert.rejects(start(denied.id), /명령의 권한/);
+    assert.equal((await info(denied.id)).rdb_in_progress, false);
+    await assert.rejects(start(id, 'rdb', false), /전체 Redis 서버/);
+    await assert.rejects(start(id, 'rdb', true, ''), /PROD/);
+    const target = await info(id);
+    assert.ok(target.directory.endsWith(path.basename(root)));
+    assert.equal(target.rdb_filename, 'dump.rdb');
+    assert.equal(target.aof_enabled, false);
+    await assert.rejects(start(id, 'aof'), /AOF가 꺼져/);
+    cli(serverPort, [['SELECT', '3'], ['SET', 'backup:expiring', 'to-restore', 'PX', '120000']]);
+
+    async function finished(kind) {
+      assert.equal((await start(id, kind)).status, 'running');
+      await assert.rejects(start(id, kind), /진행 중/);
+      for (let attempt = 0; attempt < 50; attempt++) {
+        const report = await command('redis_persistence_report', { id });
+        if (report.status !== 'running') {
+          assert.deepEqual(report, { kind, status: 'succeeded', audit_warning: false });
+          return;
+        }
+        await delay(100);
+      }
+      assert.fail('Redis did not report completion.');
+    }
+
+    await finished('rdb');
+    const file = path.join(root, target.rdb_filename);
+    assert.match(fs.readFileSync(file).subarray(0, 9).toString(), /^REDIS[0-9]{4}$/u);
+    const rdb = path.join(root, 'isolated-rdb-recovery');
+    fs.mkdirSync(rdb);
+    fs.copyFileSync(file, path.join(rdb, target.rdb_filename));
+    await verifyRecovery(rdb, false);
+
+    cli(serverPort, [['CONFIG', 'SET', 'appendonly', 'yes']]);
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const snapshot = await info(id);
+      if (snapshot.aof_enabled && !snapshot.aof_in_progress && !snapshot.aof_scheduled) break;
+      await delay(100);
+    }
+    await finished('aof');
+    const aofConfig = await info(id);
+    assert.equal(aofConfig.aof_enabled, true);
+    assert.equal(aofConfig.last_aof_ok, true);
+    const aof = path.join(root, 'isolated-aof-recovery');
+    fs.mkdirSync(aof);
+    if (aofConfig.aof_directory) {
+      const folder = path.join(root, aofConfig.aof_directory);
+      assert.ok(fs.readdirSync(folder).some(file => file.endsWith('.manifest')));
+      fs.cpSync(folder, path.join(aof, aofConfig.aof_directory), { recursive: true });
+    } else {
+      fs.copyFileSync(path.join(root, aofConfig.aof_filename), path.join(aof, aofConfig.aof_filename));
+    }
+    await verifyRecovery(aof, true);
+
+    secure.interruptNextSnapshot();
+    await assert.rejects(start(id), /결과를 확인할 수 없습니다/);
+    const { events } = await command('list_audit_events', { before: null });
+    for (const kind of ['rdb', 'aof']) {
+      const success = events.find(event => event.operation === `redis.persistence.${kind}` && event.outcome === 'succeeded');
+      assert.equal(success?.policy, 'redis-server-persistence-confirmed');
+      assert.ok(events.some(event => event.operation === success.operation && event.outcome === 'started'
+        && event.correlation_id === success.correlation_id));
+    }
+    assert.ok(events.some(event => event.operation === 'redis.persistence.rdb.unconfirmed' && event.outcome === 'started'));
+    assert.doesNotMatch(JSON.stringify(events.filter(event => event.operation.startsWith('redis.persistence.'))), /dump\.rdb|appendonly|to-restore|fixture-password/u);
+  } finally {
+    for (const session of [id, denied.id, limited.id]) await command('close_redis', { id: session });
+  }
+}
+
+async function verifyRecovery(directory, aof) {
+  const port = await availablePort();
+  const restore = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', aof ? 'yes' : 'no'],
+    { cwd: directory, windowsHide: true, stdio: 'ignore' });
+  try {
+    await ready(port, restore);
+    assert.equal(redisRaw(port, 'GET', 'db0:only'), 'other');
+    assert.equal(redisRaw(port, '-n', '3', 'GET', 'cache:string'), '문자열 값');
+    assert.equal(redisRaw(port, '-n', '3', 'GET', 'backup:expiring'), 'to-restore');
+    assert.ok(Number(redisRaw(port, '-n', '3', 'PTTL', 'backup:expiring')) > 0);
+  } finally {
+    if (restore.exitCode === null) {
+      const closed = once(restore, 'exit');
+      restore.kill();
+      await closed;
+    }
+  }
+}
+
+async function verifyPersistenceDialog(page, workspace) {
+  await workspace.getByRole('button', { name: 'Redis 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: 'Redis 연결', exact: true });
+  await login.getByLabel('Redis 암호').fill(secret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('checkbox', { name: '이 연결에서 백업 관리 허용' }).check();
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: '서버 모니터', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Redis 서버 모니터' }).getByRole('button', { name: '백업 관리' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Redis 백업 관리' });
+  await dialog.getByText('dump.rdb', { exact: true }).waitFor();
+  const save = dialog.getByRole('button', { name: 'RDB 스냅샷 요청' });
+  assert.equal(await save.isEnabled(), false);
+  await dialog.getByRole('checkbox', { name: /서버 전체의 저장 작업/ }).check();
+  assert.equal(await save.isEnabled(), false);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await save.click();
+  await dialog.getByRole('status').getByText('RDB 스냅샷 · 서버 작업 완료').waitFor();
+  await dialog.getByText('파일 확보 및 격리 복원').click();
+  await dialog.getByText(/서버의 파일 읽기 권한과 SFTP/).waitFor();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
 }
 
 async function verifyJson({ page, command, open, plain, serverPort }) {
@@ -775,6 +910,8 @@ async function main() {
         '+@read', '-keys', '+info', '+select', '+dbsize', '+memory|usage', '+watch', '+unwatch', '+multi', '+exec', '+discard',
         '+set', '+hset', '+lset', '+sadd', '+zadd', '+xadd', '+pexpire', '+persist', '+unlink',
         '+slowlog|get', 'resetchannels', '&events:*', '+subscribe', '+psubscribe', '+publish'],
+      ['ACL', 'SETUSER', 'fixture_backup', 'on', '>' + secret, '~*', '+info', '+select', '+dbsize', '+scan',
+        '+config|get', '+bgsave', '+bgrewriteaof'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '0'],
       ['SET', 'slowlog:fixture', 'example-private-slowlog-payload'],
       ['CONFIG', 'SET', 'slowlog-log-slower-than', '-1'],
@@ -788,7 +925,7 @@ async function main() {
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser, port, secure, hasJson);
-    console.log('Windows Redis E2E passed (ACL, TLS, console, monitor, Pub/Sub, typed edits, TTL and reviewed key deletion).');
+    console.log('Windows Redis E2E passed (ACL, TLS, console, monitor, Pub/Sub, typed edits, TTL, reviewed key deletion, and isolated RDB/AOF recovery).');
     console.log(hasJson ? 'Redis JSON module editing and TTL verified.' : 'Redis JSON module unavailable on the fixture server.');
   } catch (error) {
     if (server.exitCode !== null) console.error(log);
