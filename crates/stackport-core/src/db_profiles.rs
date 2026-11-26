@@ -34,6 +34,50 @@ pub struct DatabaseProfile<T> {
     pub settings: T,
 }
 
+pub enum PasswordAuthentication<P> {
+    Entered { password: P, remember: bool },
+    Saved,
+}
+
+impl<P> From<P> for PasswordAuthentication<P> {
+    fn from(password: P) -> Self {
+        Self::Entered { password, remember: false }
+    }
+}
+
+impl<P> PasswordAuthentication<P> {
+    pub fn requested(
+        password: Option<P>,
+        use_saved: bool,
+        remember: bool,
+        engine: &str,
+    ) -> Result<Self> {
+        match (password, use_saved, remember) {
+            (None, true, false) => Ok(Self::Saved),
+            (Some(password), false, remember) => Ok(Self::Entered { password, remember }),
+            _ => Err(format!("{engine} 암호를 입력하거나 저장한 암호를 선택하세요.")),
+        }
+    }
+
+    pub(crate) fn resolve<T: Settings>(
+        self,
+        store: &Store,
+        profile: &DatabaseProfile<T>,
+        engine: &str,
+        wrap: impl FnOnce(Zeroizing<String>) -> P,
+    ) -> Result<(P, bool)> {
+        match self {
+            Self::Entered { password, remember } => Ok((password, remember)),
+            Self::Saved => {
+                let password = store
+                    .saved_native_db_password(profile, engine)?
+                    .ok_or_else(|| format!("현재 연결 설정에 저장된 {engine} 암호가 없습니다."))?;
+                Ok((wrap(password), false))
+            }
+        }
+    }
+}
+
 impl Store {
     pub(crate) fn list_native_db_profiles<T: Settings>(
         &self,
@@ -172,6 +216,26 @@ impl Store {
         vault::save(&vault::target(self, T::ENGINE, &expected.id)?, &binding, password)?;
         audit(&tx, expected, operation)?;
         tx.commit().map_err(db_error)
+    }
+
+    pub(crate) async fn remember_connected_password<T: Settings + Clone + Send + 'static>(
+        &self,
+        profile: &DatabaseProfile<T>,
+        engine: &'static str,
+        password: &str,
+        operation: &'static str,
+    ) -> Option<String> {
+        let store = self.clone();
+        let profile = profile.clone();
+        let password = Zeroizing::new(password.to_owned());
+        match tokio::task::spawn_blocking(move || {
+            store.remember_native_db_password(&profile, engine, &password, operation)
+        })
+        .await
+        {
+            Ok(result) => result.err(),
+            Err(_) => Some(format!("{engine} 암호를 저장할 수 없습니다.")),
+        }
     }
 
     pub(crate) fn delete_project_native_db_passwords(&self, db: &Connection, project: &str) -> Result<()> {
@@ -357,4 +421,103 @@ fn audit<T: Settings>(
             affected_count: Some(1),
         },
     )
+}
+
+#[cfg(all(test, windows))]
+mod password_tests {
+    use super::*;
+    use crate::{oracle, sql_server};
+
+    struct Entries(Vec<String>);
+
+    impl Drop for Entries {
+        fn drop(&mut self) {
+            for target in &self.0 {
+                let _ = vault::delete(target);
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a Windows user credential vault"]
+    async fn relational_credentials_follow_profile_revision_and_authentication() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let store = Store::open(dir.path().join("workspace.db"))?;
+        let project = store.create_project("Relational credential fixtures")?;
+        let sql = store.create_sql_server_profile(&project.id, sql_server::ProfileSettings {
+            name: "SQL credential fixture".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            database: "sample".into(),
+            authentication: sql_server::Authentication::SqlLogin,
+            username: Some("fixture".into()),
+            encryption: sql_server::Encryption::Required,
+            ca_path: None,
+            environment: "PROD".into(),
+        })?;
+        let oracle = store.create_oracle_profile(&project.id, oracle::ProfileSettings {
+            name: "Oracle credential fixture".into(),
+            host: "127.0.0.1".into(),
+            port: 1,
+            target: oracle::Target::ServiceName,
+            service: "SAMPLE".into(),
+            username: "fixture".into(),
+            transport: oracle::Transport::Tcps,
+            ca_path: None,
+            environment: "PROD".into(),
+        })?;
+        let _entries = Entries(vec![
+            vault::target(&store, "sql_server", &sql.id)?,
+            vault::target(&store, "oracle", &oracle.id)?,
+        ]);
+
+        let sql_manager = sql_server::Manager::new(store.clone());
+        let oracle_manager = oracle::Manager::new(store.clone());
+        let sql_attempt = sql_manager.open(sql.id.clone(), sql.revision, sql_server::PasswordAuthentication::Saved, "").await;
+        let oracle_attempt = oracle_manager.open(oracle.id.clone(), oracle.revision, oracle::PasswordAuthentication::Saved, "".into()).await;
+        for error in [sql_attempt.err(), oracle_attempt.err()] {
+            assert!(error.is_some_and(|error| error.contains("PROD")));
+        }
+        let sql_attempt = sql_manager.open(sql.id.clone(), sql.revision, sql_server::PasswordAuthentication::Saved, "PROD").await;
+        let oracle_attempt = oracle_manager.open(oracle.id.clone(), oracle.revision, oracle::PasswordAuthentication::Saved, "PROD".into()).await;
+        for error in [sql_attempt.err(), oracle_attempt.err()] {
+            assert!(error.is_some_and(|error| error.contains("저장된") && error.contains("없습니다")));
+        }
+
+        // Seed only temporary profile entries so the test can exercise native password
+        // resolution and invalidation without SQL Server or Oracle running.
+        let sql_secret = "x".repeat(129);
+        let oracle_secret = "x".repeat(257);
+        assert!(store.remember_connected_password(&sql, "SQL Server", &sql_secret, "sql_server.credential.save").await.is_none());
+        assert!(store.remember_connected_password(&oracle, "Oracle", &oracle_secret, "oracle.credential.save").await.is_none());
+        assert!(store.sql_server_credential_status(&sql.id, sql.revision)?.usable);
+        assert!(store.oracle_credential_status(&oracle.id, oracle.revision)?.usable);
+        let sql_attempt = sql_manager.open(sql.id.clone(), sql.revision, sql_server::PasswordAuthentication::Saved, "PROD").await;
+        let oracle_attempt = oracle_manager.open(oracle.id.clone(), oracle.revision, oracle::PasswordAuthentication::Saved, "PROD".into()).await;
+        for error in [sql_attempt.err(), oracle_attempt.err()] {
+            assert!(error.is_some_and(|error| error.contains("로그인 암호")));
+        }
+
+        let integrated = store.update_sql_server_profile(&sql.id, sql.revision, sql_server::ProfileSettings {
+            authentication: sql_server::Authentication::Windows,
+            username: None,
+            ..sql.settings
+        })?;
+        let status = serde_json::to_value(store.sql_server_credential_status(&integrated.id, integrated.revision)?)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(status, serde_json::json!({ "supported": true, "stored": true, "usable": false }));
+        let integrated_attempt = sql_manager.open(integrated.id.clone(), integrated.revision, sql_server::PasswordAuthentication::Saved, "PROD").await;
+        assert!(integrated_attempt.err().is_some_and(|error| error.contains("현재 Windows 계정")));
+        store.forget_sql_server_password(&integrated.id, integrated.revision)?;
+        assert!(vault::read(&_entries.0[0], |_| ())?.is_none());
+
+        let renamed = store.update_oracle_profile(&oracle.id, oracle.revision, oracle::ProfileSettings {
+            name: "Updated Oracle fixture".into(),
+            ..oracle.settings
+        })?;
+        assert!(!store.oracle_credential_status(&renamed.id, renamed.revision)?.usable);
+        store.forget_oracle_password(&renamed.id, renamed.revision)?;
+        assert!(vault::read(&_entries.0[1], |_| ())?.is_none());
+        Ok(())
+    }
 }

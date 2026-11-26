@@ -86,7 +86,7 @@ Windows 앱과 로컬 MongoDB 8.0.38에서 문서 23개의 전체 건수, 필터
 
 이름을 붙여 저장한 파이프라인은 프로젝트 내 다른 MongoDB 컬렉션이나 뷰에서도 열 수 있습니다. 작업 공간 스키마 v21은 단계 순서와 JSON 원문 및 활성 상태를 보관합니다. 프로젝트를 복제하면 파이프라인도 복사됩니다. **JSON 교환**에서 복사한 StackPort 형식은 다른 프로젝트에서도 가져올 수 있습니다. 불러오기와 가져오기는 편집기에 단계를 채우며, 집계는 미리보기 버튼으로 실행합니다.
 
-**SQL Server**는 호스트·TCP 포트·시작 데이터베이스·인증 방식·환경을 프로젝트에 저장합니다. SQL Server 로그인 암호는 접속할 때만 입력합니다. Windows 통합 인증을 선택하면 현재 Windows 계정으로 연결합니다. TLS는 필수이며 OS 신뢰 저장소와 선택한 PEM CA로 서버 인증서를 검증합니다. 서버가 TDS 8.0을 제공하면 엄격한 TLS를 선택할 수 있습니다. 운영 연결에는 `PROD` 확인이 필요합니다. [Tiberius](https://github.com/tiberius-rs/tiberius/releases/tag/v0.13.0) · [SQL Server의 엄격한 암호화](https://learn.microsoft.com/en-us/sql/relational-databases/security/networking/connect-with-strict-encryption)
+**SQL Server**는 호스트·TCP 포트·시작 데이터베이스·인증 방식·환경을 프로젝트에 저장합니다. SQL Server 로그인은 매번 암호를 입력하거나 Windows에 저장한 암호를 선택할 수 있습니다. Windows 통합 인증을 선택하면 현재 Windows 계정으로 연결합니다. TLS는 필수이며 OS 신뢰 저장소와 선택한 PEM CA로 서버 인증서를 검증합니다. 서버가 TDS 8.0을 제공하면 엄격한 TLS를 선택할 수 있습니다. 운영 연결에는 `PROD` 확인이 필요합니다. [Tiberius](https://github.com/tiberius-rs/tiberius/releases/tag/v0.13.0) · [SQL Server의 엄격한 암호화](https://learn.microsoft.com/en-us/sql/relational-databases/security/networking/connect-with-strict-encryption)
 
 SQL Server 작업 공간은 접속한 데이터베이스에서 계정에 공개된 스키마, 테이블, 뷰를 검색합니다. 열 이름·타입·NULL·IDENTITY를 표시하며, 미리보기는 앞 64개 열을 읽습니다. 테이블은 기본 키의 열 순서와 정렬 방향으로 50행씩 읽습니다. 기본 키가 없으면 한 번에 최대 50행을 표시합니다. 큰 정수와 소수는 문자열로, 바이너리는 HEX로 보존하며 값은 처음 256문자 또는 256바이트까지 표시합니다. 잘린 문자열의 크기는 UTF-16으로 변환한 전체 값의 바이트 수입니다. [SQL Server 메타데이터 공개 범위](https://learn.microsoft.com/en-us/sql/relational-databases/security/metadata-visibility-configuration)
 
@@ -110,7 +110,7 @@ SQL Server 테이블·뷰의 **결과 내보내기**는 적용된 필터와 정�
 
 SQL Server의 **키와 인덱스**는 현재 계정에 공개된 인덱스, 제약조건, 외래 키를 항목별로 50개씩 보여줍니다. 인덱스의 종류·고유 여부·비활성 상태, 키 순서와 정렬 방향, 포함 열, 공개된 필터와 파티션별 추정 행 수의 합계를 표시합니다. 제약조건에서 기본 키·고유 키·CHECK·DEFAULT를 확인합니다. 외래 키는 들어오는 참조·나가는 참조·자기 참조를 구분하며, 복합 키의 열 대응과 갱신·삭제 동작을 표시합니다. 공개된 테이블은 열 구조로 바로 이동하고 공개 범위 밖의 대상 이름과 열은 가립니다. [sys.index_columns](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-index-columns-transact-sql) · [sys.foreign_keys](https://learn.microsoft.com/en-us/sql/relational-databases/system-catalog-views/sys-foreign-keys-transact-sql)
 
-**Oracle Database**는 Oracle의 Rust Thin 드라이버 프리릴리스 버전을 고정해 사용합니다. Windows 실행 파일에서 별도 Oracle Instant Client 설치 없이 호스트·포트·서비스 이름 또는 SID를 지정해 접속합니다. 기본 전송 방식인 TCPS는 호스트 이름과 인증서를 검증하며 드라이버에 포함된 신뢰 루트와 선택한 PEM CA를 사용합니다. 일반 TCP도 선택할 수 있습니다. 암호는 연결할 때 입력하고 운영 환경에서는 `PROD`를 확인합니다. [Oracle Rust Thin 드라이버](https://oracle.github.io/rust-oracledb/)
+**Oracle Database**는 Oracle의 Rust Thin 드라이버 프리릴리스 버전을 고정해 사용합니다. Windows 실행 파일에서 별도 Oracle Instant Client 설치 없이 호스트·포트·서비스 이름 또는 SID를 지정해 접속합니다. 기본 전송 방식인 TCPS는 호스트 이름과 인증서를 검증하며 드라이버에 포함된 신뢰 루트와 선택한 PEM CA를 사용합니다. 일반 TCP도 선택할 수 있습니다. 암호는 연결할 때 입력하거나 Windows에 저장한 암호를 선택할 수 있으며, 운영 환경에서는 `PROD`를 확인합니다. [Oracle Rust Thin 드라이버](https://oracle.github.io/rust-oracledb/)
 
 Oracle 작업 공간은 접속한 서비스에서 계정에 공개된 스키마·테이블·뷰·구체화 뷰와 열 구조를 보여줍니다. 미리보기는 앞 64개 열을 표시하며, 유효한 기본 키가 있는 테이블은 50행씩 이동할 수 있습니다. Oracle NUMBER는 지정된 자릿수를 부동소수점으로 변환하지 않고 문자열로 표시합니다. 문자와 CLOB은 앞부분을, RAW와 BLOB은 앞 256바이트를 HEX로 읽습니다. [Oracle ALL_TAB_COLUMNS](https://docs.oracle.com/en/database/oracle/oracle-database/26/refrn/ALL_TAB_COLUMNS.html)
 
@@ -264,7 +264,7 @@ Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만
 
 Windows에서는 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 성공한 연결의 암호는 현재 Windows 사용자의 자격 증명 관리자에 보관합니다. **저장한 암호 사용**을 선택하면 연결, 서버 모니터, 백업, 복원에 네이티브 코드가 자격 증명을 전달합니다. 백업과 복원에서 `pg_dump`와 `pg_restore`에는 해당 프로세스의 환경으로 전달합니다. 각 작업에서 TLS와 운영 확인을 적용합니다.
 
-PostgreSQL, MySQL·MariaDB, Redis, MongoDB의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
+PostgreSQL, MySQL·MariaDB, Redis, MongoDB, SQL Server 로그인, Oracle의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 연결 창의 **연결 성공 후 Windows에 암호 저장**을 선택하면 서버 접속에 성공한 뒤 암호를 보관합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. SQL Server에서 Windows 통합 인증으로 전환한 뒤에도 이전에 저장한 암호를 삭제할 수 있습니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
 

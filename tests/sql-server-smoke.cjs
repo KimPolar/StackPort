@@ -679,7 +679,13 @@ async function verifyMockBindEditor(page) {
     const bridge = window.__TAURI_INTERNALS__;
     const fetchNative = window.fetch.bind(window);
     const responses = {
-      open_sql_server: () => ({ id: 'tds-editor-fixture', database: 'sample', version: 'fixture', context: 'fixture' }),
+      sql_server_credential_status: () => ({ supported: true, stored: true, usable: true }),
+      open_sql_server: ({ password, useSavedPassword, rememberPassword }) => {
+        if (password !== null || useSavedPassword !== true || rememberPassword !== false) {
+          throw new Error('Expected a saved credential request without a password');
+        }
+        return { id: 'tds-editor-fixture', database: 'sample', version: 'fixture', context: 'fixture' };
+      },
       sql_server_schemas: () => ({ items: ['dbo'], has_next: false }),
       sql_server_objects: () => ({ items: [], has_next: false }),
       close_sql_server: () => null,
@@ -722,7 +728,8 @@ async function verifyMockBindEditor(page) {
   const workspace = page.getByRole('region', { name: 'SQL Server 작업 공간', exact: true });
   await workspace.getByRole('button', { name: 'SQL Server 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'SQL Server 연결', exact: true });
-  await login.getByLabel('SQL Server 암호', { exact: true }).fill('synthetic-fixture');
+  await login.getByLabel('저장한 암호 사용', { exact: true }).check();
+  assert.equal(await login.getByLabel('SQL Server 암호', { exact: true }).count(), 0);
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();

@@ -2407,6 +2407,8 @@ const auditOperationNames: Record<string, string> = {
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
   "postgres.credential.save": "PostgreSQL 암호 저장", "postgres.credential.delete": "저장한 PostgreSQL 암호 삭제",
+  "sql_server.credential.save": "SQL Server 암호 저장", "sql_server.credential.delete": "저장한 SQL Server 암호 삭제",
+  "oracle.credential.save": "Oracle 암호 저장", "oracle.credential.delete": "저장한 Oracle 암호 삭제",
   "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
   "mysql_profile.create": "MySQL 계열 연결 추가", "mysql_profile.update": "MySQL 계열 연결 수정", "mysql_profile.delete": "MySQL 계열 연결 삭제",
   "mongo_profile.create": "MongoDB 연결 추가", "mongo_profile.update": "MongoDB 연결 수정", "mongo_profile.delete": "MongoDB 연결 삭제",

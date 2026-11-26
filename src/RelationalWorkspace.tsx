@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type React
 import { invoke } from "@tauri-apps/api/core";
 import { Archive, Database, Download, Plug, RefreshCw, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
 import { OracleDataPumpDialog } from "./OracleDataPumpDialog";
@@ -18,7 +19,7 @@ import { networkAddressText } from "./quickConnect";
 import { useNativeRead } from "./usePostgresRead";
 import "./mysqlWorkspace.css";
 
-type Session = { id: string; database: string; version: string; context?: string };
+type Session = { id: string; database: string; version: string; context?: string; credential_warning?: string | null };
 type CatalogPage<T> = { items: T[]; has_next: boolean };
 type ServerObject = { id: number | string; schema: string; name: string; kind: "table" | "view" | "materialized_view" };
 const objectKind = { table: "테이블", view: "뷰", materialized_view: "구체화 뷰" };
@@ -42,7 +43,7 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   const [login, setLogin] = useState(false);
   const [backupTool, setBackupTool] = useState<"backup" | "restore" | null>(null);
   const [busy, setBusy] = useState(false);
-  const [password, setPassword] = useState("");
+  const [token, setToken] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const active = useRef<string | null>(null);
@@ -50,6 +51,8 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   const pending = useRef(false);
   const confirmationHint = useId();
   const { settings } = profile;
+  const credentialEngine = prefix === "snowflake" ? null : prefix;
+  const credentials = useDatabaseCredentials(credentialEngine, login && credentialEngine ? profile : null);
   const production = settings.environment === "PROD";
   const endpoint = settings.port === undefined ? settings.host : networkAddressText({ host: settings.host, port: settings.port });
 
@@ -62,16 +65,17 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   }, [prefix]);
 
   function closeLogin() {
-    setLogin(false); setPassword(""); setConfirmation(""); setError("");
+    setLogin(false); setToken(""); credentials.setPassword(""); setConfirmation(""); setError("");
   }
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (pending.current) return;
-    pending.current = true; setBusy(true); setError(""); setPassword("");
+    if (pending.current || credentials.clearing) return;
+    pending.current = true; setBusy(true); setError(""); setToken("");
     try {
       const next = await invoke<Session>("open_" + prefix, {
-        profileId: profile.id, revision: profile.revision, [tokenLabel ? "token" : "password"]: password, confirmation,
+        profileId: profile.id, revision: profile.revision, confirmation,
+        ...(credentialEngine ? (passwordless ? { password: "" } : credentials.take()) : { token }),
       });
       if (!mounted.current) { await invoke("close_" + prefix, { id: next.id }); return; }
       active.current = next.id; setSession(next); closeLogin();
@@ -106,6 +110,7 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
+    {session?.credential_warning && <p className="form-note" role="status">{session.credential_warning}</p>}
     {session && <RelationalViews key={session.id} session={session} profile={profile} editor={editor} engine={engine} prefix={prefix} />}
     {session && prefix === "sql_server" && backupTool === "backup" && <SqlServerBackupDialog id={session.id}
       server={`${settings.name} · ${endpoint}`} database={session.database} environment={settings.environment}
@@ -118,11 +123,12 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
-        {!passwordless
-          ? <label className="field">{tokenLabel ?? engine + " 암호"}<input autoFocus type="password" autoComplete="off" value={password}
-            required={Boolean(tokenLabel)} maxLength={tokenLabel ? 16_384 : passwordLimit}
-            disabled={busy} onChange={event => setPassword(event.target.value)} /></label>
-          : <p className="form-note">현재 Windows 계정으로 연결합니다.</p>}
+        {passwordless && <p className="form-note">현재 Windows 계정으로 연결합니다.</p>}
+        {credentialEngine
+          ? <DatabasePasswordField credentials={credentials} allowRemember acceptsPassword={!passwordless}
+            autoFocus disabled={busy} maxLength={passwordLimit} />
+          : <label className="field">{tokenLabel}<input autoFocus type="password" autoComplete="off" value={token}
+            required maxLength={16_384} disabled={busy} onChange={event => setToken(event.target.value)} /></label>}
         {transportNote && <p className="form-note">{transportNote}</p>}
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" autoComplete="off"
           aria-describedby={confirmationHint} value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} />
@@ -130,7 +136,7 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="dialog-actions">
           <button type="button" className="secondary" disabled={busy} onClick={closeLogin}>취소</button>
-          <button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button>
+          <button type="submit" className="primary" disabled={busy || credentials.clearing || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button>
         </div>
       </form>
     </Dialog>}

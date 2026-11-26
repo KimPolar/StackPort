@@ -1243,9 +1243,26 @@ async fn delete_sql_server_profile(store: State<'_, Store>, id: String, revision
 }
 
 #[tauri::command]
+async fn sql_server_credential_status(store: State<'_, Store>, profile_id: String, revision: i64)
+    -> Result<sql_server::CredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.sql_server_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_sql_server_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_sql_server_password(&profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn open_sql_server(manager: State<'_, sql_server::Manager>, profile_id: String, revision: i64,
-    password: sql_server::Password, confirmation: String) -> Result<sql_server::SessionInfo, String> {
-    manager.open(profile_id, revision, password, &confirmation).await
+    password: Option<sql_server::Password>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String) -> Result<sql_server::SessionInfo, String> {
+    let authentication = sql_server::PasswordAuthentication::requested(
+        password, use_saved_password.unwrap_or(false), remember_password.unwrap_or(false), "SQL Server",
+    )?;
+    manager.open(profile_id, revision, authentication, &confirmation).await
 }
 
 #[tauri::command]
@@ -1404,9 +1421,26 @@ async fn delete_oracle_profile(store: State<'_, Store>, id: String, revision: i6
 }
 
 #[tauri::command]
+async fn oracle_credential_status(store: State<'_, Store>, profile_id: String, revision: i64)
+    -> Result<oracle::CredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.oracle_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_oracle_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_oracle_password(&profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn open_oracle(manager: State<'_, oracle::Manager>, profile_id: String, revision: i64,
-    password: oracle::Password, confirmation: String) -> Result<oracle::SessionInfo, String> {
-    manager.open(profile_id, revision, password, confirmation).await
+    password: Option<oracle::Password>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String) -> Result<oracle::SessionInfo, String> {
+    let authentication = oracle::PasswordAuthentication::requested(
+        password, use_saved_password.unwrap_or(false), remember_password.unwrap_or(false), "Oracle",
+    )?;
+    manager.open(profile_id, revision, authentication, confirmation).await
 }
 
 #[tauri::command]
@@ -3197,6 +3231,8 @@ fn main() {
             create_sql_server_profile,
             update_sql_server_profile,
             delete_sql_server_profile,
+            sql_server_credential_status,
+            forget_sql_server_password,
             open_sql_server,
             close_sql_server,
             sql_server_schemas,
@@ -3227,6 +3263,8 @@ fn main() {
             create_oracle_profile,
             update_oracle_profile,
             delete_oracle_profile,
+            oracle_credential_status,
+            forget_oracle_password,
             open_oracle,
             close_oracle,
             oracle_schemas,

@@ -8,6 +8,7 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
+pub use crate::credential_store::CredentialStatus;
 pub use data_pump::{
     DumpHeader, PumpCapabilities, PumpExportOptions, PumpImportOptions, PumpImportOutcome,
     PumpImportPreview, PumpOutcome, PumpPreview, PumpProgress,
@@ -49,6 +50,8 @@ const CLOSED: &str = "Oracle 연결이 닫혔습니다. 다시 연결하세요."
 #[serde(transparent)]
 pub struct Password(#[serde(deserialize_with = "deserialize_password")] Zeroizing<String>);
 
+pub type PasswordAuthentication = crate::db_profiles::PasswordAuthentication<Password>;
+
 fn deserialize_password<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -60,6 +63,7 @@ pub struct SessionInfo {
     id: String,
     database: String,
     version: String,
+    credential_warning: Option<String>,
 }
 
 struct Session {
@@ -80,6 +84,16 @@ pub struct Manager {
     capacity: Arc<Semaphore>,
 }
 
+impl Store {
+    pub fn oracle_credential_status(&self, id: &str, revision: i64) -> Result<CredentialStatus> {
+        self.native_db_credential_status::<ProfileSettings>(id, revision, "Oracle")
+    }
+
+    pub fn forget_oracle_password(&self, id: &str, revision: i64) -> Result<()> {
+        self.forget_native_db_password::<ProfileSettings>(id, revision, "oracle.credential.delete")
+    }
+}
+
 impl Manager {
     pub fn new(store: Store) -> Self {
         Self {
@@ -93,10 +107,11 @@ impl Manager {
         &self,
         profile_id: String,
         revision: i64,
-        password: Password,
+        credentials: impl Into<PasswordAuthentication>,
         confirmation: String,
     ) -> Result<SessionInfo> {
         let store = self.store.clone();
+        let credentials = credentials.into();
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 Oracle 연결이 너무 많습니다.")?;
@@ -106,6 +121,7 @@ impl Manager {
             if settings.environment == "PROD" && confirmation != "PROD" {
                 return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
             }
+            let (password, remember) = credentials.resolve(&store, &profile, "Oracle", Password)?;
             if password.0.is_empty() || password.0.len() > 256 || password.0.contains('\0') {
                 return Err("Oracle 로그인 암호를 확인하세요.".into());
             }
@@ -117,23 +133,30 @@ impl Manager {
                 service
             };
             let version = connection.version().map_err(query_error)?.to_string();
-            let session = Session {
-                connection: Arc::new(AsyncMutex::new(connection)),
-                closed: AtomicBool::new(false),
-                profile,
-                password: Mutex::new(Some(password)),
-                export: Mutex::new(export::State::default()),
-                data_pump: Mutex::new(data_pump::State::default()),
-                query: Mutex::new(None),
-                _wallet: wallet,
-                _permit: permit,
-            };
-            Ok::<_, String>((session, database, version))
+            Ok::<_, String>((connection, wallet, profile, password, remember, database, version, permit))
         });
-        let (session, database, version) = timeout(OPEN_TIMEOUT, opened)
+        let (connection, wallet, profile, password, remember, database, version, permit) = timeout(OPEN_TIMEOUT, opened)
             .await
             .map_err(|_| "Oracle 연결 시간이 초과되었습니다.")?
             .map_err(|_| "Oracle 연결 작업을 마치지 못했습니다.")??;
+        let credential_warning = if remember {
+            self.store
+                .remember_connected_password(&profile, "Oracle", &password.0, "oracle.credential.save")
+                .await
+        } else {
+            None
+        };
+        let session = Session {
+            connection: Arc::new(AsyncMutex::new(connection)),
+            closed: AtomicBool::new(false),
+            profile,
+            password: Mutex::new(Some(password)),
+            export: Mutex::new(export::State::default()),
+            data_pump: Mutex::new(data_pump::State::default()),
+            query: Mutex::new(None),
+            _wallet: wallet,
+            _permit: permit,
+        };
         let id = Uuid::new_v4().to_string();
         self.sessions
             .lock()
@@ -143,6 +166,7 @@ impl Manager {
             id,
             database,
             version,
+            credential_warning,
         })
     }
 

@@ -402,7 +402,13 @@ async function verifyMockBindEditor(page) {
       }
     };
     const commands = {
-      open_oracle: () => ({ id: 'oracle-fixture', database: 'FREEPDB1', version: 'fixture' }),
+      oracle_credential_status: () => ({ supported: true, stored: false, usable: false }),
+      open_oracle: ({ password, useSavedPassword, rememberPassword }) => {
+        if (password !== 'synthetic-local-fixture' || useSavedPassword !== false || rememberPassword !== true) {
+          throw new Error('Expected the entered password and explicit storage request');
+        }
+        return { id: 'oracle-fixture', database: 'FREEPDB1', version: 'fixture', credential_warning: '검증용 암호 저장 오류' };
+      },
       oracle_schemas: () => ({ items: ['SP_FIXTURE'], has_next: false }),
       oracle_objects: () => ({ items: [], has_next: false }),
       close_oracle: () => null,
@@ -447,8 +453,10 @@ async function verifyMockBindEditor(page) {
   await workspace.getByRole('button', { name: engine + ' 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: engine + ' 연결', exact: true });
   await login.getByLabel(engine + ' 암호', { exact: true }).fill('synthetic-local-fixture');
+  await login.getByLabel('연결 성공 후 Windows에 암호 저장', { exact: true }).check();
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('status').getByText('검증용 암호 저장 오류', { exact: true }).waitFor();
   await workspace.getByRole('button', { name: 'SQL 편집기', exact: true }).click();
   await verifySqlDocumentTabs(page, workspace, 'Oracle SQL 문장');
   const pane = workspace.getByRole('region', { name: 'Oracle SQL 편집기', exact: true });

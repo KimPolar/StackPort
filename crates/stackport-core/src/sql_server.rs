@@ -10,6 +10,7 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
+pub use crate::credential_store::CredentialStatus;
 pub use backup::{BackupCapabilities, BackupOptions, BackupOutcome, BackupPreview, BackupProgress, RestoreOptions, RestorePreview, VerifyInput};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
 pub use query::{QueryInput, QueryOutcome};
@@ -44,6 +45,8 @@ type SqlClient = Client<Compat<TcpStream>>;
 #[serde(transparent)]
 pub struct Password(#[serde(deserialize_with = "deserialize_password")] Zeroizing<String>);
 
+pub type PasswordAuthentication = crate::db_profiles::PasswordAuthentication<Password>;
+
 fn deserialize_password<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -55,6 +58,7 @@ pub struct SessionInfo {
     id: String,
     database: String,
     version: String,
+    credential_warning: Option<String>,
 }
 
 struct Session {
@@ -74,6 +78,16 @@ pub struct Manager {
     capacity: Arc<Semaphore>,
 }
 
+impl Store {
+    pub fn sql_server_credential_status(&self, id: &str, revision: i64) -> Result<CredentialStatus> {
+        self.native_db_credential_status::<ProfileSettings>(id, revision, "SQL Server")
+    }
+
+    pub fn forget_sql_server_password(&self, id: &str, revision: i64) -> Result<()> {
+        self.forget_native_db_password::<ProfileSettings>(id, revision, "sql_server.credential.delete")
+    }
+}
+
 impl Manager {
     pub fn new(store: Store) -> Self {
         Self {
@@ -87,18 +101,28 @@ impl Manager {
         &self,
         profile_id: String,
         revision: i64,
-        password: Password,
+        credentials: impl Into<PasswordAuthentication>,
         confirmation: &str,
     ) -> Result<SessionInfo> {
         let store = self.store.clone();
-        let profile =
-            tokio::task::spawn_blocking(move || store.sql_server_profile(&profile_id, revision))
-                .await
-                .map_err(|_| "SQL Server 연결 설정을 읽을 수 없습니다.")??;
+        let credentials = credentials.into();
+        let confirmed = confirmation == "PROD";
+        let (profile, password, remember) = tokio::task::spawn_blocking(move || {
+            let profile = store.sql_server_profile(&profile_id, revision)?;
+            if profile.settings.environment == "PROD" && !confirmed {
+                return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+            }
+            if matches!(profile.settings.authentication, Authentication::Windows)
+                && !matches!(&credentials, PasswordAuthentication::Entered { remember: false, .. })
+            {
+                return Err("Windows 통합 인증은 현재 Windows 계정을 사용합니다.".into());
+            }
+            let (password, remember) = credentials.resolve(&store, &profile, "SQL Server", Password)?;
+            Ok::<_, String>((profile, password, remember))
+        })
+        .await
+        .map_err(|_| "SQL Server 연결 설정을 읽을 수 없습니다.")??;
         let settings = &profile.settings;
-        if settings.environment == "PROD" && confirmation != "PROD" {
-            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
-        }
         if password.0.encode_utf16().count() > 128 || password.0.contains('\0') {
             return Err("SQL Server 로그인 암호를 확인하세요.".into());
         }
@@ -125,6 +149,13 @@ impl Manager {
         })
         .await
         .map_err(|_| "SQL Server 연결 시간이 초과되었습니다.")??;
+        let credential_warning = if remember && !password.0.is_empty() {
+            self.store
+                .remember_connected_password(&profile, "SQL Server", &password.0, "sql_server.credential.save")
+                .await
+        } else {
+            None
+        };
         let id = Uuid::new_v4().to_string();
         self.sessions
             .lock()
@@ -146,6 +177,7 @@ impl Manager {
             id,
             database,
             version,
+            credential_warning,
         })
     }
 

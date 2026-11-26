@@ -37,12 +37,12 @@ PARTIAL = {
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기, DBMS 9종과 SSH 연결의 설정 기반 복제",
     "SP-CN-005": "선택한 SSH·데이터베이스 연결의 버전형 JSON 내보내기, 검토한 파일에서 선택한 연결만 가져오기, DB 이름 변경·로컬 파일 연결과 일괄 등록",
-    "SP-CN-007": "SSH 터미널 일회성 암호, PostgreSQL·MySQL·MariaDB·Redis·MongoDB Windows 연결 성공 후 선택적 암호 저장·재사용·삭제",
+    "SP-CN-007": "SSH 터미널 일회성 암호, PostgreSQL·MySQL·MariaDB·Redis·MongoDB·SQL Server·Oracle Windows 연결 성공 후 선택적 암호 저장·재사용·삭제",
     "SP-CN-008": "Windows SSH 세션에서 키 파일 1~8개 선택과 암호화된 키의 터미널 암호 입력",
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-011": "PostgreSQL·MySQL 계열 TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 서버 인증서 체인·호스트 이름·유효기간 검증, MySQL 계열 PEM 클라이언트 인증",
-    "SP-CN-012": "Windows 저장 암호를 사용하는 PostgreSQL 연결·모니터·백업·복원, MySQL·MariaDB 연결·예약 백업, Redis 연결·Pub/Sub 구독, MongoDB 연결·백업·복원",
+    "SP-CN-012": "Windows 저장 암호를 사용하는 PostgreSQL 연결·모니터·백업·복원, MySQL·MariaDB 연결·예약 백업, Redis 연결·Pub/Sub 구독, MongoDB 연결·백업·복원, SQL Server 로그인·Oracle 연결",
     "SP-CN-014": "SSH 연결 JSON에서 암호·개인 키·호스트 키 신뢰 정보 제외, DB 연결 JSON에서 암호·토큰·인증서·개인 키 경로 제외 및 가져오는 장치에서 필요한 파일 재선택",
     "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",
     "SP-CN-017": "프로젝트별 로컬(-L)·동적 SOCKS5(-D)·원격(-R) TCP 전달 등록·수정·삭제·시작·중단과 선택적 SSH 경유",
@@ -196,7 +196,7 @@ PARTIAL = {
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
     "SP-SEC-003": "SFTP 원격 삭제와 SQLite 셀 변경의 영향·운영 확인, 쓰기 SQL의 범위·연결·환경·위험 유형 표시, MySQL 계열 복원의 원본·새 DB·환경 확인과 기존 이름 충돌 방지",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
-    "SP-SEC-006": "PostgreSQL, MySQL·MariaDB, Redis, MongoDB 연결 암호의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정 검증과 네이티브 재사용, 임시 버퍼 정리",
+    "SP-SEC-006": "PostgreSQL, MySQL·MariaDB, Redis, MongoDB, SQL Server 로그인, Oracle 연결 암호의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정 검증과 네이티브 재사용, 임시 버퍼 정리",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키와 MongoDB 문서 변경·삭제 및 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
     "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키·MongoDB 문서 변경, SFTP 삭제·원격 편집 저장에도 확인",
@@ -430,7 +430,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence
             if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-SEC-006"}:
-                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs"
+                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; crates/stackport-core/src/db_profiles.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs"
                 evidence = credential_evidence if requirement_id == "SP-SEC-006" else evidence + "; " + credential_evidence
             if requirement_id in {
                 "SP-UI-002", "SP-UI-006", "SP-UI-011", "SP-CN-001", "SP-CN-003", "SP-CN-011", "SP-CN-012",
