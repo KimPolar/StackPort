@@ -10,9 +10,15 @@ type Plan = {
 type Run = {
   id: string; status: "running" | "succeeded" | "failed" | "interrupted"; trigger_kind: "scheduled" | "retry" | "manual";
   started_at: number; finished_at: number | null; expires_at: number | null; path: string; size_bytes: number | null; message: string | null;
+  artifact: {
+    sha256: string; engine_version: string; verified_at: number | null; removal_started_at: number | null;
+    removed_at: number | null; owned_here: boolean; removal_supported: boolean;
+  } | null;
 };
 type Snapshot = { plan: Plan | null; runs: Run[] };
+type ExpiredPage = { runs: Run[]; next_before: number | null };
 type Capacity = { directory: string; estimated_bytes: number; available_bytes: number | null };
+type RemovalPreview = { token: string; path: string; size_bytes: number; sha256: string; expires_at: number };
 type Draft = {
   revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
   periodic: boolean; minutes: string; retention: string; retry: boolean;
@@ -50,9 +56,12 @@ export function SqliteBackupPlanDialog({ profile, displayPath, onClose }: {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [capacity, setCapacity] = useState<Capacity | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "refresh" | "pause" | "">("");
+  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "refresh" | "pause" | "file" | "history" | "">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [removal, setRemoval] = useState<{ run: Run; preview: RemovalPreview } | null>(null);
+  const [fileFeedback, setFileFeedback] = useState<{ runId: string; text: string; error: boolean } | null>(null);
+  const [expiredPage, setExpiredPage] = useState<ExpiredPage | null>(null);
   const profileId = profile.id;
 
   useEffect(() => {
@@ -127,10 +136,32 @@ export function SqliteBackupPlanDialog({ profile, displayPath, onClose }: {
     });
   }
 
+  async function performFile(run: Run, action: () => Promise<string>) {
+    if (busy) return;
+    setBusy("file");
+    setFileFeedback(null);
+    try {
+      const text = await action();
+      if (text) setFileFeedback({ runId: run.id, text, error: false });
+    } catch (cause) {
+      setFileFeedback({ runId: run.id, text: String(cause), error: true });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function browseExpired(before: number | null) {
+    void perform("history", async () => {
+      const page = await invoke<ExpiredPage>("expired_sqlite_backups", { profileId, before });
+      setExpiredPage(current => current && before !== null ? { ...page, runs: [...current.runs, ...page.runs] } : page);
+    });
+  }
+
   const plan = snapshot?.plan;
   const stale = draft && draft.revision !== (plan?.revision ?? null);
   const nextAt = plan?.next_at ? dateText(plan.next_at) : "예약 없음";
   const running = snapshot?.runs.some(run => run.status === "running");
+  const runs = expiredPage?.runs ?? snapshot?.runs ?? [];
 
   return <Dialog title="SQLite 백업 계획" className="sqlite-backup-plan" onClose={onClose} busy={Boolean(busy)}>
     {!draft ? <div className="backup-run-history">
@@ -159,7 +190,7 @@ export function SqliteBackupPlanDialog({ profile, displayPath, onClose }: {
           <label className="field">보존 기간 (일)<input required type="number" min={1} max={3650} step={1} value={draft.retention}
             disabled={Boolean(busy)} onChange={event => change("retention", event.target.value)} /></label>
         </div>
-        <p className="form-note">파일 이름에 UTC 실행 시각과 고유 ID가 붙습니다. 만료된 파일은 직접 정리합니다.</p>
+        <p className="form-note">파일 이름에 UTC 실행 시각과 고유 ID가 붙습니다. 보존 기간이 지난 파일은 실행 이력에서 검토 후 삭제할 수 있습니다.</p>
         <label className="files-check"><input type="checkbox" checked={draft.scheduled} disabled={Boolean(busy)}
           onChange={event => change("scheduled", event.target.checked)} /> 예약 실행</label>
         {draft.scheduled && <div className="backup-plan-fields">
@@ -197,14 +228,75 @@ export function SqliteBackupPlanDialog({ profile, displayPath, onClose }: {
       </form>
       <section className="backup-run-history" aria-label="백업 실행 이력">
         <h3>실행 이력</h3>
-        {snapshot?.runs.length ? snapshot.runs.map(run => <details key={run.id}>
+        <div className="backup-file-actions" aria-label="백업 목록 보기" role="group">
+          <button type="button" className="secondary small" aria-pressed={!expiredPage} disabled={Boolean(busy)}
+            onClick={() => setExpiredPage(null)}>최근 실행</button>
+          <button type="button" className="secondary small" aria-pressed={Boolean(expiredPage)} disabled={Boolean(busy)}
+            onClick={() => browseExpired(null)}>만료 파일</button>
+        </div>
+        {fileFeedback && !fileFeedback.error && !runs.some(run => run.id === fileFeedback.runId) &&
+          <p className="form-note" role="status">{fileFeedback.text}</p>}
+        {runs.length ? runs.map(run => <details key={run.id}>
           <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]} · {dateText(run.started_at)}</summary>
           <p>{displayPath(run.path)}</p>
           {run.size_bytes !== null && <p>백업 크기 {size(run.size_bytes)}
             {run.expires_at !== null && " · 보존 만료 " + dateText(run.expires_at)}</p>}
           {run.message && <p>{run.message}</p>}
-        </details>) : <p className="form-note">실행 이력이 없습니다.</p>}
+          {run.artifact && <>
+            <p>백업 엔진 SQLite {run.artifact.engine_version}</p>
+            <p>SHA-256 <code>{run.artifact.sha256}</code></p>
+            {run.artifact.verified_at !== null && <p>마지막 지문 확인 {dateText(run.artifact.verified_at)}</p>}
+            {run.artifact.removed_at !== null ? <p>파일 삭제 완료 {dateText(run.artifact.removed_at)}</p> : <>
+              {run.artifact.removal_started_at !== null && <p>삭제 결과 확인 필요</p>}
+              {run.artifact.owned_here && <div className="backup-file-actions">
+                <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => void performFile(run, async () => {
+                  const checked = await invoke<number>("verify_sqlite_backup_file", { profileId, runId: run.id });
+                  setExpiredPage(current => current && { ...current, runs: current.runs.map(item =>
+                    item.id === run.id && item.artifact ? { ...item, artifact: { ...item.artifact, verified_at: checked } } : item) });
+                  return "파일 지문이 생성 당시 기록과 일치합니다.";
+                })}>파일 지문 확인</button>
+                {run.artifact.removal_supported && run.expires_at !== null && run.expires_at <= Date.now() / 1000 &&
+                  <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => void performFile(run, async () => {
+                    const preview = await invoke<RemovalPreview>("preview_sqlite_backup_removal", { profileId, runId: run.id });
+                    setRemoval({ run, preview });
+                    return "";
+                  })}>만료 파일 삭제</button>}
+              </div>}
+            </>}
+          </>}
+          {run.status === "succeeded" && !run.artifact && <p>이 백업은 생성 시점의 파일 지문 기록이 없는 이전 형식입니다.</p>}
+          {fileFeedback?.runId === run.id && <p className={fileFeedback.error ? "form-error" : "form-note"}
+            role={fileFeedback.error ? "alert" : "status"}>{fileFeedback.text}</p>}
+        </details>) : <p className="form-note">{expiredPage ? "정리할 만료 파일이 없습니다." : "실행 이력이 없습니다."}</p>}
+        {expiredPage?.next_before != null && <button type="button" className="secondary small" disabled={Boolean(busy)}
+          onClick={() => browseExpired(expiredPage.next_before)}>더 보기</button>}
       </section>
     </>}
+    {removal && <Dialog title="만료 백업 영구 삭제" busy={Boolean(busy)} onClose={() => setRemoval(null)}>
+      <form onSubmit={event => {
+        event.preventDefault();
+        void performFile(removal.run, async () => {
+          try {
+            const result = await invoke<{ removed_at: number; audit_warning: boolean }>("remove_sqlite_backup_file", {
+              token: removal.preview.token, confirmed: true,
+            });
+            setExpiredPage(current => current && { ...current, runs: current.runs.filter(run => run.id !== removal.run.id) });
+            return result.audit_warning ? "파일을 삭제했습니다. 완료 감사 기록을 저장하지 못했습니다." : "만료 백업 파일을 삭제했습니다.";
+          } finally { setRemoval(null); }
+        });
+      }}>
+        <p className="confirm-copy">다음 백업 파일 한 개를 디스크에서 영구 삭제합니다.</p>
+        <div className="edit-current">
+          <p><strong>{profile.name}</strong> <span className={"environment " + profile.environment.toLowerCase()}>{profile.environment}</span></p>
+          <p>{displayPath(removal.preview.path)}</p>
+          <p>{size(removal.preview.size_bytes)} · 보존 만료 {dateText(removal.preview.expires_at)}</p>
+          <p>SHA-256 <code>{removal.preview.sha256}</code></p>
+        </div>
+        <div className="dialog-actions">
+          <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => setRemoval(null)}>취소</button>
+          <button type="submit" className="danger" disabled={Boolean(busy)}>{busy ? "삭제 중…" : "영구 삭제"}</button>
+        </div>
+      </form>
+    </Dialog>}
   </Dialog>;
 }

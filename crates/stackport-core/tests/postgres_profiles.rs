@@ -165,7 +165,7 @@ fn version_ten_backup_preserves_existing_profiles_after_success_or_failure() {
             .create_postgres_profile(&project.id, settings())
             .unwrap();
         let db = Connection::open(&path).unwrap();
-        db.execute_batch("DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=10;")
+        db.execute_batch("DROP TABLE backup_artifacts; DROP TABLE backup_runs; DROP TABLE backup_plans; DROP TABLE sql_parameter_sets; DROP TABLE table_query_presets; DROP TABLE native_db_profiles; DROP TABLE mysql_profiles; DROP TABLE redis_profiles; DROP TABLE workspace_favorites; ALTER TABLE sql_templates DROP COLUMN dialect; PRAGMA user_version=10;")
             .unwrap();
         if conflict {
             db.execute_batch("CREATE VIEW table_query_presets AS SELECT 1;")
@@ -198,7 +198,7 @@ fn version_ten_backup_preserves_existing_profiles_after_success_or_failure() {
                     .contains(".v10-")
             })
             .unwrap();
-        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 22 })] {
+        for (file, version) in [(backup, 10), (path, if conflict { 10 } else { 23 })] {
             let db = Connection::open(file).unwrap();
             assert_eq!(
                 db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

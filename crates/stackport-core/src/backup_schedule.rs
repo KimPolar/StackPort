@@ -1,5 +1,8 @@
 //! Locally scheduled, verified SQLite snapshots.
-use crate::{db_error, open_user_db, Result, Store};
+use crate::{
+    backup_artifact::{self, ArtifactSummary},
+    db_error, open_user_db, Result, Store,
+};
 use chrono::{DateTime, Utc};
 use rusqlite::hooks::{AuthContext, Authorization};
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
@@ -81,12 +84,19 @@ pub struct BackupRun {
     path: String,
     size_bytes: Option<u64>,
     message: Option<String>,
+    artifact: Option<ArtifactSummary>,
 }
 
 #[derive(Serialize)]
 pub struct BackupPlanState {
     plan: Option<BackupPlan>,
     runs: Vec<BackupRun>,
+}
+
+#[derive(Serialize)]
+pub struct ExpiredBackupPage {
+    runs: Vec<BackupRun>,
+    next_before: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -134,15 +144,47 @@ impl Store {
         }
         let mut statement = db
             .prepare(&format!(
-                "{RUN_SELECT} WHERE profile_id = ?1 ORDER BY started_at DESC, rowid DESC LIMIT 40"
+                "{RUN_SELECT} WHERE r.profile_id = ?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 40"
             ))
             .map_err(db_error)?;
         let runs = statement
-            .query_map([profile_id], run_from_row)
+            .query_map(params![profile_id, workspace_path], run_from_row)
             .map_err(db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)?;
         Ok(BackupPlanState { plan, runs })
+    }
+
+    pub fn expired_sqlite_backups(
+        &self,
+        profile_id: &str,
+        before: Option<i64>,
+    ) -> Result<ExpiredBackupPage> {
+        self.profile(profile_id)?;
+        let directory = self.backup_workspace_path()?;
+        let db = self.connect()?;
+        let mut statement = db
+            .prepare(&format!(
+            "{RUN_SELECT} WHERE r.profile_id=?1 AND r.workspace_path=?2 AND r.status='succeeded'
+             AND a.file_id IS NOT NULL AND a.removed_at IS NULL AND r.expires_at<=?3
+             AND (?4 IS NULL OR r.rowid<?4) ORDER BY r.rowid DESC LIMIT 41"
+        ))
+            .map_err(db_error)?;
+        let mut results = statement
+            .query_map(params![profile_id, directory, unix_now()?, before], |row| {
+                Ok((row.get::<_, i64>(17)?, run_from_row(row)?))
+            })
+            .map_err(db_error)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_error)?;
+        let next_before = if results.len() == 41 {
+            results.pop();
+            results.last().map(|(rowid, _)| *rowid)
+        } else {
+            None
+        };
+        let runs = results.into_iter().map(|(_, run)| run).collect();
+        Ok(ExpiredBackupPage { runs, next_before })
     }
 
     pub fn save_sqlite_backup_plan(
@@ -341,19 +383,36 @@ impl Store {
                         "백업 폴더의 여유 공간이 원본의 예상 백업 크기보다 작습니다.".into(),
                     );
                 }
-                self.backup_sqlite(&profile_id, &path)
+                self.backup_sqlite_with(&profile_id, &path, backup_artifact::measure)
             });
         let finished_at = unix_now()?.max(now);
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let (status, expires_at, size_bytes, message) = match result {
-            Ok(report) => (
-                "succeeded",
-                Some(finished_at + plan.retention_days * 86_400),
-                Some(report.size_bytes),
-                report.audit_warning,
-            ),
+        let (status, expires_at, size_bytes, message, artifact) = match result {
+            Ok((report, evidence)) => {
+                let engine_version = rusqlite::version();
+                tx.execute(
+                    "INSERT INTO backup_artifacts (run_id, sha256, file_id, engine_version) VALUES (?1, ?2, ?3, ?4)",
+                    params![id, evidence.sha256, evidence.file_id, engine_version],
+                ).map_err(db_error)?;
+                let artifact = ArtifactSummary {
+                    sha256: evidence.sha256,
+                    engine_version: engine_version.into(),
+                    owned_here: true,
+                    removal_supported: cfg!(windows) && evidence.file_id.is_some(),
+                    verified_at: None,
+                    removal_started_at: None,
+                    removed_at: None,
+                };
+                (
+                    "succeeded",
+                    Some(finished_at + plan.retention_days * 86_400),
+                    Some(report.size_bytes),
+                    report.audit_warning,
+                    Some(artifact),
+                )
+            }
             Err(error) => {
                 if trigger_kind == "scheduled"
                     && plan.retry_once
@@ -364,7 +423,7 @@ impl Store {
                         params![profile_id, plan.revision, finished_at + RETRY_DELAY],
                     ).map_err(db_error)?;
                 }
-                ("failed", None, None, Some(error))
+                ("failed", None, None, Some(error), None)
             }
         };
         let updated = tx.execute(
@@ -389,10 +448,11 @@ impl Store {
             path: path.into_owned(),
             size_bytes,
             message,
+            artifact,
         }))
     }
 
-    fn backup_workspace_path(&self) -> Result<String> {
+    pub(crate) fn backup_workspace_path(&self) -> Result<String> {
         let path = self
             .path
             .canonicalize()
@@ -401,7 +461,11 @@ impl Store {
     }
 }
 
-const RUN_SELECT: &str = "SELECT id, profile_id, status, trigger_kind, started_at, finished_at, expires_at, path, size_bytes, message FROM backup_runs";
+const RUN_SELECT: &str =
+    "SELECT r.id, r.profile_id, r.status, r.trigger_kind, r.started_at, r.finished_at,
+    r.expires_at, r.path, r.size_bytes, r.message, a.sha256, a.engine_version, a.verified_at,
+    a.removal_started_at, a.removed_at, r.workspace_path = ?2, a.file_id IS NOT NULL, r.rowid
+    FROM backup_runs r LEFT JOIN backup_artifacts a ON a.run_id = r.id";
 
 fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
     Ok(BackupRun {
@@ -415,6 +479,7 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
         path: row.get(7)?,
         size_bytes: row.get(8)?,
         message: row.get(9)?,
+        artifact: backup_artifact::summary(row)?,
     })
 }
 
@@ -465,7 +530,7 @@ fn workspace_lock(workspace: &Path) -> Result<Option<File>> {
     }
 }
 
-fn unix_now() -> Result<i64> {
+pub(crate) fn unix_now() -> Result<i64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
@@ -705,5 +770,144 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(f.store.run_sqlite_backup_plan(&f.profile_id, 1).is_err());
+    }
+
+    #[test]
+    fn pre_v23_backup_history_is_preserved_without_inventing_creation_evidence() {
+        let f = Fixture::new();
+        f.plan(unix_now().unwrap() + 120, None);
+        let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let db = f.store.connect().unwrap();
+        db.execute_batch("DROP TABLE backup_artifacts; PRAGMA user_version=22;")
+            .unwrap();
+        drop(db);
+        let reopened = Store::open(&f.workspace).unwrap();
+        let history = reopened.sqlite_backup_plan(&f.profile_id).unwrap();
+        assert_eq!(history.runs[0].path, run.path);
+        assert!(history.runs[0].artifact.is_none());
+        assert!(reopened
+            .preview_sqlite_backup_removal(&f.profile_id, &run.id)
+            .is_err());
+        assert!(Path::new(&run.path).is_file());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn expired_file_pages_reach_back_beyond_recent_runs_without_duplicates() {
+        let f = Fixture::new();
+        f.plan(unix_now().unwrap() + 120, None);
+        let original = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let mut db = f.store.connect().unwrap();
+        let tx = db.transaction().unwrap();
+        tx.execute(
+            "UPDATE backup_runs SET expires_at=0 WHERE id=?1",
+            [&original.id],
+        )
+        .unwrap();
+        for i in 0..41 {
+            let id = format!("backup-{i}");
+            tx.execute(
+                "INSERT INTO backup_runs(id, profile_id, workspace_path, trigger_kind, status, started_at, expires_at, path)
+                 SELECT ?2, profile_id, workspace_path, 'manual', 'succeeded', started_at, 0, path FROM backup_runs WHERE id=?1",
+                params![original.id, id],
+            ).unwrap();
+            tx.execute(
+                "INSERT INTO backup_artifacts(run_id, sha256, file_id, engine_version)
+                 SELECT ?2, sha256, file_id, engine_version FROM backup_artifacts WHERE run_id=?1",
+                params![original.id, id],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        assert!(!f.current().runs.iter().any(|run| run.id == original.id));
+        let first = f.store.expired_sqlite_backups(&f.profile_id, None).unwrap();
+        assert_eq!(first.runs.len(), 40);
+        let last = f
+            .store
+            .expired_sqlite_backups(&f.profile_id, first.next_before)
+            .unwrap();
+        assert_eq!(last.runs.len(), 2);
+        assert!(last.next_before.is_none());
+        assert_eq!(last.runs[1].id, original.id);
+        assert!(!last
+            .runs
+            .iter()
+            .any(|old| first.runs.iter().any(|new| new.id == old.id)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retention_rechecks_identity_hash_links_and_confirmation_before_unlinking() {
+        let f = Fixture::new();
+        f.plan(unix_now().unwrap() + 120, None);
+        let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        let path = Path::new(&run.path);
+        let original_bytes = fs::read(path).unwrap();
+        assert!(f
+            .store
+            .verify_sqlite_backup_file(&f.profile_id, &run.id)
+            .is_ok());
+        let expired = || {
+            f.store
+                .preview_sqlite_backup_removal(&f.profile_id, &run.id)
+        };
+        assert!(expired().err().unwrap().contains("보존 기간"));
+        f.store
+            .connect()
+            .unwrap()
+            .execute("UPDATE backup_runs SET expires_at=0 WHERE id=?1", [&run.id])
+            .unwrap();
+
+        let preview = serde_json::to_value(expired().unwrap()).unwrap();
+        let token = preview["token"].as_str().unwrap();
+        assert!(f.store.remove_sqlite_backup_file(token, false).is_err());
+        let mut changed = original_bytes.clone();
+        *changed.last_mut().unwrap() ^= 1;
+        fs::write(path, &changed).unwrap();
+        assert!(f
+            .store
+            .remove_sqlite_backup_file(token, true)
+            .err()
+            .unwrap()
+            .contains("변경"));
+        assert_eq!(fs::read(path).unwrap(), changed);
+        fs::write(path, &original_bytes).unwrap();
+        assert!(f.store.remove_sqlite_backup_file(token, true).is_err());
+
+        let preview = serde_json::to_value(expired().unwrap()).unwrap();
+        let original = f.output.join("original.sqlite");
+        fs::rename(path, &original).unwrap();
+        fs::write(path, &original_bytes).unwrap();
+        assert!(f
+            .store
+            .remove_sqlite_backup_file(preview["token"].as_str().unwrap(), true)
+            .err()
+            .unwrap()
+            .contains("교체"));
+        assert_eq!(fs::read(path).unwrap(), original_bytes);
+        fs::remove_file(path).unwrap();
+        fs::rename(&original, path).unwrap();
+
+        let alias = f.output.join("alias.sqlite");
+        fs::hard_link(path, &alias).unwrap();
+        let preview = serde_json::to_value(expired().unwrap()).unwrap();
+        assert!(f
+            .store
+            .remove_sqlite_backup_file(preview["token"].as_str().unwrap(), true)
+            .err()
+            .unwrap()
+            .contains("하드 링크"));
+        fs::remove_file(alias).unwrap();
+        let preview = serde_json::to_value(expired().unwrap()).unwrap();
+        f.store
+            .remove_sqlite_backup_file(preview["token"].as_str().unwrap(), true)
+            .unwrap();
+        assert!(!path.exists());
+        assert!(f.current().runs[0]
+            .artifact
+            .as_ref()
+            .unwrap()
+            .removed_at
+            .is_some());
     }
 }

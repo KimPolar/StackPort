@@ -3361,6 +3361,10 @@ fn main() {
             sqlite_backup_schedule::save_sqlite_backup_plan,
             sqlite_backup_schedule::run_sqlite_backup_plan,
             sqlite_backup_schedule::pause_sqlite_backup_plan,
+            sqlite_backup_schedule::verify_sqlite_backup_file,
+            sqlite_backup_schedule::expired_sqlite_backups,
+            sqlite_backup_schedule::preview_sqlite_backup_removal,
+            sqlite_backup_schedule::remove_sqlite_backup_file,
             preview_sqlite_restore,
             choose_sqlite_restore_destination,
             restore_sqlite

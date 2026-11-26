@@ -806,3 +806,5 @@ button.files-entry { background: transparent; padding: 0; border: 0; text-decora
 .backup-run-history details { padding: 8px 0; border-top: 1px solid var(--border); font-size: 12px; }
 .backup-run-history summary { cursor: pointer; font-variant-numeric: tabular-nums; }
 .backup-run-history details p { margin: 6px 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.backup-run-history details .form-error { color: var(--danger-text); }
+.backup-file-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

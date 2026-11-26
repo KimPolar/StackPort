@@ -165,8 +165,9 @@ pub use relational_object_search::RelationalObjectSearch;
 mod native_table_filter;
 mod tls;
 pub mod backup_schedule;
+pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -352,6 +353,7 @@ pub struct Store {
     edits: Arc<edit::EditManager>,
     queries: Arc<query::QueryManager>,
     restore: Arc<restore::RestoreManager>,
+    backup_removal: Arc<backup_artifact::RemovalReview>,
     schema_sync: Arc<schema_sync::SchemaSyncManager>,
 }
 
@@ -367,6 +369,7 @@ impl Store {
             edits: Arc::new(edit::EditManager::default()),
             queries: Arc::new(query::QueryManager::default()),
             restore: Arc::new(restore::RestoreManager::default()),
+            backup_removal: Arc::new(backup_artifact::RemovalReview::default()),
             schema_sync: Arc::new(schema_sync::SchemaSyncManager::default()),
         };
         let mut db = store.connect()?;
@@ -452,6 +455,7 @@ impl Store {
                 tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -521,6 +525,7 @@ impl Store {
                 }
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
+                tx.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -924,6 +929,16 @@ impl Store {
     /// Create a verified SQLite snapshot without modifying or replacing either
     /// the source database or an existing destination.
     pub fn backup_sqlite(&self, profile_id: &str, destination: &str) -> Result<BackupReport> {
+        let (report, ()) = self.backup_sqlite_with(profile_id, destination, |_| Ok(()))?;
+        Ok(report)
+    }
+
+    fn backup_sqlite_with<T>(
+        &self,
+        profile_id: &str,
+        destination: &str,
+        inspect: impl FnOnce(&std::fs::File) -> Result<T>,
+    ) -> Result<(BackupReport, T)> {
         let profile = self.profile(profile_id)?;
         let correlation_id = Uuid::new_v4().to_string();
         let audit = |outcome, affected_count| AuditRecord {
@@ -938,7 +953,7 @@ impl Store {
         };
         insert_audit(&self.connect()?, audit("started", None))?;
         let result = open_user_db(Path::new(&profile.path))
-            .and_then(|source| snapshot_sqlite(&source, Path::new(destination.trim()), None));
+            .and_then(|source| snapshot_sqlite_with(&source, Path::new(destination.trim()), None, inspect));
         let outcome = if result.is_ok() {
             "succeeded"
         } else {
@@ -948,10 +963,10 @@ impl Store {
             .connect()
             .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
         match (result, audit_result) {
-            (Ok(mut report), Err(_)) => {
+            (Ok((mut report, evidence)), Err(_)) => {
                 report.audit_warning =
                     Some("백업은 생성됐지만 완료 감사 기록을 저장하지 못했습니다.".into());
-                Ok(report)
+                Ok((report, evidence))
             }
             (Err(error), Err(_)) => Err(format!("{error} 완료 감사 기록도 저장하지 못했습니다.")),
             (result, Ok(())) => result,
@@ -978,6 +993,7 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "oracle-datapump-schema-import-reviewed-prod",
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" => "oracle-datapump-schema-import-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        "sqlite.backup.delete" => "sqlite-backup-expired-reviewed-fingerprint",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
@@ -1070,6 +1086,16 @@ fn snapshot_sqlite(
     destination: &Path,
     expected_version: Option<i64>,
 ) -> Result<BackupReport> {
+    let (report, ()) = snapshot_sqlite_with(source, destination, expected_version, |_| Ok(()))?;
+    Ok(report)
+}
+
+fn snapshot_sqlite_with<T>(
+    source: &Connection,
+    destination: &Path,
+    expected_version: Option<i64>,
+    inspect: impl FnOnce(&std::fs::File) -> Result<T>,
+) -> Result<(BackupReport, T)> {
     if !destination.is_absolute() || destination.file_name().is_none() {
         return Err("새 백업 파일의 절대 경로를 지정하세요.".into());
     }
@@ -1142,18 +1168,19 @@ fn snapshot_sqlite(
         .metadata()
         .map_err(|e| format!("백업 크기를 확인할 수 없습니다: {e}"))?
         .len();
+    let evidence = inspect(temporary.as_file())?;
     temporary.persist_noclobber(destination).map_err(|e| {
         format!(
             "백업을 저장할 수 없습니다. 기존 파일은 덮어쓰지 않습니다: {}",
             e.error
         )
     })?;
-    Ok(BackupReport {
+    Ok((BackupReport {
         path: destination.to_string_lossy().into_owned(),
         size_bytes,
         integrity: "ok",
         audit_warning: None,
-    })
+    }, evidence))
 }
 
 fn profile_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Profile> {

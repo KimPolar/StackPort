@@ -2372,7 +2372,7 @@ const auditOperationNames: Record<string, string> = {
   "sql_parameter_set.update": "SQL 매개변수 세트 갱신",
   "sql_parameter_set.delete": "SQL 매개변수 세트 삭제",
   "workspace.copy": "작업 공간 데이터 복사",
-  "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.cell.update": "SQLite 셀 변경",
+  "sqlite_profile.create": "SQLite 연결 추가", "sqlite_profile.delete": "SQLite 연결 삭제", "sqlite.backup": "SQLite 백업", "sqlite.backup.delete": "만료된 SQLite 백업 삭제", "sqlite.cell.update": "SQLite 셀 변경",
   "sqlite.row.insert": "SQLite 행 추가", "sqlite.row.delete": "SQLite 행 삭제",
   "sqlite.row.paste": "SQLite 행 붙여넣기",
   "sqlite.row.import": "SQLite 파일 가져오기",

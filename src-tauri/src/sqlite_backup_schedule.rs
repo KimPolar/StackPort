@@ -1,5 +1,8 @@
 use stackport_core::{
-    backup_schedule::{BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun},
+    backup_artifact::{RemovalPreview, RemovalResult},
+    backup_schedule::{
+        BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, ExpiredBackupPage,
+    },
     Store,
 };
 use std::{
@@ -79,4 +82,44 @@ pub(crate) async fn pause_sqlite_backup_plan(
 ) -> Result<BackupPlanState, String> {
     let store = store.inner().clone();
     super::worker(move || store.pause_sqlite_backup_plan(&profile_id, revision)).await
+}
+
+#[tauri::command]
+pub(crate) async fn verify_sqlite_backup_file(
+    store: State<'_, Store>,
+    profile_id: String,
+    run_id: String,
+) -> Result<i64, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.verify_sqlite_backup_file(&profile_id, &run_id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn expired_sqlite_backups(
+    store: State<'_, Store>,
+    profile_id: String,
+    before: Option<i64>,
+) -> Result<ExpiredBackupPage, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.expired_sqlite_backups(&profile_id, before)).await
+}
+
+#[tauri::command]
+pub(crate) async fn preview_sqlite_backup_removal(
+    store: State<'_, Store>,
+    profile_id: String,
+    run_id: String,
+) -> Result<RemovalPreview, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.preview_sqlite_backup_removal(&profile_id, &run_id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn remove_sqlite_backup_file(
+    store: State<'_, Store>,
+    token: String,
+    confirmed: bool,
+) -> Result<RemovalResult, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.remove_sqlite_backup_file(&token, confirmed)).await
 }

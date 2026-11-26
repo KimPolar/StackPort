@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const { createHash } = require('node:crypto');
 const { chooseDatabase } = require('./database-picker.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
@@ -49,7 +50,10 @@ async function main() {
     assert.ok(run.size_bytes > 0);
     assert.equal(run.expires_at - run.finished_at, 7 * 86_400);
     assert.match(path.basename(run.path), /^fixture-\d{8}T\d{6}Z-[\da-f-]{36}\.sqlite$/);
-    verifySnapshot(path.join(output, path.basename(run.path)));
+    const file = path.join(output, path.basename(run.path));
+    assert.equal(run.artifact.sha256, createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+    assert.match(run.artifact.engine_version, /^\d+\.\d+\.\d+$/);
+    verifySnapshot(file);
   };
 
   try {
@@ -131,6 +135,53 @@ async function main() {
       assert.equal(fs.readdirSync(output).length, 3);
       await instance.getByText('SQLite 예약 백업 완료', { exact: true }).waitFor();
       console.log('Ran the missed one-shot after restart once, restored it, reported a failed run and retried it successfully after one minute.');
+
+      const artifactRun = retried.runs[0];
+      const file = path.join(output, path.basename(artifactRun.path));
+      const original = fs.readFileSync(file);
+      const details = history.locator('details').filter({ hasText: '자동 재시도' });
+      await details.locator('summary').click();
+      await details.getByText(artifactRun.artifact.sha256, { exact: true }).waitFor();
+      await details.getByRole('button', { name: '파일 지문 확인' }).click();
+      await details.getByRole('status').getByText(/생성 당시 기록과 일치/).waitFor();
+      assert.equal(await details.getByRole('button', { name: '만료 파일 삭제' }).count(), 0);
+      await assert.rejects(command('preview_sqlite_backup_removal', { profileId, runId: artifactRun.id }), /보존 기간/);
+      const metadata = new DatabaseSync(path.join(root, 'workspace', 'workspace.sqlite'));
+      try { metadata.prepare('UPDATE backup_runs SET expires_at=0 WHERE id=?').run(artifactRun.id); }
+      finally { metadata.close(); }
+      await dialog.getByRole('button', { name: '만료 파일', exact: true }).click();
+      await details.locator('summary').waitFor();
+      if (await details.getAttribute('open') === null) await details.locator('summary').click();
+
+      const remove = details.getByRole('button', { name: '만료 파일 삭제' });
+      const approval = page.getByRole('dialog', { name: '만료 백업 영구 삭제', exact: true });
+      await remove.click();
+      await approval.getByText(file, { exact: true }).waitFor();
+      await approval.getByText(artifactRun.artifact.sha256, { exact: true }).waitFor();
+      await approval.getByRole('button', { name: '취소', exact: true }).click();
+      assert.deepEqual(fs.readFileSync(file), original);
+
+      await remove.click();
+      await approval.getByRole('button', { name: '영구 삭제', exact: true }).waitFor();
+      const changed = Buffer.from(original);
+      changed[changed.length - 1] ^= 1;
+      fs.writeFileSync(file, changed);
+      await approval.getByRole('button', { name: '영구 삭제', exact: true }).click();
+      await details.getByRole('alert').getByText(/파일이 변경/).waitFor();
+      assert.deepEqual(fs.readFileSync(file), changed);
+
+      fs.writeFileSync(file, original);
+      await remove.click();
+      await approval.getByRole('button', { name: '영구 삭제', exact: true }).click();
+      await history.getByText('정리할 만료 파일이 없습니다.').waitFor();
+      await dialog.getByRole('button', { name: '최근 실행', exact: true }).click();
+      await details.locator('summary').click();
+      await details.getByText(/파일 삭제 완료/).waitFor();
+      assert.equal(fs.existsSync(file), false);
+      assert.equal(fs.readdirSync(output).length, 2);
+      const saved = (await state(profileId)).runs.find(run => run.id === artifactRun.id);
+      assert.ok(saved.artifact.verified_at > 0 && saved.artifact.removed_at > 0);
+      console.log('Verified stored SHA-256, blocked unexpired and changed files, and removed only the reviewed expired backup.');
     }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
