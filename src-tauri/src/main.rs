@@ -1332,6 +1332,21 @@ fn cancel_sql_server_backup(manager: State<'_, sql_server::Manager>, id: String,
 }
 
 #[tauri::command]
+async fn preview_sql_server_restore(manager: State<'_, sql_server::Manager>, id: String, options: sql_server::RestoreOptions)
+    -> Result<sql_server::RestorePreview, String> { manager.preview_restore(&id, options).await }
+
+#[tauri::command]
+fn discard_sql_server_restore(manager: State<'_, sql_server::Manager>, id: String, token: String) -> Result<(), String> {
+    manager.discard_restore(&id, &token)
+}
+
+#[tauri::command]
+async fn run_sql_server_restore(manager: State<'_, sql_server::Manager>, id: String, request_id: String, token: String,
+    database: String, approved: bool, confirmation: String) -> Result<sql_server::BackupOutcome, String> {
+    manager.run_restore(&id, &request_id, &token, &database, approved, &confirmation).await
+}
+
+#[tauri::command]
 async fn list_oracle_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<oracle::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_oracle_profiles(&project_id)).await
@@ -3043,6 +3058,9 @@ fn main() {
             verify_sql_server_backup,
             sql_server_backup_progress,
             cancel_sql_server_backup,
+            preview_sql_server_restore,
+            discard_sql_server_restore,
+            run_sql_server_restore,
             list_oracle_profiles,
             create_oracle_profile,
             update_oracle_profile,

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode, type RefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Archive, Database, Download, Plug, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import { Archive, Database, Download, Plug, RefreshCw, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
@@ -9,6 +9,7 @@ import { PostgresPager } from "./PostgresPager";
 import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
 import { SqlServerObjectStructure, type SqlServerRelatedTable } from "./SqlServerObjectStructure";
 import { SqlServerBackupDialog } from "./SqlServerBackupDialog";
+import { SqlServerRestoreDialog } from "./SqlServerRestoreDialog";
 import { SqlServerSqlWorkspace } from "./SqlServerSqlWorkspace";
 import { SqlWorkspaceTabs, type SqlEditorState } from "./SqlTabs";
 import { emptyTableQueryClauses, TableQueryControls, type TableQueryClauses } from "./TableQueryControls";
@@ -38,7 +39,7 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
 }) {
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
-  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupTool, setBackupTool] = useState<"backup" | "restore" | null>(null);
   const [busy, setBusy] = useState(false);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -80,7 +81,7 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   function disconnect() {
     const id = active.current;
     if (!id) return;
-    active.current = null; setSession(null); setBackupOpen(false); setError("");
+    active.current = null; setSession(null); setBackupTool(null); setError("");
     void invoke("close_" + prefix, { id }).catch(cause => { if (mounted.current) setError(String(cause)); });
   }
 
@@ -93,16 +94,21 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
       <div className="header-actions">
         <span className="readonly"><ShieldCheck size={14} aria-hidden /> 계정 권한 적용</span>
         {session ? <>
-          {prefix === "sql_server" && <button type="button" className="secondary" onClick={() => setBackupOpen(true)}><Archive size={15} aria-hidden /> DB 백업</button>}
+          {prefix === "sql_server" && <>
+            <button type="button" className="secondary" onClick={() => setBackupTool("backup")}><Archive size={15} aria-hidden /> DB 백업</button>
+            <button type="button" className="secondary" onClick={() => setBackupTool("restore")}><RotateCcw size={15} aria-hidden /> DB 복원</button>
+          </>}
           <button type="button" className="secondary" onClick={disconnect}>{engine} 연결 끊기</button></>
           : <button type="button" className="primary" onClick={() => { setError(""); setLogin(true); }}><Plug size={15} aria-hidden /> {engine} 연결</button>}
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
     {session && <RelationalViews key={session.id} session={session} profile={profile} editor={editor} engine={engine} prefix={prefix} />}
-    {session && backupOpen && prefix === "sql_server" && <SqlServerBackupDialog id={session.id}
+    {session && backupTool === "backup" && <SqlServerBackupDialog id={session.id}
       server={`${settings.name} · ${endpoint}`} database={session.database} environment={settings.environment}
-      onClose={() => setBackupOpen(false)} />}
+      onClose={() => setBackupTool(null)} />}
+    {session && backupTool === "restore" && <SqlServerRestoreDialog id={session.id}
+      server={`${settings.name} · ${endpoint}`} environment={settings.environment} onClose={() => setBackupTool(null)} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>

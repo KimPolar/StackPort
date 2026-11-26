@@ -965,6 +965,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
             "sql-server-copy-only-disk-prod-reviewed",
         "sql_server.backup" | "sql_server.backup.unconfirmed" => "sql-server-copy-only-disk-reviewed",
         "sql_server.backup.verify" => "sql-server-verifyonly-backup-set",
+        "sql_server.restore" | "sql_server.restore.unconfirmed" if record.environment == Some("PROD") =>
+            "sql-server-new-database-restore-reviewed-prod",
+        "sql_server.restore" | "sql_server.restore.unconfirmed" => "sql-server-new-database-restore-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

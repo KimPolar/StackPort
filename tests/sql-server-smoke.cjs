@@ -775,7 +775,7 @@ async function main() {
     if (onlyBackup || backupDir) {
       assert.ok(backupDir);
       await verifyBackup(page, backupDir);
-      console.log('SQL Server Windows backup E2E passed (server paths, limited role, preserved media, checksum verification, and isolated restore).');
+      console.log('SQL Server Windows backup and restore E2E passed (server paths, limited roles, preserved media, checksum verification, restore conflicts, and restored data).');
     }
   }
   finally {
@@ -827,6 +827,10 @@ async function verifyBackup(page, directory) {
     assert.equal(capability.disk_supported, true);
     assert.equal(capability.can_backup, false);
     await assert.rejects(preview(), /BACKUP DATABASE/);
+    await assert.rejects(command('preview_sql_server_restore', {
+      id, options: { path: directory.replace(/[\\/]$/, '') + (directory.startsWith('/') ? '/' : '\\') + 'no-access.bak',
+        position: 1, database: database + '_restricted' },
+    }), /복원.*권한/);
     await admin(execute => execute(`USE ${identify(database)}; ALTER ROLE [db_backupoperator] ADD MEMBER ${identify(account)};`));
     assert.equal((await command('sql_server_backup_capabilities', { id })).can_backup, true);
     await assert.rejects(preview({ directory: 'relative/path' }), /절대 경로/);
@@ -903,28 +907,122 @@ async function verifyBackup(page, directory) {
     assert.equal(readability.set.has_checksums, false);
   } finally { await command('close_sql_server', { id: adminId }); }
 
-  // Native restore deliberately runs against the disposable test instance under a fresh fixture database name.
-  await admin(async execute => {
-    const target = database + '_bak_restore';
-    assert.match(target, /^StackPortFixture_[a-f0-9]{12}_bak_restore$/);
-    const files = await sql(execute, `RESTORE FILELISTONLY FROM DISK = ${literal(archive)} WITH FILE=1;`);
-    const [[dataDirectory, logDirectory]] = await sql(execute, "SELECT CONVERT(nvarchar(4000),SERVERPROPERTY('InstanceDefaultDataPath')), CONVERT(nvarchar(4000),SERVERPROPERTY('InstanceDefaultLogPath'))");
-    const relocation = files.map(([logical, , type], index) => {
-      assert.match(type, /^[DL]$/);
-      const folder = (type === 'L' ? logDirectory : dataDirectory).replace(/[\\/]$/, '');
-      return `MOVE ${literal(logical)} TO ${literal(folder + (folder.startsWith('/') ? '/' : '\\') + target + '_' + index + (type === 'L' ? '.ldf' : '.mdf'))}`;
+  const { id: restoreId } = await open(saved, password);
+  const restoreOptions = { path: archive, position: 1, database: database + '_Review' };
+  const previewRestore = (changes = {}) => command('preview_sql_server_restore', {
+    id: restoreId, options: { ...restoreOptions, ...changes },
+  });
+  const runRestore = (plan, changes = {}) => command('run_sql_server_restore', {
+    id: restoreId, requestId: randomUUID(), token: plan.token, database: plan.database, approved: true, confirmation: 'PROD', ...changes,
+  });
+  try {
+    await assert.rejects(previewRestore({ database }), /같은 이름/);
+    await assert.rejects(previewRestore({ position: 2 }), /백업 세트/);
+    await assert.rejects(previewRestore({ data_directory: 'relative' }), /절대 경로/);
+    const plan = await previewRestore();
+    assert.equal(plan.set.database, database);
+    assert.equal(plan.set.has_checksums, true);
+    assert.ok(plan.files.some(file => file.source.kind === 'D'));
+    assert.ok(plan.files.some(file => file.source.kind === 'L'));
+    assert.ok(plan.files.every(file => /^[1-9][0-9]*$/.test(file.source.size_bytes)));
+    await assert.rejects(runRestore(plan, { database: database }), /새 DB 이름/);
+    await assert.rejects(runRestore(plan, { approved: false }), /파일 위치/);
+    await assert.rejects(runRestore(plan, { confirmation: '' }), /PROD/);
+    await admin(async execute => {
+      await execute(`CREATE DATABASE ${identify(plan.database)}`);
+      await execute(`CREATE TABLE ${identify(plan.database)}.dbo.fixture_protected (id int);`);
+      await execute(`INSERT ${identify(plan.database)}.dbo.fixture_protected VALUES (463);`);
     });
-    await execute(`RESTORE DATABASE ${identify(target)} FROM DISK = ${literal(archive)}
-      WITH FILE=1, CHECKSUM, RECOVERY, ${relocation.join(', ')};`);
+    const nameConflict = await runRestore(plan);
+    assert.equal(nameConflict.status, 'failed', JSON.stringify(nameConflict));
+    assert.match(nameConflict.message, /같은 이름/);
+    assert.equal(nameConflict.restore.staging_database, null);
+    await admin(async execute => {
+      assert.deepEqual(await sql(execute, `SELECT id FROM ${identify(plan.database)}.dbo.fixture_protected`), [[463]]);
+      assert.deepEqual(await sql(execute, `SELECT DB_ID(${literal(plan.staging_database)})`), [[null]]);
+    });
+    await assert.rejects(runRestore(plan), /미리보기/);
+
+    const filePlan = await previewRestore({ database: database + '_FileConflict' });
+    const occupiedFile = filePlan.files[0].destination;
+    await admin(execute => execute(`BACKUP DATABASE ${identify(database)} TO DISK = ${literal(occupiedFile)}
+      WITH COPY_ONLY, CHECKSUM, NOFORMAT, NOINIT, NAME = N'fixture-existing-restore-path';`));
+    const fileConflict = await runRestore(filePlan);
+    assert.equal(fileConflict.status, 'failed', JSON.stringify(fileConflict));
+    assert.match(fileConflict.message, /같은 경로/);
+    assert.equal(fileConflict.restore.staging_database, null);
+    await admin(async execute => {
+      const rows = await execute(`RESTORE HEADERONLY FROM DISK = ${literal(occupiedFile)}`);
+      assert.equal(rows[0][0].value, 'fixture-existing-restore-path');
+    });
+
+    const mutableArchive = archive.replace(/stackport-[a-f0-9]+\.bak$/, `fixture-${testRun}-changed.bak`);
+    assert.notEqual(mutableArchive, archive);
+    const writeArchive = name => admin(execute => execute(`BACKUP DATABASE ${identify(database)} TO DISK = ${literal(mutableArchive)}
+      WITH COPY_ONLY, CHECKSUM, FORMAT, NAME = ${literal(name)};`));
+    await writeArchive('fixture-reviewed-set');
+    const mediaPlan = await previewRestore({ path: mutableArchive, database: database + '_ChangedMedia' });
+    await writeArchive('fixture-replaced-set');
+    const mediaConflict = await runRestore(mediaPlan);
+    assert.equal(mediaConflict.status, 'failed', JSON.stringify(mediaConflict));
+    assert.match(mediaConflict.message, /백업 세트.*바뀌었습니다/);
+    assert.equal(mediaConflict.restore.staging_database, null);
+  } finally { await command('close_sql_server', { id: restoreId }); }
+
+  await admin(execute => execute(`USE master; CREATE USER ${identify(account)} FOR LOGIN ${identify(account)};
+    GRANT CREATE DATABASE TO ${identify(account)}; GRANT ALTER ANY DATABASE TO ${identify(account)};`));
+  const { id: delegated } = await open(reader, secret);
+  try {
+    const options = { ...restoreOptions, database: database + '_Delegated' };
+    const preview = () => command('preview_sql_server_restore', { id: delegated, options });
+    await assert.rejects(preview(), /CONNECT ANY DATABASE/);
+    await admin(execute => execute(`GRANT CONNECT ANY DATABASE TO ${identify(account)};`));
+    const plan = await preview();
+    const applied = await command('run_sql_server_restore', {
+      id: delegated, requestId: randomUUID(), token: plan.token, database: plan.database, approved: true, confirmation: 'PROD',
+    });
+    assert.equal(applied.status, 'succeeded', JSON.stringify(applied));
+    assert.equal(applied.restore.staging_database, null);
+  } finally { await command('close_sql_server', { id: delegated }); }
+
+  const target = database + '_복원]DB';
+  await workspace.getByRole('button', { name: 'DB 복원', exact: true }).click();
+  const restore = page.getByRole('dialog', { name: 'SQL Server DB 복원', exact: true });
+  await restore.getByLabel('서버의 백업 파일 경로').fill(archive);
+  await restore.getByLabel('새 데이터베이스 이름').fill(target);
+  await restore.getByText('복원 파일 폴더 지정', { exact: true }).click();
+  await restore.getByLabel('서버의 데이터 파일 폴더').fill(directory);
+  await restore.getByLabel('서버의 로그 파일 폴더').fill(directory);
+  await restore.getByRole('button', { name: '복원 미리보기', exact: true }).click();
+  const apply = restore.getByRole('button', { name: '복원 실행', exact: true });
+  await apply.waitFor();
+  assert.equal(await apply.isDisabled(), true);
+  await restore.getByText('서버의 복원 파일 2개', { exact: true }).waitFor();
+  await restore.getByText('1 · 전체 DB · 체크섬 있음', { exact: true }).waitFor();
+  await restore.getByRole('checkbox', { name: '원본 백업과 새 DB의 파일 위치를 확인했습니다.' }).check();
+  await restore.getByLabel('새 DB 이름 확인').fill(target);
+  assert.equal(await apply.isDisabled(), true);
+  await restore.getByLabel('운영 확인 문구 PROD').fill('PROD');
+  await apply.click();
+  await restore.getByRole('status').filter({ hasText: '새 데이터베이스에 복원했습니다.' }).waitFor();
+  await admin(async execute => {
     const [row] = await sql(execute, `SELECT COUNT(*), CONVERT(varchar(25),MAX(id)), MAX(CASE WHEN seq=1 THEN CONVERT(varchar(16),payload,2) END)
         FROM ${identify(target)}.[catalog].[order]]daily];`);
     assert.deepEqual(row, [61, '9223372036854775807', '00FF11']);
+    assert.deepEqual(await sql(execute, `SELECT state_desc FROM sys.databases WHERE name=${literal(target)}`), [['ONLINE']]);
+    const files = await sql(execute, `SELECT physical_name FROM sys.master_files WHERE database_id=DB_ID(${literal(target)})`);
+    assert.equal(files.length, 2);
+    assert.ok(files.every(([file]) => file.startsWith(directory.replace(/[\\/]$/, '') + (directory.startsWith('/') ? '/' : '\\'))));
   });
   const { events } = await command('list_audit_events', { before: null });
   const actions = events.filter(event => event.operation.startsWith('sql_server.backup'));
   assert.ok(actions.some(event => event.operation === 'sql_server.backup' && event.outcome === 'succeeded'));
   assert.ok(actions.some(event => event.operation === 'sql_server.backup.verify' && event.outcome === 'succeeded'));
   assert.doesNotMatch(JSON.stringify(actions), /\.bak|StackPortFixture_|fixture-existing-media/);
+  const restores = events.filter(event => event.operation === 'sql_server.restore');
+  assert.ok(restores.some(event => event.outcome === 'succeeded'));
+  assert.ok(restores.some(event => event.outcome === 'failed'));
+  assert.doesNotMatch(JSON.stringify(restores), /\.bak|StackPortFixture_|stackport_restore_/);
 }
 
 main().catch(cause => { console.error(cause); process.exitCode = 1; });

@@ -10,7 +10,7 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
-pub use backup::{BackupCapabilities, BackupOptions, BackupOutcome, BackupPreview, BackupProgress, VerifyInput};
+pub use backup::{BackupCapabilities, BackupOptions, BackupOutcome, BackupPreview, BackupProgress, RestoreOptions, RestorePreview, VerifyInput};
 pub use profiles::{Authentication, Encryption, Profile, ProfileSettings};
 pub use query::{QueryInput, QueryOutcome};
 pub use structure::{Structure, StructureSection};

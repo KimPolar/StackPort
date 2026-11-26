@@ -2334,6 +2334,8 @@ const auditOperationNames: Record<string, string> = {
   "sql_server.backup": "SQL Server 디스크 백업",
   "sql_server.backup.unconfirmed": "SQL Server 백업 결과 미확인",
   "sql_server.backup.verify": "SQL Server 백업 파일 검증",
+  "sql_server.restore": "SQL Server 백업 복원",
+  "sql_server.restore.unconfirmed": "SQL Server 복원 결과 미확인",
   "mongo.import.json": "MongoDB 문서 JSON 가져오기",
   "mongo.import.json.unconfirmed": "MongoDB 문서 가져오기 결과 미확인",
   "mongo.import.csv": "MongoDB 문서 CSV 가져오기",

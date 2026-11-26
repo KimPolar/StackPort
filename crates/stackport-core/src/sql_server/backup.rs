@@ -17,6 +17,9 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+mod restore;
+pub use restore::{RestoreOptions, RestorePreview};
+
 const PREVIEW_TTL: Duration = Duration::from_secs(300);
 const JOB_TIME: Duration = Duration::from_secs(30 * 60);
 const ATTENTION_TIME: Duration = Duration::from_secs(2);
@@ -72,7 +75,7 @@ pub struct VerifyInput {
     expected_name: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 struct BackupSet {
     id: Uuid,
     database: String,
@@ -80,6 +83,10 @@ struct BackupSet {
     position: i32,
     backup_type: i16,
     source_version: String,
+    #[serde(skip)]
+    source_major: i32,
+    #[serde(skip)]
+    snapshot: bool,
     has_checksums: bool,
     copy_only: bool,
 }
@@ -100,6 +107,8 @@ pub struct BackupOutcome {
     backup_name: Option<String>,
     status: Status,
     set: Option<BackupSet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restore: Option<restore::RestoreResult>,
     error_code: Option<u32>,
     message: Option<String>,
     attention_confirmed: Option<bool>,
@@ -113,6 +122,8 @@ enum Phase {
     Writing = 1,
     Reading = 2,
     Verifying = 3,
+    Restoring = 4,
+    Publishing = 5,
 }
 
 #[derive(Serialize)]
@@ -144,6 +155,7 @@ enum Monitor {
 #[derive(Default)]
 pub(super) struct State {
     pending: Option<Plan>,
+    restore: Option<restore::Plan>,
     active: Option<Arc<Active>>,
 }
 
@@ -170,6 +182,7 @@ impl Session {
 enum Work {
     Backup(Plan),
     Verify(VerifyInput),
+    Restore(restore::Plan),
 }
 
 impl Work {
@@ -177,6 +190,7 @@ impl Work {
         match self {
             Self::Backup(plan) => &plan.preview.path,
             Self::Verify(input) => &input.path,
+            Self::Restore(plan) => plan.path(),
         }
     }
 
@@ -185,6 +199,8 @@ impl Work {
             (Self::Backup(_), false) => "sql_server.backup",
             (Self::Backup(_), true) => "sql_server.backup.unconfirmed",
             (Self::Verify(_), _) => "sql_server.backup.verify",
+            (Self::Restore(_), false) => "sql_server.restore",
+            (Self::Restore(_), true) => "sql_server.restore.unconfirmed",
         }
     }
 }
@@ -321,6 +337,8 @@ impl Manager {
         let (phase, command) = match active.phase.load(Ordering::Acquire) {
             phase if phase == Phase::Writing as u8 => ("writing", Some("BACKUP%")),
             phase if phase == Phase::Verifying as u8 => ("verifying", Some("RESTORE%")),
+            phase if phase == Phase::Restoring as u8 => ("restoring", Some("RESTORE%")),
+            phase if phase == Phase::Publishing as u8 => ("publishing", None),
             phase if phase == Phase::Reading as u8 => ("reading", None),
             _ => ("preparing", None),
         };
@@ -428,10 +446,11 @@ impl Manager {
             path: work.path().to_owned(),
             backup_name: match &work {
                 Work::Backup(plan) => Some(plan.backup_name.clone()),
-                Work::Verify(_) => None,
+                _ => None,
             },
             status: Status::Succeeded,
             set: None,
+            restore: None,
             error_code: None,
             message: None,
             attention_confirmed: None,
@@ -444,6 +463,8 @@ impl Manager {
             _ = sleep_until(deadline) => Err(Interruption::TimedOut),
             result = execute(&mut client, active, &work) => Ok(result),
         };
+        let phase = active.phase.load(Ordering::Acquire);
+        let restoring = phase == Phase::Restoring as u8 || phase == Phase::Publishing as u8;
         match result {
             Ok(Ok(set)) => outcome.set = set,
             Ok(Err(Failure::Input(message))) => {
@@ -451,25 +472,31 @@ impl Manager {
                 outcome.message = Some(message.into());
             }
             Ok(Err(Failure::Server(error))) => {
-                let in_flight = active.phase.load(Ordering::Acquire) == Phase::Writing as u8;
+                let in_flight = restoring || phase == Phase::Writing as u8;
                 outcome.status = if in_flight && !matches!(error, Error::Server(_)) {
                     Status::Unconfirmed
                 } else {
                     Status::Failed
                 };
                 outcome.error_code = error.code();
-                outcome.message =
-                    Some(server_message(error.code(), matches!(work, Work::Verify(_))).into());
+                outcome.message = Some(
+                    match &work {
+                        Work::Restore(_) => restore::server_message(error.code()),
+                        _ => server_message(error.code(), matches!(work, Work::Verify(_))),
+                    }
+                    .into(),
+                );
             }
             Err(interruption) => {
-                let phase = active.phase.load(Ordering::Acquire);
                 let confirmed = matches!(
                     timeout(ATTENTION_TIME, client.cancel_query()).await,
                     Ok(Ok(()))
                 );
                 outcome.attention_confirmed =
                     (phase != Phase::Preparing as u8).then_some(confirmed);
-                outcome.status = if phase == Phase::Writing as u8 && !confirmed {
+                outcome.status = if phase == Phase::Publishing as u8
+                    || ((restoring || phase == Phase::Writing as u8) && !confirmed)
+                {
                     Status::Unconfirmed
                 } else {
                     match interruption {
@@ -478,7 +505,9 @@ impl Manager {
                     }
                 };
                 outcome.message = Some(
-                    if phase == Phase::Writing as u8 {
+                    if restoring {
+                        "복원 중단 뒤 서버에서 대상 DB와 임시 DB의 상태를 확인하세요."
+                    } else if phase == Phase::Writing as u8 {
                         "백업 중단 뒤 서버의 .bak 파일 상태를 확인하세요."
                     } else {
                         "SQL Server 작업이 끝나기 전에 중단되었습니다."
@@ -486,6 +515,10 @@ impl Manager {
                     .into(),
                 );
             }
+        }
+        if let Work::Restore(plan) = &work {
+            outcome.restore =
+                Some(plan.result(restoring && !matches!(outcome.status, Status::Succeeded)));
         }
         let result = if matches!(outcome.status, Status::Succeeded) {
             "succeeded"
@@ -704,6 +737,7 @@ async fn execute(
             }
             Ok(Some(before))
         }
+        Work::Restore(plan) => Ok(Some(restore::execute(client, active, plan).await?)),
     }
 }
 
@@ -770,6 +804,8 @@ async fn read_set(
             .or_else(|_| row.try_get::<i16, _>("BackupType"))?
             .ok_or_else(malformed)?,
         source_version: format!("{major}.{minor}.{build}"),
+        source_major: major,
+        snapshot: row.try_get::<bool, _>("IsSnapshot")? == Some(true),
         has_checksums: row
             .try_get::<bool, _>("HasBackupChecksums")?
             .ok_or_else(malformed)?,
