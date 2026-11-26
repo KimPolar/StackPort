@@ -1,5 +1,5 @@
 use super::{PostgresPassword, PostgresProfileInput};
-use crate::{local_file::NewFile, Result};
+use crate::{backup_artifact::{file_identity, Evidence}, local_file::NewFile, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -52,6 +52,18 @@ pub(super) fn create(
     destination: String,
     check: impl Fn() -> Result<()>,
 ) -> Result<PostgresBackupReport> {
+    create_with(profile, source, password, contents, destination, check, || Ok(())).map(|(report, _)| report)
+}
+
+pub(super) fn create_with(
+    profile: &PostgresProfileInput,
+    source: Source,
+    password: PostgresPassword,
+    contents: PostgresBackupContents,
+    destination: String,
+    check: impl Fn() -> Result<()>,
+    before_publish: impl FnOnce() -> Result<()>,
+) -> Result<(PostgresBackupReport, Evidence)> {
     check()?;
     let file = NewFile::stage(&destination, Some("backup"), ".stackport-postgres-")?;
     let tools = tools_for(profile, source.major, &check)?;
@@ -113,6 +125,7 @@ pub(super) fn create(
     archive
         .seek(SeekFrom::Start(0))
         .map_err(|_| "백업을 읽을 수 없습니다.")?;
+    let file_id = file_identity(&archive);
     let mut archive = BufReader::with_capacity(128 * 1024, archive);
     let mut bytes = vec![0; 128 * 1024];
     let mut sha256 = Sha256::new();
@@ -130,14 +143,13 @@ pub(super) fn create(
     }
     drop(archive);
     check()?;
+    before_publish()?;
+    let sha256 = format!("{:x}", sha256.finalize());
     file.publish()?;
-    Ok(PostgresBackupReport {
-        path: destination,
-        size_bytes,
-        sha256: format!("{:x}", sha256.finalize()),
-        tool_version: tools.version,
-        audit_warning: false,
-    })
+    Ok((
+        PostgresBackupReport { path: destination, size_bytes, sha256: sha256.clone(), tool_version: tools.version, audit_warning: false },
+        Evidence { sha256, file_id },
+    ))
 }
 
 pub(super) struct Tools {
@@ -313,18 +325,40 @@ pub(super) fn command(directory: &Path, executable: &str) -> Command {
     command
 }
 
+pub(super) struct ArchiveChild {
+    process: std::process::Child,
+    #[cfg(windows)]
+    _job: crate::terminal::ProcessJob,
+}
+
 pub(super) fn spawn(
     command: &mut Command,
     check: &impl Fn() -> Result<()>,
-) -> Result<std::process::Child> {
+) -> Result<ArchiveChild> {
     check()?;
-    command.spawn().map_err(|_| {
-        "PostgreSQL 백업 도구를 실행할 수 없습니다. CLI 설치와 실행 권한을 확인하세요.".into()
-    })
+    #[cfg(windows)]
+    let job = crate::terminal::ProcessJob::new()?;
+    let process = command.spawn().map_err(|_| {
+        "PostgreSQL 백업 도구를 실행할 수 없습니다. CLI 설치와 실행 권한을 확인하세요."
+    })?;
+    #[cfg(windows)]
+    let process = {
+        use std::os::windows::io::AsRawHandle;
+        let mut process = process;
+        if let Err(error) = job.attach_handle(process.as_raw_handle()) {
+            if !matches!(process.try_wait(), Ok(Some(_))) {
+                let _ = process.kill();
+                let _ = process.wait();
+                return Err(error);
+            }
+        }
+        process
+    };
+    Ok(ArchiveChild { process, #[cfg(windows)] _job: job })
 }
 
 pub(super) fn finish(
-    mut child: std::process::Child,
+    mut child: ArchiveChild,
     check: &impl Fn() -> Result<()>,
     failure: &str,
 ) -> Result<()> {
@@ -332,7 +366,7 @@ pub(super) fn finish(
         if let Err(error) = check() {
             break Err(error);
         }
-        match child.try_wait() {
+        match child.process.try_wait() {
             Ok(Some(status)) => {
                 return if status.success() {
                     Ok(())
@@ -344,7 +378,7 @@ pub(super) fn finish(
             Err(_) => break Err(failure.into()),
         }
     };
-    let _ = child.kill();
-    let _ = child.wait();
+    let _ = child.process.kill();
+    let _ = child.process.wait();
     result
 }

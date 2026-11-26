@@ -3,7 +3,7 @@ use stackport_core::{
     backup_schedule::{
         BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, ExpiredBackupPage,
     },
-    Store,
+    PostgresProfile, Store,
 };
 use std::{
     sync::mpsc::{self, RecvTimeoutError, Sender},
@@ -17,13 +17,13 @@ impl Scheduler {
     pub(crate) fn start(app: AppHandle, store: Store) -> std::io::Result<Self> {
         let (stop, stopped) = mpsc::channel();
         std::thread::Builder::new()
-            .name("sqlite-backup-scheduler".into())
+            .name("backup-scheduler".into())
             .spawn(move || {
                 while let Err(RecvTimeoutError::Timeout) =
                     stopped.recv_timeout(Duration::from_secs(2))
                 {
-                    if let Ok(Some(run)) = store.run_due_sqlite_backup() {
-                        let _ = app.emit("sqlite-backup-finished", run.status);
+                    if let Ok(Some(run)) = store.run_due_backup() {
+                        let _ = app.emit("backup-finished", (run.engine, run.status));
                     }
                 }
             })?;
@@ -33,6 +33,36 @@ impl Scheduler {
     pub(crate) fn stop(&self) {
         let _ = self.0.send(());
     }
+}
+
+#[tauri::command]
+pub(crate) async fn postgres_backup_plan(store: State<'_, Store>, profile_id: String) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.postgres_backup_plan(&profile_id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn postgres_backup_capacity(store: State<'_, Store>, profile: PostgresProfile, directory: String) -> Result<BackupCapacity, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.postgres_backup_capacity(&profile, &directory)).await
+}
+
+#[tauri::command]
+pub(crate) async fn save_postgres_backup_plan(store: State<'_, Store>, profile: PostgresProfile, confirmation: String, input: BackupPlanWrite) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.save_postgres_backup_plan(&profile, &confirmation, input)).await
+}
+
+#[tauri::command]
+pub(crate) async fn run_postgres_backup_plan(store: State<'_, Store>, profile: PostgresProfile, revision: i64, confirmation: String) -> Result<BackupRun, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.run_postgres_backup_plan(&profile, revision, &confirmation)).await
+}
+
+#[tauri::command]
+pub(crate) async fn pause_postgres_backup_plan(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.pause_postgres_backup_plan(&profile_id, revision)).await
 }
 
 #[tauri::command]

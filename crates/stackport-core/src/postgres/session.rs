@@ -277,7 +277,7 @@ fn clear_restore_plan(session: &Session, token: Uuid) {
     }
 }
 
-fn connection_config(settings: &PostgresProfileInput, password: &PostgresPassword, tunnel_port: Option<u16>, application: &str) -> Config {
+pub(super) fn connection_config(settings: &PostgresProfileInput, password: &PostgresPassword, tunnel_port: Option<u16>, application: &str) -> Config {
     let mut config = Config::new();
     config.host(&settings.host).user(&settings.username).dbname(&settings.database).password(password.0.as_bytes())
         .application_name(application).ssl_mode(SslMode::Require).connect_timeout(Duration::from_secs(5))
@@ -1984,11 +1984,11 @@ pub(super) fn field<T: for<'a> tokio_postgres::types::FromSql<'a>>(
     row.try_get(index).map_err(pg_error)
 }
 
-fn tls_connector(ca_path: Option<&str>) -> Result<TlsConnector> {
+pub(super) fn tls_connector(ca_path: Option<&str>) -> Result<TlsConnector> {
     crate::tls::verified_connector(ca_path, "PostgreSQL")
 }
 
-fn connect_error(error: tokio_postgres::Error) -> String {
+pub(super) fn connect_error(error: tokio_postgres::Error) -> String {
     match error.code().map(|code| code.code()) {
         Some("28P01" | "28000") => "서버가 PostgreSQL 암호 또는 접속 권한을 거부했습니다.".into(),
         Some("3D000") => "서버에서 지정한 PostgreSQL 데이터베이스를 찾을 수 없습니다.".into(),

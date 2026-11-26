@@ -1,4 +1,4 @@
-//! File evidence and explicitly approved retention cleanup for SQLite backup plans.
+//! File evidence and explicitly approved retention cleanup for backup plans.
 #[cfg(windows)]
 mod windows;
 
@@ -36,14 +36,17 @@ pub(crate) struct Evidence {
 }
 
 pub(crate) fn measure(file: &File) -> Result<Evidence> {
-    #[cfg(windows)]
-    let file_id = windows::identity(file);
-    #[cfg(not(windows))]
-    let file_id = None;
     Ok(Evidence {
-        file_id,
+        file_id: file_identity(file),
         sha256: fingerprint(file)?,
     })
+}
+
+pub(crate) fn file_identity(_file: &File) -> Option<String> {
+    #[cfg(windows)]
+    return windows::identity(_file);
+    #[cfg(not(windows))]
+    None
 }
 
 #[derive(Serialize)]
@@ -170,14 +173,20 @@ impl Store {
         };
         let artifact = self.expired_backup_file(&ticket.profile_id, &ticket.run_id)?;
         let file = open_verified(&artifact, true)?;
-        let profile = self.profile(&ticket.profile_id)?;
+        let db = self.connect()?;
+        let (project, environment, postgres) = db.query_row(
+            "SELECT coalesce(s.project_id,p.project_id), coalesce(s.environment,p.environment), b.postgres_profile_id IS NOT NULL
+             FROM backup_plans b LEFT JOIN profiles s ON s.id=b.sqlite_profile_id
+             LEFT JOIN postgres_profiles p ON p.id=b.postgres_profile_id WHERE b.profile_id=?1",
+            [&ticket.profile_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, bool>(2)?)),
+        ).map_err(db_error)?;
         let correlation = Uuid::new_v4().to_string();
         let audit = |outcome, affected_count| AuditRecord {
             correlation_id: &correlation,
-            operation: "sqlite.backup.delete",
-            project_id: Some(&profile.project_id),
-            profile_id: Some(&profile.id),
-            environment: Some(&profile.environment),
+            operation: if postgres { "postgres.backup.delete" } else { "sqlite.backup.delete" },
+            project_id: Some(&project),
+            profile_id: Some(&ticket.profile_id),
+            environment: Some(&environment),
             object_name: None,
             outcome,
             affected_count,

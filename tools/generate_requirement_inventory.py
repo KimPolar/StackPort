@@ -9,16 +9,16 @@ OUTPUT = ROOT / "docs" / "requirements.csv"
 
 # Evidence covers only the stated subset, never the full requirement.
 PARTIAL = {
-    "SP-BK-012": "Windows SQLite 연결별 저장 폴더·파일 이름 접두어·보존 만료일·용량 확인, 한 번 또는 일정 간격 예약, 중지·즉시 실행과 최근 40건 이력, 검토한 만료 파일 삭제",
-    "SP-AU-001": "앱에서 저장한 SQLite 연결의 검증된 전체 백업을 수동 또는 예약 실행",
-    "SP-AU-003": "SQLite 백업의 장치 시각 기준 첫 실행과 UTC 시각에 고정된 단발·분 간격 반복",
+    "SP-BK-012": "Windows SQLite·PostgreSQL 저장 폴더·파일 이름 접두어·보존 만료일·용량 확인, 한 번 또는 일정 간격 예약, 중지·즉시 실행과 최근 40건 이력, 검토한 만료 파일 삭제",
+    "SP-AU-001": "앱에 저장된 SQLite·PostgreSQL 연결의 검증된 전체 백업을 수동 또는 예약 실행",
+    "SP-AU-003": "SQLite·PostgreSQL 백업의 장치 시각 기준 첫 실행과 UTC 시각에 고정된 단발·분 간격 반복",
     "SP-AU-006": "작업 공간별 저장 백업 계획의 동시 실행 방지, 실패 뒤 옵션에 따라 1분 후 한 번 재시도, 예정분과 대기 중인 재시도 중지",
-    "SP-AU-007": "Windows 앱이 실행 중일 때 SQLite 예약을 처리하고, 앱이 닫힌 동안 지난 예약을 다음 실행에서 한 번 처리",
-    "SP-AU-008": "SQLite 백업의 실행 중·성공·실패·완료 확인 필요 상태, 파일 크기·실행 시각·오류 원인 이력",
-    "SP-AU-009": "Windows 작업 공간 상태 표시줄에 SQLite 예약 백업 및 재시도의 성공·실패 알림",
-    "SP-AU-012": "SQLite 백업 계획의 원본 검토·예상 용량과 사용 가능 공간 확인·수동 실행",
-    "SP-AU-016": "SQLite 백업 계획의 파일별 보존 만료일, 사용자가 확인한 만료 산출물 삭제와 결과 이력",
-    "SP-AT-017": "Windows 앱에서 SQLite 예약 저장과 재시작 후 지난 예약 한 번 실행, 실패 알림·자동 재시도, 코어에서 동시 실행과 복사한 작업 공간의 예약 차단 확인",
+    "SP-AU-007": "Windows 앱이 실행 중일 때 SQLite·PostgreSQL 예약을 처리하고, 앱이 닫힌 동안 지난 예약을 다음 실행에서 한 번 처리",
+    "SP-AU-008": "SQLite·PostgreSQL 백업의 실행 중·성공·실패·완료 확인 필요 상태, 파일 크기·실행 시각·오류 원인 이력",
+    "SP-AU-009": "Windows 상태 표시줄에 SQLite·PostgreSQL 예약 백업 및 재시도의 성공·실패 알림",
+    "SP-AU-012": "SQLite·PostgreSQL 백업 계획의 원본 크기와 사용 가능 공간 확인 및 즉시 실행",
+    "SP-AU-016": "SQLite·PostgreSQL 백업 계획의 파일별 보존 만료일, 검토한 만료 파일 삭제와 결과 이력",
+    "SP-AT-017": "Windows SQLite 재시작 후 지난 예약 한 번 실행, SQLite·PostgreSQL 실패 알림 및 자동 재시도, PostgreSQL 실데이터 복원과 연결 설정 변경 차단",
     "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
     "SP-UI-002": "이름순 단일 데이터베이스 연결 목록·행별 엔진 표시·명세 9종 엔진 선택형 등록, 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
@@ -203,7 +203,7 @@ PARTIAL = {
     "SP-NFR-001": "SQLite 작업을 별도 스레드에서 실행",
     "SP-NFR-002": "한 번에 최대 100행 표시",
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
-    "SP-AT-025": "v1~v10 작업 공간의 이관 전 백업과 실패 시 원본 보존, v21·v22에서 v23으로 이관할 때 별도 무결성 검사 백업 및 기존 프로젝트·예약 이력 보존",
+    "SP-AT-025": "작업 공간 이관 전 무결성 검사 백업과 실패 시 원본 보존, v21·v22·v23에서 v24로 이관할 때 기존 프로젝트·예약 이력·파일 지문 보존",
     "SP-SEC-013": "Windows SQLite 예약 백업에 생성 지문 저장, 보존 기간 이후 미리보기와 파일 ID·경로·크기·SHA-256 재확인 및 대상 핸들로 영구 삭제",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 격리 파일 복원, PostgreSQL 새 DB 행·복합 외래 키·SHA-256·오류 롤백, MySQL·MariaDB 앱 격리 복원에서 객체·행·SHA-256·이름 충돌·부분 결과 검증, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰의 내용·정의·인덱스 비교, Redis 격리 RDB에서 DB 0·3·31 키 수와 만료 확인 및 별도 검증 서버에서 RDB·AOF 값과 TTL 확인, SQL Server 앱의 BAK 생성·체크섬과 격리 새 DB 복원 행·큰 정수·바이너리·파일 경로·충돌 검증, Oracle 앱의 세 가지 방식 가져오기와 대상 스키마·테이블스페이스·기존 행 보존·38자리 숫자·RAW·유니코드 대조",
@@ -417,9 +417,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             else:
                 evidence = "crates/stackport-core/tests/workspace.rs; src/; src-tauri/"
             if requirement_id in {"SP-BK-012", "SP-AU-001", "SP-AU-003", "SP-AU-006", "SP-AU-007", "SP-AU-008", "SP-AU-009", "SP-AU-012", "SP-AT-017"}:
-                evidence = "crates/stackport-core/src/backup_schedule.rs; src/SqliteBackupPlanDialog.tsx; src-tauri/src/sqlite_backup_schedule.rs; tests/sqlite-backup-plan-smoke.cjs"
+                evidence = "crates/stackport-core/src/backup_schedule.rs; crates/stackport-core/src/postgres/schedule.rs; src/BackupPlanDialog.tsx; src-tauri/src/backup_schedule.rs; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-BK-011", "SP-BK-012", "SP-BK-016", "SP-AU-016", "SP-SEC-013"}:
-                backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/SqliteBackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs"
+                backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence
             if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-SEC-006"}:
                 credential_evidence = "crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/postgres/credentials/windows.rs; src/PostgresPasswordField.tsx; tests/postgres-smoke.cjs"

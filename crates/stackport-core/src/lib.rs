@@ -167,7 +167,7 @@ mod tls;
 pub mod backup_schedule;
 pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -454,8 +454,7 @@ impl Store {
                 tx.execute_batch(sql_parameter_sets::SCHEMA).map_err(db_error)?;
                 tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
-                tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
-                tx.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
+                backup_schedule::migrate(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -524,8 +523,7 @@ impl Store {
                     tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 }
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
-                tx.execute_batch(backup_schedule::SCHEMA).map_err(db_error)?;
-                tx.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
+                backup_schedule::migrate(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -996,6 +994,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "postgres.credential.save" | "postgres.credential.delete" => "windows-per-user-postgres-credential",
         "sqlite.backup.delete" => "sqlite-backup-expired-reviewed-fingerprint",
+        "postgres.backup.delete" => "postgres-backup-expired-reviewed-fingerprint",
+        "postgres.backup.schedule" => "postgres-backup-stored-credential-verified-tls",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",

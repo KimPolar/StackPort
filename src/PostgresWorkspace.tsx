@@ -2,6 +2,8 @@ import { lazy, Suspense, useEffect, useEffectEvent, useId, useMemo, useRef, useS
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Archive, Database, FileCode2, Maximize2, Pencil, Plug, Plus, Search, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { PostgresBackupDialog, type PostgresBackupReport, type PostgresBackupTarget } from "./PostgresBackupDialog";
+import { BackupPlanDialog } from "./BackupPlanDialog";
+import { displayFilePath } from "./fileBrowse";
 import { PostgresRestoreDialog, type PostgresRestoreReport } from "./PostgresRestoreDialog";
 import { PostgresEditDialog, PostgresGridEditDialog, type PostgresGridEditRow, type PostgresRowStamp } from "./PostgresEditDialog";
 import type { GridEditExitGuard } from "./Dialog";
@@ -91,6 +93,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
   const [exportTarget, setExportTarget] = useState<PostgresExportTarget | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [backup, setBackup] = useState<{ id: string; target: PostgresBackupTarget } | null>(null);
+  const [backupPlanOpen, setBackupPlanOpen] = useState(false);
   const [backupReport, setBackupReport] = useState<PostgresBackupReport | null>(null);
   const [restoreFor, setRestoreFor] = useState<string | null>(null);
   const [restoreReport, setRestoreReport] = useState<PostgresRestoreReport | null>(null);
@@ -162,6 +165,7 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
         <span className={`environment ${environment.toLowerCase()}`}>{environment}</span></h1>
         <p className="path"><span>PostgreSQL · {endpoint(host, port)} / {database}</span></p></div>
       <div className="header-actions"><span className="readonly"><ShieldCheck size={15} aria-hidden /> {online && session.grid_edit ? "그리드 편집 허용" : "읽기 전용"}</span>
+        <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setBackupPlanOpen(true)}>백업 계획</button>
         {online && <button type="button" className="secondary" aria-haspopup="dialog" disabled={closing}
           onClick={() => requestBackup({ selection: { kind: "database" }, label: "전체 데이터베이스" })}><Archive size={14} aria-hidden /> DB 백업</button>}
         {activeId && <button type="button" className="secondary" aria-haspopup="dialog" disabled={closing}
@@ -232,6 +236,8 @@ export function PostgresWorkspace({ profile, editor, visible, onFileBusy, onEdit
       source={`${endpoint(host, port)} / ${database}`} environment={environment} onBusy={onFileBusy}
       unavailable={activeId === backup.id ? "" : loss || "PostgreSQL에 다시 연결한 뒤 백업을 시작하세요."}
       onClose={() => setBackup(null)} onDone={report => { setBackup(null); setBackupReport(report); }} />}
+    {backupPlanOpen && <BackupPlanDialog key={profile.revision} profile={{ id: profile.id, name, environment, path: `${endpoint(host, port)} / ${database}` }}
+      postgres={profile} displayPath={displayFilePath} onFileBusy={onFileBusy} onClose={() => setBackupPlanOpen(false)} />}
     {restoreFor && <PostgresRestoreDialog id={restoreFor} profile={profile} server={endpoint(host, port)} environment={environment}
       unavailable={activeId === restoreFor ? "" : loss || "PostgreSQL에 다시 연결한 뒤 복원하세요."} onBusy={onFileBusy}
       onClose={() => setRestoreFor(null)} onRestored={report => { setRestoreFor(null); setRestoreReport(report); }} />}

@@ -18,7 +18,7 @@ import { gridGeometry, useGridLayout, visibleColumns } from "./GridColumnLayout"
 import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from "./gridValuePresentation";
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
-import { SqliteBackupPlanDialog } from "./SqliteBackupPlanDialog";
+import { BackupPlanDialog } from "./BackupPlanDialog";
 import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
 import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
 import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, sqliteCopyCell, useGridRowSelection } from "./GridRowSelection";
@@ -356,10 +356,10 @@ function App() {
     if (!desktop) return;
     let timer: number | undefined;
     let live = true;
-    const subscribed = listen<string>("sqlite-backup-finished", ({ payload }) => {
+    const subscribed = listen<[string, string]>("backup-finished", ({ payload: [engine, status] }) => {
       if (!live) return;
       window.clearTimeout(timer);
-      setBackupNotice(payload === "succeeded" ? "SQLite 예약 백업 완료" : "SQLite 예약 백업 실패");
+      setBackupNotice(`${engine} 예약 백업 ${status === "succeeded" ? "완료" : "실패"}`);
       timer = window.setTimeout(() => setBackupNotice(""), 15000);
     });
     void subscribed.catch(() => {});
@@ -2218,7 +2218,7 @@ function App() {
         if (result && executedQuery) void executeQuery(executedQuery, result.page);
       }} />}
     {restoreOpen && project && <SqliteRestoreDialog project={project} displayPath={displayPath} onClose={() => setRestoreOpen(false)} onRestored={report => { setRestoreReport(report); setRestoreOpen(false); }} />}
-    {backupPlanOpen && profile && <SqliteBackupPlanDialog key={profile.id} profile={profile} displayPath={displayPath} onClose={() => setBackupPlanOpen(false)} />}
+    {backupPlanOpen && profile && <BackupPlanDialog key={profile.id} profile={profile} displayPath={displayPath} onClose={() => setBackupPlanOpen(false)} />}
     {exportRequest && <ResultExportDialog profile={exportRequest.profile} query={exportRequest.query} onClose={() => setExportRequest(null)} onExported={report => { setExportReport(report); setExportRequest(null); }} />}
     {resultComparison && resultComparison.tabId === sqlDraft?.id && <React.Suspense fallback={null}>
       <SqlResultComparison sources={resultComparison.sources} initial={resultComparison.initial} onClose={() => setResultComparison(null)} />
@@ -2431,6 +2431,8 @@ const auditOperationNames: Record<string, string> = {
   "postgres.edit.grid": "PostgreSQL 여러 행 변경",
   "postgres.export.csv": "PostgreSQL CSV 내보내기", "postgres.export.json": "PostgreSQL JSON 내보내기",
   "postgres.backup": "PostgreSQL 백업",
+  "postgres.backup.schedule": "PostgreSQL 계획 백업",
+  "postgres.backup.delete": "만료된 PostgreSQL 백업 삭제",
   "postgres.restore": "PostgreSQL 백업 복원",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
   "database_profile.import": "데이터베이스 연결 가져오기", "database_profile.export": "데이터베이스 연결 내보내기",

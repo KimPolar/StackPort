@@ -2796,9 +2796,9 @@ async function main() {
   let jump;
   let browser;
   try {
-    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1') {
+    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1') {
       browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL);
-      await verifyStoredCredentials(browser, fixture);
+      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1');
       return;
     }
     gateway = await startGateway(fixture.port);
@@ -2818,7 +2818,7 @@ async function main() {
   }
 }
 
-async function verifyStoredCredentials(browser, fixture) {
+async function verifyStoredCredentials(browser, fixture, testPlan) {
   assert.ok(backupTools);
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
@@ -2869,6 +2869,7 @@ async function verifyStoredCredentials(browser, fixture) {
     await verifyCredentialInNewProcess(profile, secret);
 
     await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    const scheduled = testPlan ? await verifyPostgresBackupPlan(page, command, profile) : null;
     await launch();
     const use = connect.getByRole('checkbox', { name: '저장한 암호 사용', exact: true });
     await use.waitFor();
@@ -2879,14 +2880,16 @@ async function verifyStoredCredentials(browser, fixture) {
     await submit.click();
     await connect.waitFor({ state: 'detached' });
 
-    const destination = path.join(root, 'authenticated-backup.backup');
-    await page.getByRole('button', { name: 'DB 백업', exact: true }).click();
-    const backup = page.getByRole('dialog', { name: 'PostgreSQL 백업', exact: true });
-    await backup.getByLabel('새 백업 파일 경로').fill(destination);
-    await backup.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
-    await backup.getByLabel('운영 확인 문구 PROD').fill('PROD');
-    await backup.getByRole('button', { name: '백업 만들기', exact: true }).click();
-    await backup.waitFor({ state: 'detached', timeout: 40000 });
+    const destination = scheduled?.run.path ?? path.join(root, 'authenticated-backup.backup');
+    if (!scheduled) {
+      await page.getByRole('button', { name: 'DB 백업', exact: true }).click();
+      const backup = page.getByRole('dialog', { name: 'PostgreSQL 백업', exact: true });
+      await backup.getByLabel('새 백업 파일 경로').fill(destination);
+      await backup.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
+      await backup.getByLabel('운영 확인 문구 PROD').fill('PROD');
+      await backup.getByRole('button', { name: '백업 만들기', exact: true }).click();
+      await backup.waitFor({ state: 'detached', timeout: 40000 });
+    }
     assert.equal(fs.readFileSync(destination).subarray(0, 5).toString(), 'PGDMP');
 
     const database = 'fixture_vault_restore';
@@ -2911,6 +2914,10 @@ async function verifyStoredCredentials(browser, fixture) {
     } finally { await command('close_postgres', { id: recovered.id }); }
 
     await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
+    if (scheduled) {
+      await verifyExpiredPostgresBackup(page, scheduled.run, '자동 재시도');
+      await verifyExpiredPostgresBackup(page, scheduled.manual, '수동 실행');
+    }
     await launch();
     await connect.getByRole('button', { name: '저장한 암호 삭제', exact: true }).click();
     await connect.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
@@ -2921,15 +2928,111 @@ async function verifyStoredCredentials(browser, fixture) {
     const remembered = await directlyOpen(profile, { password: secret, useSavedPassword: false, rememberPassword: true });
     await command('close_postgres', { id: remembered.id });
     assert.equal(remembered.credential_warning, null);
+    if (scheduled) await command('save_postgres_backup_plan', { profile, confirmation: 'PROD', input: {
+      ...scheduled.input, revision: scheduled.state.plan.revision, next_at: Math.floor(Date.now() / 1000) + 7, retry_once: false,
+    } });
     const previous = profile;
     profile = await command('update_postgres_profile', { id: profile.id, revision: profile.revision, input: { ...input, name: '설정 변경됨' } });
     assert.deepEqual(await status(), { supported: true, stored: true, usable: false });
     await assert.rejects(directlyOpen(previous), /연결이 변경/);
     await assert.rejects(directlyOpen(), /저장된 PostgreSQL 암호가 없습니다/);
+    if (scheduled) {
+      const updated = await directlyOpen(profile, { password: secret, useSavedPassword: false, rememberPassword: true });
+      await command('close_postgres', { id: updated.id });
+      assert.equal((await status()).usable, true);
+      await page.waitForFunction(async ({ id, old }) => {
+        const state = await window.__TAURI_INTERNALS__.invoke('postgres_backup_plan', { profileId: id });
+        return state.plan.requires_review && state.runs.some(run => !old.includes(run.id) && run.status === 'failed' && run.message.includes('연결 설정이 변경'));
+      }, { id: profile.id, old: scheduled.state.runs.map(run => run.id) });
+      assert.equal(fs.readdirSync(scheduled.input.directory).length, 0);
+      const audit = (await command('list_audit_events', { before: null })).events;
+      assert.ok(audit.some(event => event.operation === 'postgres.backup.schedule' && event.outcome === 'succeeded'));
+      assert.ok(audit.some(event => event.operation === 'postgres.backup.delete' && event.outcome === 'succeeded'));
+      assert.doesNotMatch(JSON.stringify(audit), /fixture-administrator-password|scheduled PostgreSQL backups/);
+      console.log('PostgreSQL plan uses direct TLS with the stored credential, retries, restores real data, expires reviewed files and rejects a changed profile.');
+    }
     console.log('Windows credential storage is opt-in, survives a new process, supports TLS backup and restore, and respects profile changes and removal.');
   } finally {
     await command('forget_postgres_password', { profile }).catch(() => {});
   }
+}
+
+async function verifyPostgresBackupPlan(page, command, profile) {
+  await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).waitFor();
+  const directory = path.join(root, 'scheduled PostgreSQL backups');
+  const unavailable = directory + '-unavailable';
+  fs.mkdirSync(directory);
+  const getPlan = () => command('postgres_backup_plan', { profileId: profile.id });
+  const input = { revision: null, directory, prefix: 'planned-pg', interval_minutes: null,
+    retention_days: 7, retry_once: true, next_at: null };
+  await assert.rejects(command('save_postgres_backup_plan', { profile, confirmation: '', input }), /PROD/);
+  assert.equal((await getPlan()).plan, null);
+  await page.getByRole('button', { name: '백업 계획', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+  const approval = dialog.getByLabel('운영 백업 확인 (PROD 입력)', { exact: true });
+  const save = dialog.getByRole('button', { name: '계획 저장', exact: true });
+  await dialog.getByLabel('저장 폴더').fill(directory);
+  await dialog.getByRole('button', { name: '용량 확인', exact: true }).click();
+  await dialog.getByRole('status').getByText(/원본 크기 .*사용 가능/).waitFor();
+  await dialog.getByLabel('파일 이름 접두어', { exact: true }).fill(input.prefix);
+  await dialog.getByLabel('보존 기간 (일)', { exact: true }).fill(String(input.retention_days));
+  await dialog.getByLabel('실행 주기').selectOption('once');
+  const next = new Date(Date.now() + 10_000);
+  await dialog.getByLabel('첫 실행 (이 장치 시각)', { exact: true }).fill(
+    new Date(next.getTime() - next.getTimezoneOffset() * 60_000).toISOString().slice(0, 19));
+  assert.equal(await save.isDisabled(), true);
+  await approval.fill('PROD');
+  await save.click();
+  await dialog.getByRole('status').getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  fs.renameSync(directory, unavailable);
+  try {
+    await dialog.getByText(/실패 · 예약 실행/).waitFor();
+    const failed = (await getPlan()).runs[0];
+    assert.match(failed.message, /백업 폴더/);
+    assert.equal(failed.artifact, null);
+    assert.equal((await getPlan()).plan.retry_at - failed.finished_at, 60);
+    await page.getByText('PostgreSQL 예약 백업 실패', { exact: true }).waitFor();
+  } finally { fs.renameSync(unavailable, directory); }
+  console.log('PostgreSQL scheduled failure and the 60-second retry were recorded.');
+  await dialog.getByText(/무결성 검사 통과 · 자동 재시도/).waitFor({ timeout: 85000 });
+  await page.getByText('PostgreSQL 예약 백업 완료', { exact: true }).waitFor();
+  const state = await getPlan();
+  const run = state.runs.find(run => run.trigger_kind === 'retry');
+  const bytes = fs.readFileSync(run.path);
+  assert.match(path.basename(run.path), /^planned-pg-.*\.backup$/);
+  assert.equal(run.engine, 'PostgreSQL');
+  assert.equal(run.size_bytes, bytes.length);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), run.artifact.sha256);
+  assert.equal(run.expires_at - run.finished_at, input.retention_days * 86400);
+  await assert.rejects(command('run_postgres_backup_plan', { profile, revision: state.plan.revision, confirmation: '' }), /PROD/);
+  await approval.fill('PROD');
+  await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+  await dialog.getByRole('status').getByText('백업을 만들고 무결성을 확인했습니다.', { exact: true }).waitFor();
+  const withManual = await getPlan();
+  const manual = withManual.runs.find(item => item.trigger_kind === 'manual');
+  assert.equal(manual.status, 'succeeded');
+  assert.notEqual(manual.path, run.path);
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  return { input, state: withManual, run, manual };
+}
+
+async function verifyExpiredPostgresBackup(page, run, trigger) {
+  const { DatabaseSync } = require('node:sqlite');
+  const metadata = new DatabaseSync(path.join(process.env.STACKPORT_DATA_DIR, 'workspace.sqlite'));
+  try { metadata.prepare('UPDATE backup_runs SET expires_at=0 WHERE id=?').run(run.id); }
+  finally { metadata.close(); }
+  await page.getByRole('button', { name: '백업 계획', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+  await dialog.getByRole('button', { name: '만료 파일', exact: true }).click();
+  await dialog.getByText(new RegExp(`무결성 검사 통과 · ${trigger}`)).click();
+  await dialog.getByRole('button', { name: '파일 지문 확인', exact: true }).click();
+  await dialog.getByText('파일 지문이 생성 당시 기록과 일치합니다.', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '만료 파일 삭제', exact: true }).click();
+  const removal = page.getByRole('dialog', { name: '만료 백업 영구 삭제', exact: true });
+  await removal.getByRole('button', { name: '영구 삭제', exact: true }).click();
+  await removal.waitFor({ state: 'detached' });
+  assert.equal(fs.existsSync(run.path), false);
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
 }
 
 async function verifyCredentialInNewProcess(profile, secret) {

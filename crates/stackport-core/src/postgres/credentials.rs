@@ -18,7 +18,7 @@ const PROFILE_CHANGED: &str = "PostgreSQL 연결이 변경되었습니다. 새�
 pub struct PostgresCredentialStatus {
     supported: bool,
     stored: bool,
-    usable: bool,
+    pub(crate) usable: bool,
 }
 
 impl Store {
