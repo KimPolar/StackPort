@@ -13,6 +13,7 @@ import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from 
 import { MongoNamespaceDialog, type MongoNamespaceReport, type MongoValidationSettings, type MongoViewSettings } from "./MongoNamespaceDialog";
 import { MongoCollectionActionDialog, type MongoCollectionAction } from "./MongoCollectionActionDialog";
 import { MongoPipeline } from "./MongoPipeline";
+import { MongoArchiveDialog, MongoArchiveReport, type MongoArchiveResult } from "./MongoArchiveDialog";
 import { ResultFileReport, type ExportReport } from "./ResultExportDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
@@ -87,7 +88,7 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
     {session && <Browse key={session.id} session={session} projectId={profile.project_id}
-      profileName={settings.name} environment={settings.environment} onBusy={onBusy} />}
+      profileName={settings.name} environment={settings.environment} needsPassword={Boolean(settings.username)} onBusy={onBusy} />}
     {login && <Dialog title="MongoDB 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{mongoAddress(settings.uri)}</p>
@@ -109,8 +110,8 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
   </section>;
 }
 
-function Browse({ session, projectId, profileName, environment, onBusy }: {
-  session: Session; projectId: string; profileName: string; environment: string; onBusy: (busy: boolean) => void;
+function Browse({ session, projectId, profileName, environment, needsPassword, onBusy }: {
+  session: Session; projectId: string; profileName: string; environment: string; needsPassword: boolean; onBusy: (busy: boolean) => void;
 }) {
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
@@ -118,11 +119,14 @@ function Browse({ session, projectId, profileName, environment, onBusy }: {
   const [creating, setCreating] = useState(false);
   const [collectionAction, setCollectionAction] = useState<{ database: string; name: string; action: MongoCollectionAction } | null>(null);
   const [namespaceNotice, setNamespaceNotice] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archiveResult, setArchiveResult] = useState<MongoArchiveResult | null>(null);
   const databaseArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const collectionArgs = useMemo(() => ({ id: session.id, database }), [session.id, database]);
   const mutableCollection = collection?.kind === "collection" && !collection.name.startsWith("system.");
   const manageCollection = session.allow_namespaces && mutableCollection
     && database !== null && !["admin", "config", "local"].includes(database);
+  const archiveDatabase = database && !["admin", "config", "local"].includes(database) ? database : null;
 
   function created(result: MongoNamespaceReport) {
     setCreating(false);
@@ -149,12 +153,18 @@ function Browse({ session, projectId, profileName, environment, onBusy }: {
     <div className="mongo-catalog">
       <Catalog<string> title="데이터베이스" command="mongo_databases" args={databaseArgs} revision={revision}
         name={item => item} selected={database} onOpen={item => { setDatabase(item); setCollection(null); }}
-        action={session.allow_namespaces && <button type="button" className="secondary small"
-          onClick={() => { setNamespaceNotice(""); setCreating(true); }}>컬렉션·뷰 만들기</button>} />
+        action={(archiveDatabase || session.allow_namespaces) && <div className="mongo-actions">
+          {archiveDatabase && <button type="button" className="secondary small" onClick={() => { setArchiveResult(null); setArchiveOpen(true); }}>
+            {session.allow_namespaces ? "백업·복원" : "백업"}
+          </button>}
+          {session.allow_namespaces && <button type="button" className="secondary small"
+            onClick={() => { setNamespaceNotice(""); setCreating(true); }}>컬렉션·뷰 만들기</button>}
+        </div>} />
       {database && <Catalog<Collection> key={database} title="컬렉션과 뷰" command="mongo_collections" args={collectionArgs} revision={revision}
         name={item => item.name} detail={item => item.kind === "view" ? "뷰" : item.kind === "timeseries" ? "시계열" : "컬렉션"}
         selected={collection?.name ?? null} onOpen={setCollection} />}
       {namespaceNotice && <p className="form-note mongo-note" role="status">{namespaceNotice}</p>}
+      {archiveResult && <MongoArchiveReport result={archiveResult} />}
     </div>
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
@@ -169,6 +179,16 @@ function Browse({ session, projectId, profileName, environment, onBusy }: {
       environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
     {collectionAction && <MongoCollectionActionDialog id={session.id} {...collectionAction} environment={environment}
       onBusy={onBusy} onClose={() => setCollectionAction(null)} onDone={collectionActionDone} />}
+    {archiveOpen && archiveDatabase && <MongoArchiveDialog id={session.id} database={archiveDatabase}
+      currentCollection={mutableCollection ? collection?.name : undefined} environment={environment}
+      allowRestore={session.allow_namespaces} needsPassword={needsPassword} onBusy={onBusy} onClose={() => setArchiveOpen(false)}
+      onDone={result => {
+        setArchiveOpen(false); setArchiveResult(result);
+        if (result.kind === "restore") {
+          setDatabase(result.report.database); setCollection({ name: result.report.collection, kind: "collection" });
+          setRevision(value => value + 1);
+        }
+      }} />}
   </div>;
 }
 

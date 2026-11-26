@@ -161,9 +161,9 @@ PARTIAL = {
     "SP-BK-005": "버전이 일치하는 pg_dump·pg_restore 탐색, 전체·스키마·일반 테이블 백업, 커스텀 아카이브 목차 확인 후 새 DB에 단일 트랜잭션 복원",
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-011": "PostgreSQL 압축 아카이브와 SHA-256 표시, 작업마다 별도로 입력한 암호를 백업 도구에 메모리로 전달",
-    "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인",
-    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수 표시, 통합 테스트로 행·복합 외래 키·롤백 확인",
-    "SP-BK-017": "PostgreSQL 백업의 로컬 파일 저장 경로와 복원할 서버·새 DB를 각각 표시하고 복원 시 CREATEDB 권한 확인",
+    "SP-BK-013": "SQLite 새 복원 경로·버전·행 수 미리보기, PostgreSQL 새 DB 이름과 권한·버전·목차·출처·SHA-256 확인 및 보존된 사본 승인, MongoDB 원본과 새 대상·서버와 도구 버전·문서 수·SHA-256 검토",
+    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MongoDB 아카이브 체크섬 및 복원된 문서 수·컬렉션 UUID 확인",
+    "SP-BK-017": "PostgreSQL 백업의 로컬 파일 경로와 복원할 서버·새 DB를 표시하고 CREATEDB 권한 확인, MongoDB 백업의 로컬 파일 경로와 복원할 데이터베이스·새 컬렉션 표시",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
     "SP-NS-010": "SCAN 커서와 서버 패턴·타입 필터, JSON 명령을 확인한 서버의 JSON 타입 필터, 허용 시 DB 전체 키 수와 선택한 키의 TTL·메모리 표시",
     "SP-NS-011": "String 교체, Hash 필드 저장, List 항목 교체, Set 멤버 추가, Sorted Set 점수 저장, Stream 메시지 추가, 지원 서버에서 64 KiB 이하 JSON 문서 조회·검토 후 교체, UTF-8·HEX 미리보기와 키 TTL 설정·해제",
@@ -196,8 +196,8 @@ PARTIAL = {
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
     "SP-NS-005": "MongoDB 컬렉션·뷰의 무작위 문서 표본, 중첩 필드·배열 경로별 등장 비율과 BSON 유형별 문서 수, 혼합 유형 필터",
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
-    "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 배열 또는 필드 지정 CSV로 내보내기, BSON 타입 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 열별 BSON 매핑",
-    "SP-BK-009": "MongoDB 조회 결과를 BSON 왕복 검증 Extended JSON 또는 CSV 파일로 내보내기, 검토한 JSON·CSV 문서를 기존 컬렉션에 추가",
+    "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 또는 CSV로 내보내기, BSON 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 BSON 매핑, mongodump 아카이브 생성과 일반 컬렉션 한 개 복원",
+    "SP-BK-009": "MongoDB JSON·CSV 가져오기와 내보내기, mongodump로 데이터베이스나 일반 컬렉션 백업, 서버·도구 버전을 확인하고 mongorestore로 일반 컬렉션 하나를 새 이름에 복원",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -565,6 +565,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mongo/import.rs; crates/stackport-core/src/mongo/import_file.rs; src/MongoDocumentImportDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id in {"SP-NS-007", "SP-MG-001", "SP-MG-004", "SP-MG-005", "SP-MG-007"}:
                 evidence += "; crates/stackport-core/src/mongo/csv_import.rs; src/MongoDocumentImportDialog.tsx; tests/mongo-smoke.cjs"
+            if requirement_id in {"SP-NS-007", "SP-BK-009", "SP-BK-013", "SP-BK-014", "SP-BK-017", "SP-SEC-011"}:
+                evidence += "; crates/stackport-core/src/mongo/backup.rs; crates/stackport-core/src/mongo/restore.rs; src/MongoArchiveDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id == "SP-NS-012":

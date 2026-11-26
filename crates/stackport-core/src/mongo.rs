@@ -1,3 +1,5 @@
+mod archive;
+mod backup;
 mod csv_import;
 mod document_edit;
 mod document_snapshot;
@@ -12,8 +14,11 @@ mod pipeline;
 mod pipeline_store;
 mod profiles;
 mod query;
+mod restore;
 mod schema;
+mod tools;
 
+pub use backup::{MongoBackupInput, MongoBackupReport};
 pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
 pub use export::{MongoExportInput, MongoExportOutcome};
@@ -27,6 +32,7 @@ pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPip
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
 pub use profiles::{MongoProfile, MongoSettings};
 pub use query::{MongoDocumentPage, MongoQuery};
+pub use restore::{MongoRestoreInput, MongoRestoreReport, MongoRestoreReview};
 pub use schema::MongoSchemaSample;
 
 use crate::{Result, Store};
@@ -100,9 +106,11 @@ pub struct MongoIndex {
 struct Session {
     client: Client,
     profile: MongoProfile,
+    auth_database: Option<String>,
     editor: Option<Arc<document_edit::DocumentEditor>>,
     index_admin: Option<Arc<index_admin::IndexAdmin>>,
     namespace_admin: Option<Arc<namespace_admin::NamespaceAdmin>>,
+    restore_review: Option<Arc<restore::RestoreReviewSlot>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -151,7 +159,7 @@ impl MongoManager {
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 MongoDB 연결이 너무 많습니다.")?;
-        let (client, database) = timeout(READ_TIMEOUT, async {
+        let (client, database, auth_database) = timeout(READ_TIMEOUT, async {
             let mut address = profiles::parse_uri(&settings.uri, settings.tls)?;
             let uri_source = address.credential.take().and_then(|auth| auth.source);
             address.credential = settings.username.map(|username| {
@@ -166,6 +174,8 @@ impl MongoManager {
                 .await
                 .map_err(|_| "MongoDB 주소 또는 DNS 설정을 확인하세요.")?;
             let database = options.default_database.clone();
+            let auth_database = options.credential.as_ref().map(|credential| credential.source.clone()
+                .or_else(|| database.clone()).unwrap_or_else(|| "admin".into()));
             options.tls = Some(if settings.tls {
                 let mut tls = TlsOptions::default();
                 if let Some(path) = settings.ca_path {
@@ -203,7 +213,7 @@ impl MongoManager {
                 .run_command(doc! { "ping": 1 })
                 .await
                 .map_err(message)?;
-            Ok::<_, String>((client, database))
+            Ok::<_, String>((client, database, auth_database))
         })
         .await
         .map_err(|_| "MongoDB 연결 시간이 초과되었습니다.")??;
@@ -216,9 +226,11 @@ impl MongoManager {
                 Session {
                     client,
                     profile,
+                    auth_database,
                     editor,
                     index_admin,
                     namespace_admin,
+                    restore_review: allow_namespaces.then(|| Arc::new(restore::RestoreReviewSlot::default())),
                     _permit: permit,
                 },
             );

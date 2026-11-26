@@ -40,6 +40,9 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         client.visible.drop_collection('transfer_replaced')
         client.visible.transfer_replaced.insert_one({'_id': 'replacement'})
         sys.exit(0)
+    if action == ['occupy_restore_destination']:
+        client.visible.archive_race.insert_one({'_id': 'other-client', 'keep': True})
+        sys.exit(0)
     if action == ['recreate_validation_collection']:
         client.namespace_new.drop_collection('validated_items')
         client.namespace_new.create_collection('validated_items')

@@ -5905,6 +5905,7 @@ dependencies = [
  "bytes",
  "chrono",
  "encoding_rs",
+ "flate2",
  "futures-util",
  "mongodb",
  "mysql_async",

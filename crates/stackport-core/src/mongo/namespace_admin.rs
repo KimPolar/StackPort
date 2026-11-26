@@ -704,7 +704,7 @@ async fn check_names(db: &Database, name: &str, command: &Document) -> Result<()
     .map_err(|_| "MongoDB 이름 확인 시간이 초과되었습니다.")?
 }
 
-async fn namespace_exists(db: &Database, name: &str) -> Result<bool> {
+pub(super) async fn namespace_exists(db: &Database, name: &str) -> Result<bool> {
     let mut cursor = db
         .run_cursor_command(doc! {
             "listCollections": 1, "authorizedCollections": true, "nameOnly": true,
@@ -813,7 +813,7 @@ fn parse_view_pipeline(pipeline: &str) -> Result<Bson> {
     Ok(pipeline)
 }
 
-fn valid_create_name(name: &str) -> bool {
+pub(super) fn valid_create_name(name: &str) -> bool {
     !name.trim().is_empty()
         && !name.starts_with("system.")
         && !name.chars().any(|value| value.is_control() || value == '$')

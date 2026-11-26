@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { execFileSync, spawn } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
+const { createHash, randomBytes } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -17,6 +17,7 @@ const secret = 'stackport-mongo-catalog-test';
 const editSecret = 'stackport-mongo-edit-test';
 const indexSecret = 'stackport-mongo-index-test';
 const replica = process.env.STACKPORT_MONGO_REPLICA === '1';
+const toolsDirectory = process.env.STACKPORT_MONGO_TOOLS_BIN;
 const log = path.join(root, 'mongo-server.log');
 assert.ok(path.isAbsolute(root) && path.isAbsolute(binary));
 
@@ -251,6 +252,7 @@ async function verify(page, port, ca) {
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
   const fixtureAction = action => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, action]);
   await verifyMongoImportCommands(command, open, profile, editProfile, fixtureAction);
+  if (toolsDirectory) await verifyMongoArchiveCommands(command, open, profile, indexProfile, fixtureAction);
   await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
     fixtureAction);
   await verifyCollectionDropCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, false, true), fixtureAction);
@@ -291,6 +293,7 @@ async function verify(page, port, ca) {
   await indexLogin.getByRole('checkbox', { name: '이 연결에서 컬렉션·뷰 관리 허용', exact: true }).check();
   await indexLogin.getByRole('button', { name: '연결', exact: true }).click();
   await indexLogin.waitFor({ state: 'detached' });
+  if (toolsDirectory) await verifyMongoArchiveEditor(page, workspace, detail);
   await verifyIndexEditor(page, workspace, detail);
   await verifyNamespaceEditor(page, workspace, detail);
   await verifyCollectionRenameEditor(page, workspace, detail);
@@ -310,6 +313,15 @@ async function verify(page, port, ca) {
   assert.doesNotMatch(JSON.stringify(imports), /mongo-all\.json|9223372036854775807|roundtrip-private-input\.json/u);
   assert.ok(audit.some(event => event.operation === 'mongo.import.csv' && event.object_name === 'visible.transfer_csv'
     && event.affected_count === 1 && event.outcome === 'succeeded' && event.policy === 'mongo-document-import-uuid-prod-reviewed'));
+  if (toolsDirectory) {
+    const archiveEvents = audit.filter(event => event.operation.startsWith('mongo.archive.'));
+    assert.ok(archiveEvents.some(event => event.operation === 'mongo.archive.backup' && event.outcome === 'succeeded'
+      && event.object_name === 'visible.records' && event.policy === 'mongo-native-archive-no-overwrite'));
+    assert.ok(archiveEvents.some(event => event.operation === 'mongo.archive.restore' && event.outcome === 'succeeded'
+      && event.object_name === 'visible.archive_recovered' && event.affected_count === 23
+      && event.policy === 'mongo-archive-new-collection-prod-reviewed'));
+    assert.doesNotMatch(JSON.stringify(archiveEvents), /mongo-roundtrip|archive\.gz|stackport-mongo-index-test/u);
+  }
   for (const kind of ['insert', 'duplicate', 'replace', 'delete']) {
     assert.ok(edits.some(event => event.operation === `mongo.document.${kind}` && event.outcome === 'succeeded'));
   }
@@ -557,6 +569,130 @@ async function verifyMongoCsvCommands(command, id, database) {
   assert.equal(Object.keys(sample).length, 6);
   fs.appendFileSync(noHeader, '\r\n');
   await assert.rejects(review(noHeader, typedSource), /CSV 파일이 변경/);
+}
+
+async function verifyMongoArchiveCommands(command, open, reader, administrator, fixtureAction) {
+  const database = 'visible';
+  const backupConnection = await open(reader);
+  const restoredConnection = await open(administrator, indexSecret, 'PROD', false, false, true);
+  const id = restoredConnection.id;
+  const source = path.join(root, 'mongo-roundtrip.archive.gz');
+  const all = path.join(root, 'mongo-database.archive.gz');
+  const request = () => command('prepare_query');
+  async function backup(destination, overrides = {}, token) {
+    return command('create_mongo_backup', { id: backupConnection.id, request: token ?? await request(), input: {
+      database, collection: 'records', directory: toolsDirectory, destination, password: secret, confirmation: 'PROD', ...overrides,
+    } });
+  }
+  async function preview(collection, file = source, connection = id) {
+    return command('preview_mongo_restore', { id: connection, request: await request(), input: {
+      database, collection, directory: toolsDirectory, source: file,
+    } });
+  }
+  async function apply(review, confirmation = 'PROD', name = 'records') {
+    return command('apply_mongo_restore', { id, request: await request(), token: review.token, sourceDatabase: database,
+      sourceCollection: name, password: indexSecret, confirmation,
+    });
+  }
+  const listed = async search => (await command('mongo_collections', { id, database, search, page: 0 })).items.map(item => item.name);
+  try {
+    await assert.rejects(backup(source, { confirmation: '' }), /PROD/);
+    await assert.rejects(backup(source, { database: 'admin' }), /일반 MongoDB 데이터베이스/);
+    const stopped = await request();
+    assert.equal(await command('cancel_query', { token: stopped }), true);
+    await assert.rejects(backup(source, {}, stopped), /중단되었습니다/);
+    assert.equal(fs.existsSync(source), false);
+    await assert.rejects(backup(source, { password: 'incorrect-archive-fixture-password' }), /mongodump.*실패/);
+    assert.equal(fs.existsSync(source), false);
+
+    const dumped = await backup(source);
+    assert.equal(dumped.namespaces.length, 1);
+    assert.equal(dumped.namespaces[0].database, 'visible');
+    assert.equal(dumped.namespaces[0].collection, 'records');
+    assert.equal(dumped.namespaces[0].documents, 23);
+    assert.equal(dumped.namespaces[0].restore_supported, true);
+    assert.match(dumped.server_version, /^8\.0\./);
+    assert.match(dumped.tool_version, /^100\./);
+    const bytes = fs.readFileSync(source);
+    assert.equal(bytes.length, dumped.size_bytes);
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), dumped.sha256);
+    await assert.rejects(backup(source), /같은 이름의 파일/);
+    assert.deepEqual(fs.readFileSync(source), bytes);
+    const databaseDump = await backup(all, { collection: null });
+    assert.ok(databaseDump.namespaces.some(item => item.collection === 'recent_records' && item.kind === 'view' && !item.restore_supported));
+    assert.ok(databaseDump.namespaces.some(item => item.collection === 'records' && item.documents === 23));
+
+    const corrupt = path.join(root, 'mongo-incomplete.archive.gz');
+    fs.writeFileSync(corrupt, bytes.subarray(0, -4));
+    await assert.rejects(preview('incomplete_archive', corrupt), /형식 또는 무결성/);
+    await assert.rejects(preview('records'), /이미 있습니다/);
+    await assert.rejects(preview('archive_denied', source, backupConnection.id), /컬렉션·뷰 관리를 허용/);
+    const changedSource = path.join(root, 'mongo-changing.archive.gz');
+    fs.copyFileSync(source, changedSource);
+    const changed = await preview('archive_source_changed', changedSource);
+    fs.copyFileSync(all, changedSource);
+    await assert.rejects(apply(changed), /검토 이후.*변경/);
+    assert.deepEqual(await listed('archive_source_changed'), []);
+
+    const race = await preview('archive_race');
+    fixtureAction('occupy_restore_destination');
+    await assert.rejects(apply(race), /이미 있습니다/);
+    const conflict = await command('mongo_documents', { id, database, collection: 'archive_race', query: {} });
+    assert.equal(JSON.parse(conflict.items[0].json)._id, 'other-client');
+    const review = await preview('archive_recovered', all);
+    assert.equal(review.sha256, databaseDump.sha256);
+    assert.match(review.target_version, /^8\.0\./);
+    assert.equal(review.restore_tool_version, dumped.tool_version);
+    assert.deepEqual(await listed('archive_recovered'), []);
+    await assert.rejects(apply(review, ''), /PROD/);
+    await assert.rejects(apply(review, 'PROD', 'recent_records'), /일반 MongoDB 컬렉션/);
+    const restored = await apply(review);
+    assert.deepEqual(restored, { database, collection: 'archive_recovered', documents: 23, sha256: databaseDump.sha256, audit_warning: false });
+    await assert.rejects(apply(review), /검토가 만료됐거나 변경/);
+    assert.deepEqual(await listed('stackport_restore_'), []);
+    const exportFile = path.join(root, 'mongo-archive-recovered.json');
+    const outcome = await command('export_mongo_documents', { id, token: await request(), database, collection: restored.collection,
+      input: { query: { sort_field: 'rank', descending: true }, options: { destination: exportFile, format: 'json', include_header: true, spreadsheet_safe: true } },
+    });
+    assert.equal(outcome.report.rows, 23);
+    assert.deepEqual(fs.readFileSync(exportFile), fs.readFileSync(path.join(root, 'mongo-all.json')));
+    const indexes = name => command('mongo_indexes', { id, database, collection: name });
+    assert.deepEqual(await indexes(restored.collection), await indexes('records'));
+  } finally {
+    for (const connection of [backupConnection, restoredConnection]) await command('close_mongo', { id: connection.id });
+  }
+}
+
+async function verifyMongoArchiveEditor(page, workspace, detail) {
+  const action = workspace.getByRole('button', { name: '백업·복원', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'MongoDB 백업·복원', exact: true });
+  const accept = () => dialog.getByLabel('운영 환경 확인').fill('PROD');
+  const file = path.join(root, 'mongo-ui.archive.gz');
+  await workspace.getByRole('button', { name: 'records 컬렉션', exact: true }).click();
+  await action.click();
+  assert.equal(await dialog.getByLabel('백업 범위').inputValue(), 'collection');
+  await dialog.getByLabel('MongoDB Database Tools 폴더').fill(toolsDirectory);
+  await dialog.getByLabel('새 백업 파일 경로').fill(file);
+  await dialog.getByLabel('MongoDB 암호').fill(indexSecret);
+  await accept();
+  await dialog.getByRole('button', { name: '백업 만들기', exact: true }).click();
+  await workspace.getByText('MongoDB 백업 완료', { exact: true }).waitFor();
+  assert.equal(fs.existsSync(file), true);
+  await action.click();
+  await dialog.getByLabel('작업').selectOption('restore');
+  await dialog.getByLabel('MongoDB Database Tools 폴더').fill(toolsDirectory);
+  await dialog.getByLabel('복원 아카이브 경로').fill(file);
+  await dialog.getByLabel('새 컬렉션 이름').fill('ui_archive_recovered');
+  await dialog.getByRole('button', { name: '아카이브 검토', exact: true }).click();
+  await dialog.getByRole('heading', { name: '복원 아카이브 검토' }).waitFor();
+  assert.match(await dialog.getByLabel('복원할 원본 컬렉션').innerText(), /visible\.records.*23개/);
+  const restoreButton = dialog.getByRole('button', { name: '검토한 컬렉션 복원' });
+  assert.equal(await restoreButton.isDisabled(), true);
+  await dialog.getByLabel('MongoDB 암호').fill(indexSecret);
+  await accept();
+  await restoreButton.click();
+  await workspace.getByText('MongoDB 복원 완료', { exact: true }).waitFor();
+  await detail.getByRole('heading', { name: 'ui_archive_recovered', exact: true }).waitFor();
 }
 
 async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
@@ -1376,7 +1512,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, ...(replica ? ['initialize_replica'] : [])]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log(`MongoDB Windows E2E passed (${replica ? 'replica set' : 'standalone'}, TLS, BSON, document transfer, pipelines, document and index editing, and reviewed collection and view operations).`);
+    console.log(`MongoDB Windows E2E passed (${replica ? 'replica set' : 'standalone'}, TLS, BSON, document transfer${toolsDirectory ? ', native archive backup and restore' : ''}, pipelines, document and index editing, and reviewed collection and view operations).`);
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

@@ -40,6 +40,7 @@
 .mongo-document-list summary small { color: var(--text-muted); }
 .mongo-document-list pre { max-height: 42dvh; margin: 0 10px 10px; padding: 10px; overflow: auto; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
 .mongo-document-list p, .mongo-note { margin: 8px 12px; }
+.mongo-archive-report { overflow-wrap: anywhere; }
 .mongo-edit-permission { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
 .mongo-edit-permission + .mongo-edit-permission { margin-top: 8px; }
 .dialog.mongo-index-dialog, .dialog.mongo-namespace-dialog { width: min(680px, calc(100vw - 32px)); }

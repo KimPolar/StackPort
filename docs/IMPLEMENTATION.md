@@ -24,6 +24,12 @@ CSV도 같은 가져오기 화면에서 엽니다. UTF-8 쉼표 구분 파일의
 
 Windows 앱과 TLS MongoDB 8.0.38 독립 서버 및 단일 노드 복제 세트에서 BSON과 큰 문서의 내보내기→가져오기→다시 내보내기 바이트 일치, 파일·컬렉션 교체 차단, 읽기 전용 계정 거부, 오류 위치와 두 번째 묶음 실패 시 롤백 여부를 확인했습니다. 복제 세트 검사는 `STACKPORT_MONGO_REPLICA=1`로 실행합니다.
 
+데이터베이스 목록의 **백업**에서 일반 데이터베이스 전체 또는 일반 컬렉션 하나를 `mongodump` gzip 아카이브로 로컬에 저장합니다. 같은 버전의 `mongodump.exe`와 `mongorestore.exe`가 있는 MongoDB Database Tools 폴더를 선택합니다. Windows의 로컬 명명된 파이프로 도구에 연결 설정을 전달합니다. 앱은 아카이브의 네임스페이스별 레코드 수·체크섬과 파일 SHA-256을 검사한 뒤 새 파일로 저장합니다. 백업에는 oplog가 포함되지 않아 동시 쓰기가 있으면 컬렉션별 시점이 다를 수 있습니다. [MongoDB mongodump](https://www.mongodb.com/docs/database-tools/mongodump/)
+
+컬렉션·뷰 관리를 허용한 연결에서는 **백업·복원**에서 아카이브에 담긴 일반 컬렉션 하나를 골라 새 이름으로 복원합니다. 아카이브와 대상 서버는 MongoDB 8.0 이상에서 주·부 버전이 같아야 하며, 설치된 도구는 아카이브를 생성한 도구와 같거나 더 최신이어야 합니다. 실행 전 원본과 대상의 버전·네임스페이스·문서 수·SHA-256을 검토합니다. `mongorestore`로 같은 데이터베이스의 임시 컬렉션에 복원한 뒤 문서 수와 컬렉션 UUID를 확인하고 새 이름으로 변경합니다. 대상 이름이 사용 중이면 서버가 이름 변경을 거절합니다. 복원이 중단된 뒤 임시 컬렉션이 남아 있으면 결과에 이름을 표시합니다. 운영 연결은 실행 시 `PROD`를 확인하고 백업·복원 결과를 작업 기록에 남깁니다. [MongoDB mongorestore](https://www.mongodb.com/docs/database-tools/mongorestore/) · [MongoDB renameCollection](https://www.mongodb.com/docs/manual/reference/command/renameCollection/)
+
+Windows 앱, MongoDB 8.0.38 TLS 독립 서버와 단일 노드 복제 세트, MongoDB Database Tools 100.20.1에서 백업과 복원을 확인했습니다. 복원한 컬렉션을 다시 내보내 원본 문서의 BSON과 인덱스가 유지되는지 비교했습니다. 손상된 아카이브, 검토 이후 변경한 파일, 같은 이름으로 먼저 만든 컬렉션, 읽기 전용 연결의 복원 요청은 거절됐습니다.
+
 **이 연결에서 컬렉션·뷰 관리 허용**을 선택하면 **컬렉션·뷰 만들기**에서 기존 데이터베이스를 사용하거나 첫 컬렉션과 함께 새 데이터베이스를 만들 수 있습니다. 컬렉션에는 선택적으로 Extended JSON 유효성 규칙과 검사 범위, 위반 시 쓰기 거부 또는 서버 경고를 설정합니다. 뷰는 같은 데이터베이스의 원본과 읽기 전용 집계 단계 최대 24개를 사용합니다. 생성은 서버 명령을 검토한 뒤 5분 안에 한 번 적용하며 운영 환경에서는 `PROD`를 입력합니다. [MongoDB create](https://www.mongodb.com/docs/manual/reference/command/create/) · [MongoDB 뷰 생성](https://www.mongodb.com/docs/manual/core/views/create-view/) · [MongoDB 유효성 검사 범위](https://www.mongodb.com/docs/manual/core/schema-validation/specify-validation-level/)
 
 Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉션 생성, 규칙 위반 문서의 삽입 거절, 뷰의 필터 결과와 생성 후 목록 갱신을 확인했습니다. TLS와 사용자 인증을 적용한 서버에서 읽기 전용 계정은 생성 요청을 거절당하고, 별도 연결에서 같은 이름을 먼저 생성하면 이전 검토의 적용이 거절됩니다.
@@ -630,7 +636,7 @@ $env:STACKPORT_TEST_DATABASE = '<출력된 테스트 폴더>\fixture.sqlite'
 node tests/desktop-smoke.cjs
 ```
 
-MongoDB 검사는 `tests/mongo-smoke.cjs`를 사용합니다. `STACKPORT_CDP_URL`에 격리 앱의 디버깅 주소, `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MONGO_BIN`에 Windows ZIP에서 꺼낸 `mongod.exe`의 절대 경로를 지정합니다. `STACKPORT_TEST_PYTHON`으로 PyMongo가 설치된 Python을 실행해 임시 서버의 문서와 제한 계정을 만듭니다. `STACKPORT_TEST_OPENSSL`은 테스트용 TLS 인증서 생성에 사용합니다.
+MongoDB 검사는 `tests/mongo-smoke.cjs`를 사용합니다. `STACKPORT_CDP_URL`에 격리 앱의 디버깅 주소, `STACKPORT_TEST_ROOT`에 빈 테스트 폴더, `STACKPORT_MONGO_BIN`에 Windows ZIP에서 꺼낸 `mongod.exe`의 절대 경로를 지정합니다. `STACKPORT_TEST_PYTHON`으로 PyMongo가 설치된 Python을 실행해 임시 서버의 문서와 제한 계정을 만듭니다. `STACKPORT_TEST_OPENSSL`은 테스트용 TLS 인증서 생성에 사용합니다. `STACKPORT_MONGO_TOOLS_BIN`에 공식 데이터베이스 도구 폴더의 절대 경로를 지정하면 아카이브 백업·복원도 검사합니다.
 
 Windows의 MongoDB 8.0.38에서 제한 계정의 데이터베이스 범위, TLS 호스트 이름 검증, 운영 환경 확인, 컬렉션·뷰·인덱스 탐색, BSON 타입 보존과 문서 필터·표시 필드·정렬·페이지를 확인했습니다. 문서 편집은 네 가지 변경, 표시 필드를 제한한 조회에서 전체 문서 편집, 쓰기 권한 확인, BSON 타입만 바뀐 원본과 같은 이름으로 다시 생성한 컬렉션의 변경 거절을 검사합니다. 스키마 분석은 같은 계정에서 배열 내부 유형의 문서별 집계, 점이 포함된 필드와 중첩 경로 구분, 크기 초과 문서 제외, 권한 범위와 뷰를 검사합니다. 집계는 단계 이동과 비활성화의 결과 차이, 중간 및 전체 미리보기, 프로젝트 저장·다시 열기·JSON 교환, 중첩 쓰기 단계 차단을 검사합니다. 레플리카 세트와 Atlas의 DNS SRV 접속은 실서버 검증이 남았습니다.
 

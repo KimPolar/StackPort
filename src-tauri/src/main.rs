@@ -1068,6 +1068,41 @@ async fn export_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, 
     -> Result<stackport_core::MongoExportOutcome, String> { mongo.export_documents(&id, token, &database, &collection, input).await }
 
 #[tauri::command]
+async fn create_mongo_backup(mongo: State<'_, stackport_core::MongoManager>, id: String, request: String, input: stackport_core::MongoBackupInput)
+    -> Result<stackport_core::MongoBackupReport, String> { mongo.create_backup_archive(&id, request, input).await }
+
+#[tauri::command]
+async fn preview_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, id: String, request: String, input: stackport_core::MongoRestoreInput)
+    -> Result<stackport_core::MongoRestoreReview, String> { mongo.preview_restore_archive(&id, request, input).await }
+
+#[tauri::command]
+async fn apply_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, id: String, request: String, token: String,
+    source_database: String, source_collection: String, password: stackport_core::MongoPassword, confirmation: String)
+    -> Result<stackport_core::MongoRestoreReport, String> {
+    mongo.apply_restore_archive(&id, request, &token, &source_database, &source_collection, password, &confirmation).await
+}
+
+#[tauri::command]
+async fn discard_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
+    -> Result<(), String> { mongo.discard_restore_archive(&id, &token).await }
+
+#[tauri::command]
+async fn choose_mongo_archive_path(restore: bool) -> Result<Option<String>, String> {
+    worker(move || {
+        let dialog = rfd::FileDialog::new().add_filter("MongoDB 아카이브", &["archive", "gz"]);
+        let path = if restore { dialog.set_title("MongoDB 복원 아카이브 선택").pick_file() }
+        else { dialog.set_title("MongoDB 백업 저장").set_file_name("stackport-mongo.archive.gz").save_file() };
+        Ok(path.map(|path| path.to_string_lossy().into_owned()))
+    }).await
+}
+
+#[tauri::command]
+async fn choose_mongo_tools_directory() -> Result<Option<String>, String> {
+    worker(|| Ok(rfd::FileDialog::new().set_title("MongoDB Database Tools의 bin 폴더 선택")
+        .pick_folder().map(|path| path.to_string_lossy().into_owned()))).await
+}
+
+#[tauri::command]
 async fn review_mongo_document_import(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, collection: String, path: String, source: Option<stackport_core::MongoImportSource>)
     -> Result<stackport_core::MongoImportReview, String> { mongo.review_document_import(&id, database, collection, path, source.unwrap_or_default()).await }
 
@@ -2845,6 +2880,12 @@ fn main() {
             mongo_documents,
             count_mongo_documents,
             export_mongo_documents,
+            create_mongo_backup,
+            preview_mongo_restore,
+            apply_mongo_restore,
+            discard_mongo_restore,
+            choose_mongo_archive_path,
+            choose_mongo_tools_directory,
             review_mongo_document_import,
             inspect_mongo_import_csv,
             apply_mongo_document_import,

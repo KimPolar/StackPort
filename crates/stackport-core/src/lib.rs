@@ -37,6 +37,7 @@ pub use mongo::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use mongo::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
 pub use mongo::{MongoExportInput, MongoExportOutcome};
 pub use mongo::{MongoCsvInspection, MongoImportReport, MongoImportReview, MongoImportSource};
+pub use mongo::{MongoBackupInput, MongoBackupReport, MongoRestoreInput, MongoRestoreReport, MongoRestoreReview};
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use mongo::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
@@ -989,6 +990,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "mongo.namespace.rename_collection" | "mongo.namespace.rename_collection.unconfirmed" if record.environment == Some("PROD") => "mongo-collection-rename-uuid-prod-reviewed",
         "mongo.namespace.rename_collection" | "mongo.namespace.rename_collection.unconfirmed" => "mongo-collection-rename-uuid-reviewed",
         "mongo.export.csv" | "mongo.export.json" => "mongo-readonly-file-no-overwrite",
+        "mongo.archive.backup" => "mongo-native-archive-no-overwrite",
+        "mongo.archive.restore" | "mongo.archive.restore.unconfirmed" if record.environment == Some("PROD") => "mongo-archive-new-collection-prod-reviewed",
+        "mongo.archive.restore" | "mongo.archive.restore.unconfirmed" => "mongo-archive-new-collection-reviewed",
         "mongo.import.json" | "mongo.import.json.unconfirmed" | "mongo.import.csv" | "mongo.import.csv.unconfirmed" if record.environment == Some("PROD") => "mongo-document-import-uuid-prod-reviewed",
         "mongo.import.json" | "mongo.import.json.unconfirmed" | "mongo.import.csv" | "mongo.import.csv.unconfirmed" => "mongo-document-import-uuid-reviewed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",

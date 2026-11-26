@@ -457,11 +457,11 @@ fn shell_command(_shell: &str, _cwd_authority: Option<&str>) -> Result<CommandBu
 }
 
 #[cfg(windows)]
-struct ProcessJob(std::os::windows::io::OwnedHandle);
+pub(crate) struct ProcessJob(std::os::windows::io::OwnedHandle);
 
 #[cfg(windows)]
 impl ProcessJob {
-    fn new() -> Result<Self> {
+    pub(crate) fn new() -> Result<Self> {
         use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
         use windows_sys::Win32::System::JobObjects::{
             CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
@@ -496,15 +496,19 @@ impl ProcessJob {
     }
 
     fn attach(&self, child: &dyn Child) -> Result<()> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
         let process = child
             .as_raw_handle()
             .ok_or("셸 프로세스 핸들을 사용할 수 없습니다.")?;
+        self.attach_handle(process)
+    }
+
+    pub(crate) fn attach_handle(&self, process: std::os::windows::io::RawHandle) -> Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
         // SAFETY: both handles remain alive for the duration of this call.
         if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), process) } == 0 {
             return Err(format!(
-                "셸 종료 관리를 설정할 수 없습니다: {}",
+                "프로세스 종료 관리를 설정할 수 없습니다: {}",
                 std::io::Error::last_os_error()
             ));
         }

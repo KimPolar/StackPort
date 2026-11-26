@@ -259,6 +259,11 @@ impl QueryGuard {
         }
     }
 
+    pub(crate) fn cancellation_check(&self) -> impl Fn() -> bool + Send + 'static {
+        let control = Arc::clone(&self.control);
+        move || control.reason.load(Ordering::SeqCst) == CANCELLED
+    }
+
     pub(crate) fn begin_export_publication(&self) -> bool {
         self.control.publishing().is_ok()
     }
