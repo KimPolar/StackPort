@@ -26,6 +26,8 @@ Windows 앱과 TLS MongoDB 8.0.38 독립 서버 및 단일 노드 복제 세트�
 
 데이터베이스 목록의 **백업**에서 일반 데이터베이스 전체 또는 일반 컬렉션 하나를 `mongodump` gzip 아카이브로 로컬에 저장합니다. 같은 버전의 `mongodump.exe`와 `mongorestore.exe`가 있는 MongoDB Database Tools 폴더를 선택합니다. Windows의 로컬 명명된 파이프로 도구에 연결 설정을 전달합니다. 앱은 아카이브의 네임스페이스별 레코드 수·체크섬과 파일 SHA-256을 검사한 뒤 새 파일로 저장합니다. 백업에는 oplog가 포함되지 않아 동시 쓰기가 있으면 컬렉션별 시점이 다를 수 있습니다. [MongoDB mongodump](https://www.mongodb.com/docs/database-tools/mongodump/)
 
+Windows의 MongoDB 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택하면 접속에 성공한 뒤 현재 사용자의 자격 증명 관리자에 암호를 보관합니다. 연결 창과 백업·복원 화면에서 **저장한 암호 사용**을 선택할 수 있습니다. 각 작업에 설정된 `PROD` 확인과 서버 권한이 적용됩니다.
+
 컬렉션·뷰 관리를 허용한 연결에서는 **백업·복원**에서 아카이브에 담긴 일반 컬렉션 하나를 골라 새 이름으로 복원합니다. 아카이브와 대상 서버는 MongoDB 8.0 이상에서 주·부 버전이 같아야 하며, 설치된 도구는 아카이브를 생성한 도구와 같거나 더 최신이어야 합니다. 실행 전 원본과 대상의 버전·네임스페이스·문서 수·SHA-256을 검토합니다. `mongorestore`로 같은 데이터베이스의 임시 컬렉션에 복원한 뒤 문서 수와 컬렉션 UUID를 확인하고 새 이름으로 변경합니다. 대상 이름이 사용 중이면 서버가 이름 변경을 거절합니다. 복원이 중단된 뒤 임시 컬렉션이 남아 있으면 결과에 이름을 표시합니다. 운영 연결은 실행 시 `PROD`를 확인하고 백업·복원 결과를 작업 기록에 남깁니다. [MongoDB mongorestore](https://www.mongodb.com/docs/database-tools/mongorestore/) · [MongoDB renameCollection](https://www.mongodb.com/docs/manual/reference/command/renameCollection/)
 
 Windows 앱, MongoDB 8.0.38 TLS 독립 서버와 단일 노드 복제 세트, MongoDB Database Tools 100.20.1에서 백업과 복원을 확인했습니다. 복원한 컬렉션을 다시 내보내 원본 문서의 BSON과 인덱스가 유지되는지 비교했습니다. 손상된 아카이브, 검토 이후 변경한 파일, 같은 이름으로 먼저 만든 컬렉션, 읽기 전용 연결의 복원 요청은 거절됐습니다.
@@ -262,7 +264,7 @@ Windows 앱과 Redis 8.4.7로 DB 0·3·31의 복원 결과, 로딩 시점에 만
 
 Windows에서는 연결 창에서 **연결 성공 후 Windows에 암호 저장**을 선택할 수 있습니다. 성공한 연결의 암호는 현재 Windows 사용자의 자격 증명 관리자에 보관합니다. **저장한 암호 사용**을 선택하면 연결, 서버 모니터, 백업, 복원에 네이티브 코드가 자격 증명을 전달합니다. 백업과 복원에서 `pg_dump`와 `pg_restore`에는 해당 프로세스의 환경으로 전달합니다. 각 작업에서 TLS와 운영 확인을 적용합니다.
 
-PostgreSQL, MySQL·MariaDB, Redis의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
+PostgreSQL, MySQL·MariaDB, Redis, MongoDB의 저장 암호는 작업 공간의 위치, 연결 ID, 설정과 버전을 확인한 뒤 사용합니다. 이름을 포함한 연결 설정을 바꾼 경우 새 설정으로 연결해 다시 저장할 수 있습니다. 연결 창의 **저장한 암호 삭제**나 연결·프로젝트 삭제로 해당 Windows 항목을 지웁니다. 작업 공간 복사, 연결 복제, 연결 교환 파일과 감사 이력에는 암호가 포함되지 않습니다. [Windows 자격 증명 저장](https://learn.microsoft.com/en-us/windows/win32/api/wincred/nf-wincred-credwritew) · [Windows 자격 증명 범위](https://learn.microsoft.com/en-us/windows/win32/api/wincred/ns-wincred-credentialw)
 
 로컬 SSH 터널은 점프 호스트를 거쳐 시작할 수 있습니다. 경유 중인 터널이 중단되면 PostgreSQL 세션을 닫고 연결 화면에 터널 이름과 복구 경로를 표시합니다. **SSH 터널 열기**에서 같은 터널을 다시 시작한 뒤 **PostgreSQL 다시 연결**을 누르면 해당 터널이 연결 경로에 선택되어 있습니다. 데이터베이스 작업 공간을 열어 두는 동안 SQL 탭과 초안을 유지합니다.
 
@@ -823,6 +825,8 @@ Windows 자격 증명 검사에서는 `STACKPORT_POSTGRES_CREDENTIAL_ONLY=1`, `S
 MySQL·MariaDB에서 `STACKPORT_MYSQL_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 암호 저장 흐름만 검증합니다. 일회성 연결과 인증 실패 시 저장 여부, 운영 환경 확인, 별도 프로세스에서 재접속, 설정 변경 후 재사용 차단과 암호 삭제를 검사합니다.
 
 Redis에서 `STACKPORT_REDIS_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 Windows 암호 저장, 별도 프로세스의 TLS 재접속과 Pub/Sub 메시지 수신, 설정 변경과 암호 삭제를 검사합니다.
+
+MongoDB에서 `STACKPORT_MONGO_CREDENTIAL_ONLY=1`, `STACKPORT_TEST_APP_EXE`, `STACKPORT_MONGO_TOOLS_BIN`을 지정하면 별도 프로세스의 TLS 재접속과 Windows에 저장한 암호로 수행하는 실제 아카이브 백업·복원을 검사합니다.
 
 SSH 검사는 같은 격리 앱에서 테스트 전용 루프백 서버를 시작합니다. Node 24와 개발 의존성 `ssh2`가 필요하며, 아래 경로는 위에서 만든 테스트 폴더여야 합니다.
 

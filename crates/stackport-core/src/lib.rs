@@ -35,6 +35,7 @@ pub use mysql::{MysqlStructure, MysqlStructureSection};
 pub use mysql::{MysqlExportOptions, MysqlExportOutcome, MysqlExportSource};
 pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
+pub use mongo::{MongoAuthentication, MongoCredentialStatus};
 pub use mongo::{build_mongo_find_filter, MongoFindNode};
 pub use mongo::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use mongo::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
@@ -644,6 +645,7 @@ impl Store {
         self.delete_project_postgres_passwords(&tx, id)?;
         self.delete_project_mysql_passwords(&tx, id)?;
         self.delete_project_redis_passwords(&tx, id)?;
+        self.delete_project_native_db_passwords(&tx, id)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;

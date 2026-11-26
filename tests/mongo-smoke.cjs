@@ -8,6 +8,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwright');
 const { chooseDatabase } = require('./database-picker.cjs');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const binary = process.env.STACKPORT_MONGO_BIN;
@@ -765,17 +766,23 @@ async function verifyMongoDatabaseArchiveEditor(page, workspace, archive) {
   await workspace.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '9223372036854775807' }).waitFor();
 }
 
-async function verifyMongoArchiveEditor(page, workspace, detail) {
+async function verifyMongoArchiveEditor(page, workspace, detail, useStored = false) {
   const action = workspace.getByRole('button', { name: '백업·복원', exact: true });
   const dialog = page.getByRole('dialog', { name: 'MongoDB 백업·복원', exact: true });
   const accept = () => dialog.getByLabel('운영 환경 확인').fill('PROD');
+  const enterPassword = async () => {
+    if (useStored) {
+      await dialog.getByRole('checkbox', { name: '저장한 암호 사용', exact: true }).check();
+      assert.equal(await dialog.getByLabel('MongoDB 암호', { exact: true }).count(), 0);
+    } else await dialog.getByLabel('MongoDB 암호').fill(indexSecret);
+  };
   const file = path.join(root, 'mongo-ui.archive.gz');
   await workspace.getByRole('button', { name: 'records 컬렉션', exact: true }).click();
   await action.click();
   assert.equal(await dialog.getByLabel('백업 범위').inputValue(), 'collection');
   await dialog.getByLabel('MongoDB Database Tools 폴더').fill(toolsDirectory);
   await dialog.getByLabel('새 백업 파일 경로').fill(file);
-  await dialog.getByLabel('MongoDB 암호').fill(indexSecret);
+  await enterPassword();
   await accept();
   await dialog.getByRole('button', { name: '백업 만들기', exact: true }).click();
   await workspace.getByText('MongoDB 백업 완료', { exact: true }).waitFor();
@@ -790,7 +797,7 @@ async function verifyMongoArchiveEditor(page, workspace, detail) {
   assert.match(await dialog.getByLabel('복원할 원본 컬렉션').innerText(), /visible\.records.*23개/);
   const restoreButton = dialog.getByRole('button', { name: '검토한 컬렉션 복원' });
   assert.equal(await restoreButton.isDisabled(), true);
-  await dialog.getByLabel('MongoDB 암호').fill(indexSecret);
+  await enterPassword();
   await accept();
   await restoreButton.click();
   await workspace.getByText('MongoDB 복원 완료', { exact: true }).waitFor();
@@ -1587,6 +1594,101 @@ async function verifyPipeline(page, detail) {
   assert.equal(await results.count(), 0);
 }
 
+async function verifyMongoCredentials(page, port, ca) {
+  assert.ok(toolsDirectory, 'Set STACKPORT_MONGO_TOOLS_BIN to verify saved archive credentials.');
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'MongoDB 암호 보관 검증' });
+  const input = { name: '암호 보관 검증', uri: `mongodb://localhost:${port}/visible?authSource=admin&directConnection=true`,
+    username: 'index_editor', auth_database: null, environment: 'PROD', tls: true, ca_path: ca };
+  let profile = await command('create_mongo_profile', { projectId: project.id, input });
+  const args = (target = profile) => ({ profileId: target.id, revision: target.revision });
+  const status = () => command('mongo_credential_status', args());
+  const open = (options, target = profile) => command('open_mongo', { ...args(target), confirmation: 'PROD', ...options });
+  const close = session => command('close_mongo', { id: session.id });
+  const useSaved = { password: null, useSavedPassword: true };
+  const empty = { supported: true, stored: false, usable: false };
+  const named = name => ({ name, exact: true });
+  const workspace = page.getByRole('region', named('MongoDB 작업 공간'));
+  const login = page.getByRole('dialog', named('MongoDB 연결'));
+  const openLogin = () => workspace.getByRole('button', named('MongoDB 연결')).click();
+  const disconnect = () => workspace.getByRole('button', named('MongoDB 연결 끊기')).click();
+
+  try {
+    await close(await open({ password: indexSecret }));
+    assert.deepEqual(await status(), empty);
+    await assert.rejects(open({ password: 'wrong-mongo-password', rememberPassword: true }), /암호|TLS/);
+    assert.deepEqual(await status(), empty);
+
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', named('MongoDB 암호 보관 검증 열기')).click();
+    await openLogin();
+    const remember = login.getByRole('checkbox', named('연결 성공 후 Windows에 암호 저장'));
+    await remember.waitFor();
+    assert.equal(await remember.isChecked(), false);
+    await remember.check();
+    await login.getByLabel('MongoDB 암호', { exact: true }).fill(indexSecret);
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', named('연결')).click();
+    await login.waitFor({ state: 'detached' });
+    await disconnect();
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: true });
+    await assert.rejects(open({ ...useSaved, confirmation: '' }), /PROD/);
+    await assert.rejects(open({ ...useSaved, password: indexSecret }), /암호를 선택하세요/);
+
+    await withSecondDesktopInstance(root, async invoke => {
+      const session = await invoke('open_mongo', { ...args(), ...useSaved, confirmation: 'PROD' });
+      try {
+        assert.equal(session.database, 'visible');
+        assert.equal(session.credential_warning, null);
+        assert.ok(!JSON.stringify(session).includes(indexSecret));
+        const catalogs = await invoke('mongo_collections', { id: session.id, database: 'visible', search: 'records', page: 0 });
+        assert.ok(catalogs.items.some(item => item.name === 'records'));
+      } finally {
+        await invoke('close_mongo', { id: session.id });
+      }
+    });
+
+    await openLogin();
+    await login.getByRole('checkbox', named('저장한 암호 사용')).check();
+    assert.equal(await login.getByLabel('MongoDB 암호', { exact: true }).count(), 0);
+    await login.getByRole('checkbox', named('이 연결에서 컬렉션·뷰 관리 허용')).check();
+    await login.getByLabel('운영 환경 확인', { exact: true }).fill('PROD');
+    await login.getByRole('button', named('연결')).click();
+    await login.waitFor({ state: 'detached' });
+    await verifyMongoArchiveEditor(page, workspace, workspace.getByRole('region', named('MongoDB 컬렉션 상세')), true);
+    await disconnect();
+
+    await openLogin();
+    await login.getByRole('button', named('저장한 암호 삭제')).click();
+    await login.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+    assert.deepEqual(await status(), empty);
+    await assert.rejects(open(useSaved), /저장된 MongoDB 암호가 없습니다/);
+
+    await close(await open({ password: indexSecret, rememberPassword: true }));
+    const previous = profile;
+    profile = await command('update_mongo_profile', { id: profile.id, revision: profile.revision,
+      input: { ...input, name: '설정 변경됨', username: null, uri: input.uri.replace('authSource=admin&', '') } });
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: false });
+    await assert.rejects(open(useSaved, previous), /연결이 변경/);
+    await assert.rejects(open(useSaved), /저장된 MongoDB 암호가 없습니다/);
+    for (const file of ['workspace.sqlite', 'workspace.sqlite-wal']) {
+      const target = path.join(process.env.STACKPORT_DATA_DIR, file);
+      if (fs.existsSync(target)) assert.equal(fs.readFileSync(target).includes(indexSecret), false);
+    }
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', named('MongoDB 설정 변경됨 열기')).click();
+    await openLogin();
+    await login.getByRole('button', named('저장한 암호 삭제')).click();
+    await login.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+    assert.equal(await login.getByLabel('MongoDB 암호', { exact: true }).count(), 0);
+    assert.deepEqual(await status(), empty);
+  } finally {
+    await command('forget_mongo_password', args());
+  }
+}
+
 async function main() {
   const port = await availablePort();
   const { ca, combined } = certificates();
@@ -1613,6 +1715,11 @@ async function main() {
     assert.ok(listening, 'The isolated MongoDB server did not start.');
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, ...(replica ? ['initialize_replica'] : [])]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+    if (process.env.STACKPORT_MONGO_CREDENTIAL_ONLY === '1') {
+      await verifyMongoCredentials(browser.contexts()[0].pages()[0], port, ca);
+      console.log('MongoDB Windows credential flow passed (TLS, fresh process, native backup and restore, profile revision and removal).');
+      return;
+    }
     await verify(browser.contexts()[0].pages()[0], port, ca);
     console.log(`MongoDB Windows E2E passed (${replica ? 'replica set' : 'standalone'}, TLS, BSON, document transfer${toolsDirectory ? ', native archive backup and restore' : ''}, pipelines, document and index editing, and reviewed collection and view operations).`);
   } catch (cause) {

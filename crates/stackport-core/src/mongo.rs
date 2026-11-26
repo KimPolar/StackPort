@@ -1,4 +1,5 @@
 mod archive;
+mod credentials;
 mod backup;
 mod csv_import;
 mod document_edit;
@@ -31,6 +32,7 @@ pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
 pub use profiles::{MongoProfile, MongoSettings};
+pub use credentials::{MongoAuthentication, MongoCredentialStatus};
 pub use query::{MongoDocumentPage, MongoQuery};
 pub use restore::{MongoRestoreInput, MongoRestoreReport, MongoRestoreReview};
 pub use schema::MongoSchemaSample;
@@ -79,6 +81,7 @@ pub struct MongoSessionInfo {
     allow_edits: bool,
     allow_indexes: bool,
     allow_namespaces: bool,
+    credential_warning: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -135,7 +138,7 @@ impl MongoManager {
         &self,
         profile_id: String,
         revision: i64,
-        password: MongoPassword,
+        authentication: impl Into<MongoAuthentication>,
         confirmation: &str,
         allow_edits: bool,
         allow_indexes: bool,
@@ -153,9 +156,9 @@ impl MongoManager {
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
-        if password.0.len() > 4096 || (settings.username.is_none() && !password.0.is_empty()) {
-            return Err("MongoDB 사용자 이름과 암호를 확인하세요.".into());
-        }
+        let (password, remember) = self.mongo_password(&profile, authentication.into()).await?;
+        let entry = (remember && !password.0.is_empty())
+            .then(|| (profile.clone(), MongoPassword(password.0.clone())));
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 MongoDB 연결이 너무 많습니다.")?;
@@ -234,7 +237,18 @@ impl MongoManager {
                     _permit: permit,
                 },
             );
-        Ok(MongoSessionInfo { id, database, allow_edits, allow_indexes, allow_namespaces })
+        let credential_warning = if let Some((profile, password)) = entry {
+            let store = self.store.clone();
+            match tokio::task::spawn_blocking(move || {
+                store.remember_native_db_password(&profile, "MongoDB", &password.0, "mongo.credential.save")
+            }).await {
+                Ok(result) => result.err(),
+                Err(_) => Some("MongoDB 암호를 저장할 수 없습니다.".into()),
+            }
+        } else {
+            None
+        };
+        Ok(MongoSessionInfo { id, database, allow_edits, allow_indexes, allow_namespaces, credential_warning })
     }
 
     pub async fn close(&self, id: &str) -> Result<()> {

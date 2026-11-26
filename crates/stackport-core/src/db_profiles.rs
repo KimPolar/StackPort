@@ -1,7 +1,8 @@
-use crate::{db_error, insert_audit, require_changed, AuditRecord, Result, Store};
+use crate::{credential_store as vault, db_error, insert_audit, require_changed, AuditRecord, Result, Store};
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 use serde::{de::DeserializeOwned, Serialize};
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 pub(crate) const SCHEMA: &str = "CREATE TABLE native_db_profiles (
     id TEXT PRIMARY KEY,
@@ -114,8 +115,93 @@ impl Store {
         tx.execute("DELETE FROM native_db_profiles WHERE id=?1", [id])
             .map_err(db_error)?;
         audit(&tx, &profile, T::AUDIT_OPERATIONS[2])?;
+        vault::delete(&vault::target(self, T::ENGINE, id)?)?;
         tx.commit().map_err(db_error)
     }
+
+    pub(crate) fn native_db_credential_status<T: Settings>(
+        &self,
+        id: &str,
+        revision: i64,
+        engine: &str,
+    ) -> Result<vault::CredentialStatus> {
+        let profile = self.native_db_profile::<T>(id, revision)?;
+        vault::status(
+            &vault::target(self, T::ENGINE, id)?,
+            &vault::binding(&profile, engine)?,
+        )
+    }
+
+    pub(crate) fn forget_native_db_password<T: Settings>(
+        &self,
+        id: &str,
+        revision: i64,
+        operation: &'static str,
+    ) -> Result<()> {
+        let mut db = self.connect()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let profile = current::<T>(&tx, id, revision)?;
+        vault::delete(&vault::target(self, T::ENGINE, id)?)?;
+        audit(&tx, &profile, operation)?;
+        tx.commit().map_err(db_error)
+    }
+
+    pub(crate) fn saved_native_db_password<T: Settings>(
+        &self,
+        expected: &DatabaseProfile<T>,
+        engine: &str,
+    ) -> Result<Option<Zeroizing<String>>> {
+        let binding = current_credential_binding(&self.connect()?, expected, engine)?;
+        vault::load_password(&vault::target(self, T::ENGINE, &expected.id)?, &binding)
+    }
+
+    pub(crate) fn remember_native_db_password<T: Settings>(
+        &self,
+        expected: &DatabaseProfile<T>,
+        engine: &str,
+        password: &str,
+        operation: &'static str,
+    ) -> Result<()> {
+        let mut db = self.connect()?;
+        let tx = db
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let binding = current_credential_binding(&tx, expected, engine)?;
+        vault::save(&vault::target(self, T::ENGINE, &expected.id)?, &binding, password)?;
+        audit(&tx, expected, operation)?;
+        tx.commit().map_err(db_error)
+    }
+
+    pub(crate) fn delete_project_native_db_passwords(&self, db: &Connection, project: &str) -> Result<()> {
+        let mut query = db
+            .prepare("SELECT id, engine FROM native_db_profiles WHERE project_id=?1")
+            .map_err(db_error)?;
+        let rows = query
+            .query_map([project], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_error)?;
+        for row in rows {
+            let (id, engine) = row.map_err(db_error)?;
+            vault::delete(&vault::target(self, &engine, &id)?)?;
+        }
+        Ok(())
+    }
+}
+
+fn current_credential_binding<T: Settings>(
+    db: &Connection,
+    expected: &DatabaseProfile<T>,
+    engine: &str,
+) -> Result<[u8; vault::BINDING_BYTES]> {
+    let profile = current::<T>(db, &expected.id, expected.revision)?;
+    let binding = vault::binding(expected, engine)?;
+    if vault::binding(&profile, engine)? != binding {
+        return Err("데이터베이스 연결이 변경되었습니다. 다시 선택하세요.".into());
+    }
+    Ok(binding)
 }
 
 pub(crate) fn copy_profiles(db: &Connection, source: &str, destination: &str) -> Result<usize> {

@@ -973,10 +973,24 @@ async fn delete_mongo_profile(store: State<'_, Store>, id: String, revision: i64
 }
 
 #[tauri::command]
+async fn mongo_credential_status(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<stackport_core::MongoCredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.mongo_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_mongo_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_mongo_password(&profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn open_mongo(mongo: State<'_, stackport_core::MongoManager>, profile_id: String, revision: i64,
-    password: stackport_core::MongoPassword, confirmation: String, allow_edits: Option<bool>, allow_indexes: Option<bool>,
+    password: Option<stackport_core::MongoPassword>, use_saved_password: Option<bool>, remember_password: Option<bool>,
+    confirmation: String, allow_edits: Option<bool>, allow_indexes: Option<bool>,
     allow_namespaces: Option<bool>) -> Result<stackport_core::MongoSessionInfo, String> {
-    mongo.open(profile_id, revision, password, &confirmation, allow_edits.unwrap_or_default(), allow_indexes.unwrap_or_default(),
+    let authentication = stackport_core::MongoAuthentication::requested(password, use_saved_password.unwrap_or(false), remember_password.unwrap_or(false))?;
+    mongo.open(profile_id, revision, authentication, &confirmation, allow_edits.unwrap_or_default(), allow_indexes.unwrap_or_default(),
         allow_namespaces.unwrap_or_default()).await
 }
 
@@ -1093,9 +1107,11 @@ async fn preview_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, i
 
 #[tauri::command]
 async fn apply_mongo_restore(mongo: State<'_, stackport_core::MongoManager>, id: String, request: String, token: String,
-    source_database: String, source_collection: Option<String>, password: stackport_core::MongoPassword, confirmation: String)
+    source_database: String, source_collection: Option<String>, password: Option<stackport_core::MongoPassword>,
+    use_saved_password: Option<bool>, confirmation: String)
     -> Result<stackport_core::MongoRestoreReport, String> {
-    mongo.apply_restore_archive(&id, request, &token, &source_database, source_collection.as_deref(), password, &confirmation).await
+    let authentication = stackport_core::MongoAuthentication::requested(password, use_saved_password.unwrap_or(false), false)?;
+    mongo.apply_restore_archive(&id, request, &token, &source_database, source_collection.as_deref(), authentication, &confirmation).await
 }
 
 #[tauri::command]
@@ -3121,6 +3137,8 @@ fn main() {
             create_mongo_profile,
             update_mongo_profile,
             delete_mongo_profile,
+            mongo_credential_status,
+            forget_mongo_password,
             open_mongo,
             close_mongo,
             mongo_databases,

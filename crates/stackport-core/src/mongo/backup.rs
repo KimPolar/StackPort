@@ -4,7 +4,7 @@ use super::{
     message,
     restore::RestoreReviewSlot,
     tools::{self, Tools},
-    valid_database, validate_namespace, MongoManager, MongoPassword, MongoProfile, READ_TIMEOUT,
+    valid_database, validate_namespace, MongoAuthentication, MongoManager, MongoPassword, MongoProfile, READ_TIMEOUT,
 };
 use crate::{local_file::NewFile, Result};
 use bson::doc;
@@ -30,7 +30,9 @@ pub struct MongoBackupInput {
     collection: Option<String>,
     directory: String,
     destination: String,
-    password: MongoPassword,
+    password: Option<MongoPassword>,
+    #[serde(default)]
+    use_saved_password: bool,
     confirmation: String,
 }
 
@@ -65,11 +67,13 @@ impl MongoManager {
         &self,
         id: &str,
         token: String,
-        input: MongoBackupInput,
+        mut input: MongoBackupInput,
     ) -> Result<MongoBackupReport> {
         let request = self.store.queries.claim(&token)?;
         let connection = self.archive_connection(id)?;
         check_production(&connection.profile, &input.confirmation)?;
+        let authentication = MongoAuthentication::requested(input.password.take(), input.use_saved_password, false)?;
+        let (password, _) = self.mongo_password(&connection.profile, authentication).await?;
         check_database(&input.database)?;
         if let Some(name) = &input.collection {
             validate_namespace(&input.database, name)?;
@@ -95,7 +99,7 @@ impl MongoManager {
         let mut result = tokio::select! {
             biased;
             _ = request.wait_cancelled() => Err(CANCELLED.into()),
-            result = timeout(ARCHIVE_TIME, stage_backup(&connection, input, deadline, cancel)) =>
+            result = timeout(ARCHIVE_TIME, stage_backup(&connection, input, password, deadline, cancel)) =>
                 result.map_err(|_| ARCHIVE_TIMEOUT.to_owned()).and_then(|result| result),
         };
         if result.is_ok() {
@@ -144,6 +148,7 @@ impl MongoManager {
 async fn stage_backup(
     connection: &ArchiveConnection,
     input: MongoBackupInput,
+    password: MongoPassword,
     deadline: Instant,
     cancelled: impl Fn() -> bool + Send + 'static,
 ) -> Result<(NewFile, MongoBackupReport)> {
@@ -152,7 +157,6 @@ async fn stage_backup(
         collection,
         directory,
         destination,
-        password,
         ..
     } = input;
     let (tools, expected_version) =

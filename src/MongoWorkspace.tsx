@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Database, Download, Plug, RefreshCw, ShieldCheck, Upload } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentExportDialog, type MongoDocumentQuery } from "./MongoDocumentExportDialog";
@@ -18,7 +19,8 @@ import { ResultFileReport, type ExportReport } from "./ResultExportDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
-type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean; allow_namespaces: boolean };
+type Session = { id: string; database: string | null; allow_edits: boolean; allow_indexes: boolean; allow_namespaces: boolean;
+  credential_warning: string | null };
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
 type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; ttl_eligible: boolean; hidden: boolean };
@@ -29,7 +31,7 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
   const [session, setSession] = useState<Session | null>(null);
   const [login, setLogin] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [password, setPassword] = useState("");
+  const credentials = useDatabaseCredentials("mongo", login ? profile : null);
   const [confirmation, setConfirmation] = useState("");
   const [allowEdits, setAllowEdits] = useState(false);
   const [allowIndexes, setAllowIndexes] = useState(false);
@@ -53,11 +55,11 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
 
   async function connect(event: FormEvent) {
     event.preventDefault();
-    if (pending.current) return;
-    pending.current = true; setBusy(true); setError(""); setPassword("");
+    if (pending.current || credentials.clearing) return;
+    pending.current = true; setBusy(true); setError("");
     try {
       const next = await invoke<Session>("open_mongo", {
-        profileId: profile.id, revision: profile.revision, password, confirmation, allowEdits, allowIndexes, allowNamespaces,
+        profileId: profile.id, revision: profile.revision, ...credentials.take(), confirmation, allowEdits, allowIndexes, allowNamespaces,
       });
       if (!mounted.current) { await invoke("close_mongo", { id: next.id }); return; }
       active.current = next.id; setSession(next); setLogin(false);
@@ -87,13 +89,12 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} projectId={profile.project_id}
-      profileName={settings.name} environment={settings.environment} needsPassword={Boolean(settings.username)} onBusy={onBusy} />}
-    {login && <Dialog title="MongoDB 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
+    {session?.credential_warning && <p className="form-note" role="status">{session.credential_warning}</p>}
+    {session && <Browse key={session.id} session={session} profile={profile} onBusy={onBusy} />}
+    {login && <Dialog title="MongoDB 연결" busy={busy || credentials.clearing} onClose={() => { setLogin(false); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{mongoAddress(settings.uri)}</p>
-        {settings.username && <label className="field">MongoDB 암호<input autoFocus autoComplete="off" type="password" value={password}
-          maxLength={4096} disabled={busy} onChange={event => setPassword(event.target.value)} /></label>}
+        <DatabasePasswordField credentials={credentials} disabled={busy} acceptsPassword={Boolean(settings.username)} allowRemember autoFocus />
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" autoComplete="off"
           value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
         <label className="mongo-edit-permission"><input type="checkbox" checked={allowEdits} disabled={busy}
@@ -104,15 +105,17 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
           onChange={event => setAllowNamespaces(event.target.checked)} /> 이 연결에서 컬렉션·뷰 관리 허용</label>
         {!settings.tls && <p className="form-note">일반 TCP는 암호와 데이터를 평문으로 전송합니다.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
+        <div className="dialog-actions"><button type="submit" className="primary" disabled={busy || credentials.clearing || (production && confirmation !== "PROD")}>{busy ? "연결 중…" : "연결"}</button></div>
       </form>
     </Dialog>}
   </section>;
 }
 
-function Browse({ session, projectId, profileName, environment, needsPassword, onBusy }: {
-  session: Session; projectId: string; profileName: string; environment: string; needsPassword: boolean; onBusy: (busy: boolean) => void;
+function Browse({ session, profile, onBusy }: {
+  session: Session; profile: MongoProfile; onBusy: (busy: boolean) => void;
 }) {
+  const projectId = profile.project_id;
+  const { name: profileName, environment } = profile.settings;
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
@@ -179,9 +182,9 @@ function Browse({ session, projectId, profileName, environment, needsPassword, o
       environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
     {collectionAction && <MongoCollectionActionDialog id={session.id} {...collectionAction} environment={environment}
       onBusy={onBusy} onClose={() => setCollectionAction(null)} onDone={collectionActionDone} />}
-    {archiveOpen && <MongoArchiveDialog id={session.id} database={archiveDatabase}
+    {archiveOpen && <MongoArchiveDialog id={session.id} database={archiveDatabase} profile={profile}
       currentCollection={mutableCollection ? collection?.name : undefined} environment={environment}
-      allowRestore={session.allow_namespaces} needsPassword={needsPassword} onBusy={onBusy} onClose={() => setArchiveOpen(false)}
+      allowRestore={session.allow_namespaces} onBusy={onBusy} onClose={() => setArchiveOpen(false)}
       onDone={result => {
         setArchiveOpen(false); setArchiveResult(result);
         if (result.kind === "restore") {

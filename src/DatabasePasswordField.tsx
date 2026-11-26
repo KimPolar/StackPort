@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import type { MongoProfile } from "./MongoProfileDialog";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import type { PostgresProfile } from "./PostgresWorkspace";
 import type { RedisProfile } from "./RedisProfileDialog";
 
 type Status = { supported: boolean; stored: boolean; usable: boolean };
-type Engine = "postgres" | "mysql" | "redis";
-type Profile = PostgresProfile | MysqlProfile | RedisProfile;
-const passwordLabels: Record<Engine, string> = { postgres: "PostgreSQL 암호", mysql: "MySQL 암호", redis: "Redis 암호" };
+type Engine = "postgres" | "mysql" | "redis" | "mongo";
+type Profile = PostgresProfile | MysqlProfile | RedisProfile | MongoProfile;
+const passwordLabels: Record<Engine, string> = { postgres: "PostgreSQL 암호", mysql: "MySQL 암호", redis: "Redis 암호", mongo: "MongoDB 암호" };
 
 function credentialArgs(engine: Engine, profile: Profile) {
   return engine === "postgres" ? { profile } : { profileId: profile.id, revision: profile.revision };
@@ -64,23 +65,24 @@ export function useDatabaseCredentials(engine: Engine, profile: Profile | null) 
   return { label: passwordLabels[engine], status, password, setPassword, useSaved, setUseSaved, remember, setRemember, clearing, message, take, forget };
 }
 
-export function DatabasePasswordField({ credentials, disabled, allowRemember = false, autoFocus = false, passwordLabel }: {
+export function DatabasePasswordField({ credentials, disabled, allowRemember = false, autoFocus = false, passwordLabel, acceptsPassword = true }: {
   credentials: ReturnType<typeof useDatabaseCredentials>; disabled: boolean; allowRemember?: boolean; autoFocus?: boolean;
   passwordLabel?: string;
+  acceptsPassword?: boolean;
 }) {
   const { label, status, password, setPassword, useSaved, setUseSaved, remember, setRemember, clearing, message, forget } = credentials;
   const blocked = disabled || clearing;
   return <>
-    {status?.usable && <label className="postgres-edit-opt-in"><input type="checkbox" checked={useSaved} disabled={blocked}
+    {acceptsPassword && status?.usable && <label className="postgres-edit-opt-in"><input type="checkbox" checked={useSaved} disabled={blocked}
       onChange={event => { setUseSaved(event.target.checked); setPassword(""); setRemember(false); }} /> 저장한 암호 사용</label>}
-    {!(status?.usable && useSaved) && <label className="field">{passwordLabel ?? label}<input type="password" autoComplete="off"
+    {acceptsPassword && !(status?.usable && useSaved) && <label className="field">{passwordLabel ?? label}<input type="password" autoComplete="off"
       autoFocus={autoFocus} maxLength={4096} disabled={blocked} value={password} onChange={event => setPassword(event.target.value)} /></label>}
-    {allowRemember && status?.supported && !useSaved && <label className="postgres-edit-opt-in">
+    {acceptsPassword && allowRemember && status?.supported && !useSaved && <label className="postgres-edit-opt-in">
       <input type="checkbox" checked={remember} disabled={blocked} onChange={event => setRemember(event.target.checked)} />
       연결 성공 후 Windows에 암호 저장
     </label>}
     {allowRemember && status?.stored && <>
-      {!status.usable && <p className="form-note">연결 설정이 바뀌었습니다. 현재 설정의 암호를 입력하세요.</p>}
+      {acceptsPassword && !status.usable && <p className="form-note">연결 설정이 바뀌었습니다. 현재 설정의 암호를 입력하세요.</p>}
       <button type="button" className="secondary small" disabled={blocked} onClick={() => void forget()}>저장한 암호 삭제</button>
     </>}
     {message && <p className="form-note" role="status">{message}</p>}

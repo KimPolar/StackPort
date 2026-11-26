@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
+import { DatabasePasswordField, useDatabaseCredentials } from "./DatabasePasswordField";
+import type { MongoProfile } from "./MongoProfileDialog";
 
 type Namespace = { database: string; collection: string; kind: string; documents: number; restore_supported: boolean; view_on?: string };
 type Archive = { size_bytes: number; sha256: string; server_version: string; tool_version: string; namespaces: Namespace[] };
@@ -14,8 +16,8 @@ export type MongoArchiveResult = { kind: "backup"; report: BackupReport } | { ki
 
 const format = new Intl.NumberFormat("ko-KR");
 
-export function MongoArchiveDialog({ id, database, currentCollection, environment, allowRestore, needsPassword, onBusy, onClose, onDone }: {
-  id: string; database: string | null; currentCollection?: string; environment: string; allowRestore: boolean; needsPassword: boolean;
+export function MongoArchiveDialog({ id, database, currentCollection, environment, allowRestore, profile, onBusy, onClose, onDone }: {
+  id: string; database: string | null; currentCollection?: string; environment: string; allowRestore: boolean; profile: MongoProfile;
   onBusy: (busy: boolean) => void; onClose: () => void; onDone: (result: MongoArchiveResult) => void;
 }) {
   const [mode, setMode] = useState<"backup" | "restore">(database ? "backup" : "restore");
@@ -24,7 +26,8 @@ export function MongoArchiveDialog({ id, database, currentCollection, environmen
   const [directory, setDirectory] = useState("");
   const [path, setPath] = useState("");
   const [target, setTarget] = useState("");
-  const [password, setPassword] = useState("");
+  const needsPassword = Boolean(profile.settings.username);
+  const credentials = useDatabaseCredentials("mongo", needsPassword ? profile : null);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -55,7 +58,8 @@ export function MongoArchiveDialog({ id, database, currentCollection, environmen
     setReview(null);
     setSelected(0);
     setConfirmation("");
-    setPassword("");
+    credentials.setPassword("");
+    credentials.setUseSaved(false);
   }
 
   async function choose(field: "path" | "directory") {
@@ -74,20 +78,22 @@ export function MongoArchiveDialog({ id, database, currentCollection, environmen
     event.preventDefault();
     if (working.current || (submitting && production && confirmation !== "PROD")) return;
     working.current = true;
-    setBusy(true); setCancelling(false); setError(""); setPassword("");
+    setBusy(true); setCancelling(false); setError("");
     onBusy(true);
     try {
       const request = await invoke<string>("prepare_query");
       setRequest(request);
       if (!restore) {
+        const { password, useSavedPassword } = credentials.take();
         const report = await invoke<BackupReport>("create_mongo_backup", { id, request, input: {
           database, collection: scope === "collection" ? currentCollection ?? null : null,
-          directory, destination: path, password, confirmation,
+          directory, destination: path, password, use_saved_password: useSavedPassword, confirmation,
         } });
         onDone({ kind: "backup", report });
       } else if (review && sourceDatabase) {
+        const { password, useSavedPassword } = credentials.take();
         const report = await invoke<RestoreReport>("apply_mongo_restore", { id, request, token: review.token,
-          sourceDatabase, sourceCollection: restoreDatabase ? null : source?.collection, password, confirmation,
+          sourceDatabase, sourceCollection: restoreDatabase ? null : source?.collection, password, useSavedPassword, confirmation,
         });
         reviewToken.current = null;
         onDone({ kind: "restore", report });
@@ -121,7 +127,8 @@ export function MongoArchiveDialog({ id, database, currentCollection, environmen
         : <> · {database}{restore && target ? `.${target}` : !restore && scope === "collection" && currentCollection ? `.${currentCollection}` : ""}</>}
       </p>
       {allowRestore && database && <label className="field">작업<select value={mode} disabled={busy || Boolean(review)} onChange={event => {
-        setMode(event.target.value as typeof mode); setPath(""); setError(""); setConfirmation(""); setPassword("");
+        setMode(event.target.value as typeof mode); setPath(""); setError(""); setConfirmation("");
+        credentials.setPassword(""); credentials.setUseSaved(false);
       }}><option value="backup">백업</option><option value="restore">복원</option></select></label>}
       {!restore && currentCollection && <label className="field">백업 범위<select value={scope} disabled={busy}
         onChange={event => setScope(event.target.value)}><option value="collection">현재 컬렉션</option><option value="database">데이터베이스</option>
@@ -169,8 +176,7 @@ export function MongoArchiveDialog({ id, database, currentCollection, environmen
           <p className="form-note">복원이 중단되면 새 데이터베이스에 일부 객체가 남을 수 있습니다.</p>
         </> : <p className="form-note">임시 컬렉션에 복원하고 문서 수를 확인한 뒤 새 이름으로 게시합니다.</p>}
       </>}
-      {submitting && needsPassword && <label className="field">MongoDB 암호<input type="password" autoComplete="off" maxLength={4096} value={password}
-        disabled={busy} onChange={event => setPassword(event.target.value)} /></label>}
+      {submitting && needsPassword && <DatabasePasswordField credentials={credentials} disabled={busy} />}
       {submitting && production && <label className="field">운영 환경 확인<input required autoComplete="off" placeholder="PROD" disabled={busy}
         value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
       {busy && <p className="form-note" role="status">{cancelling ? "중단 요청 중…" : submitting ? "아카이브 작업을 처리하는 중…" : "아카이브를 검토하는 중…"}</p>}

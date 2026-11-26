@@ -8,7 +8,7 @@ use super::{
     message,
     namespace_admin::{namespace_exists, valid_create_name},
     tools::{self, Tools},
-    MongoManager, MongoPassword, READ_TIMEOUT,
+    MongoAuthentication, MongoManager, MongoPassword, READ_TIMEOUT,
 };
 use crate::Result;
 use bson::{doc, Binary, Document};
@@ -205,7 +205,7 @@ impl MongoManager {
         token: &str,
         source_database: &str,
         source_collection: Option<&str>,
-        password: MongoPassword,
+        authentication: impl Into<MongoAuthentication>,
         confirmation: &str,
     ) -> Result<MongoRestoreReport> {
         let request = self.store.queries.claim(&request_token)?;
@@ -246,6 +246,7 @@ impl MongoManager {
                 .ok_or("검토한 원본 MongoDB 데이터베이스를 선택하세요.")?;
             RestorePlan::Database(source)
         };
+        let (password, _) = self.mongo_password(&connection.profile, authentication.into()).await?;
         let pending = guard.take().ok_or(STALE)?;
         let cancel = request.cancellation_check();
         let deadline = Instant::now() + ARCHIVE_TIME;
