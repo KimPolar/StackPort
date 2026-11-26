@@ -28,6 +28,12 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         client.namespace_new.drop_collection('validated_items')
         client.namespace_new.create_collection('validated_items')
         sys.exit(0)
+    if action == ['create_view_source']:
+        client.namespace_new.create_collection('temporary_view_source')
+        sys.exit(0)
+    if action == ['drop_view_source']:
+        client.namespace_new.drop_collection('temporary_view_source')
+        sys.exit(0)
     if action:
         raise ValueError('Unexpected fixture action')
     client.private.data.insert_one({'private': True})

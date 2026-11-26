@@ -1,6 +1,6 @@
 use super::{
     apply_write_concern,
-    document_snapshot::{canonical, parse_document, parse_value, same_document},
+    document_snapshot::{canonical, canonical_pretty, parse_document, parse_value, same_document},
     message,
     pipeline::{validate_expression, validate_view_pipeline},
     validate_namespace, MongoManager, MongoProfile, READ_TIMEOUT, SERVER_TIME,
@@ -26,6 +26,8 @@ const UNKNOWN: &str = "MongoDB 변경 결과를 확인하지 못했습니다. �
 const VALIDATION_TARGET: &str = "유효성 규칙을 관리할 수 있는 일반 MongoDB 컬렉션을 확인하세요.";
 const VALIDATION_CHANGED: &str =
     "검토한 MongoDB 컬렉션 또는 유효성 규칙이 바뀌었습니다. 새로 고친 뒤 다시 검토하세요.";
+const VIEW_TARGET: &str = "수정할 MongoDB 뷰를 확인하세요.";
+const VIEW_CHANGED: &str = "검토한 MongoDB 뷰 정의가 바뀌었습니다. 새로 고친 뒤 다시 검토하세요.";
 
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -95,6 +97,13 @@ pub struct MongoValidationSettings {
     action: String,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MongoViewSettings {
+    source: String,
+    pipeline: String,
+}
+
 #[derive(Serialize)]
 pub struct MongoNamespaceReview {
     token: String,
@@ -132,7 +141,20 @@ struct Review {
     database: String,
     name: String,
     command: Document,
-    validation: Option<ValidationSnapshot>,
+    change: Change,
+}
+
+enum Change {
+    Create,
+    Validation(ValidationSnapshot),
+    View(Document),
+}
+
+#[derive(Clone, Copy)]
+enum Action {
+    Create,
+    Validation,
+    View,
 }
 
 struct ValidationSnapshot {
@@ -197,7 +219,7 @@ impl MongoManager {
             database,
             name,
             command,
-            validation: None,
+            change: Change::Create,
         });
         Ok(review)
     }
@@ -269,7 +291,71 @@ impl MongoManager {
             database,
             name,
             command,
-            validation: Some(before),
+            change: Change::Validation(before),
+        });
+        Ok(review)
+    }
+
+    pub async fn namespace_view_settings(
+        &self,
+        id: &str,
+        database: &str,
+        name: &str,
+    ) -> Result<MongoViewSettings> {
+        let (client, _) = self.namespace_admin(id)?;
+        validate_namespace(database, name)?;
+        let options = view_snapshot(&client.database(database), name)
+            .await?
+            .ok_or(VIEW_TARGET)?;
+        let (source, pipeline) = view_definition(&options)?;
+        Ok(MongoViewSettings {
+            source: source.into(),
+            pipeline: canonical_pretty(pipeline)?,
+        })
+    }
+
+    pub async fn review_namespace_view(
+        &self,
+        id: &str,
+        database: String,
+        name: String,
+        input: MongoViewSettings,
+    ) -> Result<MongoNamespaceReview> {
+        let (client, admin) = self.namespace_admin(id)?;
+        validate_namespace(&database, &name)?;
+        validate_view_source(&database, &name, &input.source)?;
+        let mut pending = admin.review.lock().await;
+        let db = client.database(&database);
+        let before = view_snapshot(&db, &name).await?.ok_or(VIEW_TARGET)?;
+        let (_, stored_pipeline) = view_definition(&before)?;
+        let pipeline = if input.pipeline == canonical_pretty(stored_pipeline)? {
+            stored_pipeline.clone()
+        } else {
+            parse_view_pipeline(&input.pipeline)?
+        };
+        let mut after = before.clone();
+        after.insert("viewOn", &input.source);
+        after.insert("pipeline", pipeline.clone());
+        if same_document(&before, &after)? {
+            return Err("변경할 MongoDB 뷰 원본 또는 파이프라인을 지정하세요.".into());
+        }
+        check_view_source(&db, &input.source).await?;
+        let command = doc! { "collMod": &name, "viewOn": input.source, "pipeline": pipeline };
+        let token = Uuid::new_v4().to_string();
+        let review = MongoNamespaceReview {
+            token: token.clone(),
+            definition: canonical(&after)?,
+            previous_definition: Some(canonical(&before)?),
+            removes_validator: false,
+            expires_seconds: REVIEW_TTL.as_secs(),
+        };
+        *pending = Some(Review {
+            token,
+            at: Instant::now(),
+            database,
+            name,
+            command,
+            change: Change::View(before),
         });
         Ok(review)
     }
@@ -289,7 +375,7 @@ impl MongoManager {
         token: &str,
         confirmation: &str,
     ) -> Result<MongoNamespaceReport> {
-        self.apply_namespace_review(id, token, confirmation, false)
+        self.apply_namespace_review(id, token, confirmation, Action::Create)
             .await
     }
 
@@ -299,7 +385,17 @@ impl MongoManager {
         token: &str,
         confirmation: &str,
     ) -> Result<MongoNamespaceReport> {
-        self.apply_namespace_review(id, token, confirmation, true)
+        self.apply_namespace_review(id, token, confirmation, Action::Validation)
+            .await
+    }
+
+    pub async fn apply_namespace_view(
+        &self,
+        id: &str,
+        token: &str,
+        confirmation: &str,
+    ) -> Result<MongoNamespaceReport> {
+        self.apply_namespace_review(id, token, confirmation, Action::View)
             .await
     }
 
@@ -308,7 +404,7 @@ impl MongoManager {
         id: &str,
         token: &str,
         confirmation: &str,
-        validation: bool,
+        action: Action,
     ) -> Result<MongoNamespaceReport> {
         let _write = self.namespace_writes.lock().await;
         let (client, admin) = self.namespace_admin(id)?;
@@ -318,7 +414,12 @@ impl MongoManager {
             .filter(|review| {
                 review.token == token
                     && review.at.elapsed() < REVIEW_TTL
-                    && review.validation.is_some() == validation
+                    && matches!(
+                        (&review.change, action),
+                        (Change::Create, Action::Create)
+                            | (Change::Validation(_), Action::Validation)
+                            | (Change::View(_), Action::View)
+                    )
             })
             .ok_or(STALE)?;
         if admin.profile.settings.environment == "PROD" && confirmation != "PROD" {
@@ -328,18 +429,20 @@ impl MongoManager {
             database,
             name,
             mut command,
-            validation: before,
+            change,
             ..
         } = pending.take().ok_or(STALE)?;
         let db = client.database(&database);
-        let (kind, operation) = if before.is_some() {
-            ("collection", "mongo.namespace.validation")
-        } else {
-            check_names(&db, &name, &command).await?;
-            if command.contains_key("viewOn") {
-                ("view", "mongo.namespace.create_view")
-            } else {
-                ("collection", "mongo.namespace.create_collection")
+        let (kind, operation) = match &change {
+            Change::Validation(_) => ("collection", "mongo.namespace.validation"),
+            Change::View(_) => ("view", "mongo.namespace.update_view"),
+            Change::Create => {
+                check_names(&db, &name, &command).await?;
+                if command.contains_key("viewOn") {
+                    ("view", "mongo.namespace.create_view")
+                } else {
+                    ("collection", "mongo.namespace.create_collection")
+                }
             }
         };
         command.insert("maxTimeMS", SERVER_TIME.as_millis() as i32);
@@ -347,16 +450,28 @@ impl MongoManager {
         self.audit_mongo_change(&admin.profile, token, operation, "started", None)
             .await?;
         let result = async {
-            if let Some(before) = before {
-                let current = validation_snapshot(&db, &name)
-                    .await?
-                    .ok_or(VALIDATION_CHANGED)?;
-                if current.uuid != before.uuid || !same_document(&current.options, &before.options)?
-                {
-                    return Err(VALIDATION_CHANGED.into());
+            match change {
+                Change::Validation(before) => {
+                    let current = validation_snapshot(&db, &name)
+                        .await?
+                        .ok_or(VALIDATION_CHANGED)?;
+                    if current.uuid != before.uuid
+                        || !same_document(&current.options, &before.options)?
+                    {
+                        return Err(VALIDATION_CHANGED.into());
+                    }
                 }
+                Change::View(before) => {
+                    check_view_source(&db, command.get_str("viewOn").map_err(|_| VIEW_TARGET)?)
+                        .await?;
+                    let current = view_snapshot(&db, &name).await?.ok_or(VIEW_CHANGED)?;
+                    if !same_document(&current, &before)? {
+                        return Err(VIEW_CHANGED.into());
+                    }
+                }
+                Change::Create => {}
             }
-            execute_namespace_change(&db, command, validation).await
+            execute_namespace_change(&db, command, action).await
         }
         .await;
         let (event, outcome, count) = match result.as_ref() {
@@ -432,6 +547,25 @@ async fn validation_snapshot(db: &Database, name: &str) -> Result<Option<Validat
             "validationAction": options.get_str("validationAction").unwrap_or("error"),
         },
     }))
+}
+
+async fn view_snapshot(db: &Database, name: &str) -> Result<Option<Document>> {
+    let Some(row) = namespace_record(db, name).await? else {
+        return Ok(None);
+    };
+    if row.get_str("type").ok() != Some("view") {
+        return Ok(None);
+    }
+    Ok(Some(namespace_options(&row)?.clone()))
+}
+
+fn view_definition(options: &Document) -> Result<(&str, &Bson)> {
+    let source = options.get_str("viewOn").map_err(|_| VIEW_TARGET)?;
+    let pipeline = options
+        .get("pipeline")
+        .filter(|value| value.as_array().is_some())
+        .ok_or(VIEW_TARGET)?;
+    Ok((source, pipeline))
 }
 
 fn validate_validation_target(database: &str, name: &str) -> Result<()> {
@@ -514,24 +648,36 @@ async fn namespace_exists(db: &Database, name: &str) -> Result<bool> {
     Ok(cursor.try_next().await.map_err(message)?.is_some())
 }
 
-async fn execute_namespace_change(
-    db: &Database,
-    command: Document,
-    validation: bool,
-) -> Result<()> {
+async fn check_view_source(db: &Database, source: &str) -> Result<()> {
+    let exists = timeout(READ_TIMEOUT, namespace_exists(db, source))
+        .await
+        .map_err(|_| "MongoDB 원본 조회 시간이 초과되었습니다.")??;
+    if !exists {
+        return Err(SOURCE.into());
+    }
+    Ok(())
+}
+
+async fn execute_namespace_change(db: &Database, command: Document, action: Action) -> Result<()> {
     let reply = timeout(READ_TIMEOUT, db.run_command(command))
         .await
         .map_err(|_| UNKNOWN)?
         .map_err(|error| match error.kind.as_ref() {
-            ErrorKind::Command(command) => match command.code {
-                13 if validation => "현재 MongoDB 계정에 유효성 규칙을 변경할 권한이 없습니다.",
-                26 | 361 if validation => VALIDATION_CHANGED,
-                2 | 9 | 20 | 72 | 73 | 121 | 167 | 168 | 169 | 173 | 303 | 323 | 40324 if validation => {
+            ErrorKind::Command(command) => match (action, command.code) {
+                (Action::Validation, 13) => "현재 MongoDB 계정에 유효성 규칙을 변경할 권한이 없습니다.",
+                (Action::Validation, 26 | 361) => VALIDATION_CHANGED,
+                (Action::Validation, 2 | 9 | 20 | 72 | 73 | 121 | 167 | 168 | 169 | 173 | 303 | 323 | 40324) => {
                     "MongoDB 서버가 유효성 규칙 변경을 거부했습니다. 규칙과 서버 지원을 확인하세요."
                 }
-                13 => "현재 MongoDB 계정에 컬렉션 또는 뷰를 생성할 권한이 없습니다.",
-                48 => EXISTS,
-                2 | 9 | 72 | 73 | 167 | 168 | 169 | 173 | 40324 => {
+                (Action::View, 13) => "현재 MongoDB 계정에 뷰를 변경할 권한이 없습니다.",
+                (Action::View, 26) => VIEW_CHANGED,
+                (Action::View, 5) => "MongoDB 뷰가 원본을 통해 자신을 참조합니다.",
+                (Action::View, 2 | 9 | 20 | 72 | 73 | 167 | 168 | 169 | 173 | 40324) => {
+                    "MongoDB 서버가 뷰 정의 변경을 거부했습니다. 원본, 파이프라인과 서버 지원을 확인하세요."
+                }
+                (Action::Create, 13) => "현재 MongoDB 계정에 컬렉션 또는 뷰를 생성할 권한이 없습니다.",
+                (Action::Create, 48) => EXISTS,
+                (Action::Create, 2 | 9 | 72 | 73 | 167 | 168 | 169 | 173 | 40324) => {
                     "MongoDB 서버가 생성을 거부했습니다. 이름, 유효성 규칙 또는 뷰 파이프라인을 확인하세요."
                 }
                 _ => UNKNOWN,
@@ -567,17 +713,26 @@ fn create_command(database: &str, name: &str, input: MongoNamespaceCreate) -> Re
             }
         }
         MongoNamespaceCreate::View { source, pipeline } => {
-            validate_namespace(database, &source)?;
-            if source == name || !valid_create_name(&source) {
-                return Err(SOURCE.into());
-            }
-            let pipeline = parse_value(&pipeline)?;
-            validate_view_pipeline(&pipeline)?;
+            validate_view_source(database, name, &source)?;
             command.insert("viewOn", source);
-            command.insert("pipeline", pipeline);
+            command.insert("pipeline", parse_view_pipeline(&pipeline)?);
         }
     }
     Ok(command)
+}
+
+fn validate_view_source(database: &str, name: &str, source: &str) -> Result<()> {
+    validate_namespace(database, source)?;
+    if source == name || !valid_create_name(source) {
+        return Err(SOURCE.into());
+    }
+    Ok(())
+}
+
+fn parse_view_pipeline(pipeline: &str) -> Result<Bson> {
+    let pipeline = parse_value(pipeline)?;
+    validate_view_pipeline(&pipeline)?;
+    Ok(pipeline)
 }
 
 fn valid_create_name(name: &str) -> bool {

@@ -8,7 +8,7 @@ import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
-import { MongoNamespaceDialog, type MongoNamespaceReport, type MongoValidationSettings } from "./MongoNamespaceDialog";
+import { MongoNamespaceDialog, type MongoNamespaceReport, type MongoValidationSettings, type MongoViewSettings } from "./MongoNamespaceDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
@@ -142,7 +142,8 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
         projectId={projectId} revision={revision} refresh={() => setRevision(value => value + 1)}
         allowEdits={session.allow_edits && mutableCollection} allowIndexes={session.allow_indexes && mutableCollection}
-        allowValidation={session.allow_namespaces && mutableCollection && !["admin", "config", "local"].includes(database)}
+        allowDefinitionEdits={session.allow_namespaces && (collection.kind === "view"
+          || (mutableCollection && !["admin", "config", "local"].includes(database)))}
         environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
     {creating && <MongoNamespaceDialog id={session.id} initialDatabase={database ?? ""} initialSource={collection?.name ?? ""}
@@ -176,9 +177,9 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowValidation, environment, onBusy }: {
+function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowDefinitionEdits, environment, onBusy }: {
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
-  allowEdits: boolean; allowIndexes: boolean; allowValidation: boolean; environment: string; onBusy: (busy: boolean) => void;
+  allowEdits: boolean; allowIndexes: boolean; allowDefinitionEdits: boolean; environment: string; onBusy: (busy: boolean) => void;
 }) {
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline" | "definition">("documents");
   const [draft, setDraft] = useState(defaultQuery);
@@ -190,8 +191,8 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const [documentNotice, setDocumentNotice] = useState("");
   const [indexAction, setIndexAction] = useState<MongoIndexAction | null>(null);
   const [indexNotice, setIndexNotice] = useState("");
-  const [validationRequest, setValidationRequest] = useState<{ id: string; database: string; name: string } | null>(null);
-  const [validationNotice, setValidationNotice] = useState("");
+  const [definitionRequest, setDefinitionRequest] = useState<{ id: string; database: string; name: string } | null>(null);
+  const [definitionNotice, setDefinitionNotice] = useState("");
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
   const countArgs = useMemo(() => view === "documents" && countRequest?.filter === query.filter
@@ -200,7 +201,10 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const count = useNativeRead<string>("count_mongo_documents", countArgs, revision);
   const indexes = useNativeRead<Page<Index>>("mongo_indexes", view === "indexes" ? args : null, revision);
   const definition = useNativeRead<string>("mongo_namespace_definition", view === "definition" ? args : null, revision);
-  const validation = useNativeRead<MongoValidationSettings>("mongo_namespace_validation_settings", validationRequest);
+  const isView = collection.kind === "view";
+  const editLabel = isView ? "뷰 정의" : "유효성 규칙";
+  const editSettings = useNativeRead<MongoValidationSettings | MongoViewSettings>(
+    isView ? "mongo_namespace_view_settings" : "mongo_namespace_validation_settings", definitionRequest);
   const update = (change: Partial<Query>) => setDraft(value => ({ ...value, ...change }));
   const narrowDocument = () => { update({ projection: '{"_id": 1}' }); setQuery({ ...query, projection: '{"_id": 1}', page: 0 }); };
   function applyQuery(next: Query) {
@@ -221,14 +225,14 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
     <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
     <div hidden={view !== "pipeline"}><MongoPipeline target={args} projectId={projectId} /></div>
     {view === "definition" && <>
-      {allowValidation && definition.data !== null && <div className="mongo-actions">
-        <button type="button" className="secondary small" disabled={validation.loading}
-          onClick={() => { setValidationNotice(""); setValidationRequest({ id, database, name: collection.name }); }}>
-          {validation.loading ? "유효성 설정 조회 중…" : "유효성 규칙 편집"}
+      {allowDefinitionEdits && definition.data !== null && <div className="mongo-actions">
+        <button type="button" className="secondary small" disabled={editSettings.loading}
+          onClick={() => { setDefinitionNotice(""); setDefinitionRequest({ id, database, name: collection.name }); }}>
+          {editSettings.loading ? "편집 설정 조회 중…" : editLabel + " 편집"}
         </button>
       </div>}
-      {validation.error && <p className="error-banner" role="alert">{validation.error}</p>}
-      {validationNotice && <p className="form-note mongo-note" role="status">{validationNotice}</p>}
+      {editSettings.error && <p className="error-banner" role="alert">{editSettings.error}</p>}
+      {definitionNotice && <p className="form-note mongo-note" role="status">{definitionNotice}</p>}
       {definition.loading && <p className="result-empty" role="status">정의 조회 중…</p>}
       {definition.error && <p className="error-banner" role="alert">{definition.error}</p>}
       {definition.data !== null && <pre className="mongo-command-definition mongo-note"
@@ -309,11 +313,14 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
         setIndexAction(null);
         refresh();
       }} />}
-    {validation.data && <MongoNamespaceDialog id={id} initialDatabase={database} initialSource=""
-      validation={{ collection: collection.name, settings: validation.data }} environment={environment} onBusy={onBusy}
-      onClose={() => setValidationRequest(null)} onDone={report => {
-        setValidationRequest(null);
-        setValidationNotice(report.audit_warning ? "유효성 규칙 변경 완료 · 감사 기록 저장 실패" : "유효성 규칙 변경 완료");
+    {editSettings.data && <MongoNamespaceDialog id={id} initialDatabase={database} initialSource=""
+      editable={"validator" in editSettings.data
+        ? { kind: "validation", name: collection.name, settings: editSettings.data }
+        : { kind: "view", name: collection.name, settings: editSettings.data }}
+      environment={environment} onBusy={onBusy}
+      onClose={() => setDefinitionRequest(null)} onDone={report => {
+        setDefinitionRequest(null);
+        setDefinitionNotice(editLabel + (report.audit_warning ? " 변경 완료 · 감사 기록 저장 실패" : " 변경 완료"));
         refresh();
       }} />}
     {documentEdit && <MongoDocumentEditDialog id={id} database={database} collection={collection.name} change={documentEdit}

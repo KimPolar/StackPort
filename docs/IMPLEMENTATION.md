@@ -16,6 +16,10 @@ Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉�
 
 **정의** 화면에서는 서버에 저장된 옵션을 Canonical Extended JSON으로 읽습니다. 컬렉션의 유효성 규칙·검사 범위·위반 시 동작과 뷰의 원본·파이프라인을 확인할 수 있습니다. 이 화면은 서버의 상세 조회 권한을 따르며 최대 64 KiB를 표시합니다. [MongoDB listCollections](https://www.mongodb.com/docs/manual/reference/command/listcollections/)
 
+컬렉션·뷰 관리가 허용된 연결에서 뷰의 **정의 → 뷰 정의 편집**을 열면 같은 데이터베이스의 원본 컬렉션이나 뷰를 바꾸고 파이프라인을 수정할 수 있습니다. 서버에 저장된 정의와 변경할 정의를 표시하며 운영 환경에서는 `PROD`를 입력합니다. 적용 전에 원본의 존재와 뷰 정의를 다시 확인합니다. 새 파이프라인은 중첩된 쓰기 단계와 서버 JavaScript를 차단하며, 그 밖의 단계 지원 여부와 뷰의 순환 참조는 서버가 검사합니다. [MongoDB collMod 뷰 변경](https://www.mongodb.com/docs/manual/reference/command/collmod/#modify-views)
+
+Windows 앱과 MongoDB 8.0.38 TLS 환경에서 원본을 다른 뷰로 바꾼 뒤 새 파이프라인의 조회 결과를 확인했습니다. 오래된 검토, 적용 전에 사라진 원본, 순환 참조, 읽기 전용 계정의 변경 요청은 거절됐습니다.
+
 컬렉션·뷰 관리가 허용된 연결에서 일반 컬렉션의 **정의 → 유효성 규칙 편집**을 열면 규칙과 검사 옵션을 변경할 수 있습니다. 규칙 입력을 비우면 규칙을 제거합니다. 적용 전에 변경 전후를 표시하며 운영 환경에서는 `PROD`를 입력합니다. 서버의 변경 권한이 필요하고 적용 직전에 컬렉션 UUID와 기존 규칙·검사 옵션을 다시 읽습니다. 기존 문서는 설정된 검사 범위에 따라 이후 수정 시 검사됩니다. [MongoDB collMod](https://www.mongodb.com/docs/manual/reference/command/collmod/)
 
 Windows 앱과 TLS를 적용한 MongoDB 8.0.38에서 규칙 변경으로 인한 쓰기 거부, 경고 설정 및 규칙 제거 후 쓰기 허용, 읽기 전용 계정의 변경 거절을 확인했습니다. 두 연결에서 같은 규칙을 동시에 변경하면 한 건만 적용되고, 같은 이름으로 다시 생성한 컬렉션에는 이전 검토를 적용할 수 없습니다.

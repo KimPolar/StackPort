@@ -33,8 +33,11 @@ pub(super) fn snapshot(raw: RawDocumentBuf) -> Result<Document> {
 }
 
 pub(super) fn canonical(document: &Document) -> Result<String> {
-    let text = serde_json::to_string_pretty(&Canonical(&Bson::Document(document.clone())))
-        .map_err(|_| INVALID)?;
+    canonical_pretty(&Bson::Document(document.clone()))
+}
+
+pub(super) fn canonical_pretty(value: &Bson) -> Result<String> {
+    let text = serde_json::to_string_pretty(&Canonical(value)).map_err(|_| INVALID)?;
     if text.len() > MAX_BYTES {
         return Err(INVALID.into());
     }

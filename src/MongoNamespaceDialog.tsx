@@ -5,21 +5,26 @@ import { Dialog } from "./Dialog";
 type Kind = "collection" | "view";
 type Review = { token: string; definition: string; previous_definition: string | null; removes_validator: boolean; expires_seconds: number };
 export type MongoValidationSettings = { validator: string; level: string; action: string };
+export type MongoViewSettings = { source: string; pipeline: string };
+type MongoNamespaceEdit = { kind: "validation"; name: string; settings: MongoValidationSettings }
+  | { kind: "view"; name: string; settings: MongoViewSettings };
 export type MongoNamespaceReport = { database: string; name: string; kind: Kind; audit_warning: boolean };
 
-export function MongoNamespaceDialog({ id, initialDatabase, initialSource, validation, environment, onBusy, onClose, onDone }: {
+export function MongoNamespaceDialog({ id, initialDatabase, initialSource, editable, environment, onBusy, onClose, onDone }: {
   id: string; initialDatabase: string; initialSource: string; environment: string;
-  validation?: { collection: string; settings: MongoValidationSettings };
+  editable?: MongoNamespaceEdit;
   onBusy: (busy: boolean) => void; onClose: () => void; onDone: (report: MongoNamespaceReport) => void;
 }) {
-  const [kind, setKind] = useState<Kind>("collection");
+  const validation = editable?.kind === "validation" ? editable.settings : null;
+  const view = editable?.kind === "view" ? editable.settings : null;
+  const [kind, setKind] = useState<Kind>(view ? "view" : "collection");
   const [database, setDatabase] = useState(initialDatabase);
-  const [name, setName] = useState(validation?.collection ?? "");
-  const [source, setSource] = useState(initialSource);
-  const [pipeline, setPipeline] = useState("[]");
-  const [validator, setValidator] = useState(validation?.settings.validator ?? "");
-  const [level, setLevel] = useState(validation?.settings.level ?? "strict");
-  const [action, setAction] = useState(validation?.settings.action ?? "error");
+  const [name, setName] = useState(editable?.name ?? "");
+  const [source, setSource] = useState(view?.source ?? initialSource);
+  const [pipeline, setPipeline] = useState(view?.pipeline ?? "[]");
+  const [validator, setValidator] = useState(validation?.validator ?? "");
+  const [level, setLevel] = useState(validation?.level ?? "strict");
+  const [action, setAction] = useState(validation?.action ?? "error");
   const [review, setReview] = useState<Review | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
@@ -28,7 +33,10 @@ export function MongoNamespaceDialog({ id, initialDatabase, initialSource, valid
   const token = useRef<string | null>(null);
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   const awaitingConfirmation = Boolean(review && environment === "PROD" && confirmation !== "PROD");
-  const operation = validation ? "변경" : "생성";
+  const operation = editable ? "변경" : "생성";
+  const command = editable?.kind ?? "create";
+  const definitionLabel = view ? "뷰 정의" : "유효성 설정";
+  const title = view ? "MongoDB 뷰 정의 편집" : validation ? "MongoDB 유효성 규칙 편집" : "MongoDB 컬렉션·뷰 만들기";
 
   useEffect(() => () => {
     if (token.current) void invoke("discard_mongo_namespace_review", { id, token: token.current }).catch(() => {});
@@ -52,15 +60,13 @@ export function MongoNamespaceDialog({ id, initialDatabase, initialSource, valid
     setError("");
     try {
       if (review) {
-        const command = validation ? "apply_mongo_namespace_validation" : "apply_mongo_namespace_create";
-        const result = await invoke<MongoNamespaceReport>(command, { id, token: review.token, confirmation });
+        const result = await invoke<MongoNamespaceReport>("apply_mongo_namespace_" + command, { id, token: review.token, confirmation });
         token.current = null;
         onDone(result);
       } else {
-        const options = { validator, level, action };
-        const input = validation ? options : kind === "collection" ? { kind, ...options } : { kind, source, pipeline };
-        const command = validation ? "review_mongo_namespace_validation" : "review_mongo_namespace_create";
-        const result = await invoke<Review>(command, { id, database, name, input });
+        const options = kind === "collection" ? { validator, level, action } : { source, pipeline };
+        const input = editable ? options : { kind, ...options };
+        const result = await invoke<Review>("review_mongo_namespace_" + command, { id, database, name, input });
         token.current = result.token;
         setReview(result);
       }
@@ -74,7 +80,7 @@ export function MongoNamespaceDialog({ id, initialDatabase, initialSource, valid
     }
   }
 
-  return <Dialog title={validation ? "MongoDB 유효성 규칙 편집" : "MongoDB 컬렉션·뷰 만들기"}
+  return <Dialog title={title}
     busy={busy} className="restore-dialog mongo-namespace-dialog" onClose={onClose}>
     <form onSubmit={event => void submit(event)} aria-busy={busy}>
       {review ? <>
@@ -83,15 +89,15 @@ export function MongoNamespaceDialog({ id, initialDatabase, initialSource, valid
         {review.previous_definition === null
           ? <pre className="mongo-command-definition" aria-label="생성 명령" tabIndex={0}>{review.definition}</pre>
           : <div className="mongo-edit-compare">
-            <section><h4>변경 전</h4><pre aria-label="변경 전 유효성 설정" tabIndex={0}>{review.previous_definition}</pre></section>
-            <section><h4>변경 후</h4><pre aria-label="변경 후 유효성 설정" tabIndex={0}>{review.definition}</pre></section>
+            <section><h4>변경 전</h4><pre aria-label={"변경 전 " + definitionLabel} tabIndex={0}>{review.previous_definition}</pre></section>
+            <section><h4>변경 후</h4><pre aria-label={"변경 후 " + definitionLabel} tabIndex={0}>{review.definition}</pre></section>
           </div>}
         {review.removes_validator && <p className="form-note">유효성 규칙이 제거됩니다.</p>}
         <p className="form-note">검토는 {review.expires_seconds / 60}분 동안 유효합니다.</p>
         {environment === "PROD" && <label className="field">운영 환경 확인<input required placeholder="PROD"
           autoComplete="off" value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} /></label>}
       </> : <fieldset className="mongo-namespace-fields" disabled={busy}>
-        {validation ? <p className="confirm-copy"><strong>{environment}</strong> · {database}.{name}</p> : <>
+        {editable ? <p className="confirm-copy"><strong>{environment}</strong> · {database}.{name}</p> : <>
           <label className="field">생성 유형<select aria-label="생성 유형" value={kind} onChange={event => setKind(event.target.value as Kind)}>
             <option value="collection">컬렉션</option>
             <option value="view">뷰</option>
@@ -113,12 +119,12 @@ export function MongoNamespaceDialog({ id, initialDatabase, initialSource, valid
               <option value="strict">모든 삽입과 수정</option>
               <option value="moderate">삽입과 유효한 기존 문서의 수정</option>
               {validation && <option value="off">검사 안 함</option>}
-              {validation?.settings.level === "constraint" && <option value="constraint">모든 문서가 규칙을 충족해야 함</option>}
+              {validation?.level === "constraint" && <option value="constraint">모든 문서가 규칙을 충족해야 함</option>}
             </select></label>
             <label className="field">규칙 위반 시<select value={action} onChange={event => setAction(event.target.value)}>
               <option value="error">쓰기 거부</option>
               <option value="warn">서버 로그에 경고</option>
-              {validation?.settings.action === "errorAndLog" && <option value="errorAndLog">쓰기 거부 및 서버 로그에 경고</option>}
+              {validation?.action === "errorAndLog" && <option value="errorAndLog">쓰기 거부 및 서버 로그에 경고</option>}
             </select></label>
           </div>}
         </> : <>

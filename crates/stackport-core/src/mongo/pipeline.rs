@@ -93,7 +93,7 @@ fn prepare(stages: &[MongoPipelineStage], through: Option<usize>) -> Result<Vec<
         let value: Bson = serde_json::from_str(&stage.expression)
             .map_err(|_| format!("{}단계에 올바른 Extended JSON 값을 입력하세요.", index + 1))?;
         validate_expression(&value, 0).map_err(|error| format!("{}단계 · {error}", index + 1))?;
-        validate_stage(&stage.operator, &value, &mut remaining)
+        validate_stage(&stage.operator, &value, &mut remaining, allowed_operator)
             .map_err(|error| format!("{}단계 · {error}", index + 1))?;
         pipeline.push(doc! { &stage.operator: value });
     }
@@ -130,8 +130,13 @@ fn allowed_operator(operator: &str) -> bool {
     )
 }
 
-fn validate_stage(operator: &str, value: &Bson, remaining: &mut usize) -> Result<()> {
-    if !allowed_operator(operator) {
+fn validate_stage(
+    operator: &str,
+    value: &Bson,
+    remaining: &mut usize,
+    allowed: fn(&str) -> bool,
+) -> Result<()> {
+    if !allowed(operator) {
         return Err("지원하는 읽기 전용 집계 단계만 사용할 수 있습니다.".into());
     }
     *remaining = remaining
@@ -142,20 +147,24 @@ fn validate_stage(operator: &str, value: &Bson, remaining: &mut usize) -> Result
             .as_document()
             .ok_or("$facet에 이름별 파이프라인을 입력하세요.")?;
         for branch in branches.values() {
-            validate_nested_pipeline(branch, remaining)?;
+            validate_nested_pipeline(branch, remaining, allowed)?;
         }
     } else if matches!(operator, "$lookup" | "$unionWith") {
         if let Some(branch) = value
             .as_document()
             .and_then(|document| document.get("pipeline"))
         {
-            validate_nested_pipeline(branch, remaining)?;
+            validate_nested_pipeline(branch, remaining, allowed)?;
         }
     }
     Ok(())
 }
 
-fn validate_nested_pipeline(value: &Bson, remaining: &mut usize) -> Result<()> {
+fn validate_nested_pipeline(
+    value: &Bson,
+    remaining: &mut usize,
+    allowed: fn(&str) -> bool,
+) -> Result<()> {
     let stages = value
         .as_array()
         .ok_or("중첩 파이프라인은 단계 배열이어야 합니다.")?;
@@ -164,7 +173,7 @@ fn validate_nested_pipeline(value: &Bson, remaining: &mut usize) -> Result<()> {
             return Err("중첩 파이프라인의 각 단계에는 연산자 하나가 필요합니다.".into());
         };
         let (operator, expression) = document.iter().next().expect("validated nonempty stage");
-        validate_stage(operator, expression, remaining)?;
+        validate_stage(operator, expression, remaining, allowed)?;
     }
     Ok(())
 }
@@ -172,7 +181,9 @@ fn validate_nested_pipeline(value: &Bson, remaining: &mut usize) -> Result<()> {
 pub(super) fn validate_view_pipeline(value: &Bson) -> Result<()> {
     validate_expression(value, 0)?;
     let mut remaining = MAX_STAGES;
-    validate_nested_pipeline(value, &mut remaining)
+    validate_nested_pipeline(value, &mut remaining, |operator| {
+        operator.starts_with('$') && !matches!(operator, "$out" | "$merge")
+    })
 }
 
 pub(super) fn validate_expression(value: &Bson, depth: usize) -> Result<()> {
