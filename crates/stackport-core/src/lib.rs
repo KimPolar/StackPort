@@ -65,6 +65,8 @@ pub use postgres::{PostgresSearchInput, PostgresSearchPage};
 pub use postgres::{PostgresStatementStats, PostgresStatementStatsInput};
 pub use postgres::{PostgresValuePage, PostgresValueRepresentation, PostgresValueSave, PostgresValueTarget};
 mod project_lifecycle;
+mod database_folders;
+pub use database_folders::{DatabaseFolder, DatabaseFolderEngine, DatabaseFolderState, DatabasePlacement};
 pub use project_lifecycle::ArchivedProject;
 mod query;
 pub use query::{QueryOutcome, SqlParameterValue};
@@ -170,7 +172,7 @@ mod tls;
 pub mod backup_schedule;
 pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 33;
+const SCHEMA_VERSION: i64 = 34;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -460,6 +462,7 @@ impl Store {
                 tx.execute_batch(sql_templates::DIALECT_SCHEMA).map_err(db_error)?;
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 backup_schedule::migrate(&tx)?;
+                database_folders::migrate(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {
@@ -529,6 +532,7 @@ impl Store {
                 }
                 tx.execute_batch(mongo::PIPELINE_SCHEMA).map_err(db_error)?;
                 backup_schedule::migrate(&tx)?;
+                database_folders::migrate(&tx)?;
                 tx.pragma_update(None, "user_version", SCHEMA_VERSION)
                     .map_err(db_error)?;
             } else if current != SCHEMA_VERSION {

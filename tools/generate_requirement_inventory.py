@@ -19,8 +19,8 @@ PARTIAL = {
     "SP-AU-012": "SQLite·PostgreSQL·MySQL·MariaDB 백업 계획 초안의 예약·저장 권한·원본 읽기·용량 검증, PostgreSQL TLS 경로와 MySQL·MariaDB 덤프 도구 확인, 다음 달력 일정 미리보기와 즉시 백업",
     "SP-AU-016": "SQLite·PostgreSQL·MySQL·MariaDB 백업 계획의 파일별 보존 만료일, 검토한 만료 파일 삭제와 결과 이력",
     "SP-AT-017": "Windows SQLite·PostgreSQL 달력 예약 실행·중지, SQLite 미리보기·재시작 후 지난 예약 실행, 두 엔진의 실패 알림·재시도, PostgreSQL 복원·SSH 경로 검증",
-    "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 새 프로젝트와 연결 정의 복제",
-    "SP-UI-002": "이름순 단일 데이터베이스 연결 목록·행별 엔진 표시·명세 9종 엔진 선택형 등록, 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 서버 검색 결과에서 테이블·뷰 열기",
+    "SP-UI-001": "프로젝트 관리 메뉴에서 이름 변경·복제·보관·재활성화·삭제, 프로젝트별 데이터베이스 하위 폴더와 연결 배치 및 복제",
+    "SP-UI-002": "통합 데이터베이스 목록의 사용자 폴더·경로 검색·행별 엔진 표시·명세 9종 엔진 선택형 등록, 별도 SSH 그룹, SQLite 객체 탐색 및 PostgreSQL 검색 결과에서 테이블·뷰 열기",
     "SP-UI-003": "연결별 SQL 다중 탭, Windows 터미널 탭 전환·고정·순서 변경·복제·최근 닫은 탭 다시 열기·고정하지 않은 탭 일괄 닫기, 터미널·RDP 세션 수 표시",
     "SP-UI-004": "두 도구의 좌우·상하 분할, 2×2 프리셋과 최대 네 영역의 개별 분할·크기 조절, 작업 상태를 유지하는 도구 교체·이동",
     "SP-UI-006": "탐색기에서 연결과 즐겨찾기·SQLite 객체 필터링, 연결된 PostgreSQL에 이름·스키마 객체 검색 제출 및 명령 팔레트 검색",
@@ -33,7 +33,7 @@ PARTIAL = {
     "SP-UI-019": "SQLite·PostgreSQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
     "SP-UI-015": "작업 공간의 라이트·다크·시스템 테마, 컴팩트 밀도, 분할·초안·터미널을 유지하는 집중 모드, 탐색기 펼치기·접기",
     "SP-UI-016": "작업 도구와 터미널 탭의 키보드 이동, 명령 팔레트 검색, 분할 창 크기 조절, Ctrl+Shift+F 터미널 출력 검색",
-    "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL·Redis 호스트·포트·사용자·이름·환경 저장과 Redis DB 번호·TLS 설정",
+    "SP-CN-001": "프로젝트별 SQLite 파일, SSH·PostgreSQL·Redis 호스트·포트·사용자·이름·환경 저장과 Redis DB 번호·TLS 설정, DB 연결의 프로젝트별 폴더 배치",
     "SP-CN-002": "SSH 연결의 DNS·TCP 단계 진단과 호스트 키 사전 조회; 인증·권한 검사는 미제공",
     "SP-CN-003": "SQLite 연결 정의 생성·삭제, SSH·PostgreSQL·Redis 연결 정의 생성·수정·삭제와 세션 열기·닫기, DBMS 9종과 SSH 연결의 설정 기반 복제",
     "SP-CN-005": "선택한 SSH·데이터베이스 연결의 버전형 JSON 내보내기, 검토한 파일에서 선택한 연결만 가져오기, DB 이름 변경·로컬 파일 연결과 일괄 등록",
@@ -443,6 +443,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; src/WorkspaceExplorer.tsx; src/workspaceExplorer.css"
                 if requirement_id != "SP-UI-006":
                     evidence += "; tests/desktop-smoke.cjs"
+            if requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001"}:
+                evidence += "; crates/stackport-core/src/database_folders.rs; crates/stackport-core/tests/database_folders.rs; src/DatabaseFolderDialog.tsx; tests/database-folders-smoke.cjs"
             if requirement_id in {"SP-UI-006", "SP-UI-009", "SP-ST-006"}:
                 evidence += "; src/workspaceFavorites.ts; crates/stackport-core/src/workspace_favorites.rs; crates/stackport-core/tests/workspace_favorites.rs; tests/workspace-resume-smoke.cjs"
                 if requirement_id == "SP-UI-009":

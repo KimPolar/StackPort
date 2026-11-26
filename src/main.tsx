@@ -2343,6 +2343,8 @@ function SshProfileDialog({ mode, profile, initial, projectId, onClose, onChange
 const auditOperationNames: Record<string, string> = {
   "project.create": "프로젝트 생성", "project.rename": "프로젝트 이름 변경", "project.duplicate": "프로젝트 복제", "project.delete": "프로젝트 삭제",
   "project.archive": "프로젝트 보관", "project.unarchive": "프로젝트 활성화",
+  "database_folder.create": "연결 폴더 만들기", "database_folder.update": "연결 폴더 변경",
+  "database_folder.place_connection": "연결 폴더 이동", "database_folder.delete": "연결 폴더 삭제",
   "sql_template.create": "SQL 템플릿 생성", "sql_template.update": "SQL 템플릿 편집", "sql_template.favorite": "SQL 템플릿 즐겨찾기 변경",
   "mongo_pipeline.create": "MongoDB 파이프라인 생성", "mongo_pipeline.update": "MongoDB 파이프라인 편집", "mongo_pipeline.delete": "MongoDB 파이프라인 삭제",
   "mongo.document.insert": "MongoDB 문서 삽입", "mongo.document.duplicate": "MongoDB 문서 복제", "mongo.document.replace": "MongoDB 문서 수정",

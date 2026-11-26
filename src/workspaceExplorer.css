@@ -99,6 +99,30 @@ button.explorer-group-title:hover { background: var(--surface-hover); color: var
 .explorer-group-actions { flex-shrink: 0; gap: 1px; }
 .explorer-group-actions .icon-button, .object-toolbar .icon-button { width: 25px; height: 27px; }
 .explorer-group-content { display: grid; gap: 3px; margin-top: 4px; }
+.database-folder-row { display: flex; align-items: center; min-width: 0; gap: 2px; }
+.database-folder-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  text-align: left;
+}
+.database-folder-toggle:hover { background: var(--surface-hover); }
+.database-folder-toggle svg, .database-folder-toggle span { flex-shrink: 0; }
+.database-folder-toggle strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; }
+.database-folder-toggle span { margin-inline-start: auto; font-size: 10px; font-variant-numeric: tabular-nums; }
+.database-folder-row > .icon-button { flex: 0 0 24px; height: 28px; }
+.database-folder-contents { display: grid; gap: 3px; }
+.database-folder-indent { margin-inline-start: 10px; padding-inline-start: 3px; border-inline-start: 1px solid var(--divider); }
+.database-folder-dialog-actions { flex-wrap: wrap; }
+.database-profile-action-strip { justify-content: flex-end; padding-inline: 4px; background: var(--surface-hover); border-radius: 5px; }
 .sidebar-empty { margin: 6px 6px 10px; color: var(--text-muted); font-size: 12px; line-height: 1.55; }
 .explorer-profile { display: flex; align-items: center; min-width: 0; gap: 2px; }
 .profile-row, .object-row {

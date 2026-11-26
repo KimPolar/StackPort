@@ -368,6 +368,8 @@ Windows 상단의 **빠른 연결**은 `Ctrl+Shift+Q`와 명령 팔레트에서�
 
 탐색기에서는 프로젝트 선택과 검색창을 상단에 고정하고 **데이터베이스**와 **SSH** 그룹을 각각 접을 수 있습니다. 데이터베이스 목록은 저장된 연결을 엔진에 관계없이 이름순으로 표시합니다. 각 연결에서 엔진과 주소를 확인하고, 탐색기나 빈 데이터베이스 화면의 **데이터베이스 연결 추가**에서 엔진을 고릅니다. 연결 이름·엔진·파일 경로·호스트와 포트·환경, 그리고 열린 SQLite 연결의 테이블과 뷰를 공백으로 구분한 검색어로 찾습니다. 일치한 객체는 연결 아래에 표시하며, 필터를 지우면 접기 상태가 복원됩니다. 프로젝트를 바꾸면 검색을 초기화합니다. 프로젝트 이름 변경·복제·보관·삭제와 작업 공간 복사는 **프로젝트 관리**에서 실행합니다. [Navicat의 탐색기 필터](https://www.navicat.com/manual/online_manual/en/navicat_18/win_manual/main_window.html)
 
+Windows 탐색기의 **연결 폴더 만들기**로 프로젝트 안에 폴더와 하위 폴더를 만듭니다. 연결 옆 **연결 작업 → 폴더로 이동**에서 서로 다른 DBMS 연결을 같은 폴더로 옮길 수 있습니다. 검색어에 폴더 이름을 넣으면 해당 경로의 연결을 찾고, 프로젝트 복제 시 폴더 구조와 연결 배치도 복제합니다. 폴더를 삭제하면 그 안의 연결이 상위 폴더 또는 데이터베이스 최상위로 이동합니다. 폴더 배치와 연결 설정은 별도로 저장하며, 작업 공간 v34 이관 시 기존 연결은 최상위에 표시됩니다.
+
 탐색기의 **즐겨찾기**에서 개인 또는 프로젝트 범위를 선택한 뒤 SQLite·PostgreSQL·SSH 연결이나 SQLite·PostgreSQL 테이블·뷰 옆의 별을 누릅니다. 즐겨찾기는 작업 공간 메타데이터에 저장되며, 탐색기 검색으로 다른 연결의 고정 객체도 열 수 있습니다. 프로젝트를 복제하면 프로젝트 범위의 항목이 복제된 연결을 가리킵니다. 개인 범위는 원래 프로젝트에 유지됩니다. 연결 정의를 삭제하면 관련 항목도 제거됩니다. 메타데이터 v13으로 이관할 때 이전 작업 공간을 검증해 백업하고 기존 즐겨찾기를 보존합니다.
 
 PostgreSQL에 접속한 뒤 탐색기에 객체 이름이나 `스키마.객체`를 입력하고 **연결 이름에서 검색**을 누르면 현재 서버의 조회 가능한 객체를 페이지별로 표시합니다. 검색 결과나 객체 화면에서 즐겨찾기에 추가할 수 있습니다. 즐겨찾기는 저장 연결·스키마·객체 이름을 보존합니다. 연결을 종료한 상태에서 즐겨찾기를 열면 먼저 일반 접속 화면에서 TLS·암호·환경 확인을 거치고, 접속 후 서버에서 현재 객체와 조회 권한을 확인합니다.
@@ -627,6 +629,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `tests/structured-preview.test.mjs`, `crates/stackport-core/tests/edit.rs`, `tests/desktop-smoke.cjs`: 탭 구분 입력의 따옴표·빈 셀·범위를 확인하고, SQLite의 제목 매핑, 큰 정수 보존과 중복 오류 시 전체 붙여넣기 롤백을 검사합니다.
 - `tests/appearance-smoke.cjs`: 격리된 Windows 앱에서 테마와 창 모양 전환, SQLite 목록 밀도 및 집중 모드, 분할 위치·탐색기 상태·SQL 초안·터미널 세션 유지, 재시작 후 설정 복원을 검사합니다. 첫 프로세스에서 `STACKPORT_THEME_PHASE=write`로 실행하고, 같은 WebView2 프로필을 사용해 앱을 다시 띄운 뒤 `STACKPORT_THEME_PHASE=read`로 실행합니다.
 - `tests/desktop-smoke.cjs`와 `tests/terminal-smoke.cjs`에서 도구의 키보드 전환, 다른 도구에서 탐색기 접기·펼치기와 SQLite 객체 열기, 전환 뒤 열린 터미널 유지 및 개수 표시를 확인합니다.
+- `tests/database-folders-smoke.cjs`와 `crates/stackport-core/tests/database_folders.rs`에서 8가지 연결 유형의 혼합 배치, 하위 폴더와 검색, 재시작, 프로젝트 복제, 삭제 후 연결 보존 및 v33 이관을 확인합니다.
 - `crates/stackport-core/tests/workspace_resume.rs` 및 `tests/workspace-resume-smoke.cjs`에서 배치 저장 충돌, 손상 시 이전 설정 복원, 보관된 프로젝트 제외, 새 Windows 프로세스에서 프로젝트·프로필·4분할 복원과 수동 연결 정책을 검사합니다. Windows 테스트는 `STACKPORT_RESUME_PHASE=write`로 먼저 실행한 뒤, 같은 `STACKPORT_DATA_DIR`과 새 WebView2 프로필로 앱을 시작해 `STACKPORT_RESUME_PHASE=read`로 실행합니다. 쓰기 단계는 격리된 앱의 `STACKPORT_TEST_WINDOW_PID`가 필요합니다.
 - `tests/terminal-smoke.cjs`: 격리된 Windows 앱에서 PowerShell·CMD와 한글 입력·24비트 색상 출력, 탭별 스크롤백 검색, 비활성 탭의 새 출력 표시와 확인, 탭 전환·키보드 이동, 여러 줄 붙여넣기 거부와 창 종료 확인을 검사합니다. 실제 IME 조합 입력과 스크린 리더 사용성은 별도 검증이 필요합니다.
 - `crates/stackport-core/tests/terminal_output.rs`와 `tests/terminal-smoke.cjs`에서 터미널 TXT/ANSI 내보내기의 UTF-8, 화면 줄바꿈 복원, 한글·색상·스크롤백, 탭 범위, 파일 크기 제한과 기존 파일 보존을 검사합니다.

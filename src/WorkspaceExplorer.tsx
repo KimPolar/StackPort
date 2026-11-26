@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Archive, ChevronDown, ChevronRight, Copy, Database, Ellipsis, FileDown, FileUp, FolderOpen,
+  Archive, ChevronDown, ChevronRight, Copy, Database, Ellipsis, FileDown, FileUp, Folder, FolderInput, FolderOpen, FolderPlus,
   KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Search, Star, Table2, TerminalSquare, Trash2, X, type LucideIcon,
 } from "lucide-react";
 import type { DatabaseObject } from "./SqlSchemaDetails";
+import { DatabaseFolderDialog, databaseFolderPaths, folderEngines, type DatabaseFolder, type DatabaseFolderState, type FolderAction } from "./DatabaseFolderDialog";
 import type { PostgresProfile, PostgresProfileAction, PostgresConnection } from "./PostgresWorkspace";
 import type { RedisProfile, RedisProfileAction } from "./RedisProfileDialog";
 import type { PostgresSearchPage } from "./PostgresSearchDialog";
@@ -16,7 +17,7 @@ import type { SnowflakeProfile, SnowflakeProfileAction } from "./SnowflakeProfil
 import type { DatabaseExchangeMode } from "./DatabaseProfileExchange";
 import { duplicateProfileAction } from "./profileActions";
 import { PostgresPager } from "./PostgresPager";
-import { usePostgresRead } from "./usePostgresRead";
+import { useNativeRead, usePostgresRead } from "./usePostgresRead";
 import type { SshProfile } from "./ssh-profile-types";
 import { networkAddressText } from "./quickConnect";
 import { matchesWorkspaceSearch, workspaceSearchTerms } from "./workspaceSearch";
@@ -77,12 +78,13 @@ function ExplorerButton({ label, Icon, onClick, disabled, pressed, busy }: {
   </button>;
 }
 
-function ExplorerGroup({ id, name, label = name, Icon, count, filtering, actions, children, unit = "연결" }: {
+function ExplorerGroup({ id, name, label = name, Icon, count, filtering, actions, children, unit = "연결", showEmpty = false }: {
   id: string; name: string; label?: string; Icon: LucideIcon; count: number; filtering: boolean; actions: ReactNode; children: ReactNode; unit?: string;
+  showEmpty?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   const open = filtering || expanded;
-  return <section className="explorer-group" hidden={filtering && !count}>
+  return <section className="explorer-group" hidden={filtering && !count && !showEmpty}>
     <div className="explorer-group-heading">
       {filtering ? <div className="explorer-group-title"><Icon size={14} aria-hidden /><strong>{name}</strong><span>{count}</span></div> :
         <button type="button" className="explorer-group-title" aria-label={label}
@@ -96,12 +98,15 @@ function ExplorerGroup({ id, name, label = name, Icon, count, filtering, actions
   </section>;
 }
 
-function ExplorerProfile({ name, environment, detail, engine, label, selected, Icon, onOpen, children }: {
+function ExplorerProfile({ name, environment, detail, engine, label, selected, Icon, onOpen, children, compactActions = false }: {
   name: string; environment: string; detail: string; label?: string; selected?: boolean; Icon: LucideIcon;
   engine?: string;
-  onOpen: () => void; children?: ReactNode;
+  onOpen: () => void; children?: ReactNode; compactActions?: boolean;
 }) {
-  return <div className="explorer-profile">
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsId = useId();
+  const actionLabel = `${engine ? `${engine} ` : ""}${name} 연결 작업`;
+  return <><div className="explorer-profile">
     <button type="button" className="profile-row" aria-current={selected ? "true" : undefined}
       aria-label={label ?? `${name} ${environment}`} aria-description={[engine, detail, label && environment].filter(Boolean).join(" · ")}
       title={detail} onClick={onOpen}>
@@ -111,8 +116,15 @@ function ExplorerProfile({ name, environment, detail, engine, label, selected, I
       </small></span>
       <span className={`environment ${environment.toLowerCase()}`}>{environment}</span>
     </button>
-    {children && <span className="explorer-profile-actions">{children}</span>}
-  </div>;
+    {children && <span className="explorer-profile-actions">{compactActions ?
+      <button type="button" className="icon-button" aria-label={actionLabel} title={actionLabel}
+        aria-expanded={actionsOpen} aria-controls={actionsId} onClick={() => setActionsOpen(!actionsOpen)}>
+        <Ellipsis size={15} aria-hidden />
+      </button> : children}</span>}
+  </div>
+  {compactActions && children && <div id={actionsId} className="explorer-profile-actions database-profile-action-strip"
+    role="group" aria-label={actionLabel} hidden={!actionsOpen}>{children}</div>}
+  </>;
 }
 
 function ObjectGroup({ name, items, selected, onOpen, favoriteAction }: {
@@ -136,6 +148,9 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const [remoteSearch, setRemoteSearch] = useState<{ id: string; term: string; page: number } | null>(null);
+  const [folderAction, setFolderAction] = useState<FolderAction | null>(null);
+  const [folderRevision, setFolderRevision] = useState(0);
+  const [closedFolders, setClosedFolders] = useState<Set<string>>(() => new Set());
   const input = useRef<HTMLInputElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const scopeButtons = useRef<HTMLDivElement>(null);
@@ -143,7 +158,23 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   const terms = useMemo(() => workspaceSearchTerms(query), [query]);
   const filtering = terms.length > 0;
 
-  useEffect(() => { setQuery(""); setMenuOpen(false); setRemoteSearch(null); }, [projectId]);
+  useEffect(() => { setQuery(""); setMenuOpen(false); setRemoteSearch(null); setFolderAction(null); setClosedFolders(new Set()); }, [projectId]);
+
+  const folderArgs = useMemo(() => desktop && projectId ? { projectId } : null, [desktop, projectId]);
+  const folderRead = useNativeRead<DatabaseFolderState>("list_database_folders", folderArgs, folderRevision, true);
+  useEffect(() => {
+    if (!folderArgs) return;
+    const refreshOnFocus = () => setFolderRevision(value => value + 1);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [folderArgs]);
+  const layout = folderRead.data;
+  const compactDatabaseActions = Boolean(layout?.folders.length);
+  const paths = useMemo(() => databaseFolderPaths(layout?.folders ?? []), [layout]);
+  const placements = useMemo(() => new Map(layout?.placements.map(item => [`${item.engine}:${item.profile_id}`, item.folder_id])), [layout]);
+  const byFolderId = useMemo(() => new Map(layout?.folders.map(item => [item.id, item])), [layout]);
+  const placement = (engine: keyof typeof folderEngines, id: string) => placements.get(`${folderEngines[engine]}:${id}`) ?? null;
+  const folderName = (engine: keyof typeof folderEngines, id: string) => paths.get(placement(engine, id) ?? "");
 
   const sqliteProfiles = sqlite.profiles.filter(item => item.project_id === projectId);
   const postgresProfiles = postgres.profiles.filter(item => item.project_id === projectId);
@@ -156,7 +187,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   const pgSearch = usePostgresRead<PostgresSearchPage>("search_postgres_objects", remoteArgs);
   const sshProfiles = ssh.profiles.filter(item => item.project_id === projectId);
   const loaded = sqliteProfiles.find(item => item.id === sqlite.loadedId);
-  const sqliteFields = (item: SqliteProfile) => [item.name, item.environment, sqlite.displayPath(item.path), "SQLite 데이터베이스"];
+  const sqliteFields = (item: SqliteProfile) => [item.name, item.environment, sqlite.displayPath(item.path), "SQLite 데이터베이스", folderName("sqlite", item.id)];
   const sqliteMatches = sqliteProfiles.filter(item => matchesWorkspaceSearch(terms, ...sqliteFields(item)));
   const sqliteContext = loaded ? sqliteFields(loaded) : [];
   const objects = loaded && !sqlite.loading ? sqlite.objects.filter(item => matchesWorkspaceSearch(terms,
@@ -164,24 +195,24 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
   const visibleSqlite = objects.length && loaded && !sqliteMatches.includes(loaded)
     ? sqliteProfiles.filter(item => item === loaded || sqliteMatches.includes(item)) : sqliteMatches;
   const postgresMatches = postgresProfiles.filter(item => matchesWorkspaceSearch(terms,
-    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "PostgreSQL 데이터베이스"));
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "PostgreSQL 데이터베이스", folderName("postgres", item.id)));
   const visiblePostgres = submitted && activePostgres && !postgresMatches.includes(activePostgres)
     ? postgresProfiles.filter(item => item === activePostgres || postgresMatches.includes(item)) : postgresMatches;
   const sshMatches = sshProfiles.filter(item => matchesWorkspaceSearch(terms,
     item.name, item.host, item.port, item.environment, "SSH 서버"));
   const redisMatches = redis.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
-    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스"));
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "Redis 데이터베이스", folderName("redis", item.id)));
   const mysqlMatches = mysql.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
-    item.settings.name, item.settings.host, item.settings.port, item.settings.database ?? undefined, item.settings.environment, "MySQL MariaDB 데이터베이스"));
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database ?? undefined, item.settings.environment, "MySQL MariaDB 데이터베이스", folderName("mysql", item.id)));
   const mongoMatches = mongo.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
-    item.settings.name, mongoAddress(item.settings.uri), item.settings.environment, "MongoDB 데이터베이스"));
+    item.settings.name, mongoAddress(item.settings.uri), item.settings.environment, "MongoDB 데이터베이스", folderName("mongo", item.id)));
   const sqlServerMatches = sqlServer.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
-    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "SQL Server MSSQL 데이터베이스"));
+    item.settings.name, item.settings.host, item.settings.port, item.settings.database, item.settings.environment, "SQL Server MSSQL 데이터베이스", folderName("sqlServer", item.id)));
   const oracleMatches = oracle.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
-    item.settings.name, item.settings.host, item.settings.port, item.settings.service, item.settings.environment, "Oracle Database 데이터베이스"));
+    item.settings.name, item.settings.host, item.settings.port, item.settings.service, item.settings.environment, "Oracle Database 데이터베이스", folderName("oracle", item.id)));
   const snowflakeMatches = snowflake.profiles.filter(item => item.project_id === projectId && matchesWorkspaceSearch(terms,
     item.settings.name, item.settings.host, item.settings.database, item.settings.warehouse ?? undefined, item.settings.role ?? undefined,
-    item.settings.environment, "Snowflake 데이터베이스"));
+    item.settings.environment, "Snowflake 데이터베이스", folderName("snowflake", item.id)));
   const databaseItems = [
     ...visibleSqlite.map(item => ({ engine: "sqlite" as const, name: item.name, item })),
     ...visiblePostgres.map(item => ({ engine: "postgres" as const, name: item.settings.name, item })),
@@ -192,6 +223,21 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     ...(desktop ? oracleMatches.map(item => ({ engine: "oracle" as const, name: item.settings.name, item })) : []),
     ...(desktop ? snowflakeMatches.map(item => ({ engine: "snowflake" as const, name: item.settings.name, item })) : []),
   ].sort((left, right) => left.name.localeCompare(right.name, "ko", { numeric: true }));
+  const entriesByFolder = new Map<string | null, typeof databaseItems>();
+  for (const entry of databaseItems) {
+    const folderId = placement(entry.engine, entry.item.id);
+    const location = folderId && byFolderId.has(folderId) ? folderId : null;
+    const entries = entriesByFolder.get(location);
+    if (entries) entries.push(entry);
+    else entriesByFolder.set(location, [entry]);
+  }
+  const childrenByFolder = new Map<string | null, DatabaseFolder[]>();
+  for (const folder of layout?.folders ?? []) {
+    const children = childrenByFolder.get(folder.parent_id);
+    if (children) children.push(folder);
+    else childrenByFolder.set(folder.parent_id, [folder]);
+  }
+  const matchingFolders = filtering ? [...paths.values()].filter(path => matchesWorkspaceSearch(terms, path)).length : 0;
   const connections = sqliteMatches.length + postgresMatches.length + redisMatches.length + mysqlMatches.length
     + mongoMatches.length + sqlServerMatches.length + oracleMatches.length + snowflakeMatches.length + sshMatches.length;
   const hasSavedDatabase = [sqlite.profiles, postgres.profiles, redis.profiles, mysql.profiles, mongo.profiles,
@@ -243,14 +289,73 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     return desktop ? <ExplorerButton label={`${name} ${engine} 연결 복제`} Icon={Copy} onClick={onClick} /> : null;
   }
 
+  function moveFolderButton(entry: (typeof databaseItems)[number]) {
+    if (!layout?.folders.length) return null;
+    return <ExplorerButton label={`${entry.name} 연결을 폴더로 이동`} Icon={FolderInput} onClick={() => setFolderAction({
+      kind: "place", engine: folderEngines[entry.engine], name: entry.name, id: entry.item.id, folderId: placement(entry.engine, entry.item.id),
+    })} />;
+  }
+
+  function toggleFolder(id: string) {
+    setClosedFolders(current => {
+      const next = new Set(current);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  }
+
+  function finishFolderAction(parent: string | null) {
+    setFolderAction(null);
+    setFolderRevision(value => value + 1);
+    setClosedFolders(current => {
+      const next = new Set(current);
+      for (let id = parent; id; id = byFolderId.get(id)?.parent_id ?? null) next.delete(id);
+      return next;
+    });
+  }
+
+  function folderBranches(parent: string | null, depth = 0): { rows: ReactNode[]; count: number } {
+    const rows: ReactNode[] = [];
+    let count = 0;
+    for (const folder of childrenByFolder.get(parent) ?? []) {
+      const children = folderBranches(folder.id, depth + 1);
+      const entries = entriesByFolder.get(folder.id) ?? [];
+      const total = entries.length + children.count;
+      if (filtering && !total && !children.rows.length && !matchesWorkspaceSearch(terms, paths.get(folder.id))) continue;
+      count += total;
+      const open = filtering || !closedFolders.has(folder.id);
+      const contentId = `explorer-database-folder-${folder.id}`;
+      rows.push(<div key={folder.id} className="database-folder-branch">
+        <div className="database-folder-row">
+          <button type="button" className="database-folder-toggle" aria-label={`${folder.name} 폴더`}
+            title={paths.get(folder.id)} aria-description={`연결 ${total}개`} aria-expanded={open} aria-controls={contentId}
+            onClick={() => toggleFolder(folder.id)}>
+            {open ? <ChevronDown size={13} aria-hidden /> : <ChevronRight size={13} aria-hidden />}
+            {open ? <FolderOpen size={15} aria-hidden /> : <Folder size={15} aria-hidden />}
+            <strong>{folder.name}</strong><span aria-hidden>{total}</span>
+          </button>
+          <ExplorerButton Icon={Ellipsis} label={`${folder.name} 폴더 설정`} onClick={() => setFolderAction({ kind: "edit", folder })} />
+        </div>
+        <div id={contentId} className={depth < 3 ? "database-folder-contents database-folder-indent" : "database-folder-contents"}
+          role="group" aria-label={`${folder.name} 폴더 내용`} hidden={!open}>
+          {children.rows}
+          {entries.map(databaseEntry)}
+          {!children.rows.length && !entries.length && <p className="sidebar-empty">빈 폴더</p>}
+        </div>
+      </div>);
+    }
+    return { rows, count };
+  }
+
   function databaseEntry(entry: (typeof databaseItems)[number]) {
     if (entry.engine === "sqlite") {
       const item = entry.item;
       return <div key={`sqlite:${item.id}`}>
-        <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)} engine="SQLite"
+        <ExplorerProfile name={item.name} environment={item.environment} detail={sqlite.displayPath(item.path)} engine="SQLite" compactActions={compactDatabaseActions}
           Icon={Database} selected={sqlite.active && item === loaded} onOpen={() => sqlite.open(item.id)}>
           {favoriteButton({ kind: "sqlite", profile_id: item.id }, item.name)}
           {duplicateButton(item.name, "SQLite", () => sqlite.duplicate(item.id))}
+          {moveFolderButton(entry)}
         </ExplorerProfile>
         {item === loaded && (sqlite.active || filtering) && <div className="object-list">
           <div className="object-toolbar"><span>객체</span>
@@ -269,12 +374,13 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     if (entry.engine === "postgres") {
       const item = entry.item;
       return <div key={`postgres:${item.id}`}>
-        <ExplorerProfile name={item.settings.name} environment={item.settings.environment}
+        <ExplorerProfile name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
           detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} engine="PostgreSQL" label={`PostgreSQL ${item.settings.name} 열기`}
           Icon={Database} selected={item.id === postgres.activeId} onOpen={() => postgres.open(item.id)}>
           {favoriteButton({ kind: "postgres", profile_id: item.id }, item.settings.name)}
           <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 수정`} Icon={Pencil} onClick={() => postgres.action({ kind: "edit", profile: item })} />
           {duplicateButton(item.settings.name, "PostgreSQL", () => postgres.action(duplicateProfileAction(item, postgres.profiles)))}
+          {moveFolderButton(entry)}
           <ExplorerButton label={`${item.settings.name} PostgreSQL 연결 삭제`} Icon={Trash2} onClick={() => postgres.action({ kind: "delete", profile: item })} />
         </ExplorerProfile>
         {item === activePostgres && submitted && <div className="object-list explorer-postgres-results" role="group" aria-label="PostgreSQL 서버 검색 결과">
@@ -303,67 +409,74 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     }
     if (entry.engine === "mysql") {
       const item = entry.item;
-      return <ExplorerProfile key={`mysql:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      return <ExplorerProfile key={`mysql:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
         detail={networkAddressText(item.settings)} engine="MySQL · MariaDB" label={`MySQL ${item.settings.name} 열기`}
         Icon={Database} selected={item.id === mysql.activeId} onOpen={() => mysql.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} MySQL 연결 수정`} Icon={Pencil} onClick={() => mysql.action({ kind: "edit", profile: item })} />
         {duplicateButton(item.settings.name, "MySQL · MariaDB", () => mysql.action(duplicateProfileAction(item, mysql.profiles)))}
+        {moveFolderButton(entry)}
         <ExplorerButton label={`${item.settings.name} MySQL 연결 삭제`} Icon={Trash2} onClick={() => mysql.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     if (entry.engine === "mongo") {
       const item = entry.item;
-      return <ExplorerProfile key={`mongo:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      return <ExplorerProfile key={`mongo:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
         detail={mongoAddress(item.settings.uri)} engine="MongoDB" label={`MongoDB ${item.settings.name} 열기`}
         Icon={Database} selected={item.id === mongo.activeId} onOpen={() => mongo.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} MongoDB 연결 수정`} Icon={Pencil} onClick={() => mongo.action({ kind: "edit", profile: item })} />
         {duplicateButton(item.settings.name, "MongoDB", () => mongo.action(duplicateProfileAction(item, mongo.profiles)))}
+        {moveFolderButton(entry)}
         <ExplorerButton label={`${item.settings.name} MongoDB 연결 삭제`} Icon={Trash2} onClick={() => mongo.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     if (entry.engine === "sqlServer") {
       const item = entry.item;
-      return <ExplorerProfile key={`sqlServer:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      return <ExplorerProfile key={`sqlServer:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
         detail={`${networkAddressText(item.settings)} / ${item.settings.database}`} engine="SQL Server"
         label={`SQL Server ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === sqlServer.activeId} onOpen={() => sqlServer.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 수정`} Icon={Pencil} onClick={() => sqlServer.action({ kind: "edit", profile: item })} />
         {duplicateButton(item.settings.name, "SQL Server", () => sqlServer.action(duplicateProfileAction(item, sqlServer.profiles)))}
+        {moveFolderButton(entry)}
         <ExplorerButton label={`${item.settings.name} SQL Server 연결 삭제`} Icon={Trash2} onClick={() => sqlServer.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     if (entry.engine === "oracle") {
       const item = entry.item;
-      return <ExplorerProfile key={`oracle:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      return <ExplorerProfile key={`oracle:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
         detail={`${networkAddressText(item.settings)} / ${item.settings.service}`} engine="Oracle Database"
         label={`Oracle Database ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === oracle.activeId} onOpen={() => oracle.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} Oracle Database 연결 수정`} Icon={Pencil} onClick={() => oracle.action({ kind: "edit", profile: item })} />
         {duplicateButton(item.settings.name, "Oracle Database", () => oracle.action(duplicateProfileAction(item, oracle.profiles)))}
+        {moveFolderButton(entry)}
         <ExplorerButton label={`${item.settings.name} Oracle Database 연결 삭제`} Icon={Trash2} onClick={() => oracle.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     if (entry.engine === "snowflake") {
       const item = entry.item;
-      return <ExplorerProfile key={`snowflake:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+      return <ExplorerProfile key={`snowflake:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
         detail={`${item.settings.host} / ${item.settings.database}`} engine="Snowflake"
         label={`Snowflake ${item.settings.name} 열기`} Icon={Database}
         selected={item.id === snowflake.activeId} onOpen={() => snowflake.open(item.id)}>
         <ExplorerButton label={`${item.settings.name} Snowflake 연결 수정`} Icon={Pencil} onClick={() => snowflake.action({ kind: "edit", profile: item })} />
         {duplicateButton(item.settings.name, "Snowflake", () => snowflake.action(duplicateProfileAction(item, snowflake.profiles)))}
+        {moveFolderButton(entry)}
         <ExplorerButton label={`${item.settings.name} Snowflake 연결 삭제`} Icon={Trash2} onClick={() => snowflake.action({ kind: "delete", profile: item })} />
       </ExplorerProfile>;
     }
     const item = entry.item;
-    return <ExplorerProfile key={`redis:${item.id}`} name={item.settings.name} environment={item.settings.environment}
+    return <ExplorerProfile key={`redis:${item.id}`} name={item.settings.name} environment={item.settings.environment} compactActions={compactDatabaseActions}
       detail={`${networkAddressText(item.settings)} / DB ${item.settings.database}`} engine="Redis" label={`Redis ${item.settings.name} 열기`}
       Icon={KeyRound} selected={item.id === redis.activeId} onOpen={() => redis.open(item.id)}>
       <ExplorerButton label={`${item.settings.name} Redis 연결 수정`} Icon={Pencil} onClick={() => redis.action({ kind: "edit", profile: item })} />
       {duplicateButton(item.settings.name, "Redis", () => redis.action(duplicateProfileAction(item, redis.profiles)))}
+      {moveFolderButton(entry)}
       <ExplorerButton label={`${item.settings.name} Redis 연결 삭제`} Icon={Trash2} onClick={() => redis.action({ kind: "delete", profile: item })} />
     </ExplorerProfile>;
   }
 
+  const folders = folderBranches(null).rows;
   return <aside className="explorer" id="workspace-explorer" aria-label="작업 공간 탐색기" hidden={hidden}>
     <div className="explorer-fixed">
       <div className="explorer-top">
@@ -400,7 +513,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
       {project && <div className="object-search explorer-search" role="search" aria-label="프로젝트 탐색기 필터">
         <Search size={15} aria-hidden />
         <input ref={input} type="search" aria-label="탐색기 검색" value={query} onChange={event => { setQuery(event.target.value); setRemoteSearch(null); }}
-          placeholder="연결, 주소, 테이블 찾기" autoComplete="off" spellCheck={false}
+          placeholder="폴더, 연결, 객체 찾기" autoComplete="off" spellCheck={false}
           onKeyDown={event => {
             if (event.key !== "Escape" || !query || event.nativeEvent.isComposing) return;
             event.preventDefault(); event.stopPropagation(); clearSearch();
@@ -411,7 +524,7 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
     <div className="explorer-scroll">
       {!project ? <p className="sidebar-empty">프로젝트를 선택하거나 새 프로젝트를 만드세요.</p> : <>
         {filtering && <p className="explorer-search-status" role="status">
-          {connections || objects.length || visibleFavorites.length ? `연결 ${connections}개 · 객체 ${objects.length}개${visibleFavorites.length ? ` · 즐겨찾기 ${visibleFavorites.length}개` : ""}` :
+          {connections || objects.length || visibleFavorites.length || matchingFolders ? `연결 ${connections}개 · 객체 ${objects.length}개${matchingFolders ? ` · 폴더 ${matchingFolders}개` : ""}${visibleFavorites.length ? ` · 즐겨찾기 ${visibleFavorites.length}개` : ""}` :
             sqlite.loading && loaded ? "SQLite 객체를 불러오는 중…" : submitted ? "로컬 탐색기 결과 0개" : "일치하는 연결이나 객체가 없습니다."}
         </p>}
         {filtering && activePostgres && pg && <button type="button" className="secondary small explorer-postgres-search"
@@ -442,16 +555,23 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
               }} />
           </ExplorerProfile>)}
         </ExplorerGroup>}
-        <ExplorerGroup id="explorer-databases" name="데이터베이스" label="데이터베이스 연결 목록" Icon={Database} count={databaseItems.length} filtering={filtering} actions={<>
+        <ExplorerGroup id="explorer-databases" name="데이터베이스" label="데이터베이스 연결 목록" Icon={Database} count={databaseItems.length} filtering={filtering} showEmpty={folders.length > 0} actions={<>
           {desktop && <>
+            <ExplorerButton label="연결 폴더 만들기" Icon={FolderPlus} disabled={folderRead.loading && !layout}
+              onClick={() => setFolderAction({ kind: "create", parentId: null })} />
             <ExplorerButton label="데이터베이스 연결 가져오기" Icon={FileUp} onClick={() => onDatabaseExchange("import")} />
             <ExplorerButton label="데이터베이스 연결 내보내기" Icon={FileDown} disabled={!hasSavedDatabase} onClick={() => onDatabaseExchange("export")} />
           </>}
           <ExplorerButton label="SQLite 백업 복원" Icon={RotateCcw} onClick={sqlite.restore} />
           <ExplorerButton label="데이터베이스 연결 추가" Icon={Plus} onClick={onAddDatabase} />
         </>}>
-          {!databaseItems.length && <p className="sidebar-empty">저장된 데이터베이스 연결이 없습니다.</p>}
-          {databaseItems.map(databaseEntry)}
+          {folderRead.error && <div className="explorer-favorite-error">
+            <p role="alert">{folderRead.error}</p>
+            <button type="button" className="secondary small" onClick={() => setFolderRevision(value => value + 1)}>폴더 다시 읽기</button>
+          </div>}
+          {!databaseItems.length && !folders.length && <p className="sidebar-empty">저장된 데이터베이스 연결이 없습니다.</p>}
+          {folders}
+          {entriesByFolder.get(null)?.map(databaseEntry)}
         </ExplorerGroup>
         <ExplorerGroup id="explorer-ssh" name="SSH" Icon={TerminalSquare} count={sshMatches.length} filtering={filtering} actions={<>
           <ExplorerButton label="SSH 연결 가져오기" Icon={FileUp} onClick={() => ssh.action("import")} />
@@ -471,5 +591,8 @@ export function WorkspaceExplorer({ desktop, hidden, projectId, projects, favori
         </ExplorerGroup>
       </>}
     </div>
+    {project && folderAction && <DatabaseFolderDialog key={`${projectId}:${folderAction.kind}`} projectId={projectId} action={folderAction}
+      paths={paths} onClose={() => setFolderAction(null)} onChanged={finishFolderAction}
+      onSubfolder={parentId => setFolderAction({ kind: "create", parentId })} />}
   </aside>;
 }

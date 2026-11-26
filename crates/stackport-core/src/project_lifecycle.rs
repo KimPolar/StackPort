@@ -97,6 +97,7 @@ impl Store {
         copied_total += crate::redis::copy_profiles(&tx, source, &duplicate.id)?;
         copied_total += crate::mysql::copy_profiles(&tx, source, &duplicate.id)?;
         copied_total += crate::db_profiles::copy_profiles(&tx, source, &duplicate.id)?;
+        let mut sqlite_mapping = Vec::with_capacity(db_profiles.len());
         for profile in db_profiles {
             let new_id = Uuid::new_v4().to_string();
             let changed = tx.execute(
@@ -105,7 +106,9 @@ impl Store {
             ).map_err(db_error)?;
             require_changed(changed, "SQLite 연결 정의를 복제할 수 없습니다.")?;
             copied_total += copy_project_favorites(&tx, source, &duplicate.id, &profile.id, &new_id)?;
+            sqlite_mapping.push((profile.id, new_id));
         }
+        copied_total += crate::database_folders::copy_database_folders(&tx, source, &duplicate.id, &sqlite_mapping)?;
         for profile in &mut ssh_profiles {
             let source_id = std::mem::replace(&mut profile.id, Uuid::new_v4().to_string());
             profile.project_id.clone_from(&duplicate.id);

@@ -2,6 +2,7 @@
 
 mod data_location;
 mod backup_schedule;
+mod database_folders;
 use data_location::{DataLocation, DataMode, RuntimeInfo};
 
 use stackport_core::{database_exchange, oracle, snowflake, sql_server, RelationalObjectSearch};
@@ -3045,6 +3046,11 @@ fn main() {
             get_runtime_info,
             get_workspace_resume,
             list_workspace_favorites,
+            database_folders::list_database_folders,
+            database_folders::create_database_folder,
+            database_folders::update_database_folder,
+            database_folders::move_database_connection,
+            database_folders::delete_database_folder,
             set_workspace_favorite,
             save_workspace_resume,
             preview_workspace_copy,

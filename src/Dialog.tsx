@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 
 export type GridEditExitGuard = (after: () => void) => void;
 
-export function Dialog({ title, children, onClose, busy, interceptEscape = false, className = "", initialFocus }: {
+export function Dialog({ title, children, onClose, busy, interceptEscape = false, className = "", initialFocus, role, describedBy }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
@@ -11,6 +11,8 @@ export function Dialog({ title, children, onClose, busy, interceptEscape = false
   interceptEscape?: boolean;
   className?: string;
   initialFocus?: RefObject<HTMLElement | null>;
+  role?: "alertdialog";
+  describedBy?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -18,7 +20,7 @@ export function Dialog({ title, children, onClose, busy, interceptEscape = false
     ref.current?.showModal();
     initialFocus?.current?.focus();
   }, [initialFocus]);
-  return <dialog ref={ref} className={`dialog ${className}`} aria-labelledby={titleId} onClose={onClose}
+  return <dialog ref={ref} className={`dialog ${className}`} role={role} aria-labelledby={titleId} aria-describedby={describedBy} onClose={onClose}
     onCancel={event => {
       if (busy || interceptEscape) event.preventDefault();
       if (!busy && interceptEscape) onClose();
