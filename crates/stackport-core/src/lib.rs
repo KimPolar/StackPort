@@ -971,6 +971,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "oracle.pump.export" | "oracle.pump.export.unconfirmed" if record.environment == Some("PROD") =>
             "oracle-datapump-schema-export-reviewed-prod",
         "oracle.pump.export" | "oracle.pump.export.unconfirmed" => "oracle-datapump-schema-export-reviewed",
+        "oracle.pump.import" | "oracle.pump.import.unconfirmed" if record.environment == Some("PROD") =>
+            "oracle-datapump-schema-import-reviewed-prod",
+        "oracle.pump.import" | "oracle.pump.import.unconfirmed" => "oracle-datapump-schema-import-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

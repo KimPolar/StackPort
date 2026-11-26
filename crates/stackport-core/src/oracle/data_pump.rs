@@ -12,6 +12,9 @@ use std::{
 };
 use uuid::Uuid;
 
+mod import;
+pub use import::{PumpImportOptions, PumpImportOutcome, PumpImportPreview};
+
 const STATE: &str = "Oracle Data Pump 작업 상태를 읽을 수 없습니다.";
 const REVIEW: &str = "Oracle 백업 미리보기를 다시 확인하세요.";
 const CREATE_TABLE: &str =
@@ -102,6 +105,8 @@ BEGIN
     :job_name := NULL;
     :created := NULL;
     :master_pieces := NULL;
+    :file_number := NULL;
+    :master_present := NULL;
     IF header IS NOT NULL THEN
         i := header.FIRST;
         WHILE i IS NOT NULL LOOP
@@ -112,6 +117,8 @@ BEGIN
               WHEN SYS.DBMS_DATAPUMP.KU$_DFHDR_JOB_NAME THEN :job_name := header(i).value;
               WHEN SYS.DBMS_DATAPUMP.KU$_DFHDR_CREATION_DATE THEN :created := header(i).value;
               WHEN SYS.DBMS_DATAPUMP.KU$_DFHDR_MASTER_PIECE_COUNT THEN :master_pieces := header(i).value;
+              WHEN SYS.DBMS_DATAPUMP.KU$_DFHDR_FILE_NUMBER THEN :file_number := header(i).value;
+              WHEN SYS.DBMS_DATAPUMP.KU$_DFHDR_MASTER_PRESENT THEN :master_present := header(i).value;
               ELSE NULL;
             END CASE;
             i := header.NEXT(i);
@@ -134,9 +141,9 @@ pub struct PumpCapabilities {
     directories: Vec<Directory>,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ExportContent {
+enum PumpContent {
     All,
     Metadata,
     Data,
@@ -146,7 +153,7 @@ enum ExportContent {
 #[serde(deny_unknown_fields)]
 pub struct PumpExportOptions {
     directory: String,
-    content: ExportContent,
+    content: PumpContent,
 }
 
 #[derive(Clone, Serialize)]
@@ -156,11 +163,11 @@ pub struct PumpPreview {
     directory: Directory,
     filename: String,
     job: String,
-    content: ExportContent,
+    content: PumpContent,
     expires_seconds: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct DumpHeader {
     directory: Directory,
     filename: String,
@@ -171,6 +178,8 @@ pub struct DumpHeader {
     job: Option<String>,
     created: Option<String>,
     master_pieces: Option<String>,
+    file_number: Option<String>,
+    master_present: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -196,6 +205,21 @@ pub struct PumpOutcome {
     audit_warning: bool,
 }
 
+impl PumpOutcome {
+    fn new(directory: Directory, filename: String, job: String) -> Self {
+        Self {
+            status: Status::Failed,
+            directory,
+            filename,
+            job,
+            error_code: None,
+            error_count: 0,
+            message: None,
+            audit_warning: false,
+        }
+    }
+}
+
 struct Plan {
     preview: PumpPreview,
     expires: Instant,
@@ -204,6 +228,7 @@ struct Plan {
 #[derive(Default)]
 pub(super) struct State {
     pending: Option<Plan>,
+    import: Option<import::Plan>,
     active: Option<Arc<Job>>,
 }
 
@@ -212,6 +237,17 @@ struct Job {
     stop: AtomicBool,
     started: AtomicBool,
     percent: AtomicI32,
+}
+
+impl Job {
+    fn new(request: &str) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            id: request_id(request)?,
+            stop: AtomicBool::new(false),
+            started: AtomicBool::new(false),
+            percent: AtomicI32::new(-1),
+        }))
+    }
 }
 
 #[derive(Serialize)]
@@ -309,12 +345,7 @@ impl Manager {
         confirmation: &str,
     ) -> Result<PumpOutcome> {
         let session = self.session(id)?;
-        let job = Arc::new(Job {
-            id: request_id(request)?,
-            stop: AtomicBool::new(false),
-            started: AtomicBool::new(false),
-            percent: AtomicI32::new(-1),
-        });
+        let job = Job::new(request)?;
         if session.profile.settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
@@ -403,24 +434,26 @@ impl Manager {
         filename: String,
         expected_job: Option<String>,
     ) -> Result<DumpHeader> {
-        if filename.is_empty()
-            || filename.len() > 255
-            || filename.trim() != filename
-            || filename.ends_with('.')
-            || filename.contains(['/', '\\', ':'])
-            || filename.chars().any(char::is_control)
-        {
-            return Err("디렉터리 아래의 덤프 파일 이름만 입력하세요.".into());
-        }
+        validate_filename(&filename)?;
         self.read(id, move |connection| {
-            let directory = visible_directory(connection, &directory)?;
-            if !directory.readable {
-                return Err("선택한 Oracle 디렉터리에 READ 권한이 필요합니다.".into());
-            }
+            let directory = readable_directory(connection, &directory)?;
             inspect(connection, directory, filename, expected_job)
         })
         .await
     }
+}
+
+fn validate_filename(filename: &str) -> Result<()> {
+    if filename.is_empty()
+        || filename.len() > 255
+        || filename.trim() != filename
+        || filename.ends_with('.')
+        || filename.contains(['/', '\\', ':'])
+        || filename.chars().any(char::is_control)
+    {
+        return Err("디렉터리 아래의 덤프 파일 이름만 입력하세요.".into());
+    }
+    Ok(())
 }
 
 fn request_id(value: &str) -> Result<Uuid> {
@@ -465,6 +498,14 @@ fn visible_directory(connection: &Connection, name: &str) -> Result<Directory> {
         .ok_or_else(|| "현재 계정에 공개된 Oracle 디렉터리를 선택하세요.".into())
 }
 
+fn readable_directory(connection: &Connection, name: &str) -> Result<Directory> {
+    let directory = visible_directory(connection, name)?;
+    if !directory.readable {
+        return Err("선택한 Oracle 디렉터리에 READ 권한이 필요합니다.".into());
+    }
+    Ok(directory)
+}
+
 fn export_scope(connection: &Connection, name: &str) -> Result<(String, Directory)> {
     let (schema, create_table) = principal(connection)?;
     if !create_table {
@@ -478,40 +519,44 @@ fn export_scope(connection: &Connection, name: &str) -> Result<(String, Director
 }
 
 fn run_export(connection: &Connection, preview: PumpPreview, job: &Job) -> PumpOutcome {
-    let mut outcome = PumpOutcome {
-        status: Status::Failed,
-        directory: preview.directory,
-        filename: preview.filename,
-        job: preview.job,
-        error_code: None,
-        error_count: 0,
-        message: None,
-        audit_warning: false,
-    };
+    let outcome = PumpOutcome::new(preview.directory, preview.filename, preview.job);
+    let schema_filter = schema_filter(&preview.schema);
+    let metadata = i32::from(preview.content != PumpContent::Data);
+    let rows = i32::from(preview.content != PumpContent::Metadata);
+    run_job(connection, job, outcome, |outcome| {
+        let mut result = connection.execute_named(
+            START,
+            &[
+                ("job_name", &outcome.job),
+                ("file_name", &outcome.filename),
+                ("directory_name", &outcome.directory.name),
+                ("schema_filter", &schema_filter),
+                ("include_metadata", &metadata),
+                ("include_rows", &rows),
+                ("job_handle", &DB_TYPE_NUMBER),
+            ],
+        )?;
+        result.out_bind_data().get::<i32>("job_handle")
+    })
+}
+
+fn schema_filter(schema: &str) -> String {
+    format!("IN ('{}')", schema.replace('\'', "''"))
+}
+
+fn run_job(
+    connection: &Connection,
+    job: &Job,
+    mut outcome: PumpOutcome,
+    start: impl FnOnce(&PumpOutcome) -> std::result::Result<i32, Error>,
+) -> PumpOutcome {
     if job.stop.load(Ordering::Acquire) {
         outcome.status = Status::Cancelled;
         return outcome;
     }
-    let schema_filter = format!("IN ('{}')", preview.schema.replace('\'', "''"));
-    let metadata = i32::from(!matches!(preview.content, ExportContent::Data));
-    let rows = i32::from(!matches!(preview.content, ExportContent::Metadata));
     let started = connection
         .set_call_timeout(Some(Duration::from_secs(25)))
-        .and_then(|_| {
-            let mut result = connection.execute_named(
-                START,
-                &[
-                    ("job_name", &outcome.job),
-                    ("file_name", &outcome.filename),
-                    ("directory_name", &outcome.directory.name),
-                    ("schema_filter", &schema_filter),
-                    ("include_metadata", &metadata),
-                    ("include_rows", &rows),
-                    ("job_handle", &DB_TYPE_NUMBER),
-                ],
-            )?;
-            result.out_bind_data().get::<i32>("job_handle")
-        });
+        .and_then(|_| start(&outcome));
     let handle = match started {
         Ok(handle) => handle,
         Err(error) => {
@@ -624,6 +669,8 @@ fn inspect(
                 ("job_name", &DB_TYPE_VARCHAR),
                 ("created", &DB_TYPE_VARCHAR),
                 ("master_pieces", &DB_TYPE_VARCHAR),
+                ("file_number", &DB_TYPE_VARCHAR),
+                ("master_present", &DB_TYPE_VARCHAR),
             ],
         )
         .map_err(|error| pump_error(&error))?;
@@ -657,6 +704,8 @@ fn inspect(
         source_version: out.get("source_version").map_err(query_error)?,
         created: out.get("created").map_err(query_error)?,
         master_pieces: out.get("master_pieces").map_err(query_error)?,
+        file_number: out.get("file_number").map_err(query_error)?,
+        master_present: out.get("master_present").map_err(query_error)?,
     })
 }
 

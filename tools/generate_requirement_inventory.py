@@ -162,10 +162,10 @@ PARTIAL = {
     "SP-BK-005": "버전이 일치하는 pg_dump·pg_restore 탐색, 전체·스키마·일반 테이블 백업, 커스텀 아카이브 목차 확인 후 새 DB에 단일 트랜잭션 복원",
     "SP-BK-006": "SQLite WAL 포함 스냅샷과 무결성 검사",
     "SP-BK-007": "SQL Server 전체 COPY_ONLY 백업과 로컬 디스크 백업 세트의 새 DB 복원, 파일 재배치·권한·경로·이름 충돌, 체크섬 검증, 진행률과 중단 요청",
-    "SP-BK-008": "Oracle DIRECTORY 권한·서버 경로 미리보기와 본인 스키마 Data Pump 내보내기, 서버 작업 진행률·중단, 덤프 헤더 확인 및 독립 테스트 스키마 가져오기 검증",
+    "SP-BK-008": "Oracle DIRECTORY 권한·서버 경로 확인과 스키마 Data Pump 내보내기, 단일 덤프의 빈 스키마 복원·기존 테이블 데이터 추가, 덤프 헤더 재확인, 서버 작업 진행률·중단, 대상 객체 검사",
     "SP-BK-011": "PostgreSQL 압축 아카이브와 PostgreSQL·MySQL 계열 SHA-256 표시 및 작업마다 별도로 입력한 암호 전달, SQL Server 백업 압축 및 서버 체크섬",
-    "SP-BK-013": "SQLite 복원 경로·버전·행 수, PostgreSQL 새 DB·권한·버전·목차·SHA-256, MySQL 계열 새 DB·원본·객체 목록·서버와 도구 버전·보존한 사본 및 SHA-256, MongoDB 원본과 새 대상·객체 목록·문서 수·SHA-256, Redis 사본의 SHA-256 대조, SQL Server 새 DB·원본 서버 버전·파일별 논리 이름·크기·원래 경로와 배치",
-    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MySQL 계열 새 DB의 객체 목록·행 수·복원 사본 SHA-256과 부분 복원 상태, MongoDB 복원 객체·인덱스·문서·버킷 수와 체크섬·UUID 확인, Redis RDB 체크섬·격리 복원 키 수와 만료 상태·단일 및 다중 AOF 구조·파일별 SHA-256 검사, SQL Server 백업 세트의 판독·체크섬과 복원 DB의 온라인 상태·파일 위치 확인, Oracle 덤프 세트 헤더와 작업 이름 대조",
+    "SP-BK-013": "SQLite 복원 경로·버전·행 수, PostgreSQL 새 DB·권한·버전·목차·SHA-256, MySQL 계열 새 DB·원본·객체 목록·서버와 도구 버전·보존한 사본 및 SHA-256, MongoDB 원본과 새 대상·객체 목록·문서 수·SHA-256, Redis 사본의 SHA-256 대조, SQL Server 새 DB·원본 서버 버전·파일별 논리 이름·크기·원래 경로와 배치, Oracle 원본 덤프와 대상 스키마·서버 버전·기본 테이블스페이스·추가 대상과 부분 반영 안내",
+    "SP-BK-014": "SQLite 백업·복원본 무결성 및 행 검증, PostgreSQL 아카이브 SHA-256과 새 DB 테이블 수·행·복합 외래 키·롤백 확인, MySQL 계열 새 DB의 객체 목록·행 수·복원 사본 SHA-256과 부분 복원 상태, MongoDB 복원 객체·인덱스·문서·버킷 수와 체크섬·UUID 확인, Redis RDB 체크섬·격리 복원 키 수와 만료 상태·단일 및 다중 AOF 구조·파일별 SHA-256 검사, SQL Server 백업 세트의 판독·체크섬과 복원 DB의 온라인 상태·파일 위치 확인, Oracle 덤프 헤더와 작업 이름 대조 및 가져온 객체 수·유효 상태 확인",
     "SP-BK-016": "MySQL 계열 백업 결과의 로컬 경로·크기·서버 및 도구 버전·SHA-256, 선택한 Redis 백업 파일과 매니페스트의 활성 기본·증분 파일, 용량, SHA-256, 검사 도구 버전과 RDB 형식 표시",
     "SP-BK-017": "PostgreSQL 백업 로컬 경로와 복원 대상·CREATEDB 권한, MySQL 계열 로컬 SQL 경로와 복원할 서버·새 DB·계정 권한 안내, MongoDB 백업 로컬 경로와 새 DB·컬렉션·목록 조회 권한, Redis 서버 파일 경로와 별도 전송·읽기 권한 안내, SQL Server 디스크 경로와 서비스 계정·SQL 계정 권한, Oracle 디렉터리 객체·서버 경로·READ 및 WRITE 권한",
     "SP-NS-009": "Redis 6.2 이상과 호환되는 단독 서버, ACL·암호 인증, 검증 TLS·일반 TCP와 논리 DB 선택",
@@ -194,7 +194,7 @@ PARTIAL = {
     "SP-NFR-006": "v1~v4 작업 공간을 백업한 뒤 트랜잭션으로 v5 이관, 손상된 배치의 이전 스냅샷 복원",
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
-    "SP-AT-016": "SQLite 격리 파일 복원, PostgreSQL 새 DB 행·복합 외래 키·SHA-256·오류 롤백, MySQL·MariaDB 앱 격리 복원에서 객체·행·SHA-256·이름 충돌·부분 결과 검증, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰의 내용·정의·인덱스 비교, Redis 격리 RDB에서 DB 0·3·31 키 수와 만료 확인 및 별도 검증 서버에서 RDB·AOF 값과 TTL 확인, SQL Server 앱의 BAK 생성·체크섬과 격리 새 DB 복원 행·큰 정수·바이너리·파일 경로·충돌 검증, Oracle 네이티브 가져오기로 앱에서 생성한 세 가지 덤프의 객체와 행·38자리 숫자·RAW·유니코드 대조",
+    "SP-AT-016": "SQLite 격리 파일 복원, PostgreSQL 새 DB 행·복합 외래 키·SHA-256·오류 롤백, MySQL·MariaDB 앱 격리 복원에서 객체·행·SHA-256·이름 충돌·부분 결과 검증, MongoDB TLS 독립 서버와 복제 세트에서 일반·빈 컬렉션·시계열·의존 뷰의 내용·정의·인덱스 비교, Redis 격리 RDB에서 DB 0·3·31 키 수와 만료 확인 및 별도 검증 서버에서 RDB·AOF 값과 TTL 확인, SQL Server 앱의 BAK 생성·체크섬과 격리 새 DB 복원 행·큰 정수·바이너리·파일 경로·충돌 검증, Oracle 앱의 세 가지 방식 가져오기와 대상 스키마·테이블스페이스·기존 행 보존·38자리 숫자·RAW·유니코드 대조",
     "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 새 데이터베이스의 첫 컬렉션과 유효성 규칙·읽기 전용 뷰 생성, 서버에 저장된 유효성 규칙과 뷰 정의 조회, 검토를 거친 유효성 규칙 변경·제거와 뷰 원본·파이프라인 수정, 일반 컬렉션의 동일 데이터베이스 내 이름 변경과 삭제, 인덱스 생성·숨김과 TTL 변경·삭제",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
@@ -595,6 +595,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/sql_server/backup/restore.rs; src/SqlServerRestoreDialog.tsx"
             if requirement_id in {"SP-BK-001", "SP-BK-002", "SP-BK-003", "SP-BK-008", "SP-BK-014", "SP-BK-017", "SP-AT-016"}:
                 evidence += "; crates/stackport-core/src/oracle/data_pump.rs; src/OracleDataPumpDialog.tsx; tests/oracle-smoke.cjs; tests/oracle-pump-fixture.py"
+            if requirement_id in {"SP-BK-008", "SP-BK-013", "SP-BK-014", "SP-BK-017", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/oracle/data_pump/import.rs"
             if requirement_id == "SP-NS-012":
                 evidence += "; crates/stackport-core/src/redis/console.rs; src/RedisConsoleDialog.tsx"
             if requirement_id in {"SP-NS-013", "SP-AT-018"}:

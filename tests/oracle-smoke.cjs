@@ -642,6 +642,7 @@ async function verifyPump(page, python) {
   const apply = (id, token, changes = {}) => call('run_oracle_pump_export', {
     id, requestId: randomUUID(), token, approved: true, confirmation: 'PROD', ...changes,
   });
+  const dumps = {};
   const { id: readerId } = await open(limited);
   try {
     const caps = await call('oracle_pump_capabilities', { id: readerId });
@@ -686,7 +687,7 @@ async function verifyPump(page, python) {
       const plan = await preview(id, content);
       const run = await apply(id, plan.token);
       assert.equal(run.status, 'succeeded', JSON.stringify(run));
-      fixture('import', content, run.filename);
+      dumps[content] = run.filename;
     }
   } finally { await call('close_oracle', { id }); }
 
@@ -721,7 +722,7 @@ async function verifyPump(page, python) {
   await inspected.or(dialog.getByRole('alert')).first().waitFor({ timeout: 25_000 });
   assert.ok(await inspected.isVisible(), await dialog.innerText());
   await dialog.getByText('덤프 세트 ID', { exact: true }).waitFor();
-  fixture('import', 'all', file);
+  dumps.all = file;
 
   const { id: verifier } = await open(profile);
   try {
@@ -732,11 +733,103 @@ async function verifyPump(page, python) {
     assert.ok(BigInt(header.size_bytes) > 0);
     await assert.rejects(inspect(verifier, file, readonly, 'SP_DIFFERENT_JOB'), /일치하지/);
   } finally { await call('close_oracle', { id: verifier }); }
+
+  const restores = {};
+  for (const kind of ['metadata', 'data', 'all']) {
+    restores[kind] = await call('create_oracle_profile', {
+      projectId: project.id, input: {
+        ...profile.settings, name: 'Data Pump 가져오기 ' + kind, username: 'SP_' + kind.toUpperCase() + '_' + run,
+      },
+    });
+  }
+  const reviewImport = (id, content, changes = {}) => call('preview_oracle_pump_import', {
+    id, options: { directory, filename: dumps[content], source, content, ...changes },
+  });
+  const runImport = (id, plan, changes = {}) => call('run_oracle_pump_import', {
+    id, requestId: randomUUID(), token: plan.token, target: plan.target, approved: true, confirmation: 'PROD', ...changes,
+  });
+  const { id: importId } = await open(restores.metadata);
+  try {
+    const caps = await call('oracle_pump_capabilities', { id: importId });
+    assert.ok(caps.directories.some(item => item.name === directory && item.readable && !item.writable));
+    await assert.rejects(reviewImport(importId, 'metadata', { filename: '../escape.dmp' }), /파일 이름/);
+    const staleTarget = await reviewImport(importId, 'metadata');
+    assert.equal(staleTarget.target, 'SP_METADATA_' + run);
+    assert.equal(staleTarget.source, source);
+    assert.equal(staleTarget.tablespace, 'SP_PUMP_DEST_' + run);
+    assert.match(staleTarget.target_version, /^\d+[.]/);
+    await assert.rejects(runImport(importId, staleTarget, { target: 'WRONG' }), /대상 스키마 이름/);
+    await assert.rejects(runImport(importId, staleTarget, { approved: false }), /적용 방식/);
+    await assert.rejects(runImport(importId, staleTarget, { confirmation: '' }), /PROD/);
+    fixture('change-schema', 'metadata');
+    try {
+      await assert.rejects(runImport(importId, staleTarget), /기존 객체/);
+      await assert.rejects(reviewImport(importId, 'metadata'), /기존 객체/);
+    } finally { fixture('reset-schema', 'metadata'); }
+    await assert.rejects(runImport(importId, staleTarget), /미리보기/);
+    const staleDump = await reviewImport(importId, 'metadata');
+    fixture('swap', dumps.metadata, dumps.data);
+    try {
+      await assert.rejects(runImport(importId, staleDump), /덤프 또는 대상 스키마가 변경/);
+      fixture('check-empty', 'metadata');
+    } finally { fixture('swap-back', dumps.metadata, dumps.data); }
+    const reported = await runImport(importId, await reviewImport(importId, 'metadata'));
+    assert.equal(reported.status, 'succeeded', JSON.stringify(reported));
+    assert.equal(reported.verification.tables, 1);
+    fixture('check-import', 'metadata');
+  } finally { await call('close_oracle', { id: importId }); }
+
+  const { id: dataId } = await open(restores.data);
+  try {
+    await assert.rejects(reviewImport(dataId, 'data'), /호환되는 테이블 구조/);
+    fixture('prepare-data');
+    const plan = await reviewImport(dataId, 'data');
+    assert.deepEqual(plan.tables, ['KEPT', 'PROOF']);
+    const reported = await runImport(dataId, plan);
+    assert.equal(reported.status, 'succeeded', JSON.stringify(reported));
+    assert.equal(reported.verification.tables, 2);
+    fixture('check-import', 'data');
+  } finally { await call('close_oracle', { id: dataId }); }
+
+  await dialog.getByRole('button', { name: '닫기', exact: true }).last().click();
+  await workspace.getByRole('button', { name: engine + ' 연결 끊기', exact: true }).click();
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await explorer.getByRole('button', { name: engine + ' Data Pump 가져오기 all 열기', exact: true }).click();
+  await workspace.getByRole('button', { name: engine + ' 연결', exact: true }).click();
+  await login.getByLabel(engine + ' 암호').fill(secret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'Data Pump', exact: true }).click();
+  await dialog.getByRole('button', { name: '덤프 가져오기', exact: true }).click();
+  await dialog.getByLabel('Oracle 디렉터리').selectOption(directory);
+  await dialog.getByLabel('덤프 파일 이름').fill(dumps.all);
+  await dialog.getByLabel('원본 스키마 이름').fill(source);
+  await dialog.getByRole('button', { name: '가져오기 미리보기', exact: true }).click();
+  const applyRestore = dialog.getByRole('button', { name: '가져오기 실행', exact: true });
+  await applyRestore.waitFor();
+  await dialog.getByText('SP_PUMP_DEST_' + run, { exact: true }).waitFor();
+  assert.equal(await applyRestore.isDisabled(), true);
+  await dialog.getByRole('checkbox', { name: '원본 덤프와 대상 스키마, 적용 방식을 확인했습니다.' }).check();
+  await dialog.getByLabel('대상 스키마 이름 확인').fill('SP_ALL_' + run);
+  assert.equal(await applyRestore.isDisabled(), true);
+  await dialog.getByLabel('운영 확인 문구 PROD').fill('PROD');
+  await applyRestore.click();
+  const imported = dialog.getByRole('status').filter({ hasText: '대상 스키마에 가져왔습니다.' });
+  await imported.or(dialog.getByRole('alert')).first().waitFor({ timeout: 90_000 });
+  assert.ok(await imported.isVisible(), await dialog.innerText());
+  await dialog.getByText('대상 객체', { exact: true }).waitFor();
+  fixture('check-import', 'all');
+
   const { events } = await call('list_audit_events', { before: null });
   const audit = events.filter(event => event.operation.startsWith('oracle.pump.export'));
   assert.ok(audit.some(event => event.outcome === 'succeeded'));
   assert.ok(audit.some(event => event.outcome === 'failed'));
   assert.doesNotMatch(JSON.stringify(audit), /\.dmp|SP_PUMP_|SP_DUMP_|StackPortPump89Qa/);
+  const imports = events.filter(event => event.operation === 'oracle.pump.import');
+  assert.equal(imports.filter(event => event.outcome === 'succeeded').length, 3);
+  assert.doesNotMatch(JSON.stringify(imports), /\.dmp|SP_METADATA_|SP_DATA_|SP_ALL_|StackPortPump89Qa/);
 }
 
 async function main() {
@@ -759,7 +852,7 @@ async function main() {
     const browser = await chromium.connectOverCDP(cdp);
     try { await verifyPump(browser.contexts()[0].pages()[0], python); }
     finally { await browser.close(); }
-    console.log('Oracle Windows Data Pump E2E passed (directories and permissions, collision protection, three export modes, dump header, and real isolated imports).');
+    console.log('Oracle Windows Data Pump E2E passed (directory permissions, export and import in three modes, dump identity and target conflicts, append preservation, and isolated value checks).');
     return;
   }
   const object = Number(execFileSync(python, [path.join(__dirname, 'oracle-fixture.py'), String(port), run, service], {

@@ -116,6 +116,10 @@ Oracle 작업 공간의 **Data Pump**에서 로그인한 계정의 스키마를 
 
 **덤프 헤더 확인**은 `READ` 권한이 있는 Oracle 디렉터리 안의 파일을 읽습니다. 파일 크기, 덤프 세트 ID, 작업·파일 형식 버전과 생성 정보를 표시합니다. 방금 만든 파일을 선택하면 헤더의 작업 이름을 대조합니다. 헤더 확인 결과와 내보내기 결과는 각각 표시됩니다. Data Pump를 제공하는 Oracle 설치가 필요하며 Oracle Free 컨테이너는 Full 이미지를 사용합니다. [Oracle GET_DUMPFILE_INFO](https://docs.oracle.com/en/database/oracle/oracle-database/26/arpls/DBMS_DATAPUMP.html) · [Oracle Free 이미지 비교](https://container-registry.oracle.com/ords/ocr/ba/database/free)
 
+**덤프 가져오기**는 로그인한 Oracle 사용자 스키마에 마스터 정보가 포함된 단일 덤프를 적용합니다. 미리보기는 입력한 원본 스키마, 서버 파일과 덤프 세트, 원본 작업 버전, 대상 Oracle 버전과 기본 테이블스페이스를 표시합니다. 대상 계정은 디렉터리 `READ`, `CREATE TABLE`, 저장 할당량과 객체별 생성 권한이 필요합니다. 실행 때 덤프 헤더, 파일 크기, 디렉터리 경로와 대상 스키마를 다시 확인합니다. 대상 이름을 그대로 입력하고, 운영 연결에서는 `PROD`도 입력합니다. [Oracle Data Pump 가져오기와 REMAP_SCHEMA](https://docs.oracle.com/en/database/oracle/oracle-database/26/sutil/parameters-available-command-line-mode-import-oracle-data-pump.html)
+
+구조를 포함하는 가져오기는 빈 사용자 스키마에 대상의 기본 저장 설정으로 객체를 만들며 Oracle의 `SKIP` 정책을 사용합니다. 사용자 정의와 시스템·역할 권한 등 계정 설정은 가져오기에서 제외합니다. 구조만 선택하면 행을 가져오지 않습니다. 데이터만 선택하면 검토 목록에 있는 기존 테이블과 덤프가 일치하는 범위에서 행을 추가합니다. 원본 스키마 이름이 뷰나 저장 코드 안에 포함된 경우 참조를 별도로 확인합니다. 가져오기 도중 실패하거나 중단하면 일부 변경이 대상에 남을 수 있습니다. 완료 뒤에는 사용자 객체·테이블 수와 유효하지 않은 객체 수를 표시합니다. [Oracle Data Pump 필터와 변환](https://docs.oracle.com/en/database/oracle/oracle-database/26/arpls/DBMS_DATAPUMP.html)
+
 Oracle **SQL 편집기**는 전체 문서, 현재 문장, 선택 영역을 실행합니다. 일반 SQL은 세미콜론으로 나눕니다. 연달아 실행할 PL/SQL 블록과 저장 프로그램은 별도 줄의 `/`로 구분합니다. Oracle 대체 인용 문자열과 인용 식별자 안의 구분 문자는 유지합니다. 문서의 최대 크기는 256 KiB이며 한 번에 최대 100개 문장을 실행합니다. [Oracle SQL*Plus의 PL/SQL 구분](https://docs.oracle.com/en/database/oracle/oracle-database/19/sqpug/SQL-Plus-basics.html)
 
 실행 범위에 `:name` 같은 입력 변수가 있으면 타입과 값을 실행 전에 입력합니다. 일반 이름은 대소문자 구분 없이 같은 값으로 바인딩하고 인용된 이름은 대소문자를 유지합니다. 문자열, 64비트 정수, 최대 38자리 `NUMBER`, `BINARY_DOUBLE`, 16진수 `RAW`, `NULL`을 지원합니다. 실행 범위 전체의 변수와 제출한 값이 일치해야 첫 문장을 실행합니다. 값을 숨기면 입력란, 실행 오류의 상세 메시지, 서버 경고를 가립니다. 쿼리에서 반환한 값은 결과 표에 표시됩니다. 감사 로그에는 연결과 실행 결과를 기록합니다. [Oracle Rust 드라이버의 SQL 실행과 바인딩](https://github.com/oracle/rust-oracledb/blob/main/doc/sql_execution.md)
@@ -706,7 +710,7 @@ Oracle AI Database 26ai Free 23.26.4.0.0에서 Windows 앱의 서비스 이름·
 
 시험용 CDB에 SID로 연결할 수 있으면 `STACKPORT_ORACLE_TEST_SID`를 지정해 SID 로그인도 확인합니다. TCP로 필터·정렬 등 데이터 탐색만 검증하는 환경에서는 `STACKPORT_ORACLE_TEST_TCP_ONLY=1`로 TCPS 검사를 생략할 수 있습니다.
 
-격리 Oracle 서버가 쓸 수 있는 폴더를 `STACKPORT_ORACLE_PUMP_DIRECTORY_PATH`에 지정하면 Data Pump 검사를 실행합니다. 테스트는 권한이 다른 계정과 Oracle 디렉터리를 생성해 운영 확인, 기존 파일 보존, 진행 중인 서버 작업의 중단, 세 가지 백업 방식과 헤더를 검사합니다. 앱이 만든 덤프를 Oracle의 `DBMS_DATAPUMP`로 별도 테스트 스키마에 가져와 객체, 행 수, 38자리 숫자, RAW와 유니코드를 대조합니다.
+격리 Oracle 서버가 쓸 수 있는 폴더를 `STACKPORT_ORACLE_PUMP_DIRECTORY_PATH`에 지정하면 Data Pump 검사를 실행합니다. 테스트는 권한이 다른 계정과 Oracle 디렉터리를 생성해 운영 확인, 기존 파일 보존, 진행 중인 서버 작업의 중단, 세 가지 백업과 가져오기 방식을 검사합니다. 앱에서 생성한 덤프를 읽기 전용 디렉터리 권한으로 별도 테스트 스키마에 적용합니다. 검토 후 변경한 원본 덤프와 대상 객체를 차단하고, 기존 행의 보존과 새 객체의 테이블스페이스·행 수·38자리 숫자·RAW·유니코드를 대조합니다.
 
 Snowflake는 격리된 HTTPS 서버에서 인증 헤더, 인증서 검증, 상태 확인, gzip 분할 응답, 진행 중 조회 취소, 완전한 객체 경로가 지정된 정의 SQL 응답과 크기 제한을 검증합니다. 코어 테스트에서 정밀 소수와 문자열 필터의 바인딩, 정렬과 행 제한의 적용 순서, 스키마·객체·열 검색 SQL과 값 바인딩을 확인합니다. Windows 공통 탐색기 검사에서는 연결 등록과 검색, PAT·OAuth 입력 화면을 확인합니다.
 

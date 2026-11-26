@@ -1483,6 +1483,21 @@ async fn inspect_oracle_pump_dump(manager: State<'_, oracle::Manager>, id: Strin
     -> Result<oracle::DumpHeader, String> { manager.inspect_pump_dump(&id, directory, filename, expected_job).await }
 
 #[tauri::command]
+async fn preview_oracle_pump_import(manager: State<'_, oracle::Manager>, id: String, options: oracle::PumpImportOptions)
+    -> Result<oracle::PumpImportPreview, String> { manager.preview_pump_import(&id, options).await }
+
+#[tauri::command]
+fn discard_oracle_pump_import(manager: State<'_, oracle::Manager>, id: String, token: String) -> Result<(), String> {
+    manager.discard_pump_import(&id, &token)
+}
+
+#[tauri::command]
+async fn run_oracle_pump_import(manager: State<'_, oracle::Manager>, id: String, request_id: String, token: String,
+    target: String, approved: bool, confirmation: String) -> Result<oracle::PumpImportOutcome, String> {
+    manager.import_pump(&id, &request_id, &token, &target, approved, &confirmation).await
+}
+
+#[tauri::command]
 async fn list_snowflake_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<snowflake::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_snowflake_profiles(&project_id)).await
@@ -3121,6 +3136,9 @@ fn main() {
             oracle_pump_progress,
             cancel_oracle_pump,
             inspect_oracle_pump_dump,
+            preview_oracle_pump_import,
+            discard_oracle_pump_import,
+            run_oracle_pump_import,
             list_snowflake_profiles,
             create_snowflake_profile,
             update_snowflake_profile,

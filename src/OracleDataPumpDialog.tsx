@@ -5,13 +5,16 @@ import { Dialog } from "./Dialog";
 type Directory = { name: string; path: string; readable: boolean; writable: boolean };
 type Capabilities = { schema: string; create_table: boolean; directories: Directory[] };
 type Content = "all" | "metadata" | "data";
-type Preview = {
+type ExportPreview = {
   token: string; schema: string; directory: Directory; filename: string; job: string; content: Content; expires_seconds: number;
 };
+type ImportPreview = { token: string; source: string; target: string; target_version: string; tablespace: string; dump: Header;
+  content: Content; tables: string[]; expires_seconds: number };
 type Outcome = {
   status: "succeeded" | "completed_with_errors" | "failed" | "cancelled" | "timed_out" | "unconfirmed";
   directory: Directory; filename: string; job: string;
   error_code: number | null; error_count: number; message: string | null; audit_warning: boolean;
+  target?: string; changes_possible?: boolean; verification?: { objects: number; tables: number; invalid: number } | null;
 };
 type Header = {
   directory: Directory; filename: string; size_bytes: string; guid: string;
@@ -26,20 +29,29 @@ const outcomeText: Record<Outcome["status"], string> = {
   timed_out: "제한 시간이 초과되어 Oracle 작업을 중단했습니다.",
   unconfirmed: "Oracle 서버에서 내보내기 결과를 확인해야 합니다.",
 };
+const importOutcomeText: Record<Outcome["status"], string> = {
+  ...outcomeText,
+  succeeded: "대상 스키마에 가져왔습니다.",
+  completed_with_errors: "오류 또는 확인이 필요한 객체가 있습니다.",
+  failed: "Oracle Data Pump 가져오기에 실패했습니다.",
+  unconfirmed: "Oracle 서버에서 가져오기 결과를 확인해야 합니다.",
+};
 const bytes = new Intl.NumberFormat("ko-KR");
 
 export function OracleDataPumpDialog({ id, server, database, environment, onClose }: {
   id: string; server: string; database: string; environment: string; onClose: () => void;
 }) {
-  const [mode, setMode] = useState<"export" | "inspect">("export");
+  const [mode, setMode] = useState<"export" | "inspect" | "import">("export");
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [directory, setDirectory] = useState("");
   const [content, setContent] = useState<Content>("all");
   const [filename, setFilename] = useState("");
+  const [source, setSource] = useState("");
   const [expectedJob, setExpectedJob] = useState<string>();
-  const [preview, setPreview] = useState<Preview>();
+  const [preview, setPreview] = useState<ExportPreview | ImportPreview>();
   const [approved, setApproved] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [confirmedTarget, setConfirmedTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [request, setRequest] = useState<string>();
   const [started, setStarted] = useState(false);
@@ -51,10 +63,14 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
   const [loadingError, setLoadingError] = useState("");
   const submitting = useRef(false);
   const production = environment === "PROD";
+  const importing = mode === "import";
+  const restore = preview && "target" in preview ? preview : undefined;
   const eligible = capabilities?.directories.filter(item => mode === "export" ? item.writable : item.readable) ?? [];
   const selected = eligible.find(item => item.name === directory);
   const ready = mode === "inspect" ? selected && filename.trim()
-    : capabilities?.create_table && selected && (!preview || (approved && (!production || confirmation === "PROD")));
+    : capabilities?.create_table && selected && (preview
+      ? approved && (!production || confirmation === "PROD") && (!restore || confirmedTarget === restore.target)
+      : !importing || (filename.trim() && source.trim()));
 
   useEffect(() => {
     let active = true;
@@ -83,13 +99,14 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
   }, [id, request]);
 
   function discard() {
-    if (preview) void invoke("discard_oracle_pump_export", { id, token: preview.token }).catch(() => {});
-    setPreview(undefined); setApproved(false); setConfirmation("");
+    if (preview) void invoke(restore ? "discard_oracle_pump_import" : "discard_oracle_pump_export", { id, token: preview.token }).catch(() => {});
+    setPreview(undefined); setApproved(false); setConfirmation(""); setConfirmedTarget("");
   }
 
   function switchMode(next: typeof mode) {
     const choices = capabilities?.directories.filter(item => next === "export" ? item.writable : item.readable) ?? [];
     if (!choices.some(item => item.name === directory)) setDirectory(choices[0]?.name ?? "");
+    if (next === "import" && mode !== "import") setContent("all");
     discard(); setMode(next); setError(""); setReport(undefined); setFile(undefined); setExpectedJob(undefined);
   }
 
@@ -101,11 +118,16 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
       if (mode === "inspect") {
         setFile(await invoke<Header>("inspect_oracle_pump_dump", { id, directory, filename: filename.trim(), expectedJob }));
       } else if (!preview) {
-        setPreview(await invoke<Preview>("preview_oracle_pump_export", { id, options: { directory, content } }));
+        setPreview(importing
+          ? await invoke<ImportPreview>("preview_oracle_pump_import", { id, options: { directory, filename: filename.trim(), source, content } })
+          : await invoke<ExportPreview>("preview_oracle_pump_export", { id, options: { directory, content } }));
       } else {
         const requestId = crypto.randomUUID();
         setRequest(requestId);
-        const result = await invoke<Outcome>("run_oracle_pump_export", { id, requestId, token: preview.token, approved, confirmation });
+        const args = { id, requestId, token: preview.token, approved, confirmation };
+        const result = restore
+          ? await invoke<Outcome>("run_oracle_pump_import", { ...args, target: confirmedTarget })
+          : await invoke<Outcome>("run_oracle_pump_export", args);
         discard(); setReport(result);
       }
     } catch (cause) {
@@ -133,44 +155,71 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
   return <Dialog title="Oracle Data Pump" className="restore-dialog" busy={busy} onClose={close}>
     <div className="mysql-views" role="group" aria-label="Data Pump 작업">
       <button type="button" className="secondary small" aria-pressed={mode === "export"} disabled={busy} onClick={() => switchMode("export")}>스키마 백업</button>
+      <button type="button" className="secondary small" aria-pressed={importing} disabled={busy} onClick={() => switchMode("import")}>덤프 가져오기</button>
       <button type="button" className="secondary small" aria-pressed={mode === "inspect"} disabled={busy} onClick={() => switchMode("inspect")}>덤프 헤더 확인</button>
     </div>
     <form onSubmit={submit} aria-busy={busy}>
       <p className="confirm-copy"><strong>{server} · {environment}</strong><br />{database}</p>
       {preview ? <>
-        <dl className="restore-summary">
+        {restore ? <>
+          <dl className="restore-summary">
+            <dt>원본 스키마</dt><dd>{restore.source}</dd>
+            <dt>대상 스키마</dt><dd>{restore.target} · Oracle {restore.target_version}</dd>
+            {restore.content !== "data" && <><dt>기본 테이블스페이스</dt><dd>{restore.tablespace}</dd></>}
+            <dt>서버 파일</dt><dd>{restore.dump.directory.name} · {restore.dump.directory.path}<br />{restore.dump.filename}</dd>
+            <dt>덤프 세트</dt><dd>{restore.dump.guid}{restore.dump.source_version && ` · Oracle ${restore.dump.source_version}`}</dd>
+            <dt>적용 방식</dt><dd>{restore.content === "data" ? "기존 테이블에 데이터 추가" : contentNames[restore.content]}</dd>
+          </dl>
+          {restore.tables.length > 0 && <details>
+            <summary>가져오기 대상 테이블 {restore.tables.length}개</summary>
+            <ul>{restore.tables.map(table => <li key={table}>{table}</li>)}</ul>
+          </details>}
+          <p className="form-note">{restore.content === "data"
+            ? "호환되는 테이블에 행을 추가합니다. 기존 행은 보존되며 중복 키나 제약조건 오류가 생길 수 있습니다."
+            : "빈 사용자 스키마에 대상의 기본 저장 설정으로 객체를 만듭니다. 뷰와 저장 코드에 포함된 원본 스키마 참조는 별도로 확인하세요."}</p>
+          <p className="form-note">가져오기 도중 오류나 중단이 발생하면 이미 적용된 변경이 대상에 남을 수 있습니다.</p>
+          <label className="field">대상 스키마 이름 확인<input autoComplete="off" required disabled={busy}
+            value={confirmedTarget} onChange={event => setConfirmedTarget(event.target.value)} /></label>
+        </> : "directory" in preview && <dl className="restore-summary">
           <dt>원본 스키마</dt><dd>{preview.schema}</dd>
           <dt>Oracle 디렉터리</dt><dd>{preview.directory.name} · {preview.directory.path}</dd>
           <dt>서버 파일</dt><dd>{preview.filename}</dd>
           <dt>백업 내용</dt><dd>{contentNames[preview.content]}</dd>
           <dt>서버 작업</dt><dd>{preview.job}</dd>
-        </dl>
+        </dl>}
         <p className="form-note">미리보기는 {preview.expires_seconds / 60}분간 유효합니다.</p>
         <label className="restore-trust"><input type="checkbox" disabled={busy} checked={approved}
-          onChange={event => setApproved(event.target.checked)} /> 스키마와 서버 파일 경로를 확인했습니다.</label>
+          onChange={event => setApproved(event.target.checked)} /> {restore
+            ? "원본 덤프와 대상 스키마, 적용 방식을 확인했습니다."
+            : "스키마와 서버 파일 경로를 확인했습니다."}</label>
         {production && <label className="field">운영 확인 문구 PROD<input autoComplete="off" required disabled={busy} value={confirmation}
           onChange={event => setConfirmation(event.target.value)} /></label>}
       </> : <>
         {mode === "export" && capabilities && <dl className="restore-summary"><dt>원본 스키마</dt><dd>{capabilities.schema}</dd></dl>}
+        {importing && capabilities && <dl className="restore-summary"><dt>대상 스키마</dt><dd>{capabilities.schema}</dd></dl>}
         <label className="field">Oracle 디렉터리<select required disabled={busy || !eligible.length} value={directory}
           onChange={event => { setDirectory(event.target.value); setFile(undefined); setExpectedJob(undefined); }}>
           <option value="">디렉터리 선택</option>
           {eligible.map(item => <option value={item.name} key={item.name}>{item.name}</option>)}
         </select></label>
         {selected && <p className="form-note">서버 경로 <code>{selected.path}</code></p>}
-        {mode === "export"
-          ? <label className="field">백업 내용<select disabled={busy} value={content} onChange={event => setContent(event.target.value as Content)}>
+        {mode !== "export" && <label className="field">덤프 파일 이름<input required disabled={busy} maxLength={255} value={filename}
+          onChange={event => { setFilename(event.target.value); setExpectedJob(undefined); setFile(undefined); }} /></label>}
+        {importing && <label className="field">원본 스키마 이름<input required disabled={busy} maxLength={128} autoComplete="off"
+          value={source} onChange={event => setSource(event.target.value)} /></label>}
+        {mode !== "inspect" && <label className="field">{importing ? "가져올 내용" : "백업 내용"}
+          <select disabled={busy} value={content} onChange={event => setContent(event.target.value as Content)}>
             {Object.entries(contentNames).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-          </select></label>
-          : <label className="field">덤프 파일 이름<input required disabled={busy} maxLength={255} value={filename}
-            onChange={event => { setFilename(event.target.value); setExpectedJob(undefined); setFile(undefined); }} /></label>}
+          </select></label>}
         <p className="form-note">{mode === "export"
           ? "Oracle 서버가 파일을 씁니다. 디렉터리 WRITE 권한과 CREATE TABLE 권한, 기본 테이블스페이스 할당량이 필요합니다."
+          : importing
+            ? "대상 계정으로 연결하고 덤프에 저장된 원본 스키마 이름을 정확히 입력하세요. 서버 디렉터리 READ와 CREATE TABLE 권한이 필요합니다."
           : "Oracle 서버에 있는 파일의 헤더를 읽습니다. 디렉터리 READ 권한이 필요합니다."}</p>
         {!capabilities && !loadingError && <p className="form-note" role="status">Oracle 디렉터리와 권한을 확인하는 중…</p>}
         {loadingError && <p className="form-error" role="alert">{loadingError}</p>}
         {capabilities && !eligible.length && <p className="form-error" role="alert">{mode === "export" ? "WRITE" : "READ"} 권한이 있는 Oracle 디렉터리가 없습니다.</p>}
-        {mode === "export" && capabilities && !capabilities.create_table && <p className="form-error" role="alert">현재 계정에 CREATE TABLE 권한이 없습니다.</p>}
+        {mode !== "inspect" && capabilities && !capabilities.create_table && <p className="form-error" role="alert">현재 계정에 CREATE TABLE 권한이 없습니다.</p>}
       </>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {busy && <p className="form-note" role="status">{cancelling ? "중단 요청 중…"
@@ -178,16 +227,20 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
         {percent != null && ` · 데이터 진행률 ${percent}%`}</p>}
       {report && <div className="form-note">
         <p className={report.status === "succeeded" ? "success-banner" : "form-error"} role={report.status === "succeeded" ? "status" : "alert"}>
-          {outcomeText[report.status]}</p>
+          {(report.target ? importOutcomeText : outcomeText)[report.status]}</p>
         <dl className="restore-summary">
           <dt>서버 파일</dt><dd>{report.directory.name} · {report.filename}</dd>
           <dt>서버 작업</dt><dd>{report.job}</dd>
+          {report.target && <><dt>대상 스키마</dt><dd>{report.target}</dd></>}
+          {report.verification && <><dt>대상 객체</dt><dd>{report.verification.objects}개 · 테이블 {report.verification.tables}개
+            {report.verification.invalid > 0 && ` · 유효하지 않은 객체 ${report.verification.invalid}개`}</dd></>}
         </dl>
+        {report.changes_possible && report.status !== "succeeded" && <p>대상 스키마에 일부 변경이 남았는지 확인하세요.</p>}
         {report.message && <p>{report.message}</p>}
         {report.error_count > 0 && <p>서버 오류 {report.error_count}건</p>}
         {report.error_code != null && <p>Oracle 오류 {report.error_code}</p>}
         {report.audit_warning && <p className="form-error" role="alert">작업 결과를 감사 기록에 저장할 수 없습니다.</p>}
-        {report.status === "succeeded" && report.directory.readable && <button type="button" className="secondary"
+        {!report.target && report.status === "succeeded" && report.directory.readable && <button type="button" className="secondary"
           onClick={() => inspectGenerated(report)}>이 덤프의 헤더 확인</button>}
       </div>}
       {file && <div className="form-note">
@@ -204,11 +257,12 @@ export function OracleDataPumpDialog({ id, server, database, environment, onClos
         </dl>
       </div>}
       <div className="dialog-actions">
-        {preview && !busy && <button type="button" className="secondary" onClick={discard}>백업 설정 다시 선택</button>}
+        {preview && !busy && <button type="button" className="secondary" onClick={discard}>설정 다시 선택</button>}
         <button type="button" className="secondary" disabled={busy && (!request || cancelling)} onClick={busy ? () => void cancel() : close}>
           {busy && request ? "작업 중단" : "닫기"}</button>
         <button type="submit" className="primary" disabled={busy || !ready}>
-          {mode === "inspect" ? "헤더 읽기" : preview ? "백업 실행" : "백업 미리보기"}</button>
+          {mode === "inspect" ? "헤더 읽기" : importing ? (preview ? "가져오기 실행" : "가져오기 미리보기")
+            : preview ? "백업 실행" : "백업 미리보기"}</button>
       </div>
     </form>
   </Dialog>;

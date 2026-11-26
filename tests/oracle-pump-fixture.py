@@ -36,16 +36,21 @@ def setup():
         separator = max(system.rfind('/'), system.rfind('\\'))
         assert separator > 0
         datafile = (system[:separator + 1] + f'pump_{run.lower()}.dbf').replace("'", "''")
+        target_file = (system[:separator + 1] + f'pump_target_{run.lower()}.dbf').replace("'", "''")
         space = f'SP_PUMP_SPACE_{run}'
+        target_space = f'SP_PUMP_DEST_{run}'
         cursor.execute(f"CREATE TABLESPACE {space} DATAFILE '{datafile}' SIZE 40M")
+        cursor.execute(f"CREATE TABLESPACE {target_space} DATAFILE '{target_file}' SIZE 40M")
         for name in (owner, limited, *targets.values()):
-            cursor.execute(f'CREATE USER {name} IDENTIFIED BY "{password}" DEFAULT TABLESPACE {space} QUOTA UNLIMITED ON {space}')
+            assigned = target_space if name in targets.values() else space
+            cursor.execute(f'CREATE USER {name} IDENTIFIED BY "{password}" DEFAULT TABLESPACE {assigned} QUOTA UNLIMITED ON {assigned}')
             cursor.execute(f'GRANT CREATE SESSION TO {name}')
             if name != limited:
                 cursor.execute(f'GRANT CREATE TABLE, CREATE VIEW TO {name}')
         cursor.execute(f"CREATE DIRECTORY {directory} AS '{folder}'")
         cursor.execute(f"CREATE DIRECTORY {readonly} AS '{folder}'")
-        cursor.execute(f'GRANT READ, WRITE ON DIRECTORY {directory} TO {owner}, {", ".join(targets.values())}')
+        cursor.execute(f'GRANT READ, WRITE ON DIRECTORY {directory} TO {owner}')
+        cursor.execute(f'GRANT READ ON DIRECTORY {directory} TO {", ".join(targets.values())}')
         cursor.execute(f'GRANT READ ON DIRECTORY {readonly} TO {owner}, {limited}')
 
     with connection(owner) as db, db.cursor() as cursor:
@@ -83,41 +88,55 @@ def protect(name, write):
             assert marker.getvalue() == 'A100ECFF'
 
 
-def import_check(kind, name):
+def prepare_data():
+    with connection(targets['data']) as db, db.cursor() as cursor:
+        cursor.execute(table)
+        cursor.execute("INSERT INTO proof(id) VALUES(-471)")
+        cursor.execute('CREATE TABLE kept (value NUMBER)')
+        cursor.execute('INSERT INTO kept VALUES(-763)')
+        db.commit()
+
+
+def change_schema(kind, create):
+    with connection(targets[kind]) as db, db.cursor() as cursor:
+        cursor.execute('CREATE TABLE scope_changed (value NUMBER)' if create else 'DROP TABLE scope_changed PURGE')
+
+
+def swap_archive(name, replacement, reverse=False):
     assert_filename(name)
-    target = targets[kind]
-    with connection(target) as db, db.cursor() as cursor:
-        db.call_timeout = 110_000
-        if kind == 'data':
-            cursor.execute(table)
-        state = cursor.var(str, size=30)
-        cursor.execute("""DECLARE h NUMBER; final_state VARCHAR2(30);
-            BEGIN
-              h:=SYS.DBMS_DATAPUMP.OPEN('IMPORT','SCHEMA',NULL,:job_name,'COMPATIBLE');
-              SYS.DBMS_DATAPUMP.ADD_FILE(h,:file_name,:dir_name,filetype=>SYS.DBMS_DATAPUMP.KU$_FILE_TYPE_DUMP_FILE);
-              SYS.DBMS_DATAPUMP.METADATA_FILTER(h,'SCHEMA_EXPR',:schema_filter);
-              SYS.DBMS_DATAPUMP.METADATA_REMAP(h,'REMAP_SCHEMA',:origin,:target);
-              IF :data_only = 1 THEN
-                SYS.DBMS_DATAPUMP.SET_PARAMETER(h,'INCLUDE_METADATA',0);
-                SYS.DBMS_DATAPUMP.SET_PARAMETER(h,'TABLE_EXISTS_ACTION','APPEND');
-              ELSE
-                SYS.DBMS_DATAPUMP.SET_PARAMETER(h,'TABLE_EXISTS_ACTION','SKIP');
-              END IF;
-              SYS.DBMS_DATAPUMP.START_JOB(h);
-              SYS.DBMS_DATAPUMP.WAIT_FOR_JOB(h,final_state);
-              :state := final_state;
-            END;""", job_name=f'SP_IMP_{kind.upper()}_{run}', file_name=name, dir_name=directory,
-                       schema_filter=f"IN ('{owner}')", origin=owner, target=target,
-                       data_only=int(kind == 'data'), state=state)
-        assert state.getvalue() == 'COMPLETED', state.getvalue()
+    assert_filename(replacement)
+    displaced = name + '.held'
+    with connection(owner) as db, db.cursor() as cursor:
+        for before, after in (((name, replacement), (displaced, name)) if reverse
+                              else ((name, displaced), (replacement, name))):
+            cursor.execute("BEGIN SYS.UTL_FILE.FRENAME(:dir_name,:before,:dir_name,:after); END;",
+                           dir_name=directory, before=before, after=after)
+
+
+def check_import(kind):
+    with connection(targets[kind]) as db, db.cursor() as cursor:
+        cursor.execute("SELECT tablespace_name, (SELECT default_tablespace FROM user_users) FROM user_tables WHERE table_name='PROOF'")
+        actual, expected = cursor.fetchone()
+        assert actual == expected
         cursor.execute("SELECT COUNT(*) FROM proof")
-        assert cursor.fetchone() == (0 if kind == 'metadata' else 61,)
+        assert cursor.fetchone() == ({'all': 61, 'metadata': 0, 'data': 62}[kind],)
         if kind != 'metadata':
             cursor.execute(r"""SELECT COUNT(*) FROM proof WHERE id=12345678901234567890123456789012345678
                 AND raw_value=HEXTORAW('00FF11') AND title=UNISTR('\D55C')""")
             assert cursor.fetchone() == (1,)
         cursor.execute("SELECT COUNT(*) FROM user_views WHERE view_name='PROOF_VIEW'")
         assert cursor.fetchone() == (0 if kind == 'data' else 1,)
+        if kind == 'data':
+            cursor.execute('SELECT COUNT(*) FROM proof WHERE id=-471')
+            assert cursor.fetchone() == (1,)
+            cursor.execute('SELECT value FROM kept')
+            assert cursor.fetchall() == [(-763,)]
+
+
+def check_empty(kind):
+    with connection(targets[kind]) as db, db.cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) FROM user_objects")
+        assert cursor.fetchone() == (0,)
 
 
 if mode == 'setup':
@@ -126,7 +145,19 @@ elif mode == 'protect':
     protect(arguments[0], True)
 elif mode == 'check-protected':
     protect(arguments[0], False)
-elif mode == 'import':
-    import_check(*arguments)
+elif mode == 'prepare-data':
+    prepare_data()
+elif mode == 'change-schema':
+    change_schema(arguments[0], True)
+elif mode == 'reset-schema':
+    change_schema(arguments[0], False)
+elif mode == 'swap':
+    swap_archive(*arguments)
+elif mode == 'swap-back':
+    swap_archive(*arguments, reverse=True)
+elif mode == 'check-import':
+    check_import(arguments[0])
+elif mode == 'check-empty':
+    check_empty(arguments[0])
 else:
     raise ValueError('Invalid Data Pump fixture operation')

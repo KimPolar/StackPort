@@ -8,7 +8,10 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
-pub use data_pump::{DumpHeader, PumpCapabilities, PumpExportOptions, PumpOutcome, PumpPreview, PumpProgress};
+pub use data_pump::{
+    DumpHeader, PumpCapabilities, PumpExportOptions, PumpImportOptions, PumpImportOutcome,
+    PumpImportPreview, PumpOutcome, PumpPreview, PumpProgress,
+};
 pub use profiles::{Profile, ProfileSettings, Target, Transport};
 pub use query::{QueryInput, QueryOutcome, QuerySource};
 
