@@ -63,7 +63,7 @@ import { MysqlWorkspace } from "./MysqlWorkspace";
 import { PostgresProfileDialog } from "./PostgresProfileDialog";
 import { RdpWorkspace } from "./RdpWorkspace";
 import { SftpWorkspace } from "./SftpWorkspace";
-import type { TerminalDirectory } from "./terminalDirectory";
+import type { TerminalDirectory, TerminalFiles } from "./terminalDirectory";
 import { WorkspaceCopyDialog } from "./WorkspaceCopyDialog";
 import { WorkspaceExitDialog } from "./WorkspaceExitDialog";
 import { WorkspaceNavigation, workspaceTools, type WorkspacePage } from "./WorkspaceNavigation";
@@ -231,6 +231,7 @@ function App() {
   const [sshExchange, setSshExchange] = useState<"import" | "export" | null>(null);
   const [sshOpenRequest, setSshOpenRequest] = useState<SshOpenRequest | null>(null);
   const [terminalDirectory, setTerminalDirectory] = useState<TerminalDirectory | null>(null);
+  const [terminalFiles, setTerminalFiles] = useState<TerminalFiles | null>(null);
   const [profileId, setProfileId] = useState("");
   const [catalog, setCatalog] = useState<{ profileId: string; objects: DatabaseObject[]; failed?: boolean } | null>(null);
   const [favoriteObject, setFavoriteObject] = useState<{ projectId: string; profileId: string; name: string } | null>(null);
@@ -1171,6 +1172,13 @@ function App() {
     else if (next === "workspace") setHistoryOpen(false);
   }
 
+  function showTerminalFiles() {
+    const tools = paneTools(layout);
+    if (tools.includes("files") || !tools.includes("terminal") || tools.length >= 4) return;
+    const pane = splitPane(++nextSplit.current, "side", toolPane("files"), toolPane("terminal"));
+    applyLayout(editTool(layout, tool => tool === "terminal" ? { ...pane, size: 36 } : toolPane(tool)));
+  }
+
   function openTunnels() {
     setTunnelViewRequest(request => request + 1);
     showTool("network");
@@ -1986,7 +1994,7 @@ function App() {
     terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
         <TerminalWorkspace visible={toolVisible("terminal")} colorScheme={colorScheme} onCountChange={updateTerminalCount} request={sshOpenRequest} sshProfiles={sshProfiles}
-          onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} />
+          onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} onFilesChange={setTerminalFiles} onShowFiles={showTerminalFiles} />
       </React.Suspense>
     </div>,
     network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body">
@@ -1998,7 +2006,8 @@ function App() {
     </div>,
     files: loadedPages.has("files") && <div id="workspace-pane-files" className="tool-body network-body">
       <SftpWorkspace projectName={project?.name ?? ""} profiles={sshProfiles} onExitGuard={setSftpExitGuard}
-        onRequestExit={requestAppClose} terminalDirectory={terminalDirectory} />
+        onRequestExit={requestAppClose} terminalDirectory={terminalDirectory} terminalFiles={terminalFiles}
+        terminalProjectName={projects.find(item => item.id === terminalFiles?.profile.project_id)?.name ?? ""} />
     </div>,
   };
 

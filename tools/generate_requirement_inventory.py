@@ -51,7 +51,7 @@ PARTIAL = {
     "SP-NW-002": "네트워크·SSH 연결 화면의 DNS·TCP 진단과 Windows Ping·경로 추적, 도구 전환 후 진단 상태 유지",
     "SP-NW-003": "Windows HTTP/HTTPS HEAD·GET, 최대 5회 가용성 측정, 상태 코드·헤더·경과 시간·TLS 정보",
     "SP-NW-007": "로컬 터널 루프백 독점 바인딩, SOCKS5 무인증 범위와 원격 수신 범위 확인, 원격 루프백 채널만 허용",
-    "SP-FL-001": "저장된 SSH 연결과 공통 호스트 키 저장소로 SFTP 탐색 시작, 같은 프로젝트의 다단계 SSH 경유",
+    "SP-FL-001": "저장된 SSH 직접·경유 연결에 인증 한 번으로 터미널과 SFTP 탐색 표시, 연결 시 선택 해제 및 실패 후 SFTP만 다시 열기",
     "SP-FL-002": "로컬·SFTP 이중 패널, 이름 검색과 독립 정렬·방문 기록, 경로·상위/하위 폴더 이동과 새로고침, 좁은 창에서 패널 전환",
     "SP-FL-003": "SFTP 원격 폴더 생성, 일반 파일·폴더 이름 변경·이동, 일반 파일 복사와 단일 파일·빈 폴더 삭제",
     "SP-FL-004": "확인한 호스트 키로 SFTP v3 연결, 암호와 암호화된 개인 키 인증",
@@ -203,7 +203,7 @@ PARTIAL = {
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
     "SP-AT-007": "Windows 로컬 CMD·PowerShell 입출력과 종료 정리",
     "SP-AT-001": "SSH 동일 알고리즘 키 변경 차단·명시적 재확인·교체 후 이전 키 차단",
-    "SP-AT-002": "확인된 SSH 기반 SFTP 연결에서 UTF-8 원격 파일 편집·저장·재조회",
+    "SP-AT-002": "저장된 SSH 접속과 인증을 공유하는 SFTP 파일 창에서 UTF-8 원격 파일 편집·저장·재조회",
     "SP-AT-003": "SFTP 원본 변경 시 해시 충돌 감지, 편집 내용 유지와 새 원격 파일 또는 로컬 초안 보관",
     "SP-AT-006": "Windows에서 SSH 점프 경유 PostgreSQL·MySQL·MariaDB 연결, 터널 중단 안내와 동일 터널 재연결, SQL 초안 유지 및 실행",
 }
@@ -285,7 +285,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             elif requirement_id in {"SP-CN-017", "SP-CN-018", "SP-NW-007"}:
                 evidence = "crates/stackport-core/src/ssh_tunnel.rs; crates/stackport-core/src/ssh_tunnel/runtime.rs; crates/stackport-core/tests/ssh_tunnel.rs; src/SshTunnelPanel.tsx; tests/ssh-tunnel-smoke.cjs"
             elif requirement_id == "SP-FL-001":
-                evidence = "crates/stackport-core/src/ssh_transport.rs; crates/stackport-core/src/sftp.rs; src/SshRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
+                evidence = "crates/stackport-core/src/terminal/routed.rs; crates/stackport-core/src/sftp.rs; src/TerminalWorkspace.tsx; src/SftpWorkspace.tsx; src/SshRouteDialog.tsx; src-tauri/src/main.rs; tests/sftp-smoke.cjs"
             elif requirement_id == "SP-TM-002":
                 evidence = "crates/stackport-core/src/ssh.rs; crates/stackport-core/src/terminal/routed.rs; src/TerminalWorkspace.tsx; tests/ssh-smoke.cjs; tests/sftp-smoke.cjs"
             elif requirement_id in {"SP-UI-001", "SP-UI-002", "SP-CN-001", "SP-CN-003", "SP-CN-023"}:

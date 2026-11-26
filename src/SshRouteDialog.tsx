@@ -18,7 +18,7 @@ const authentication = (credentials: Credentials) => credentials.method === "pas
   ? { kind: "password", password: credentials.secret }
   : { kind: "private_key", path: credentials.path, passphrase: credentials.secret };
 
-export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initialHops = [], onBusy, onClose, onOpened }: ({
+export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initialHops = [], initialFiles = true, onBusy, onClose, onOpened }: ({
   tool: "sftp" | "terminal";
   tunnel?: never;
 } | {
@@ -28,9 +28,10 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   target: SshProfile;
   profiles: SshProfile[];
   initialHops?: string[];
+  initialFiles?: boolean;
   onBusy: (value: boolean) => void;
   onClose: () => void;
-  onOpened: (session: Session, route: SshProfile[]) => void;
+  onOpened: (session: Session, route: SshProfile[], withFiles: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const title = useId();
@@ -43,6 +44,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   }));
   const [credentials, setCredentials] = useState(emptyCredentials);
   const [confirmation, setConfirmation] = useState("");
+  const [withFiles, setWithFiles] = useState(initialFiles);
   const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -98,7 +100,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
         ...(tool === "terminal" ? { rows: 24, cols: 80 } : {}),
         ...(tunnel ? { tunnel, scopeConfirmed } : {}),
       });
-      if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile));
+      if (result.status === "open") onOpened(result.session, hops.map(hop => hop.profile), tool === "terminal" && withFiles);
       else { setNotice(""); setCompared(false); setTrust(result); }
     });
   }
@@ -152,6 +154,8 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
           <CredentialFields value={credentials} onChange={setCredentials} onChoose={chooseKey} />
         </fieldset>
         {production && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
+        {tool === "terminal" && <label className="files-check"><input type="checkbox" checked={withFiles}
+          onChange={event => setWithFiles(event.target.checked)} /> 파일 탐색 함께 열기</label>}
         {tunnel?.settings.kind === "remote" && <p className="form-note">SSH 서버에 루프백 수신을 요청합니다. 서버의 GatewayPorts 설정에 따라 실제 수신 범위가 달라질 수 있습니다.</p>}
         {confirmScope && <label className="files-check">
           <input type="checkbox" required checked={scopeConfirmed} onChange={event => setScopeConfirmed(event.target.checked)} />

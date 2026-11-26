@@ -3,8 +3,8 @@ use super::{
     TerminalManager, TerminalState, CHUNK_SIZE, OUTPUT_CHUNKS,
 };
 use crate::{
-    ssh_transport::{self, SshRoute},
-    Result, SshManager, SshRouteHop, SshRouteResult,
+    ssh_transport::{self, Endpoint, SshRoute},
+    Result, SftpManager, SftpOpened, SshManager, SshProfile, SshRouteHop, SshRouteResult,
 };
 use portable_pty::PtySize;
 use russh::{client::Msg, Channel, ChannelMsg, ChannelReadHalf, ChannelWriteHalf};
@@ -22,6 +22,8 @@ pub(super) struct RemoteControl {
     input: async_mpsc::Sender<Vec<u8>>,
     size: watch::Sender<PtySize>,
     stop: oneshot::Sender<()>,
+    route: Arc<SshRoute>,
+    profile: SshProfile,
 }
 
 impl RemoteControl {
@@ -49,6 +51,35 @@ impl RemoteControl {
 }
 
 impl TerminalManager {
+    pub async fn open_native_ssh(
+        &self,
+        manager: Arc<SshManager>,
+        destination: SshRouteHop,
+        rows: u16,
+        cols: u16,
+    ) -> Result<TerminalInfo> {
+        let size = terminal_size(rows, cols)?;
+        let profile = destination.profile;
+        let endpoint = ssh_transport::connect_endpoint(
+            manager, &profile, destination.authentication, None, false, None,
+        ).await?;
+        let Endpoint::Authenticated(connection) = endpoint else {
+            return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
+        };
+        self.start_remote(profile, SshRoute { connection, hops: Vec::new() }, size).await
+    }
+
+    pub async fn open_sftp(&self, files: &SftpManager, id: &str) -> Result<SftpOpened> {
+        let (profile, route) = {
+            let sessions = self.sessions.lock().map_err(|_| "터미널 상태를 사용할 수 없습니다.")?;
+            let session = sessions.get(id).ok_or("SSH 터미널이 닫혔습니다.")?;
+            let remote = session.remote.lock().map_err(|_| "터미널 상태를 사용할 수 없습니다.")?;
+            let remote = remote.as_ref().ok_or("이 터미널에서 공유 SFTP 연결을 열 수 없습니다.")?;
+            (remote.profile.clone(), Arc::clone(&remote.route))
+        };
+        files.open_on_terminal(profile, route).await
+    }
+
     pub async fn open_routed_ssh(
         &self,
         manager: Arc<SshManager>,
@@ -73,6 +104,11 @@ impl TerminalManager {
                 return Ok(SshRouteResult::TrustRequired { stage, host })
             }
         };
+        let session = self.start_remote(profile, route, size).await?;
+        Ok(SshRouteResult::Open { session })
+    }
+
+    async fn start_remote(&self, profile: SshProfile, route: SshRoute, size: PtySize) -> Result<TerminalInfo> {
         let channel = match timeout(SETUP_TIMEOUT, open_shell(&route, size)).await {
             Ok(Ok(channel)) => channel,
             result => {
@@ -89,6 +125,7 @@ impl TerminalManager {
         let (size, size_rx) = watch::channel(size);
         let (stop, mut stop_rx) = oneshot::channel();
         let state = Arc::new(TerminalState::default());
+        let route = Arc::new(route);
         let id = Uuid::new_v4().to_string();
         let session = Arc::new(Session {
             closing: Arc::new(AtomicBool::new(false)),
@@ -98,7 +135,9 @@ impl TerminalManager {
             master: Mutex::new(None),
             job: Mutex::new(None),
             known_hosts: Mutex::new(None),
-            remote: Mutex::new(Some(RemoteControl { input, size, stop })),
+            remote: Mutex::new(Some(RemoteControl {
+                input, size, stop, route: Arc::clone(&route), profile: profile.clone(),
+            })),
         });
         self.sessions
             .lock()
@@ -122,15 +161,13 @@ impl TerminalManager {
         } else {
             profile.host
         };
-        Ok(SshRouteResult::Open {
-            session: TerminalInfo {
-                id,
-                shell: "ssh".into(),
-                process_id: None,
-                target: Some(format!("{}@{address}:{}", profile.username, profile.port)),
-                environment: Some(profile.environment),
-                cwd_authority: None,
-            },
+        Ok(TerminalInfo {
+            id,
+            shell: "ssh".into(),
+            process_id: None,
+            target: Some(format!("{}@{address}:{}", profile.username, profile.port)),
+            environment: Some(profile.environment),
+            cwd_authority: None,
         })
     }
 }
@@ -156,17 +193,28 @@ async fn open_shell(
         )
         .await
         .map_err(|_| "원격 터미널을 요청할 수 없습니다.")?;
-    if !matches!(channel.wait().await, Some(ChannelMsg::Success)) {
+    if !channel_accepted(&mut channel).await {
         return Err("서버가 원격 터미널 요청을 거부했습니다.");
     }
     channel
         .request_shell(true)
         .await
         .map_err(|_| "원격 셸을 요청할 수 없습니다.")?;
-    if !matches!(channel.wait().await, Some(ChannelMsg::Success)) {
+    if !channel_accepted(&mut channel).await {
         return Err("서버가 원격 셸 요청을 거부했습니다.");
     }
     Ok(channel)
+}
+
+async fn channel_accepted(channel: &mut Channel<Msg>) -> bool {
+    while let Some(message) = channel.wait().await {
+        match message {
+            ChannelMsg::Success => return true,
+            ChannelMsg::WindowAdjusted { .. } => continue,
+            _ => return false,
+        }
+    }
+    false
 }
 
 async fn read_output(

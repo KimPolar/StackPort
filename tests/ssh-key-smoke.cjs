@@ -141,6 +141,7 @@ async function main() {
   await page.getByRole('dialog').locator('select').selectOption('PROD');
   await page.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: 'SSH 저장된 운영 서버 연결' }).click();
+  await page.getByLabel('파일 탐색 함께 열기').uncheck();
   await page.getByLabel('SSH 인증 방식').selectOption('key_files');
   await page.getByLabel('SSH 키 파일 1 경로').fill(identityPath);
   await page.getByRole('button', { name: '지문 확인' }).click();

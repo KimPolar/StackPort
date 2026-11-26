@@ -15,7 +15,7 @@ import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameA
 import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 import { SshRouteDialog } from "./SshRouteDialog";
-import type { TerminalDirectory } from "./terminalDirectory";
+import type { TerminalDirectory, TerminalFiles } from "./terminalDirectory";
 
 type Session = { id: string; directory: Directory };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
@@ -30,17 +30,21 @@ const fileColumns = [["name", "이름"], ["size", "크기"], ["modified", "수�
 const mutationTitles = { create: "원격 폴더 생성 완료", rename: "원격 이름 변경 완료", move: "원격 이동 완료", delete: "원격 삭제 완료", permissions: "원격 권한·소유자 변경 완료" };
 const transferTitles = { download: "다운로드 완료", upload: "업로드 완료", copy: "원격 복사 완료", edit: "원격 파일 저장 완료" };
 
-export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit, terminalDirectory }: {
+export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExit, terminalDirectory, terminalFiles, terminalProjectName }: {
   projectName: string;
   profiles: SshProfile[];
   onExitGuard: (guard: (() => void) | null) => void;
   onRequestExit: () => void;
   terminalDirectory: TerminalDirectory | null;
+  terminalFiles: TerminalFiles | null;
+  terminalProjectName: string;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [activePane, setActivePane] = useState<"local" | "remote">("local");
-  const [remote, setRemote] = useState<{ id: string; profile: SshProfile; directory: Directory; projectName: string; route: string[] } | null>(null);
+  const [remote, setRemote] = useState<(Session & { profile: SshProfile; projectName: string; route: string[]; terminalId?: string }) | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [pausedTerminal, setPausedTerminal] = useState("");
   const [closing, setClosing] = useState(false);
   const [localFolder, setLocalFolder] = useState<DirectoryLocation | null>(null);
   const [comparison, setComparison] = useState<ComparisonSelection | null>(null);
@@ -60,8 +64,43 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
   const [error, setError] = useState("");
   const selected = profiles.find(profile => profile.id === selectedId) ?? profiles[0];
   const followPaused = Boolean(closing || transfer || comparison || showSyncProfiles || nameAction || destinationSelection || deleteSelection || editorSelection || permissionSelection || preview);
+  const remoteId = remote?.id;
+  const linkedTerminal = remote?.terminalId;
   const remoteTerminalPath = terminalDirectory?.kind === "ssh" && remote && terminalDirectory.profileId === remote.profile.id
-    && terminalDirectory.revision === remote.profile.revision ? terminalDirectory.path : null;
+    && terminalDirectory.revision === remote.profile.revision
+    && (!linkedTerminal || terminalDirectory.terminalId === linkedTerminal) ? terminalDirectory.path : null;
+
+  useEffect(() => {
+    if (followPaused || connecting) return;
+    const terminalId = terminalFiles?.terminalId;
+    if (remoteId) {
+      if (linkedTerminal && linkedTerminal !== terminalId) {
+        setRemote(null);
+        setFinished(null); setNameResult(null); setSavedDraftPath(""); setError("");
+        void invoke("close_sftp", { id: remoteId }).catch(() => {});
+      }
+      return;
+    }
+    if (!terminalFiles || pausedTerminal === terminalId) {
+      setAttaching(false);
+      return;
+    }
+    let current = true;
+    setAttaching(true); setError("");
+    void invoke<Session>("open_terminal_sftp", { terminalId: terminalFiles.terminalId }).then(session => {
+      if (!current) {
+        void invoke("close_sftp", { id: session.id }).catch(() => {});
+        return;
+      }
+      setRemote({ ...session, ...terminalFiles, projectName: terminalProjectName });
+      setActivePane("remote");
+    }).catch(error => {
+      if (!current) return;
+      setError(`SSH 터미널의 파일 탐색을 열 수 없습니다. ${String(error)}`);
+      setPausedTerminal(terminalFiles.terminalId);
+    }).finally(() => { if (current) setAttaching(false); });
+    return () => { current = false; };
+  }, [terminalFiles, terminalProjectName, pausedTerminal, remoteId, linkedTerminal, followPaused, connecting]);
 
   async function disconnect() {
     if (!remote || closing) return;
@@ -69,6 +108,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
     setError("");
     try {
       await invoke("close_sftp", { id: remote.id });
+      if (remote.terminalId) setPausedTerminal(remote.terminalId);
       setRemote(null);
       setTransfer(null);
       setComparison(null);
@@ -208,7 +248,10 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         <button type="button" className="secondary small" disabled={closing} onClick={() => void disconnect()}>SFTP 연결 끊기</button>
       </div>}
     </header>
-    {!remote && <div className="results-card files-setup">
+    {attaching && <p className="form-note" role="status">SSH 세션에서 원격 파일을 여는 중…</p>}
+    {!remote && terminalFiles?.terminalId === pausedTerminal && <button type="button" className="secondary small"
+      disabled={connecting || attaching} onClick={() => setPausedTerminal("")}>SSH 세션의 SFTP 다시 열기</button>}
+    {!remote && !attaching && <div className="results-card files-setup">
       <label className="field">{projectName ? `${projectName}의 SSH 연결` : "SSH 연결"}
         <select aria-label="SSH 연결 선택" value={selected?.id ?? ""} disabled={!profiles.length || connecting} onChange={event => setSelectedId(event.target.value)}>
           {!profiles.length && <option value="">저장된 SSH 연결 없음</option>}
@@ -261,7 +304,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
         action={{ kind: "download", run: file => chooseTransfer({ ...file, kind: "download", folder: localFolder ? displayFilePath(localFolder.path) : "" }) }} />
         : <section className="results-card files-pane" id="remote-files" data-active={activePane === "remote"} aria-label="원격 파일">
           <div className="panel-heading"><div><Server size={15} aria-hidden /><strong>원격 파일</strong></div></div>
-          <div className="files-empty"><p>{profiles.length ? "위에서 SSH 연결을 확인한 뒤 원격 폴더를 엽니다." : "탐색기에서 SSH 연결을 추가하면 원격 폴더를 열 수 있습니다."}</p></div>
+          <div className="files-empty"><p>{attaching ? "원격 폴더를 여는 중입니다." : profiles.length ? "위에서 SSH 연결을 확인한 뒤 원격 폴더를 엽니다." : "탐색기에서 SSH 연결을 추가하면 원격 폴더를 열 수 있습니다."}</p></div>
         </section>}
     </div>
     {remote && transfer && <SftpTransferDialog id={remote.id} target={`${remote.profile.name} · ${remote.profile.host}:${remote.profile.port} · ${remote.profile.environment}`}

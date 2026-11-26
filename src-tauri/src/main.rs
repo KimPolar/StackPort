@@ -808,6 +808,31 @@ async fn open_saved_ssh_terminal(
     .await
 }
 
+#[tauri::command]
+async fn open_saved_native_ssh_terminal(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    terminals: State<'_, Arc<TerminalManager>>,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: SshCredentials,
+    rows: u16,
+    cols: u16,
+) -> Result<TerminalInfo, String> {
+    let store = store.inner().clone();
+    let profile = worker(move || confirmed_ssh_profile(&store, &profile, &confirmation)).await?;
+    terminals.open_native_ssh(Arc::clone(ssh.inner()), SshRouteHop { profile, authentication }, rows, cols).await
+}
+
+#[tauri::command]
+async fn open_terminal_sftp(
+    terminals: State<'_, Arc<TerminalManager>>,
+    sftp: State<'_, SftpManager>,
+    terminal_id: String,
+) -> Result<SftpOpened, String> {
+    terminals.open_sftp(sftp.inner(), &terminal_id).await
+}
+
 fn confirmed_ssh_profile(
     store: &Store,
     profile: &SshProfile,
@@ -2760,6 +2785,8 @@ fn main() {
             list_ssh_trust_events,
             open_ssh_terminal,
             open_saved_ssh_terminal,
+            open_saved_native_ssh_terminal,
+            open_terminal_sftp,
             open_routed_ssh_terminal,
             list_ssh_tunnels,
             list_postgres_profiles,

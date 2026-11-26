@@ -123,7 +123,8 @@ pub struct SftpManager {
 
 struct FilesSession {
     profile: SshProfile,
-    ssh: SshRoute,
+    ssh: Arc<SshRoute>,
+    shared_transport: bool,
     files: RawSftpSession,
     operation: AsyncMutex<()>,
     pending_delete: Mutex<Option<delete::PendingDelete>>,
@@ -167,7 +168,7 @@ impl SftpManager {
             let Endpoint::Authenticated(connection) = endpoint else {
                 return Err("먼저 이 서버의 SSH 호스트 키 지문을 확인하고 신뢰하세요.".into());
             };
-            start_session(profile, SshRoute { connection, hops: Vec::new() }, permit).await
+            start_session(profile, Arc::new(SshRoute { connection, hops: Vec::new() }), false, permit).await
         }).await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
         self.insert_session(ready)
     }
@@ -184,11 +185,21 @@ impl SftpManager {
             SshRouteResult::TrustRequired { stage, host } => return Ok(RoutedSftpOpened::TrustRequired { stage, host }),
         };
         let stage = format!("대상 · {}", destination.profile.name);
-        let ready = timeout(START_TIMEOUT, start_session(destination.profile, route, permit))
+        let ready = timeout(START_TIMEOUT, start_session(destination.profile, Arc::new(route), false, permit))
             .await.map_err(|_| format!("{stage} — SFTP 연결 준비 시간이 초과되었습니다."))?
             .map_err(|error| format!("{stage} — {error}"))?;
         let session = self.insert_session(ready)?;
         Ok(RoutedSftpOpened::Open { session })
+    }
+
+    pub(crate) async fn open_on_terminal(&self, profile: SshProfile, route: Arc<SshRoute>) -> Result<SftpOpened> {
+        let permit = self.acquire()?;
+        let ready = timeout(START_TIMEOUT, start_session(profile, Arc::clone(&route), true, permit))
+            .await.map_err(|_| "SFTP 연결 준비 시간이 초과되었습니다.")??;
+        if route.is_closed() {
+            return Err("SSH 연결이 종료되었습니다. 다시 연결하세요.".into());
+        }
+        self.insert_session(ready)
     }
 
     fn acquire(&self) -> Result<OwnedSemaphorePermit> {
@@ -238,7 +249,10 @@ impl SftpManager {
             .remove(id);
         if let Some(session) = session {
             session.cancel_transfer_on_close();
-            session.ssh.close().await;
+            let _ = session.files.close_session();
+            if !session.shared_transport {
+                session.ssh.close().await;
+            }
         }
         Ok(())
     }
@@ -246,7 +260,8 @@ impl SftpManager {
 
 async fn start_session(
     profile: SshProfile,
-    ssh: SshRoute,
+    ssh: Arc<SshRoute>,
+    shared_transport: bool,
     permit: OwnedSemaphorePermit,
 ) -> Result<(FilesSession, BrowseDirectory)> {
     let mut channel = ssh.connection
@@ -281,6 +296,7 @@ async fn start_session(
         FilesSession {
             profile,
             ssh,
+            shared_transport,
             files,
             operation: AsyncMutex::new(()),
             pending_delete: Mutex::new(None),

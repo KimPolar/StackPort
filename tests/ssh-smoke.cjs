@@ -264,6 +264,7 @@ async function main() {
 
   await page.getByRole('button', { name: 'SSH 운영 SSH 연결' }).click();
   await page.getByRole('heading', { name: 'SSH 연결', exact: true }).waitFor();
+  await page.getByLabel('파일 탐색 함께 열기').uncheck();
   if (!await page.getByLabel('호스트 또는 IP').isDisabled() || !await page.getByLabel('사용자 이름').isDisabled()) throw new Error('Saved connection target was editable in the confirmation dialog.');
   await page.getByRole('button', { name: '지문 확인' }).click();
   await page.getByText(changedKey.fingerprint, { exact: true }).waitFor();
