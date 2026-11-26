@@ -2307,6 +2307,8 @@ const auditOperationNames: Record<string, string> = {
   "mongo.namespace.create_collection": "MongoDB 컬렉션 생성", "mongo.namespace.create_view": "MongoDB 뷰 생성",
   "mongo.namespace.validation": "MongoDB 유효성 규칙 변경",
   "mongo.namespace.update_view": "MongoDB 뷰 정의 변경",
+  "mongo.namespace.drop_collection": "MongoDB 컬렉션 삭제",
+  "mongo.namespace.drop_collection.unconfirmed": "MongoDB 컬렉션 삭제 결과 미확인",
   "mongo.namespace.unconfirmed": "MongoDB 컬렉션·뷰 변경 결과 미확인",
   "table_query_preset.create": "조회 조건 저장", "table_query_preset.replace": "조회 조건 갱신", "table_query_preset.delete": "조회 조건 삭제",
   "sql_template.delete": "SQL 템플릿 삭제",

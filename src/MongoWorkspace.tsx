@@ -9,6 +9,7 @@ import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocume
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
 import { MongoNamespaceDialog, type MongoNamespaceReport, type MongoValidationSettings, type MongoViewSettings } from "./MongoNamespaceDialog";
+import { MongoCollectionDropDialog } from "./MongoCollectionDropDialog";
 import { MongoPipeline } from "./MongoPipeline";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
@@ -111,7 +112,8 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
   const [creating, setCreating] = useState(false);
-  const [creation, setCreation] = useState<MongoNamespaceReport | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ database: string; name: string } | null>(null);
+  const [namespaceNotice, setNamespaceNotice] = useState("");
   const databaseArgs = useMemo(() => ({ id: session.id }), [session.id]);
   const collectionArgs = useMemo(() => ({ id: session.id, database }), [session.id, database]);
   const mutableCollection = collection?.kind === "collection" && !collection.name.startsWith("system.");
@@ -121,7 +123,16 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
     setDatabase(result.database);
     setCollection({ name: result.name, kind: result.kind });
     setRevision(value => value + 1);
-    setCreation(result);
+    setNamespaceNotice(result.database + "." + result.name + (result.kind === "view" ? " 뷰" : " 컬렉션") + " 생성 완료."
+      + (result.audit_warning ? " 완료 감사 기록을 저장하지 못했습니다." : ""));
+  }
+
+  function dropped(result: MongoNamespaceReport) {
+    setDropTarget(null);
+    setCollection(null);
+    setRevision(value => value + 1);
+    setNamespaceNotice(result.database + "." + result.name + " 컬렉션 삭제 완료."
+      + (result.audit_warning ? " 완료 감사 기록을 저장하지 못했습니다." : ""));
   }
 
   return <div className="mongo-layout">
@@ -129,14 +140,11 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
       <Catalog<string> title="데이터베이스" command="mongo_databases" args={databaseArgs} revision={revision}
         name={item => item} selected={database} onOpen={item => { setDatabase(item); setCollection(null); }}
         action={session.allow_namespaces && <button type="button" className="secondary small"
-          onClick={() => { setCreation(null); setCreating(true); }}>컬렉션·뷰 만들기</button>} />
+          onClick={() => { setNamespaceNotice(""); setCreating(true); }}>컬렉션·뷰 만들기</button>} />
       {database && <Catalog<Collection> key={database} title="컬렉션과 뷰" command="mongo_collections" args={collectionArgs} revision={revision}
         name={item => item.name} detail={item => item.kind === "view" ? "뷰" : item.kind === "timeseries" ? "시계열" : "컬렉션"}
         selected={collection?.name ?? null} onOpen={setCollection} />}
-      {creation && <p className="form-note mongo-note" role="status">
-        {creation.database}.{creation.name} {creation.kind === "view" ? "뷰" : "컬렉션"} 생성 완료.
-        {creation.audit_warning && " 완료 감사 기록을 저장하지 못했습니다."}
-      </p>}
+      {namespaceNotice && <p className="form-note mongo-note" role="status">{namespaceNotice}</p>}
     </div>
     {database && collection
       ? <CollectionContent key={JSON.stringify([database, collection.name])} id={session.id} database={database} collection={collection}
@@ -144,10 +152,14 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
         allowEdits={session.allow_edits && mutableCollection} allowIndexes={session.allow_indexes && mutableCollection}
         allowDefinitionEdits={session.allow_namespaces && (collection.kind === "view"
           || (mutableCollection && !["admin", "config", "local"].includes(database)))}
+        onDrop={session.allow_namespaces && mutableCollection && !["admin", "config", "local"].includes(database)
+          ? () => { setNamespaceNotice(""); setDropTarget({ database, name: collection.name }); } : undefined}
         environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
     {creating && <MongoNamespaceDialog id={session.id} initialDatabase={database ?? ""} initialSource={collection?.name ?? ""}
       environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
+    {dropTarget && <MongoCollectionDropDialog id={session.id} {...dropTarget} environment={environment}
+      onBusy={onBusy} onClose={() => setDropTarget(null)} onDone={dropped} />}
   </div>;
 }
 
@@ -177,9 +189,10 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowDefinitionEdits, environment, onBusy }: {
+function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowDefinitionEdits, onDrop, environment, onBusy }: {
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
   allowEdits: boolean; allowIndexes: boolean; allowDefinitionEdits: boolean; environment: string; onBusy: (busy: boolean) => void;
+  onDrop?: () => void;
 }) {
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline" | "definition">("documents");
   const [draft, setDraft] = useState(defaultQuery);
@@ -225,11 +238,12 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
     <div hidden={view !== "schema"}><MongoSchemaAnalysis target={args} revision={revision} /></div>
     <div hidden={view !== "pipeline"}><MongoPipeline target={args} projectId={projectId} /></div>
     {view === "definition" && <>
-      {allowDefinitionEdits && definition.data !== null && <div className="mongo-actions">
-        <button type="button" className="secondary small" disabled={editSettings.loading}
+      {((allowDefinitionEdits && definition.data !== null) || onDrop) && <div className="mongo-actions">
+        {allowDefinitionEdits && definition.data !== null && <button type="button" className="secondary small" disabled={editSettings.loading}
           onClick={() => { setDefinitionNotice(""); setDefinitionRequest({ id, database, name: collection.name }); }}>
           {editSettings.loading ? "편집 설정 조회 중…" : editLabel + " 편집"}
-        </button>
+        </button>}
+        {onDrop && <button type="button" className="danger small" onClick={onDrop}>컬렉션 삭제</button>}
       </div>}
       {editSettings.error && <p className="error-banner" role="alert">{editSettings.error}</p>}
       {definitionNotice && <p className="form-note mongo-note" role="status">{definitionNotice}</p>}

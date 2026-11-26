@@ -277,7 +277,7 @@ impl MongoManager {
         let review = pending.review.take().ok_or(STALE)?;
         let operation = pending.change.operation();
         let command = write_command(pending, review.after, &client)?;
-        self.audit_mongo_change(&editor.profile, token, operation, "started", None)
+        self.audit_mongo_change(&editor.profile, token, operation, "started", None, None)
             .await?;
         let result = execute_write(&client, &pending.database, command).await;
         let (completed_operation, outcome, count) = match result.as_ref() {
@@ -286,7 +286,7 @@ impl MongoManager {
             Err(_) => (operation, "failed", None),
         };
         let audit_warning = self
-            .audit_mongo_change(&editor.profile, token, completed_operation, outcome, count)
+            .audit_mongo_change(&editor.profile, token, completed_operation, outcome, count, None)
             .await
             .is_err();
         if result.is_ok() {
@@ -311,10 +311,12 @@ impl MongoManager {
         operation: &'static str,
         outcome: &'static str,
         count: Option<i64>,
+        object_name: Option<&str>,
     ) -> Result<()> {
         let store = self.store.clone();
         let profile = profile.clone();
         let token = token.to_owned();
+        let object_name = object_name.map(str::to_owned);
         tokio::task::spawn_blocking(move || {
             if outcome == "started" && !operation.ends_with(".unconfirmed") {
                 store.mongo_profile(&profile.id, profile.revision)?;
@@ -327,7 +329,7 @@ impl MongoManager {
                     project_id: Some(&profile.project_id),
                     profile_id: Some(&profile.id),
                     environment: Some(&profile.settings.environment),
-                    object_name: None,
+                    object_name: object_name.as_deref(),
                     outcome,
                     affected_count: count,
                 },

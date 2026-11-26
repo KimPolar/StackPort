@@ -244,8 +244,10 @@ async function verify(page, port, ca) {
   const indexProfile = await alternate({ name: '인덱스 검증', username: 'index_editor' });
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
+  const fixtureAction = action => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, action]);
   await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
-    action => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, action]));
+    fixtureAction);
+  await verifyCollectionDropCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, false, true), fixtureAction);
   const limitedNamespace = await open(profile, secret, 'PROD', false, false, true);
   try {
     const denied = await command('review_mongo_namespace_create', { id: limitedNamespace.id, database: 'visible',
@@ -257,6 +259,8 @@ async function verify(page, port, ca) {
     const view = await command('review_mongo_namespace_view', { id: limitedNamespace.id, database: 'visible', name: 'recent_records',
       input: { source: 'records', pipeline: '[{"$match":{"rank":21}}]' } });
     await assert.rejects(command('apply_mongo_namespace_view', { id: limitedNamespace.id, token: view.token, confirmation: 'PROD' }), /뷰를 변경할 권한/);
+    const drop = await command('review_mongo_collection_drop', { id: limitedNamespace.id, database: 'visible', name: 'records' });
+    await assert.rejects(command('apply_mongo_collection_drop', { id: limitedNamespace.id, token: drop.token, confirmation: 'PROD', approval: 'DROP' }), /삭제할 권한/);
   } finally {
     await command('close_mongo', { id: limitedNamespace.id });
   }
@@ -276,6 +280,7 @@ async function verify(page, port, ca) {
   await indexLogin.waitFor({ state: 'detached' });
   await verifyIndexEditor(page, workspace, detail);
   await verifyNamespaceEditor(page, workspace, detail);
+  await verifyCollectionDropEditor(page, workspace, detail);
   const audit = [];
   let cursor = null;
   do {
@@ -296,7 +301,73 @@ async function verify(page, port, ca) {
   for (const operation of ['mongo.namespace.create_collection', 'mongo.namespace.create_view', 'mongo.namespace.validation', 'mongo.namespace.update_view']) {
     assert.ok(audit.some(event => event.operation === operation && event.outcome === 'succeeded'));
   }
+  assert.ok(audit.some(event => event.operation === 'mongo.namespace.drop_collection' && event.outcome === 'succeeded'
+    && event.object_name === 'namespace_new.drop_target' && event.policy === 'mongo-collection-drop-uuid-prod-reviewed'));
   assert.deepEqual(errors, []);
+}
+
+async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
+  const first = await openAdmin();
+  const second = await openAdmin();
+  const database = 'namespace_new';
+  const name = 'drop_target';
+  const review = (id, target = name) => command('review_mongo_collection_drop', { id, database, name: target });
+  const apply = (id, token, approval = 'DROP', confirmation = 'PROD') =>
+    command('apply_mongo_collection_drop', { id, token, approval, confirmation });
+  const catalog = async () => (await command('mongo_collections', { id: first.id, database, search: '', page: 0 })).items;
+  const rows = async collection => (await command('mongo_documents', { id: first.id, database, collection, query: {} }))
+    .items.map(item => JSON.parse(item.json)._id);
+  try {
+    changeFixture('create_drop_target');
+    const initial = await review(first.id);
+    assert.equal(initial.estimated_documents, '2');
+    assert.equal(initial.index_count, 2);
+    assert.deepEqual(initial.dependent_views, ['on_drop_direct', 'on_drop_indirect', 'on_drop_lookup']);
+    assert.deepEqual(await rows(name), ['first', 'second']);
+    await assert.rejects(review(second.id, 'on_drop_direct'), /일반 MongoDB 컬렉션/);
+    await assert.rejects(apply(second.id, initial.token), /만료되었거나/);
+    await assert.rejects(apply(first.id, initial.token, 'DROP', ''), /PROD/);
+    await assert.rejects(apply(first.id, initial.token, ''), /DROP/);
+    changeFixture('add_drop_dependency');
+    await assert.rejects(apply(first.id, initial.token), /의존 뷰가 바뀌었습니다/);
+    const original = await review(first.id);
+    assert.ok(original.dependent_views.includes('on_drop_new'));
+    changeFixture('recreate_drop_target');
+    await assert.rejects(apply(first.id, original.token), /컬렉션 또는 의존 뷰가 바뀌었습니다/);
+    assert.deepEqual(await rows(name), ['replacement']);
+    const final = await review(first.id);
+    assert.equal(final.estimated_documents, '1');
+    assert.equal((await apply(first.id, final.token)).kind, 'collection');
+    await assert.rejects(apply(first.id, final.token), /만료되었거나/);
+    assert.ok(!(await catalog()).some(item => item.name === name));
+    assert.ok((await catalog()).some(item => item.name === 'on_drop_indirect' && item.kind === 'view'));
+    assert.deepEqual(await rows('drop_origin'), ['keep']);
+  } finally {
+    await Promise.all([first, second].map(session => command('close_mongo', { id: session.id })));
+  }
+}
+
+async function verifyCollectionDropEditor(page, workspace, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  await button(workspace, 'ui_collection 컬렉션').click();
+  await button(detail, '정의').click();
+  await button(detail, '컬렉션 삭제').click();
+  const dialog = page.getByRole('dialog', { name: 'MongoDB 컬렉션 삭제', exact: true });
+  await button(dialog, '삭제 영향 조회').click();
+  await dialog.getByText('문서 약 0개', { exact: true }).waitFor();
+  await dialog.getByText('인덱스 1개', { exact: true }).waitFor();
+  await dialog.getByText('이 데이터베이스에 이 컬렉션을 사용하는 뷰가 없습니다.', { exact: true }).waitFor();
+  const apply = button(dialog, '검토한 컬렉션 삭제');
+  assert.equal(await apply.isDisabled(), true);
+  await dialog.getByLabel('컬렉션 삭제 승인').fill('DROP');
+  assert.equal(await apply.isDisabled(), true);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  await button(workspace, 'ui_collection 컬렉션').waitFor({ state: 'detached' });
+  await detail.waitFor({ state: 'detached' });
+  await workspace.getByText('visible.ui_collection 컬렉션 삭제 완료.', { exact: true }).waitFor();
+  await button(workspace, 'records 컬렉션').waitFor();
 }
 
 async function verifyNamespaceCommands(command, openAdmin, changeFixture) {
@@ -928,7 +999,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation, validation changes, and view updates).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

@@ -302,7 +302,7 @@ impl MongoManager {
         command.insert("collectionUUID", review.uuid.clone());
         command.insert("maxTimeMS", server_limit.as_millis() as i32);
         super::apply_write_concern(&client, &mut command)?;
-        self.audit_mongo_change(&admin.profile, token, operation, "started", None)
+        self.audit_mongo_change(&admin.profile, token, operation, "started", None, None)
             .await?;
         let result = async {
             timeout(READ_TIMEOUT, check_review(&db, &review))
@@ -317,7 +317,7 @@ impl MongoManager {
             Err(_) => (operation, "failed", None),
         };
         let audit_warning = self
-            .audit_mongo_change(&admin.profile, token, event, outcome, count)
+            .audit_mongo_change(&admin.profile, token, event, outcome, count, None)
             .await
             .is_err();
         match result {

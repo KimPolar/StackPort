@@ -34,7 +34,7 @@ pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
 pub use mongo::{build_mongo_find_filter, MongoFindNode};
 pub use mongo::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
-pub use mongo::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
+pub use mongo::{MongoCollectionDropReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use mongo::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
@@ -982,6 +982,8 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "redis.pubsub.publish" | "redis.pubsub.publish.unconfirmed" => "redis-pubsub-publish-confirmed",
         "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" if record.environment == Some("PROD") => "mongo-typed-document-prod-reviewed",
         "mongo.document.insert" | "mongo.document.duplicate" | "mongo.document.replace" | "mongo.document.delete" | "mongo.document.unconfirmed" => "mongo-typed-document-reviewed",
+        "mongo.namespace.drop_collection" | "mongo.namespace.drop_collection.unconfirmed" if record.environment == Some("PROD") => "mongo-collection-drop-uuid-prod-reviewed",
+        "mongo.namespace.drop_collection" | "mongo.namespace.drop_collection.unconfirmed" => "mongo-collection-drop-uuid-reviewed",
         "sqlite.row.update" if record.environment == Some("PROD") => "sqlite-row-update-prod-confirmed",
         "sqlite.row.update" => "sqlite-row-update-confirmed",
         "sqlite.grid.update" if record.environment == Some("PROD") => "sqlite-grid-update-prod-confirmed",

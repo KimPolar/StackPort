@@ -1,7 +1,9 @@
 import sys
+from uuid import uuid4
 
 from bson import Binary, Decimal128, Int64, ObjectId
 from pymongo import MongoClient
+from pymongo.errors import OperationFailure
 
 
 port, ca_path, *action = sys.argv[1:]
@@ -33,6 +35,29 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         sys.exit(0)
     if action == ['drop_view_source']:
         client.namespace_new.drop_collection('temporary_view_source')
+        sys.exit(0)
+    if action == ['create_drop_target']:
+        db = client.namespace_new
+        db.drop_target.insert_many([{'_id': 'first', 'qty': 1}, {'_id': 'second', 'qty': 2}])
+        db.drop_target.create_index('qty', name='qty_idx')
+        db.drop_origin.insert_one({'_id': 'keep'})
+        db.create_collection('on_drop_direct', viewOn='drop_target', pipeline=[])
+        db.create_collection('on_drop_indirect', viewOn='on_drop_direct', pipeline=[])
+        db.create_collection('on_drop_lookup', viewOn='drop_origin', pipeline=[
+            {'$facet': {'join': [{'$lookup': {'from': 'drop_target', 'pipeline': [], 'as': 'joined'}}]}},
+        ])
+        try:
+            db.command('drop', 'drop_target', collectionUUID=Binary.from_uuid(uuid4()))
+            raise AssertionError('MongoDB accepted a drop with the wrong collection UUID')
+        except OperationFailure as error:
+            assert error.code == 361, error
+        sys.exit(0)
+    if action == ['add_drop_dependency']:
+        client.namespace_new.create_collection('on_drop_new', viewOn='drop_target', pipeline=[])
+        sys.exit(0)
+    if action == ['recreate_drop_target']:
+        client.namespace_new.drop_collection('drop_target')
+        client.namespace_new.drop_target.insert_one({'_id': 'replacement'})
         sys.exit(0)
     if action:
         raise ValueError('Unexpected fixture action')

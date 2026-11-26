@@ -171,7 +171,7 @@ PARTIAL = {
     "SP-NS-013": "단독 서버의 채널·패턴 구독, UTF-8·HEX 수신 미리보기, 자동 재연결, 최근 100건 보관·지우기, 검토 후 UTF-8 발행",
     "SP-NS-014": "단독 서버의 메모리·클라이언트·초당 작업, DB별 키·만료 통계, 복제 역할·연결과 권한이 허용하는 최근 슬로로그 표시",
     "SP-NS-017": "접속 때 Redis 호환 주·부 버전과 Cluster 여부 확인, JSON.GET·JSON.SET 확인과 권한으로 명령 정보를 읽을 수 없는 상태 처리, 서버 지원 여부에 따른 JSON 필터·편집 UI",
-    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 미리보기와 동시 변경 차단, MongoDB 단일 문서 삭제 검토, MongoDB 단일 인덱스 정의·고유·TTL·사용 영향 검토와 컬렉션 UUID 및 인덱스 정의 확인, DELETE·DROP 및 PROD 승인",
+    "SP-NS-018": "Redis 개별 키 또는 선택한 최대 50개 키의 미리보기와 동시 변경 차단, MongoDB 단일 문서·인덱스·일반 컬렉션 삭제 검토, 인덱스 영향 또는 전체 문서·인덱스·의존 뷰 표시, 컬렉션 UUID와 검토 정보 재확인, DELETE·DROP 및 PROD 승인",
     "SP-ST-006": "프로젝트·연결 정의·즐겨찾기·작업 공간 배치 저장, 이전 배치 스냅샷 복원, 메타데이터 이관 전 검증 백업",
     "SP-ST-017": "SQLite 트랜잭션과 버전 비교로 여러 창의 작업 공간 배치 저장 충돌 감지",
     "SP-ST-011": "Windows 휴대형·표준·지정 데이터 경로 및 새 폴더로 검증 복사",
@@ -190,7 +190,7 @@ PARTIAL = {
     "SP-AT-025": "v1~v10 백업 후 v11 이관·이관 실패 시 원본 보존",
     "SP-AT-024": "SQLite 로컬 메타데이터 및 로컬 조회",
     "SP-AT-016": "SQLite 백업 격리 파일 복원과 PostgreSQL 앱에서 새 DB 복원, 행·복합 외래 키·SHA-256 확인 및 의존성 오류 롤백",
-    "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 새 데이터베이스의 첫 컬렉션과 유효성 규칙·읽기 전용 뷰 생성, 서버에 저장된 유효성 규칙과 뷰 정의 조회, 검토를 거친 유효성 규칙 변경·제거와 뷰 원본·파이프라인 수정, 일반 컬렉션의 인덱스 생성·숨김과 TTL 변경·단일 삭제",
+    "SP-NS-001": "MongoDB에서 계정에 공개된 데이터베이스·컬렉션·뷰·인덱스 조회, 새 데이터베이스의 첫 컬렉션과 유효성 규칙·읽기 전용 뷰 생성, 서버에 저장된 유효성 규칙과 뷰 정의 조회, 검토를 거친 유효성 규칙 변경·제거와 뷰 원본·파이프라인 수정, 일반 컬렉션과 인덱스 삭제, 인덱스 생성·숨김과 TTL 변경",
     "SP-NS-002": "MongoDB 일반 컬렉션에서 JSON·트리·그리드로 단일 문서 삽입·복제·수정·삭제, 중첩 필드와 배열 편집, BSON 타입·필드 순서 보존과 원본/변경 검토, 문서 및 컬렉션의 동시 변경 차단",
     "SP-NS-003": "MongoDB 비교·논리 필터, 표시 필드, 정렬과 페이지 조회, 중첩 AND·OR와 BSON 값의 찾기 빌더, 컬렉션·뷰의 적용 필터 전체 일치 건수, BSON Canonical Extended JSON 표시",
     "SP-NS-004": "MongoDB 집계 단계 편집·순서 변경·활성 토글, 중간 및 전체 읽기 전용 미리보기, 프로젝트 저장·복제와 JSON 교환",
@@ -555,6 +555,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence += "; crates/stackport-core/src/mongo/index_admin.rs; src/MongoIndexDialog.tsx; tests/mongo-smoke.cjs"
             if requirement_id == "SP-NS-001":
                 evidence += "; crates/stackport-core/src/mongo/namespace_admin.rs; src/MongoNamespaceDialog.tsx"
+            if requirement_id in {"SP-NS-001", "SP-NS-018"}:
+                evidence += "; crates/stackport-core/src/mongo/namespace_admin/drop_collection.rs; src/MongoCollectionDropDialog.tsx"
             if requirement_id == "SP-NS-014":
                 evidence += "; crates/stackport-core/src/redis/monitor.rs; src/RedisServerMonitor.tsx"
             if requirement_id == "SP-NS-012":

@@ -17,6 +17,9 @@ use std::{
 use tokio::{sync::Mutex, time::timeout};
 use uuid::Uuid;
 
+mod drop_collection;
+pub use drop_collection::MongoCollectionDropReview;
+
 const REVIEW_TTL: Duration = Duration::from_secs(300);
 const STALE: &str = "MongoDB 변경 검토가 만료되었거나 바뀌었습니다. 다시 검토하세요.";
 const EXISTS: &str = "같은 이름의 MongoDB 컬렉션 또는 뷰가 이미 있습니다.";
@@ -148,6 +151,7 @@ enum Change {
     Create,
     Validation(ValidationSnapshot),
     View(Document),
+    DropCollection(drop_collection::DropSnapshot),
 }
 
 #[derive(Clone, Copy)]
@@ -155,6 +159,7 @@ enum Action {
     Create,
     Validation,
     View,
+    DropCollection,
 }
 
 struct ValidationSnapshot {
@@ -375,7 +380,7 @@ impl MongoManager {
         token: &str,
         confirmation: &str,
     ) -> Result<MongoNamespaceReport> {
-        self.apply_namespace_review(id, token, confirmation, Action::Create)
+        self.apply_namespace_review(id, token, confirmation, "", Action::Create)
             .await
     }
 
@@ -385,7 +390,7 @@ impl MongoManager {
         token: &str,
         confirmation: &str,
     ) -> Result<MongoNamespaceReport> {
-        self.apply_namespace_review(id, token, confirmation, Action::Validation)
+        self.apply_namespace_review(id, token, confirmation, "", Action::Validation)
             .await
     }
 
@@ -395,7 +400,7 @@ impl MongoManager {
         token: &str,
         confirmation: &str,
     ) -> Result<MongoNamespaceReport> {
-        self.apply_namespace_review(id, token, confirmation, Action::View)
+        self.apply_namespace_review(id, token, confirmation, "", Action::View)
             .await
     }
 
@@ -404,6 +409,7 @@ impl MongoManager {
         id: &str,
         token: &str,
         confirmation: &str,
+        approval: &str,
         action: Action,
     ) -> Result<MongoNamespaceReport> {
         let _write = self.namespace_writes.lock().await;
@@ -419,11 +425,15 @@ impl MongoManager {
                         (Change::Create, Action::Create)
                             | (Change::Validation(_), Action::Validation)
                             | (Change::View(_), Action::View)
+                            | (Change::DropCollection(_), Action::DropCollection)
                     )
             })
             .ok_or(STALE)?;
         if admin.profile.settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+        }
+        if matches!(action, Action::DropCollection) && approval != "DROP" {
+            return Err("컬렉션을 삭제하려면 DROP을 입력하세요.".into());
         }
         let Review {
             database,
@@ -433,9 +443,12 @@ impl MongoManager {
             ..
         } = pending.take().ok_or(STALE)?;
         let db = client.database(&database);
+        let object_name =
+            matches!(action, Action::DropCollection).then(|| format!("{database}.{name}"));
         let (kind, operation) = match &change {
             Change::Validation(_) => ("collection", "mongo.namespace.validation"),
             Change::View(_) => ("view", "mongo.namespace.update_view"),
+            Change::DropCollection(_) => ("collection", "mongo.namespace.drop_collection"),
             Change::Create => {
                 check_names(&db, &name, &command).await?;
                 if command.contains_key("viewOn") {
@@ -447,8 +460,15 @@ impl MongoManager {
         };
         command.insert("maxTimeMS", SERVER_TIME.as_millis() as i32);
         apply_write_concern(&client, &mut command)?;
-        self.audit_mongo_change(&admin.profile, token, operation, "started", None)
-            .await?;
+        self.audit_mongo_change(
+            &admin.profile,
+            token,
+            operation,
+            "started",
+            None,
+            object_name.as_deref(),
+        )
+        .await?;
         let result = async {
             match change {
                 Change::Validation(before) => {
@@ -469,6 +489,9 @@ impl MongoManager {
                         return Err(VIEW_CHANGED.into());
                     }
                 }
+                Change::DropCollection(before) => {
+                    drop_collection::check_snapshot(&db, &name, &before).await?;
+                }
                 Change::Create => {}
             }
             execute_namespace_change(&db, command, action).await
@@ -476,11 +499,23 @@ impl MongoManager {
         .await;
         let (event, outcome, count) = match result.as_ref() {
             Ok(()) => (operation, "succeeded", Some(1)),
+            Err(error) if error == UNKNOWN && matches!(action, Action::DropCollection) => (
+                "mongo.namespace.drop_collection.unconfirmed",
+                "started",
+                None,
+            ),
             Err(error) if error == UNKNOWN => ("mongo.namespace.unconfirmed", "started", None),
             Err(_) => (operation, "failed", None),
         };
         let audit_warning = self
-            .audit_mongo_change(&admin.profile, token, event, outcome, count)
+            .audit_mongo_change(
+                &admin.profile,
+                token,
+                event,
+                outcome,
+                count,
+                object_name.as_deref(),
+            )
             .await
             .is_err();
         match result {
@@ -520,27 +555,36 @@ fn namespace_options(row: &Document) -> Result<&Document> {
         .map_err(|_| "MongoDB 컬렉션·뷰 정의를 읽을 수 없습니다.".into())
 }
 
-async fn validation_snapshot(db: &Database, name: &str) -> Result<Option<ValidationSnapshot>> {
+async fn collection_identity(db: &Database, name: &str) -> Result<Option<(Binary, Document)>> {
     let Some(row) = namespace_record(db, name).await? else {
         return Ok(None);
     };
-    let info = row.get_document("info").map_err(|_| VALIDATION_TARGET)?;
-    if row.get_str("type").ok() != Some("collection")
-        || info.get_bool("readOnly").ok() != Some(false)
-    {
+    if row.get_str("type").ok() != Some("collection") {
         return Ok(None);
     }
+    let info = row
+        .get_document("info")
+        .map_err(|_| "MongoDB 컬렉션 정보를 읽을 수 없습니다.")?;
     let Some(Bson::Binary(uuid)) = info.get("uuid") else {
         return Ok(None);
     };
-    let options = namespace_options(&row)?;
+    if info.get_bool("readOnly").ok() != Some(false) {
+        return Ok(None);
+    }
+    Ok(Some((uuid.clone(), namespace_options(&row)?.clone())))
+}
+
+async fn validation_snapshot(db: &Database, name: &str) -> Result<Option<ValidationSnapshot>> {
+    let Some((uuid, options)) = collection_identity(db, name).await? else {
+        return Ok(None);
+    };
     let validator = match options.get("validator") {
         Some(Bson::Document(validator)) => validator.clone(),
         None => Document::new(),
         _ => return Err(VALIDATION_TARGET.into()),
     };
     Ok(Some(ValidationSnapshot {
-        uuid: uuid.clone(),
+        uuid,
         options: doc! {
             "validator": validator,
             "validationLevel": options.get_str("validationLevel").unwrap_or("strict"),
@@ -674,6 +718,11 @@ async fn execute_namespace_change(db: &Database, command: Document, action: Acti
                 (Action::View, 5) => "MongoDB 뷰가 원본을 통해 자신을 참조합니다.",
                 (Action::View, 2 | 9 | 20 | 72 | 73 | 167 | 168 | 169 | 173 | 40324) => {
                     "MongoDB 서버가 뷰 정의 변경을 거부했습니다. 원본, 파이프라인과 서버 지원을 확인하세요."
+                }
+                (Action::DropCollection, 13) => "현재 MongoDB 계정에 컬렉션을 삭제할 권한이 없습니다.",
+                (Action::DropCollection, 26 | 361) => drop_collection::CHANGED,
+                (Action::DropCollection, 2 | 9 | 20 | 72 | 73 | 115 | 197 | 303 | 323 | 40415) => {
+                    "MongoDB 서버가 UUID 조건이 있는 컬렉션 삭제를 거부했습니다. 서버 지원을 확인하세요."
                 }
                 (Action::Create, 13) => "현재 MongoDB 계정에 컬렉션 또는 뷰를 생성할 권한이 없습니다.",
                 (Action::Create, 48) => EXISTS,
