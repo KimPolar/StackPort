@@ -10,13 +10,14 @@ import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagn
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
 import { TerminalTabDialog } from "./TerminalTabDialog";
 import { SshRouteDialog } from "./SshRouteDialog";
+import { SshPasswordOptions, useSshPassword } from "./SshPasswordOptions";
 import { terminalDirectoryFromOsc, type TerminalDirectory, type TerminalFiles } from "./terminalDirectory";
 import type { ColorScheme } from "./appearance";
 import "@xterm/xterm/css/xterm.css";
 
 type LocalShell = "powershell" | "cmd";
 type Shell = LocalShell | "ssh";
-type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null; cwd_authority: string | null };
+type TerminalInfo = { id: string; shell: Shell; process_id: number | null; target: string | null; environment: SshProfile["environment"] | null; cwd_authority: string | null; credential_warning?: string };
 type TerminalExit = { code: number | null; error: string | null };
 type TerminalRead = { data: number[]; exit: TerminalExit | null; output_closed: boolean; output_error: string | null };
 type DirectSshTarget = { host: string; port: number; username: string };
@@ -36,7 +37,7 @@ type SshDialogRequest = {
   reopen?: number;
 };
 type SshKey = { algorithm: string; fingerprint: string };
-type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive";
+type SshAuthenticationMode = "automatic" | "key_files" | "password" | "keyboard_interactive" | "profile_password";
 type SshHost = { status: "trusted" | "unknown" | "replacement"; host: string; port: number; token: string | null; keys: SshKey[]; previous: SshKey | null };
 
 const call = <T,>(command: string, args?: Record<string, unknown>) => invoke<T>(command, args);
@@ -544,6 +545,7 @@ function TerminalPane({ tab, visible, colorScheme, onExit, onActivity, onDirecto
       <span className="terminal-search-status" role="status">{searchStatus}</span>
     </form>}
     {tab.exit && <div className="terminal-exit" role="status">{tab.exit.error ?? `셸이 종료되었습니다. 종료 코드: ${tab.exit.code ?? "확인 불가"}`}</div>}
+    {tab.credential_warning && <div className="terminal-exit" role="status">{tab.credential_warning}</div>}
     {savedOutput && <div className="terminal-exit terminal-output-saved" role="status"><span>출력을 저장했습니다.</span> <span>{savedOutput.path} · {savedOutput.bytes.toLocaleString("ko-KR")} bytes</span></div>}
     {error && <div className="terminal-error" role="alert">{error}</div>}
     <div className="terminal-screen" ref={container} aria-label={`${tabName(tab)} 터미널 화면`} />
@@ -577,7 +579,11 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
   const [diagnostic, setDiagnostic] = useState<NetworkDiagnostics | null>(null);
   const [busy, setBusy] = useState<"" | "file" | "diagnose" | "inspect" | "trust" | "open">("");
   const [error, setError] = useState("");
-  const credentialsReady = !withFiles || (fileMethod === "password" ? Boolean(fileSecret) : Boolean(identityPaths[0].trim()));
+  const profilePassword = !withFiles && authentication === "profile_password";
+  const native = withFiles || profilePassword;
+  const passwordMode = profilePassword || fileMethod === "password";
+  const password = useSshPassword(profile && native && passwordMode ? profile : null, info?.status === "trusted" ? info.keys[0]?.fingerprint : undefined);
+  const credentialsReady = !native || (passwordMode ? password.useSaved || Boolean(fileSecret) : Boolean(identityPaths[0].trim()));
   useEffect(() => { dialog.current?.showModal(); }, []);
 
   function updateIdentity(index: number, path: string) {
@@ -632,23 +638,23 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
   }
 
   async function connect() {
-    if (!info || info.status !== "trusted" || busy || !credentialsReady) return;
+    if (!info || info.status !== "trusted" || busy || password.clearing || !credentialsReady) return;
     if (!withFiles && authentication === "key_files" && identityPaths.some(path => !path.trim())) { setError("모든 SSH 키 파일 경로를 입력하거나 빈 줄을 삭제하세요."); return; }
     setBusy("open"); onOpeningChange(true); setError("");
     try {
       const selectedAuthentication = authentication === "key_files" ? { kind: authentication, paths: identityPaths } : { kind: authentication };
-      const nativeAuthentication = fileMethod === "password" ? { kind: fileMethod, password: fileSecret }
-        : { kind: fileMethod, path: identityPaths[0], passphrase: fileSecret };
+      const credentials = !native ? { authentication: selectedAuthentication }
+        : passwordMode ? password.argumentsFor(fileSecret)
+        : { authentication: { kind: "private_key", path: identityPaths[0], passphrase: fileSecret } };
       setFileSecret("");
-      const credentials = withFiles ? nativeAuthentication : selectedAuthentication;
       let terminal: TerminalInfo;
       if (profile) {
-        terminal = await call<TerminalInfo>(withFiles ? "open_saved_native_ssh_terminal" : "open_saved_ssh_terminal", {
-          profile, confirmation: prodConfirmation, authentication: credentials, rows: 24, cols: 80,
+        terminal = await call<TerminalInfo>(native ? "open_saved_native_ssh_terminal" : "open_saved_ssh_terminal", {
+          profile, confirmation: prodConfirmation, ...credentials, rows: 24, cols: 80,
         });
       } else {
         terminal = await call<TerminalInfo>(withFiles ? "open_direct_native_ssh_terminal" : "open_ssh_terminal", {
-          host: info.host, port: info.port, username, authentication: credentials, rows: 24, cols: 80,
+          host: info.host, port: info.port, username, ...credentials, rows: 24, cols: 80,
         });
       }
       const launch: TerminalLaunch = profile
@@ -666,7 +672,7 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
         {onRoute && <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => onRoute(withFiles)}>경유 서버 사용</button>}
       </p>}
       <label className="files-check"><input type="checkbox" checked={withFiles} disabled={Boolean(busy)} onChange={event => {
-        setWithFiles(event.target.checked); setFileSecret(""); setError("");
+        setWithFiles(event.target.checked); setFileSecret(""); password.resetChoice(); setError("");
       }} /> 파일 탐색 함께 열기</label>
       <div className="ssh-connection-fields ssh-endpoint">
         <label className="field">호스트 또는 IP<input autoFocus={!profile} required disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={host} onChange={event => { setHost(event.target.value); setDiagnostic(null); }} placeholder="예: server.example.com" /></label>
@@ -674,10 +680,11 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
       </div>
       <div className="ssh-connection-fields">
         <label className="field">사용자 이름<input required pattern="[A-Za-z0-9_.][A-Za-z0-9._-]*" disabled={Boolean(profile) || Boolean(info) || Boolean(busy)} value={username} onChange={event => setUsername(event.target.value)} placeholder="SSH 사용자" /></label>
-        {!withFiles && <label className="field">SSH 인증 방식<select autoFocus={Boolean(profile)} disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as SshAuthenticationMode); setError(""); }}>
+        {!withFiles && <label className="field">SSH 인증 방식<select autoFocus={Boolean(profile)} disabled={Boolean(busy)} value={authentication} onChange={event => { setAuthentication(event.target.value as SshAuthenticationMode); setFileSecret(""); password.resetChoice(); setError(""); }}>
           <option value="automatic">자동</option>
           <option value="key_files">지정한 키 파일</option>
           <option value="password">암호</option>
+          {profile && <option value="profile_password">프로필 암호</option>}
           <option value="keyboard_interactive">서버 대화형 인증</option>
         </select></label>}
       </div>
@@ -695,28 +702,29 @@ function SshDialog({ profile, target, initialAuthentication = "automatic", initi
       {!withFiles && authentication === "keyboard_interactive" && <p className="form-note">연결한 뒤 터미널에서 서버의 질문에 답하세요. 각 답변의 화면 표시 여부는 서버가 지정합니다.</p>}
       <div className="ssh-diagnostic-actions"><button type="button" className="secondary small" disabled={Boolean(busy) || !host.trim() || !port} onClick={() => void diagnose()}>DNS·TCP 진단</button><span>네트워크 연결을 시도하며 로그인하지 않습니다.</span></div>
       {diagnostic && <NetworkDiagnosticResult result={diagnostic} ssh />}
-      {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. {withFiles ? "암호 또는 개인 키로 터미널과 파일 탐색을 같은 연결에서 엽니다." : "암호는 연결 후 터미널에 직접 입력하며 StackPort에 저장되지 않습니다."}{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
+      {!info && <p className="form-note">먼저 서버의 호스트 키 지문을 확인합니다. {withFiles ? "암호 또는 개인 키로 터미널과 파일 탐색을 같은 연결에서 엽니다." : profilePassword ? "프로필 암호는 지문을 확인한 뒤 입력하거나 저장한 암호를 선택합니다." : "연결 후 터미널에서 필요한 인증 정보를 입력합니다."}{!profile && " 직접 입력한 연결에는 환경이 지정되지 않습니다."}</p>}
       {info && <div className="ssh-verification">
         <strong>{info.host.includes(":") ? `[${info.host}]` : info.host}:{info.port} · {info.status === "trusted" ? "저장된 호스트 키" : info.status === "replacement" ? "호스트 키 재확인" : "확인이 필요한 호스트 키"}</strong>
         {info.status !== "trusted" ? <>{info.previous && <div className="ssh-previous"><span>기존에 신뢰한 지문</span><code>{info.previous.fingerprint}</code></div>}<p>이 지문은 서버가 제공한 값입니다. 서버 관리자에게 받은 지문과 별도의 경로로 비교한 후 신뢰할 키를 선택하세요.{info.previous && " 교체 후 새 연결에서는 기존 키가 차단되며, 이미 열린 세션은 유지됩니다."}</p><fieldset><legend>서버 지문 선택</legend>{info.keys.map(key => <label className="ssh-key" key={key.fingerprint}><input type="radio" name="ssh-key" value={key.fingerprint} disabled={Boolean(busy) || key.fingerprint === info.previous?.fingerprint} checked={fingerprint === key.fingerprint} onChange={() => setFingerprint(key.fingerprint)} /><span><strong>{key.algorithm}{key.fingerprint === info.previous?.fingerprint ? " · 현재 신뢰 키" : ""}</strong><code>{key.fingerprint}</code></span></label>)}</fieldset>{info.status === "replacement" && <label className="field ssh-confirm">키를 바꾸려면 교체 입력<input disabled={Boolean(busy)} value={confirmation} onChange={event => setConfirmation(event.target.value)} placeholder="교체" /></label>}</> : <><p>실제 접속에서는 저장된 키만 허용합니다. 서버 키가 달라지면 연결이 차단됩니다.</p>{info.keys.map(key => <div className="ssh-key-value" key={key.fingerprint}><strong>{key.algorithm}</strong><code>{key.fingerprint}</code></div>)}<button type="button" className="secondary small ssh-reinspect" disabled={Boolean(busy)} onClick={() => void reinspect()}>다른 호스트 키 확인</button></>}
       </div>}
-      {withFiles && info?.status === "trusted" && <fieldset className="ssh-identity-fields" disabled={Boolean(busy)}>
-        <legend>터미널 및 SFTP 인증</legend>
-        <label className="field">SSH 인증 방식<select value={fileMethod} onChange={event => {
-          setFileMethod(event.target.value as typeof fileMethod); setFileSecret(""); setError("");
-        }}><option value="password">암호</option><option value="private_key">개인 키 파일</option></select></label>
-        {fileMethod === "private_key" && <div className="ssh-identity-row">
+      {native && info?.status === "trusted" && <fieldset className="ssh-identity-fields" disabled={Boolean(busy) || password.clearing}>
+        <legend>{withFiles ? "터미널 및 SFTP 인증" : "프로필 암호 인증"}</legend>
+        {withFiles && <label className="field">SSH 인증 방식<select value={fileMethod} onChange={event => {
+          setFileMethod(event.target.value as typeof fileMethod); setFileSecret(""); password.resetChoice(); setError("");
+        }}><option value="password">암호</option><option value="private_key">개인 키 파일</option></select></label>}
+        {!passwordMode && <div className="ssh-identity-row">
           <label className="field">개인 키 파일 경로<input value={identityPaths[0]} onChange={event => updateIdentity(0, event.target.value)} autoComplete="off" /></label>
           <button type="button" className="secondary" onClick={() => void chooseIdentity(0)}>키 선택</button>
         </div>}
-        <label className="field">{fileMethod === "password" ? "SSH 암호" : "개인 키 암호 (선택)"}
-          <input type="password" autoComplete="off" maxLength={4096} value={fileSecret} onChange={event => setFileSecret(event.target.value)} />
-        </label>
+        {!password.useSaved && <label className="field">{passwordMode ? "SSH 암호" : "개인 키 암호 (선택)"}
+          <input type="password" autoComplete="off" maxLength={4096} disabled={password.clearing} value={fileSecret} onChange={event => setFileSecret(event.target.value)} />
+        </label>}
+        {profile && passwordMode && <SshPasswordOptions credentials={password} clearPassword={() => setFileSecret("")} />}
       </fieldset>}
       {info?.status === "trusted" && profile?.environment === "PROD" && <label className="field ssh-prod-confirm">운영 환경 확인: PROD 입력<input disabled={Boolean(busy)} value={prodConfirmation} onChange={event => setProdConfirmation(event.target.value)} autoComplete="off" placeholder="PROD" /></label>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {busy && <p className="form-note" role="status">{busy === "file" ? "키 파일을 선택하는 중…" : busy === "diagnose" ? "DNS와 TCP 연결을 확인하는 중…" : busy === "inspect" ? "서버 지문을 조회하는 중…" : busy === "trust" ? "확인한 키를 저장하는 중…" : "SSH 세션을 여는 중…"}</p>}
-      <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setProdConfirmation(""); setFileSecret(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy) || !credentialsReady || (profile?.environment === "PROD" && prodConfirmation !== "PROD")} onClick={() => void connect()}>연결</button>}</div>
+      <div className="dialog-actions"><button type="button" className="secondary" disabled={Boolean(busy)} onClick={info ? () => { setInfo(null); setFingerprint(""); setConfirmation(""); setProdConfirmation(""); setFileSecret(""); setError(""); } : onClose}>{info ? "다시 입력" : "취소"}</button>{!info ? <button type="submit" className="primary" disabled={Boolean(busy)}>지문 확인</button> : info.status !== "trusted" ? <button type="button" className={info.status === "replacement" ? "danger" : "primary"} disabled={Boolean(busy) || !fingerprint || (info.status === "replacement" && confirmation !== "교체")} onClick={() => void trust()}>{info.status === "replacement" ? "확인한 키로 교체" : "지문을 확인하고 신뢰"}</button> : <button type="button" className="primary" disabled={Boolean(busy) || password.clearing || !credentialsReady || (profile?.environment === "PROD" && prodConfirmation !== "PROD")} onClick={() => void connect()}>연결</button>}</div>
     </form>
   </dialog>;
 }

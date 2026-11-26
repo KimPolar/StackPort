@@ -78,6 +78,11 @@ pub enum SshCredentials {
         #[serde(default, deserialize_with = "secret")]
         passphrase: Zeroizing<String>,
     },
+    #[serde(skip)]
+    BoundPassword {
+        password: Zeroizing<String>,
+        public_key: String,
+    },
 }
 
 fn secret<'de, D: Deserializer<'de>>(
@@ -291,6 +296,11 @@ async fn connect(
     let pinned = tokio::task::spawn_blocking(move || keys.pinned_public_key(&key_host, port))
         .await
         .map_err(|_| "저장된 SSH 호스트 키를 확인할 수 없습니다.")??;
+    if let SshCredentials::BoundPassword { public_key, .. } = &credentials {
+        if pinned.as_ref() != Some(public_key) {
+            return Err("SSH 호스트 키가 변경되었습니다. 지문을 다시 확인하세요.".into());
+        }
+    }
     let capture = Arc::new(Mutex::new(None));
     let mut config = client::Config {
         inactivity_timeout: Some(Duration::from_secs(5 * 60)),
@@ -363,7 +373,7 @@ async fn authenticate(
     credentials: SshCredentials,
 ) -> Result<()> {
     let authentication = match credentials {
-        SshCredentials::Password { password } => {
+        SshCredentials::Password { password } | SshCredentials::BoundPassword { password, .. } => {
             if password.is_empty() || password.len() > 4096 {
                 return Err("SSH 암호를 확인하세요.".into());
             }

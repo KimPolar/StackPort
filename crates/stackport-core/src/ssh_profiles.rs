@@ -105,7 +105,11 @@ impl Store {
     }
 
     pub fn ssh_profile(&self, id: &str) -> Result<SshProfile> {
-        let profile = self.connect()?.query_row("SELECT id, project_id, name, host, port, username, environment, revision FROM ssh_profiles WHERE id=?1", [id], from_row)
+        Self::ssh_profile_on(&self.connect()?, id)
+    }
+
+    pub(crate) fn ssh_profile_on(db: &Connection, id: &str) -> Result<SshProfile> {
+        let profile = db.query_row("SELECT id, project_id, name, host, port, username, environment, revision FROM ssh_profiles WHERE id=?1", [id], from_row)
             .optional().map_err(db_error)?.ok_or("SSH 연결을 찾을 수 없습니다.")?;
         validate_stored(profile)
     }
@@ -218,6 +222,7 @@ impl Store {
         if remains {
             return Err("SSH 연결 삭제 결과를 확인할 수 없어 변경을 취소했습니다.".into());
         }
+        self.delete_ssh_password_entry(id)?;
         tx.commit().map_err(db_error)
     }
 }

@@ -15,9 +15,10 @@ import { listedItemSnapshot, SftpNameDialog, type SftpListedItem, type SftpNameA
 import { SftpPermissionsDialog, type PermissionSelection } from "./SftpPermissionsDialog";
 import { SftpTransferDialog, type FileSelection, type TransferResult, type TransferSelection } from "./SftpTransferDialog";
 import { SshRouteDialog } from "./SshRouteDialog";
+import { SshPasswordOptions, useSshPassword } from "./SshPasswordOptions";
 import type { TerminalDirectory, TerminalFiles } from "./terminalDirectory";
 
-type Session = { id: string; directory: Directory };
+type Session = { id: string; directory: Directory; credential_warning?: string };
 type Host = { status: string; token: string | null; keys: { algorithm: string; fingerprint: string }[] };
 type DirectoryHistory = { visits: DirectoryLocation[]; index: number };
 type FileConnection = Session & Omit<TerminalFiles, "terminalId"> & { projectName: string; terminalId?: string };
@@ -262,6 +263,7 @@ export function SftpWorkspace({ projectName, profiles, onExitGuard, onRequestExi
       </div>}
     </header>
     {attaching && <p className="form-note" role="status">SSH 세션에서 원격 파일을 여는 중…</p>}
+    {remote?.credential_warning && <p className="form-note" role="status">{remote.credential_warning}</p>}
     {!linked && terminalFiles?.terminalId === pausedTerminal && <button type="button" className="secondary small"
       disabled={connecting || attaching} onClick={() => setPausedTerminal("")}>SSH 세션의 SFTP 다시 열기</button>}
     {!remote && !attaching && <div className="results-card files-setup">
@@ -360,6 +362,7 @@ function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const pending = useRef(false);
+  const password = useSshPassword(method === "password" ? profile : null, info?.status === "trusted" ? info.keys[0]?.fingerprint : undefined);
 
   async function perform(action: () => Promise<void>) {
     if (pending.current) return;
@@ -390,10 +393,10 @@ function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
 
   function open(event: FormEvent) {
     event.preventDefault();
-    if (info?.status !== "trusted") return;
-    const authentication = method === "password" ? { kind: method, password: secret } : { kind: method, path: keyPath, passphrase: secret };
+    if (info?.status !== "trusted" || busy || password.clearing) return;
+    const credentials = method === "password" ? password.argumentsFor(secret) : { authentication: { kind: method, path: keyPath, passphrase: secret } };
     setSecret("");
-    void perform(async () => onOpened(await invoke<Session>("open_sftp", { profile, confirmation, authentication })));
+    void perform(async () => onOpened(await invoke<Session>("open_sftp", { profile, confirmation, ...credentials })));
   }
 
   return <><form className="files-auth" data-step={info ? "review" : "inspect"} onSubmit={open}>
@@ -410,9 +413,9 @@ function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
       <label className="files-check"><input type="checkbox" checked={compared} onChange={event => setCompared(event.target.checked)} /> 별도로 받은 지문과 일치합니다</label>
       <button type="button" className="secondary small" disabled={!selected || !compared} onClick={trust}>확인한 키 신뢰</button>
     </fieldset>}
-    {info?.status === "trusted" && <fieldset className="files-credentials" disabled={busy}>
+    {info?.status === "trusted" && <fieldset className="files-credentials" disabled={busy || password.clearing}>
       <legend className="sr-only">SFTP 사용자 인증</legend>
-      <label className="field">인증 방식<select value={method} onChange={event => { setMethod(event.target.value as typeof method); setSecret(""); setError(""); }}>
+      <label className="field">인증 방식<select value={method} onChange={event => { setMethod(event.target.value as typeof method); setSecret(""); password.resetChoice(); setError(""); }}>
         <option value="password">SSH 암호</option><option value="private_key">개인 키 파일</option>
       </select></label>
       {method === "private_key" && <label className="field">개인 키 파일 경로<span className="file-input">
@@ -422,11 +425,12 @@ function SftpConnect({ profile, profiles, onConnecting, onOpened }: {
           if (path) setKeyPath(path);
         })}>키 선택</button>
       </span></label>}
-      <label className="field">{method === "password" ? "SSH 암호" : "개인 키 암호 (선택)"}
-        <input required={method === "password"} type="password" autoComplete="off" maxLength={4096} value={secret} onChange={event => setSecret(event.target.value)} />
-      </label>
+      {!password.useSaved && <label className="field">{method === "password" ? "SSH 암호" : "개인 키 암호 (선택)"}
+        <input required={method === "password"} type="password" autoComplete="off" maxLength={4096} disabled={password.clearing} value={secret} onChange={event => setSecret(event.target.value)} />
+      </label>}
+      {method === "password" && <SshPasswordOptions credentials={password} clearPassword={() => setSecret("")} />}
       {profile.environment === "PROD" && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
-      <button type="submit" className="primary small">SFTP 연결</button>
+      <button type="submit" className="primary small" disabled={password.clearing}>SFTP 연결</button>
     </fieldset>}
     {busy && <p className="form-note" role="status">요청을 처리하는 중…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}

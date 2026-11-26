@@ -2404,6 +2404,7 @@ const auditOperationNames: Record<string, string> = {
   "sqlite.export.csv": "SQLite CSV 내보내기",
   "sqlite.export.json": "SQLite JSON 내보내기",
   "ssh_profile.create": "SSH 연결 추가", "ssh_profile.update": "SSH 연결 수정", "ssh_profile.delete": "SSH 연결 삭제",
+  "ssh.credential.save": "SSH 암호 저장", "ssh.credential.delete": "저장한 SSH 암호 삭제",
   "ssh_tunnel.create": "SSH 터널 등록", "ssh_tunnel.update": "SSH 터널 수정", "ssh_tunnel.delete": "SSH 터널 삭제",
   "postgres_profile.create": "PostgreSQL 연결 추가", "postgres_profile.update": "PostgreSQL 연결 수정", "postgres_profile.delete": "PostgreSQL 연결 삭제",
   "postgres.credential.save": "PostgreSQL 암호 저장", "postgres.credential.delete": "저장한 PostgreSQL 암호 삭제",

@@ -87,7 +87,7 @@ pub use schema_sync::{SchemaSyncPreview, SchemaSyncReport};
 mod schema_document;
 pub use schema_document::{SchemaDocumentFormat, SchemaDocumentReport};
 mod ssh;
-pub use ssh::{SshAuthentication, SshHostInfo, SshKeyInfo, SshManager, SshTrustEvent, SshTrustPage};
+pub use ssh::{SshAuthentication, SshCredentialStatus, SshHostInfo, SshKeyInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
 pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;
@@ -650,6 +650,7 @@ impl Store {
         self.delete_project_mysql_passwords(&tx, id)?;
         self.delete_project_redis_passwords(&tx, id)?;
         self.delete_project_native_db_passwords(&tx, id)?;
+        self.delete_project_ssh_passwords(&tx, id)?;
         let changed = tx
             .execute("DELETE FROM projects WHERE id = ?1", [id])
             .map_err(db_error)?;

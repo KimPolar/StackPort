@@ -18,7 +18,7 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult,
-    SshHostInfo, SshManager, SshProfile, SshProfileExportReport, SshProfileImportPreview,
+    SshCredentialStatus, SshHostInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file_with_encoding, save_sql_definition, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlFileEncoding, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
     RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
@@ -812,19 +812,78 @@ async fn open_saved_ssh_terminal(
 }
 
 #[tauri::command]
+async fn ssh_credential_status(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    profile_id: String,
+    revision: i64,
+    fingerprint: String,
+) -> Result<SshCredentialStatus, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || store.ssh_credential_status(&ssh, &profile_id, revision, &fingerprint)).await
+}
+
+#[tauri::command]
+async fn forget_ssh_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_ssh_password(&profile_id, revision)).await
+}
+
+#[derive(serde::Serialize)]
+struct SshConnectionResult<T> {
+    #[serde(flatten)]
+    session: T,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_warning: Option<String>,
+}
+
+async fn prepare_saved_ssh(
+    store: Store,
+    ssh: Arc<SshManager>,
+    profile: SshProfile,
+    confirmation: String,
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
+) -> Result<(SshRouteHop, Option<SshPasswordSave>), String> {
+    worker(move || {
+        let profile = confirmed_ssh_profile(&store, &profile, &confirmation)?;
+        let (authentication, save) = store.prepare_ssh_credentials(&ssh, &profile, authentication, password_choice)?;
+        Ok((SshRouteHop { profile, authentication }, save))
+    }).await
+}
+
+async fn finish_saved_ssh<T>(
+    store: Store,
+    ssh: Arc<SshManager>,
+    session: T,
+    save: Option<SshPasswordSave>,
+) -> SshConnectionResult<T> {
+    let credential_warning = if let Some(save) = save {
+        worker(move || save.store(&store, &ssh)).await.err()
+    } else {
+        None
+    };
+    SshConnectionResult { session, credential_warning }
+}
+
+#[tauri::command]
 async fn open_saved_native_ssh_terminal(
     store: State<'_, Store>,
     ssh: State<'_, Arc<SshManager>>,
     terminals: State<'_, Arc<TerminalManager>>,
     profile: SshProfile,
     confirmation: String,
-    authentication: SshCredentials,
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
     rows: u16,
     cols: u16,
-) -> Result<TerminalInfo, String> {
+) -> Result<SshConnectionResult<TerminalInfo>, String> {
     let store = store.inner().clone();
-    let profile = worker(move || confirmed_ssh_profile(&store, &profile, &confirmation)).await?;
-    terminals.open_native_ssh(Arc::clone(ssh.inner()), SshRouteHop { profile, authentication }, rows, cols).await
+    let ssh = Arc::clone(ssh.inner());
+    let (destination, save) = prepare_saved_ssh(store.clone(), Arc::clone(&ssh), profile, confirmation, authentication, password_choice).await?;
+    let session = terminals.open_native_ssh(Arc::clone(&ssh), destination, rows, cols).await?;
+    Ok(finish_saved_ssh(store, ssh, session, save).await)
 }
 
 #[tauri::command]
@@ -872,12 +931,14 @@ async fn open_sftp(
     sftp: State<'_, SftpManager>,
     profile: SshProfile,
     confirmation: String,
-    authentication: SftpAuthentication,
-) -> Result<SftpOpened, String> {
+    authentication: Option<SftpAuthentication>,
+    password_choice: Option<SshPasswordChoice>,
+) -> Result<SshConnectionResult<SftpOpened>, String> {
     let store = store.inner().clone();
     let ssh = Arc::clone(ssh.inner());
-    let current = worker(move || confirmed_ssh_profile(&store, &profile, &confirmation)).await?;
-    sftp.open(ssh, current, authentication).await
+    let (destination, save) = prepare_saved_ssh(store.clone(), Arc::clone(&ssh), profile, confirmation, authentication, password_choice).await?;
+    let session = sftp.open(Arc::clone(&ssh), destination.profile, destination.authentication).await?;
+    Ok(finish_saved_ssh(store, ssh, session, save).await)
 }
 
 #[tauri::command]
@@ -3110,6 +3171,8 @@ fn main() {
             create_ssh_profile,
             update_ssh_profile,
             delete_ssh_profile,
+            ssh_credential_status,
+            forget_ssh_password,
             preview_ssh_profile_import,
             import_ssh_profiles,
             export_ssh_profiles,

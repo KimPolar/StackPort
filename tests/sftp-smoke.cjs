@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
+const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 
 const root = process.env.STACKPORT_TEST_ROOT;
 const password = 'fixture-sftp-password';
@@ -660,6 +661,12 @@ async function main() {
 
     const [project] = await command('list_projects');
     const [profile] = await command('list_ssh_profiles', { projectId: project.id });
+    if (process.env.STACKPORT_SFTP_CREDENTIAL_ONLY === '1') {
+      await verifySavedSshPassword(page, command, profile, server, identity, original.fingerprint);
+      assert.deepEqual(errors, []);
+      console.log('Windows saved SSH password, shared and standalone sessions, second process, key replacement and deletion passed.');
+      return;
+    }
     if (process.env.STACKPORT_SFTP_LINK_ONLY === '1') {
       await verifyLinkedSftp(page, command, profile, server, keyFile);
       await verifyDirectLinkedSftp(page, server);
@@ -845,6 +852,124 @@ async function main() {
   } finally {
     await browser.close();
     await server.close();
+  }
+}
+
+async function verifySavedSshPassword(page, command, profile, server, identity, fingerprint) {
+  const reference = { profileId: profile.id, revision: profile.revision };
+  const status = (reviewed = fingerprint) => command('ssh_credential_status', { ...reference, fingerprint: reviewed });
+  const authentication = { kind: 'password', password };
+  const remember = { mode: 'remember', fingerprint };
+  const saved = { mode: 'saved', fingerprint };
+  const withPassword = { profile, confirmation: 'PROD', authentication, passwordChoice: remember, rows: 24, cols: 80 };
+  const workspace = page.getByRole('region', { name: '파일 탐색', exact: true });
+  const remote = workspace.getByRole('region', { name: '원격 파일', exact: true });
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  const shell = page.locator('[role=tabpanel]:visible .xterm-rows');
+  const savedToggle = '저장한 암호 사용';
+  const openDialog = () => page.getByRole('button', { name: 'SSH 운영 파일 서버 연결', exact: true }).click();
+  const closeTerminal = async () => {
+    page.once('dialog', confirm => confirm.accept());
+    await page.getByRole('button', { name: /SSH \d+ .*터미널 닫기/ }).click();
+  };
+  const closeFiles = workspace.getByRole('button', { name: 'SFTP 연결 끊기' });
+  const noCredential = { supported: true, stored: false, usable: false };
+
+  try {
+    assert.deepEqual(await status(), noCredential);
+    await assert.rejects(command('open_saved_native_ssh_terminal', { ...withPassword, confirmation: '' }), /PROD/);
+    assert.equal(server.stats.passwords, 0);
+    await assert.rejects(command('open_saved_native_ssh_terminal', {
+      ...withPassword, authentication: { kind: 'password', password: 'incorrect-fixture-password' },
+    }), /인증을 거부/);
+    assert.deepEqual(await status(), noCredential);
+    assert.equal(server.stats.passwords, 1);
+
+    await openDialog();
+    await ssh.getByRole('button', { name: '지문 확인' }).click();
+    await ssh.getByLabel('SSH 암호', { exact: true }).fill(password);
+    await ssh.getByLabel('연결 성공 후 Windows에 암호 저장').check();
+    await ssh.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+    await ssh.getByRole('button', { name: '연결', exact: true }).click();
+    await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    assert.deepEqual(await status(), { supported: true, stored: true, usable: true });
+    assert.equal(server.stats.passwords, 2);
+    assert.equal(server.stats.subsystem, 1);
+    await closeTerminal();
+    await closeFiles.waitFor({ state: 'detached' });
+
+    await withSecondDesktopInstance(root, async invoke => {
+      const session = await invoke('open_sftp', { profile, confirmation: 'PROD', passwordChoice: saved });
+      try {
+        assert.equal(session.directory.path, '/home/stackport');
+        assert.doesNotMatch(JSON.stringify(session), /fixture-sftp-password/);
+      } finally {
+        await invoke('close_sftp', { id: session.id });
+      }
+    });
+    await page.getByRole('button', { name: '파일 탐색', exact: true }).click();
+    await workspace.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
+    await workspace.getByLabel(savedToggle, { exact: true }).check();
+    assert.equal(await workspace.getByLabel('SSH 암호', { exact: true }).count(), 0);
+    await workspace.getByLabel('운영 환경 확인').fill('PROD');
+    await workspace.getByRole('button', { name: 'SFTP 연결', exact: true }).click();
+    await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+    await closeFiles.click();
+    await closeFiles.waitFor({ state: 'detached' });
+    assert.equal(server.stats.passwords, 4);
+    assert.equal(server.stats.subsystem, 3);
+
+    await openDialog();
+    await ssh.getByLabel('파일 탐색 함께 열기').uncheck();
+    await ssh.getByLabel('SSH 인증 방식').selectOption('profile_password');
+    await ssh.getByRole('button', { name: '지문 확인' }).click();
+    await ssh.getByLabel(savedToggle, { exact: true }).check();
+    await ssh.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+    await ssh.getByRole('button', { name: '연결', exact: true }).click();
+    await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+    assert.equal(server.stats.passwords, 5);
+    assert.equal(server.stats.subsystem, 3);
+    await closeTerminal();
+
+    await server.close();
+    const key = makeHost();
+    const replacement = await startHost(key, identity, profile.port);
+    try {
+      await assert.rejects(command('open_sftp', { profile, confirmation: 'PROD', passwordChoice: saved }), /호스트 키/);
+      const review = await command('reinspect_ssh_host', { host: profile.host, port: profile.port });
+      assert.equal(review.status, 'replacement');
+      await command('trust_ssh_host', { token: review.token, fingerprint: key.fingerprint, confirmation: '교체' });
+      await assert.rejects(status(), /호스트 키가 변경/);
+      assert.deepEqual(await status(key.fingerprint), { supported: true, stored: true, usable: false });
+      await assert.rejects(command('open_sftp', {
+        profile, confirmation: 'PROD', passwordChoice: { mode: 'saved', fingerprint: key.fingerprint },
+      }), /저장된 암호가 없습니다/);
+      assert.equal(replacement.stats.passwords, 0);
+      await page.getByRole('button', { name: '파일 탐색', exact: true }).click();
+      await workspace.getByRole('button', { name: 'SSH 호스트 키 확인' }).click();
+      await workspace.getByRole('button', { name: '저장한 암호 삭제' }).click();
+      await workspace.getByText('저장한 암호를 삭제했습니다.', { exact: true }).waitFor();
+      assert.deepEqual(await status(key.fingerprint), noCredential);
+      await workspace.getByLabel('SSH 암호', { exact: true }).fill(password);
+      await workspace.getByLabel('연결 성공 후 Windows에 암호 저장').check();
+      await workspace.getByLabel('운영 환경 확인').fill('PROD');
+      await workspace.getByRole('button', { name: 'SFTP 연결', exact: true }).click();
+      await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+      assert.equal(replacement.stats.passwords, 1);
+      assert.deepEqual(await status(key.fingerprint), { supported: true, stored: true, usable: true });
+      await closeFiles.click();
+      await closeFiles.waitFor({ state: 'detached' });
+    } finally {
+      await replacement.close();
+    }
+    const audit = await command('list_audit_events', { before: null });
+    assert.equal(audit.events.filter(event => event.operation === 'ssh.credential.save').length, 2);
+    assert.equal(audit.events.filter(event => event.operation === 'ssh.credential.delete').length, 1);
+    assert.doesNotMatch(JSON.stringify(audit), /fixture-sftp-password/);
+  } finally {
+    const { keys: [key] } = await command('inspect_ssh_host', { host: profile.host, port: profile.port });
+    if (key && (await status(key.fingerprint)).stored) await command('forget_ssh_password', reference);
   }
 }
 
