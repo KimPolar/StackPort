@@ -10,12 +10,14 @@ type Calendar = { expression: string; time_zone: string; excluded_dates: string[
 type Occurrence = { at: number; local_time: string };
 type Plan = {
   revision: number; directory: string; prefix: string; interval_minutes: number | null;
-  retention_days: number; retry_once: boolean; next_at: number | null; retry_at: number | null; requires_review: boolean;
+  retention_days: number; retry_limit: number; retry_delay_minutes: number; retry_attempt: number | null;
+  next_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
   calendar: Calendar | null;
 };
 type Run = {
   id: string; status: "running" | "succeeded" | "failed" | "interrupted"; trigger_kind: "scheduled" | "retry" | "manual";
+  retry_attempt: number | null;
   started_at: number; finished_at: number | null; expires_at: number | null; path: string; size_bytes: number | null; message: string | null;
   artifact: {
     sha256: string; engine_version: string; verified_at: number | null; removal_started_at: number | null;
@@ -30,6 +32,7 @@ type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
   revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
   mode: "once" | "periodic" | "calendar"; minutes: string; retention: string; retry: boolean;
+  retryCount: string; retryMinutes: string;
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
@@ -58,7 +61,9 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     timeZone: plan?.calendar?.time_zone ?? (date.resolvedOptions().timeZone || "UTC"),
     excluded: plan?.calendar?.excluded_dates.join("\n") ?? "",
     retention: String(plan?.retention_days ?? 30),
-    retry: plan?.retry_once ?? true,
+    retry: (plan?.retry_limit ?? 1) > 0,
+    retryCount: String(Math.max(1, plan?.retry_limit ?? 1)),
+    retryMinutes: String(plan?.retry_delay_minutes ?? 1),
     tunnel: plan ? plan.tunnel : initialTunnel,
   };
 }
@@ -177,7 +182,8 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         interval_minutes: draft.mode === "periodic" ? Number(draft.minutes) : null,
         calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
         calendar_enabled: draft.mode === "calendar" && draft.scheduled,
-        retention_days: Number(draft.retention), retry_once: draft.retry, next_at: nextAt,
+        retention_days: Number(draft.retention), retry_limit: draft.retry ? Number(draft.retryCount) : 0,
+        retry_delay_minutes: draft.retry ? Number(draft.retryMinutes) : undefined, next_at: nextAt,
       } }));
       setConfirmation("");
       setNotice("백업 계획을 저장했습니다.");
@@ -305,12 +311,19 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           </ul>}
         </>}
         <label className="files-check"><input type="checkbox" checked={draft.retry} disabled={Boolean(busy)}
-          onChange={event => change("retry", event.target.checked)} /> 예약 실패 시 1분 뒤 한 번 재시도</label>
+          onChange={event => change("retry", event.target.checked)} /> 예약 실패 시 자동 재시도</label>
+        {draft.retry && <div className="backup-plan-fields">
+          <label className="field">최대 재시도 횟수<input required type="number" min={1} max={5} step={1} value={draft.retryCount}
+            disabled={Boolean(busy)} onChange={event => change("retryCount", event.target.value)} /></label>
+          <label className="field">재시도 간격 (분)<input required type="number" min={1} max={1440} step={1} value={draft.retryMinutes}
+            disabled={Boolean(busy)} onChange={event => change("retryMinutes", event.target.value)} /></label>
+        </div>}
         <p className="form-note">앱을 실행 중일 때 백업합니다. 앱이 닫혀 있는 동안 지난 예약은 다음 실행에서 한 번 처리합니다. {postgres ? "백업 파일은 암호화되지 않습니다." : "백업은 전체 SQLite 파일이며 암호화되지 않습니다."}</p>
         {production && <label className="field">운영 백업 확인 (PROD 입력)<input value={confirmation} autoComplete="off"
           disabled={Boolean(busy)} onChange={event => setConfirmation(event.target.value)} /></label>}
         {plan && <p className="form-note">다음 예약 {plan.requires_review ? "설정 검토 필요" : nextAt}
-          {!plan.requires_review && plan.retry_at !== null && " · 재시도 " + dateText(plan.retry_at)}</p>}
+          {!plan.requires_review && plan.retry_at !== null && ` · ${plan.retry_attempt}차 재시도 ${plan.calendar
+            ? calendarDate(plan.retry_at, plan.calendar.time_zone) : dateText(plan.retry_at)}`}</p>}
         {plan?.requires_review && <p className="form-note" role="status">{postgres ? "현재 연결 설정, 백업 위치와 일정을 검토한 뒤 계획을 다시 저장하세요." : "이 작업 공간의 백업 위치와 일정을 검토한 뒤 계획을 저장하세요."}</p>}
         {stale && <p className="form-error" role="alert">다른 창에서 계획이 변경되었습니다. 설정을 새로고침하세요.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
@@ -340,7 +353,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         {fileFeedback && !fileFeedback.error && !runs.some(run => run.id === fileFeedback.runId) &&
           <p className="form-note" role="status">{fileFeedback.text}</p>}
         {runs.length ? runs.map(run => <details key={run.id}>
-          <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]} · {dateText(run.started_at)}</summary>
+          <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]}{run.retry_attempt !== null && ` (${run.retry_attempt}차)`} · {dateText(run.started_at)}</summary>
           <p>{displayPath(run.path)}</p>
           {run.size_bytes !== null && <p>백업 크기 {size(run.size_bytes)}
             {run.expires_at !== null && " · 보존 만료 " + dateText(run.expires_at)}</p>}

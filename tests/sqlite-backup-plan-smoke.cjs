@@ -10,7 +10,7 @@ const { chooseDatabase } = require('./database-picker.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar phase.');
+if (!root || !['prepare', 'resume', 'calendar', 'retry'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar/retry phase.');
 
 const source = path.join(root, '예약 원본.sqlite');
 const output = path.join(root, '예약 백업');
@@ -83,8 +83,9 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
-        if (phase === 'calendar') {
-          await verifyCalendarPlan(dialog, history, () => state(profile.id), storeRun);
+        if (phase === 'calendar' || phase === 'retry') {
+          const verify = phase === 'calendar' ? verifyCalendarPlan : verifyRetryPlan;
+          await verify(dialog, history, () => state(profile.id), storeRun);
           assert.deepEqual(errors, []);
           return;
         }
@@ -233,6 +234,52 @@ async function verifyCalendarPlan(dialog, history, state, storeRun) {
   assert.deepEqual(paused.calendar, plan.calendar);
   assert.equal(await zone.inputValue(), 'Asia/Seoul');
   console.log('Ran a real calendar backup and kept the calendar rule when paused.');
+}
+
+async function verifyRetryPlan(dialog, history, state, storeRun) {
+  const scheduled = dialog.getByRole('checkbox', { name: '예약 실행', exact: true });
+  const save = dialog.getByRole('button', { name: '계획 저장', exact: true });
+  const savedNotice = dialog.getByText('백업 계획을 저장했습니다.', { exact: true });
+  const gap = dialog.getByLabel('재시도 간격 (분)', { exact: true });
+  await scheduled.uncheck();
+  await dialog.getByLabel('최대 재시도 횟수', { exact: true }).fill('2');
+  await gap.fill('3');
+  await save.click();
+  await savedNotice.waitFor();
+  const paused = (await state()).plan;
+  assert.equal(paused.retry_limit, 2);
+  assert.equal(paused.retry_delay_minutes, 3);
+  assert.equal(paused.next_at, null);
+
+  await scheduled.check();
+  await dialog.getByLabel('실행 주기').selectOption('once');
+  await gap.fill('1');
+  await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(dateInput(Math.floor(Date.now() / 1000) + 9));
+  await save.click();
+  await savedNotice.waitFor();
+  fs.renameSync(output, displaced);
+  try {
+    await history.getByText(/실패 · 예약 실행/).waitFor();
+    const initial = await state();
+    assert.equal(initial.runs[0].retry_attempt, null);
+    assert.equal(initial.plan.retry_attempt, 1);
+    assert.equal(initial.plan.retry_at - initial.runs[0].finished_at, 60);
+    console.log('The initial failure queued retry 1, using the saved retry interval.');
+    await history.getByText(/실패 · 자동 재시도 \(1차\)/).waitFor({ timeout: 80000 });
+    const firstRetry = await state();
+    assert.equal(firstRetry.runs[0].retry_attempt, 1);
+    assert.equal(firstRetry.plan.retry_attempt, 2);
+    assert.equal(firstRetry.plan.retry_at - firstRetry.runs[0].finished_at, 60);
+    assert.equal(fs.readdirSync(displaced).length, 0);
+  } finally { fs.renameSync(displaced, output); }
+  await history.getByText(/무결성 검사 통과 · 자동 재시도 \(2차\)/).waitFor({ timeout: 80000 });
+  const finished = await state();
+  assert.equal(finished.plan.retry_at, null);
+  assert.equal(finished.plan.retry_attempt, null);
+  assert.deepEqual(finished.runs.map(run => run.retry_attempt), [2, 1, null]);
+  storeRun(finished.runs[0]);
+  assert.equal(fs.readdirSync(output).length, 1);
+  console.log('Retry 2 published the verified backup and cleared the pending retry.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });
