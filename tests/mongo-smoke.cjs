@@ -128,6 +128,7 @@ async function verify(page, port, ca) {
     assert.equal(last.items.length, 3);
     assert.equal(last.has_next, false);
     assert.equal(last.items[2].json, null);
+    await verifyMongoExportCommands(command, id);
     const filtered = await list({ filter: '{"rank":{"$gte":20}}', projection: '{"rank":1,"_id":0}', sort_field: 'rank', descending: true });
     assert.deepEqual(filtered.items.map(item => JSON.parse(item.json).rank.$numberInt), ['22', '21', '20']);
     const count = (filter, target = database, collection = 'records') =>
@@ -213,6 +214,7 @@ async function verify(page, port, ca) {
   await detail.getByLabel('정렬 방향').selectOption('desc');
   await detail.getByRole('button', { name: '조회 적용' }).click();
   await detail.locator('pre[aria-label="Canonical Extended JSON"]').filter({ hasText: '"22"' }).waitFor();
+  await verifyMongoExportEditor(page, detail);
   await verifyFindBuilder(page, detail);
   await detail.getByRole('button', { name: '인덱스', exact: true }).click();
   await detail.getByRole('rowheader', { name: 'expiry', exact: true }).waitFor();
@@ -314,7 +316,91 @@ async function verify(page, port, ca) {
   assert.ok(audit.some(event => event.operation === 'mongo.namespace.rename_collection' && event.outcome === 'succeeded'
     && event.object_name === 'namespace_new.rename_source → namespace_new.rename_destination'
     && event.policy === 'mongo-collection-rename-uuid-prod-reviewed'));
+  for (const format of ['json', 'csv']) {
+    assert.ok(audit.some(event => event.operation === 'mongo.export.' + format && event.outcome === 'succeeded'
+      && event.policy === 'mongo-readonly-file-no-overwrite' && event.object_name?.startsWith('visible.')));
+  }
   assert.deepEqual(errors, []);
+}
+
+async function verifyMongoExportCommands(command, id) {
+  const database = 'visible';
+  const runExport = async ({ name, collection = 'records', query = {}, format = 'json', fields = [], token }) => {
+    const destination = path.join(root, name);
+    const request = token ?? await command('prepare_query', {});
+    return command('export_mongo_documents', { id, token: request, database, collection, input: {
+      query, options: { destination, format, include_header: true, spreadsheet_safe: true }, fields,
+    } });
+  };
+  const read = name => fs.readFileSync(path.join(root, name), 'utf8');
+  const full = await runExport({ name: 'mongo-all.json', query: { sort_field: 'rank', descending: true, page: 4 } });
+  assert.equal(full.status, 'exported');
+  assert.equal(full.report.rows, 23);
+  const docs = JSON.parse(read('mongo-all.json'));
+  assert.equal(docs[0].rank.$numberInt, '22');
+  assert.equal(docs[0].large.length, 70000);
+  assert.equal(docs[0].exact.$numberLong, '9223372036854775807');
+  assert.equal(docs[0].decimal.$numberDecimal, '123.4500');
+  assert.deepEqual(docs[0].payload.$binary, { base64: 'AP8=', subType: '00' });
+  assert.equal(docs[0]._id.$oid, '000000000000000000000017');
+  assert.equal(docs.at(-1).rank.$numberInt, '0');
+  assert.equal(full.report.size_bytes, Buffer.byteLength(read('mongo-all.json')));
+  const saved = read('mongo-all.json');
+  await assert.rejects(runExport({ name: 'mongo-all.json' }), /이미 있습니다/);
+  assert.equal(read('mongo-all.json'), saved);
+  const batches = await runExport({ name: 'mongo-batches.json', collection: 'export_batches' });
+  assert.equal(batches.report.rows, 130);
+  assert.deepEqual(JSON.parse(read('mongo-batches.json')).map(doc => Number(doc._id.$numberInt)),
+    Array.from({ length: 130 }, (_, index) => index));
+
+  const projected = await runExport({ name: 'mongo-view.json', collection: 'recent_records', query: {
+    filter: '{"rank":{"$gte":21}}', projection: '{"rank":1,"_id":0}', sort_field: 'rank', descending: true,
+  } });
+  assert.equal(projected.report.rows, 2);
+  assert.deepEqual(JSON.parse(read('mongo-view.json')), [{ rank: { $numberInt: '22' } }, { rank: { $numberInt: '21' } }]);
+  await runExport({ name: 'mongo-empty.json', query: { filter: '{"rank":-10}' } });
+  assert.deepEqual(JSON.parse(read('mongo-empty.json')), []);
+  await assert.rejects(runExport({ name: 'mongo-ambiguous.json', collection: 'export_ambiguous' }), /손실 없이/);
+  assert.ok(!fs.existsSync(path.join(root, 'mongo-ambiguous.json')));
+
+  const csv = await runExport({ name: 'mongo-columns.csv', collection: 'export_special', format: 'csv',
+    fields: ['formula', 'array.0.n', 'meta.label', 'missing'] });
+  assert.equal(csv.report.rows, 1);
+  assert.equal(csv.report.protected_fields, 1);
+  assert.equal(read('mongo-columns.csv'),
+    '"formula","array.0.n","meta.label","missing"\r\n"\'=1+1",-9007199254740993,"쉼표, ""인용""\n다음 줄",\\N\r\n');
+  await assert.rejects(runExport({ name: 'mongo-invalid.csv', format: 'csv', fields: ['rank', 'rank'] }), /중복 없이/);
+  assert.ok(!fs.existsSync(path.join(root, 'mongo-invalid.csv')));
+
+  const token = await command('prepare_query', {});
+  assert.equal(await command('cancel_query', { token }), true);
+  assert.deepEqual(await runExport({ name: 'mongo-cancelled.json', token }), { status: 'cancelled' });
+  assert.ok(!fs.existsSync(path.join(root, 'mongo-cancelled.json')));
+  assert.ok(!fs.readdirSync(root).some(name => name.startsWith('.stackport-json-') || name.startsWith('.stackport-csv-')));
+}
+
+async function verifyMongoExportEditor(page, detail) {
+  const open = detail.getByRole('button', { name: '문서 내보내기', exact: true });
+  const dialog = page.getByRole('dialog', { name: '결과 내보내기', exact: true });
+  await open.click();
+  await dialog.getByText(/Canonical Extended JSON 배열/).waitFor();
+  const json = path.join(root, 'mongo-ui.json');
+  await dialog.getByLabel('새 JSON 파일 경로').fill(json);
+  await dialog.getByRole('button', { name: 'JSON 저장', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(json, 'utf8')), ['22', '21', '20'].map(rank => ({ rank: { $numberInt: rank } })));
+  await detail.getByText(/JSON 저장 완료 · 3행/u).waitFor();
+
+  await open.click();
+  await dialog.getByLabel('파일 형식').selectOption('CSV');
+  await dialog.getByText(/BSON 타입 정보가 일부 손실됩니다/).waitFor();
+  assert.equal(await dialog.getByLabel('CSV 필드 경로').inputValue(), 'rank');
+  const csv = path.join(root, 'mongo-ui.csv');
+  await dialog.getByLabel('새 CSV 파일 경로').fill(csv);
+  await dialog.getByRole('button', { name: 'CSV 저장', exact: true }).click();
+  await dialog.waitFor({ state: 'detached' });
+  assert.equal(fs.readFileSync(csv, 'utf8'), '"rank"\r\n22\r\n21\r\n20\r\n');
+  await detail.getByText(/CSV 저장 완료 · 3행/u).waitFor();
 }
 
 async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
@@ -1085,7 +1171,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops and renames).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, document exports, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops and renames).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

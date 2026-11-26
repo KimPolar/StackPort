@@ -10,6 +10,10 @@ React/TypeScript 화면은 Tauri 명령을 통해 Rust 코어를 호출합니다
 
 MongoDB 작업 공간은 계정 권한 안에서 데이터베이스·컬렉션·뷰를 검색합니다. 문서는 필터·표시 필드·정렬을 서버에 전달해 20개씩 읽고, BSON 타입을 보존하는 Canonical Extended JSON으로 표시합니다. BSON과 표시 문자열 모두 문서당 64 KiB까지 미리 볼 수 있고, 페이지의 표시 문자열 합계는 384 KiB까지입니다. 큰 문서는 표시 필드를 줄여 다시 조회할 수 있습니다. 컬렉션 인덱스는 64개까지 키 순서·고유 여부·TTL·숨김 상태를 읽습니다. [MongoDB Rust 드라이버 데이터베이스와 컬렉션](https://www.mongodb.com/docs/drivers/rust/current/database-collection/)
 
+**문서 → 문서 내보내기**는 적용된 필터·표시 필드·정렬로 컬렉션이나 뷰의 전체 결과를 다시 읽습니다. UTF-8 JSON은 Canonical Extended JSON 배열입니다. 각 문서를 BSON으로 되돌려 원본 바이트와 일치하는지 확인하며, 변환 결과가 일치하지 않으면 파일 저장을 중단합니다. CSV는 한 줄에 한 필드 경로를 지정하고 점으로 하위 필드나 배열 위치를 선택합니다. 누락된 값과 BSON null은 `\N`으로 쓰고, 문자열 수식 보호 옵션과 CSV의 BSON 타입 손실을 표시합니다. 문서는 나눠 읽고 진행 건수를 표시합니다. 파일 준비 중 작업을 취소하거나 5분 제한을 넘기면 부분 결과를 저장하지 않습니다. 기존 파일은 보존됩니다. 감사 기록에는 연결, 대상, 형식과 결과를 남깁니다. [MongoDB Extended JSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/)
+
+Windows 앱과 TLS를 적용한 MongoDB 8.0.38에서 읽기 전용 계정으로 컬렉션·뷰를 내보냈습니다. 화면의 페이지와 문서 크기 한도를 넘는 전체 결과, BSON 타입 왕복, CSV 필드 순서와 수식 보호, 취소·변환 오류·기존 파일 충돌을 확인했습니다.
+
 **이 연결에서 컬렉션·뷰 관리 허용**을 선택하면 **컬렉션·뷰 만들기**에서 기존 데이터베이스를 사용하거나 첫 컬렉션과 함께 새 데이터베이스를 만들 수 있습니다. 컬렉션에는 선택적으로 Extended JSON 유효성 규칙과 검사 범위, 위반 시 쓰기 거부 또는 서버 경고를 설정합니다. 뷰는 같은 데이터베이스의 원본과 읽기 전용 집계 단계 최대 24개를 사용합니다. 생성은 서버 명령을 검토한 뒤 5분 안에 한 번 적용하며 운영 환경에서는 `PROD`를 입력합니다. [MongoDB create](https://www.mongodb.com/docs/manual/reference/command/create/) · [MongoDB 뷰 생성](https://www.mongodb.com/docs/manual/core/views/create-view/) · [MongoDB 유효성 검사 범위](https://www.mongodb.com/docs/manual/core/schema-validation/specify-validation-level/)
 
 Windows 앱과 로컬 MongoDB 8.0.38에서 새 데이터베이스의 첫 컬렉션 생성, 규칙 위반 문서의 삽입 거절, 뷰의 필터 결과와 생성 후 목록 갱신을 확인했습니다. TLS와 사용자 인증을 적용한 서버에서 읽기 전용 계정은 생성 요청을 거절당하고, 별도 연결에서 같은 이름을 먼저 생성하면 이전 검토의 적용이 거절됩니다.

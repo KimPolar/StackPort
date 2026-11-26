@@ -155,7 +155,8 @@ impl SqlParameterValue {
 struct QueryControl {
     reason: AtomicU8,
     interrupt: Mutex<Option<InterruptHandle>>,
-    exported_rows: AtomicU64,
+    exported_rows: Arc<AtomicU64>,
+    cancel_notify: tokio::sync::Notify,
 }
 
 impl QueryControl {
@@ -168,6 +169,7 @@ impl QueryControl {
         {
             return Ok(false);
         }
+        self.cancel_notify.notify_one();
         if let Some(handle) = self
             .interrupt
             .lock()
@@ -240,10 +242,26 @@ pub(crate) struct QueryManager {
     entries: Mutex<HashMap<String, QueryEntry>>,
 }
 
-struct QueryGuard {
+pub(crate) struct QueryGuard {
     manager: Arc<QueryManager>,
     token: String,
     control: Arc<QueryControl>,
+}
+
+impl QueryGuard {
+    pub(crate) fn export_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.control.exported_rows)
+    }
+
+    pub(crate) async fn wait_cancelled(&self) {
+        while self.control.reason.load(Ordering::SeqCst) != CANCELLED {
+            self.control.cancel_notify.notified().await;
+        }
+    }
+
+    pub(crate) fn begin_export_publication(&self) -> bool {
+        self.control.publishing().is_ok()
+    }
 }
 
 impl Drop for QueryGuard {
@@ -275,7 +293,7 @@ impl QueryManager {
         Ok(token)
     }
 
-    fn claim(self: &Arc<Self>, token: &str) -> Result<QueryGuard> {
+    pub(crate) fn claim(self: &Arc<Self>, token: &str) -> Result<QueryGuard> {
         let mut entries = self
             .entries
             .lock()
@@ -1013,5 +1031,18 @@ mod tests {
         assert!(manager.claim(&token).is_err());
         drop(guard);
         assert!(!manager.cancel(&token).unwrap());
+    }
+
+    #[tokio::test]
+    async fn export_cancellation_wakes_a_waiting_request_and_blocks_publication() {
+        let manager = Arc::new(QueryManager::default());
+        let token = manager.prepare().unwrap();
+        let guard = manager.claim(&token).unwrap();
+        let waiting = guard.wait_cancelled();
+        tokio::pin!(waiting);
+        assert!(futures_util::poll!(&mut waiting).is_pending());
+        assert!(manager.cancel(&token).unwrap());
+        tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap();
+        assert!(!guard.begin_export_publication());
     }
 }

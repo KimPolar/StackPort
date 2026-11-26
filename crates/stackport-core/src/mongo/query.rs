@@ -24,6 +24,34 @@ pub struct MongoQuery {
     page: u32,
 }
 
+impl MongoQuery {
+    pub(super) fn prepare(&self) -> Result<(Document, Document, Document)> {
+        let filter = read_filter(&self.filter)?;
+        let projection = read_document(&self.projection, "표시 필드")?;
+        if projection.len() > 64
+            || projection.iter().any(|(name, value)| {
+                !valid_field(name)
+                    || !matches!(
+                        value,
+                        Bson::Boolean(_) | Bson::Int32(0 | 1) | Bson::Int64(0 | 1)
+                    )
+            })
+        {
+            return Err("표시 필드는 최대 64개이며 각 값은 0 또는 1로 지정하세요.".into());
+        }
+        let sort_field = self.sort_field.trim();
+        let sort_field = if sort_field.is_empty() { "_id" } else { sort_field };
+        if !valid_field(sort_field) {
+            return Err("MongoDB 정렬 필드 이름을 확인하세요.".into());
+        }
+        let mut sort = doc! { sort_field: if self.descending { -1 } else { 1 } };
+        if sort_field != "_id" {
+            sort.insert("_id", 1);
+        }
+        Ok((filter, projection, sort))
+    }
+}
+
 #[derive(Serialize)]
 pub struct MongoDocumentPage {
     items: Vec<DocumentPreview>,
@@ -46,39 +74,7 @@ impl MongoManager {
         query: MongoQuery,
     ) -> Result<MongoDocumentPage> {
         validate_namespace(database, collection)?;
-        let MongoQuery {
-            filter,
-            projection,
-            sort_field,
-            descending,
-            page,
-        } = query;
-        let filter = read_filter(&filter)?;
-        let projection = read_document(&projection, "표시 필드")?;
-        if projection.len() > 64
-            || projection.iter().any(|(name, value)| {
-                !valid_field(name)
-                    || !matches!(
-                        value,
-                        Bson::Boolean(_) | Bson::Int32(0 | 1) | Bson::Int64(0 | 1)
-                    )
-            })
-        {
-            return Err("표시 필드는 최대 64개이며 각 값은 0 또는 1로 지정하세요.".into());
-        }
-        let sort_field = sort_field.trim();
-        let sort_field = if sort_field.is_empty() {
-            "_id"
-        } else {
-            sort_field
-        };
-        if !valid_field(sort_field) {
-            return Err("MongoDB 정렬 필드 이름을 확인하세요.".into());
-        }
-        let mut sort = doc! { sort_field: if descending { -1 } else { 1 } };
-        if sort_field != "_id" {
-            sort.insert("_id", 1);
-        }
+        let (filter, projection, sort) = query.prepare()?;
         let client = self.client(id)?;
         let collection = client
             .database(database)
@@ -88,7 +84,7 @@ impl MongoManager {
                 .find(filter)
                 .projection(projection)
                 .sort(sort)
-                .skip(u64::from(page) * PAGE_SIZE as u64)
+                .skip(u64::from(query.page) * PAGE_SIZE as u64)
                 .limit(PAGE_SIZE as i64 + 1)
                 .batch_size(4)
                 .max_time(SERVER_TIME)

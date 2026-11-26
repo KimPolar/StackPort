@@ -289,7 +289,7 @@ impl ExportFile {
                     self.delimiter(index).map_err(io)?;
                     match value {
                         TypedExportValue::Null => self.file.write_all(b"null").map_err(io)?,
-                        TypedExportValue::Text(value) => {
+                        TypedExportValue::Text(value) | TypedExportValue::Number(value) => {
                             serde_json::to_writer(&mut self.file, value)
                                 .map_err(|error| format.io(error))?
                         }
@@ -305,16 +305,13 @@ impl ExportFile {
                     self.delimiter(index).map_err(io)?;
                     match value {
                         TypedExportValue::Null => self.file.write_all(b"\\N"),
+                        TypedExportValue::Number(value) if csv_number(value) => self.file.write_all(value.as_bytes()),
                         TypedExportValue::Text(value)
-                            if column.numeric
-                                && value.parse::<f64>().is_ok()
-                                && value.bytes().all(|byte| {
-                                    matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e' | b'E')
-                                }) =>
+                            if column.numeric && csv_number(value) =>
                         {
                             self.file.write_all(value.as_bytes())
                         }
-                        TypedExportValue::Text(value) => self.write_csv_text(value),
+                        TypedExportValue::Text(value) | TypedExportValue::Number(value) => self.write_csv_text(value),
                         TypedExportValue::Binary(value) => self.write_blob(value, b"\"X'", b"'\""),
                     }
                     .map_err(io)?;
@@ -322,6 +319,18 @@ impl ExportFile {
                 self.file.write_all(b"\r\n").map_err(io)
             }
         }
+    }
+
+    pub(crate) fn write_json_array_document(&mut self, document: &str, previous_rows: u64) -> Result<()> {
+        let prefix = if previous_rows == 0 { b"[\n" } else { b",\n" };
+        self.file.write_all(prefix).and_then(|_| self.file.write_all(document.as_bytes()))
+            .map_err(|error| self.format.io(error))
+    }
+
+    pub(crate) fn finish_json_array(mut self, rows: u64) -> Result<ReadyExport> {
+        let suffix: &[u8] = if rows == 0 { b"[]\n" } else { b"\n]\n" };
+        self.file.write_all(suffix).map_err(|error| self.format.io(error))?;
+        self.into_ready()
     }
 
     fn write_json_row(&mut self, row: &Row<'_>, previous_rows: u64) -> Result<()> {
@@ -544,6 +553,7 @@ pub(crate) struct TypedExportColumn {
 pub(crate) enum TypedExportValue<'a> {
     Null,
     Text(&'a str),
+    Number(&'a str),
     Binary(&'a [u8]),
 }
 
@@ -565,6 +575,11 @@ impl ReadyExport {
             audit_warning: None,
         })
     }
+}
+
+fn csv_number(value: &str) -> bool {
+    value.parse::<f64>().is_ok()
+        && value.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e' | b'E'))
 }
 
 fn formula_prefix(value: &str) -> bool {

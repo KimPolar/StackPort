@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { SqlParameterValue } from "./SqlParameterFields";
@@ -52,18 +52,21 @@ export function ResultExportDialog({ profile, query, onClose, onExported }: {
   return <ResultFileDialog profile={profile} source={source} driver={driver} onClose={onClose} onExported={onExported} />;
 }
 
-export function ResultFileDialog({ profile, source, driver, onClose, onExported, unavailable = "" }: {
+export function ResultFileDialog({ profile, source, driver, onClose, onExported, unavailable = "", initialFormat = "CSV", formatOptions, onBusy }: {
   profile: { name: string; environment: string };
   source: string;
   driver: ExportDriver;
   onClose: () => void;
   onExported: (report: ExportReport) => void;
   unavailable?: string;
+  initialFormat?: ExportFormat;
+  formatOptions?: (format: ExportFormat, busy: boolean) => ReactNode;
+  onBusy?: (busy: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const pathId = useId();
   const pending = useRef(false);
-  const [format, setFormat] = useState<ExportFormat>("CSV");
+  const [format, setFormat] = useState<ExportFormat>(initialFormat);
   const [destination, setDestination] = useState("");
   const [header, setHeader] = useState(true);
   const [spreadsheetSafe, setSpreadsheetSafe] = useState(true);
@@ -117,6 +120,7 @@ export function ResultFileDialog({ profile, source, driver, onClose, onExported,
   async function start() {
     if (pending.current || unavailable) return;
     pending.current = true;
+    onBusy?.(true);
     setBusy(true); setRows(0); setNotice(""); setError("");
     try {
       const request = await driver.prepare();
@@ -130,6 +134,7 @@ export function ResultFileDialog({ profile, source, driver, onClose, onExported,
     } finally {
       pending.current = false;
       setBusy(false); setToken(""); setStopping(false);
+      onBusy?.(false);
     }
   }
 
@@ -162,6 +167,7 @@ export function ResultFileDialog({ profile, source, driver, onClose, onExported,
           <option value="JSON">JSON</option>
         </select>
       </label>
+      {formatOptions?.(format, busy)}
       <div className="field"><label htmlFor={pathId}>새 {format} 파일 경로</label><span className="file-input">
         <input id={pathId} required disabled={busy} value={destination} placeholder="새 파일의 절대 경로" onChange={event => setDestination(event.target.value)} />
         <button type="button" className="secondary" disabled={busy} onClick={() => void chooseFolder()}>폴더 선택</button>

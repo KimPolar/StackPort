@@ -1,6 +1,7 @@
 mod document_edit;
 mod document_snapshot;
 mod document_structure;
+mod export;
 mod find_builder;
 mod index_admin;
 mod namespace_admin;
@@ -12,6 +13,7 @@ mod schema;
 
 pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
+pub use export::{MongoExportInput, MongoExportOutcome};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
 pub use namespace_admin::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
@@ -92,6 +94,7 @@ pub struct MongoIndex {
 
 struct Session {
     client: Client,
+    profile: MongoProfile,
     editor: Option<Arc<document_edit::DocumentEditor>>,
     index_admin: Option<Arc<index_admin::IndexAdmin>>,
     namespace_admin: Option<Arc<namespace_admin::NamespaceAdmin>>,
@@ -133,7 +136,7 @@ impl MongoManager {
         let editor = allow_edits.then(|| Arc::new(document_edit::DocumentEditor::new(profile.clone())));
         let index_admin = allow_indexes.then(|| Arc::new(index_admin::IndexAdmin::new(profile.clone())));
         let namespace_admin = allow_namespaces.then(|| Arc::new(namespace_admin::NamespaceAdmin::new(profile.clone())));
-        let settings = profile.settings;
+        let settings = profile.settings.clone();
         if settings.environment == "PROD" && confirmation != "PROD" {
             return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
         }
@@ -207,6 +210,7 @@ impl MongoManager {
                 id.clone(),
                 Session {
                     client,
+                    profile,
                     editor,
                     index_admin,
                     namespace_admin,

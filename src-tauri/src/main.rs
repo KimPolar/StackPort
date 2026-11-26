@@ -1039,6 +1039,10 @@ async fn count_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, i
     -> Result<String, String> { mongo.count_documents(&id, &database, &collection, &filter).await }
 
 #[tauri::command]
+async fn export_mongo_documents(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, database: String, collection: String, input: stackport_core::MongoExportInput)
+    -> Result<stackport_core::MongoExportOutcome, String> { mongo.export_documents(&id, token, &database, &collection, input).await }
+
+#[tauri::command]
 async fn build_mongo_find_filter(node: stackport_core::MongoFindNode, base: String) -> Result<String, String> {
     worker(move || stackport_core::build_mongo_find_filter(node, &base)).await
 }
@@ -2789,6 +2793,7 @@ fn main() {
             apply_mongo_namespace_create,
             mongo_documents,
             count_mongo_documents,
+            export_mongo_documents,
             build_mongo_find_filter,
             begin_mongo_document_edit,
             edit_mongo_document_draft,

@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Database, Plug, RefreshCw, ShieldCheck } from "lucide-react";
+import { Database, Download, Plug, RefreshCw, ShieldCheck } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { mongoAddress, type MongoProfile } from "./MongoProfileDialog";
 import { MongoSchemaAnalysis } from "./MongoSchemaAnalysis";
 import { MongoDocumentList, type MongoDocumentPage } from "./MongoDocumentList";
+import { MongoDocumentExportDialog, type MongoDocumentQuery } from "./MongoDocumentExportDialog";
 import { MongoDocumentEditDialog, type MongoDocumentChange } from "./MongoDocumentEditDialog";
 import { MongoFindBuilder, type MongoFindState } from "./MongoFindBuilder";
 import { MongoIndexDialog, mongoIndexActionLabels, type MongoIndexAction } from "./MongoIndexDialog";
 import { MongoNamespaceDialog, type MongoNamespaceReport, type MongoValidationSettings, type MongoViewSettings } from "./MongoNamespaceDialog";
 import { MongoCollectionActionDialog, type MongoCollectionAction } from "./MongoCollectionActionDialog";
 import { MongoPipeline } from "./MongoPipeline";
+import { ResultFileReport, type ExportReport } from "./ResultExportDialog";
 import { useNativeRead } from "./usePostgresRead";
 import "./mongoWorkspace.css";
 
@@ -18,9 +20,7 @@ type Session = { id: string; database: string | null; allow_edits: boolean; allo
 type Page<T> = { items: T[]; has_next: boolean };
 type Collection = { name: string; kind: string };
 type Index = { name: string; keys: string; unique: boolean; ttl_seconds: number | null; ttl_eligible: boolean; hidden: boolean };
-type Query = { filter: string; projection: string; sort_field: string; descending: boolean; page: number };
-
-const defaultQuery: Query = { filter: "", projection: "", sort_field: "_id", descending: false, page: 0 };
+const defaultQuery: MongoDocumentQuery = { filter: "", projection: "", sort_field: "_id", descending: false, page: 0 };
 const displayNumber = new Intl.NumberFormat("ko-KR");
 
 export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onBusy: (busy: boolean) => void }) {
@@ -85,7 +85,8 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
       </div>
     </div>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
-    {session && <Browse key={session.id} session={session} projectId={profile.project_id} environment={settings.environment} onBusy={onBusy} />}
+    {session && <Browse key={session.id} session={session} projectId={profile.project_id}
+      profileName={settings.name} environment={settings.environment} onBusy={onBusy} />}
     {login && <Dialog title="MongoDB 연결" busy={busy} onClose={() => { setLogin(false); setPassword(""); setError(""); }}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{mongoAddress(settings.uri)}</p>
@@ -107,7 +108,9 @@ export function MongoWorkspace({ profile, onBusy }: { profile: MongoProfile; onB
   </section>;
 }
 
-function Browse({ session, projectId, environment, onBusy }: { session: Session; projectId: string; environment: string; onBusy: (busy: boolean) => void }) {
+function Browse({ session, projectId, profileName, environment, onBusy }: {
+  session: Session; projectId: string; profileName: string; environment: string; onBusy: (busy: boolean) => void;
+}) {
   const [database, setDatabase] = useState(session.database);
   const [collection, setCollection] = useState<Collection | null>(null);
   const [revision, setRevision] = useState(0);
@@ -159,7 +162,7 @@ function Browse({ session, projectId, environment, onBusy }: { session: Session;
         allowDefinitionEdits={manageCollection || (session.allow_namespaces && collection.kind === "view")}
         onCollectionAction={manageCollection
           ? action => { setNamespaceNotice(""); setCollectionAction({ database, name: collection.name, action }); } : undefined}
-        environment={environment} onBusy={onBusy} />
+        profileName={profileName} environment={environment} onBusy={onBusy} />
       : <section className="results-card"><p className="result-empty">데이터베이스와 컬렉션을 선택하세요.</p></section>}
     {creating && <MongoNamespaceDialog id={session.id} initialDatabase={database ?? ""} initialSource={collection?.name ?? ""}
       environment={environment} onBusy={onBusy} onClose={() => setCreating(false)} onDone={created} />}
@@ -194,9 +197,9 @@ function Catalog<T>({ title, command, args, revision, name, detail, selected, on
   </section>;
 }
 
-function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowDefinitionEdits, onCollectionAction, environment, onBusy }: {
+function CollectionContent({ id, database, collection, projectId, revision, refresh, allowEdits, allowIndexes, allowDefinitionEdits, onCollectionAction, profileName, environment, onBusy }: {
   id: string; database: string; collection: Collection; projectId: string; revision: number; refresh: () => void;
-  allowEdits: boolean; allowIndexes: boolean; allowDefinitionEdits: boolean; environment: string; onBusy: (busy: boolean) => void;
+  allowEdits: boolean; allowIndexes: boolean; allowDefinitionEdits: boolean; profileName: string; environment: string; onBusy: (busy: boolean) => void;
   onCollectionAction?: (action: MongoCollectionAction) => void;
 }) {
   const [view, setView] = useState<"documents" | "indexes" | "schema" | "pipeline" | "definition">("documents");
@@ -211,6 +214,8 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const [indexNotice, setIndexNotice] = useState("");
   const [definitionRequest, setDefinitionRequest] = useState<{ id: string; database: string; name: string } | null>(null);
   const [definitionNotice, setDefinitionNotice] = useState("");
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const args = useMemo(() => ({ id, database, collection: collection.name }), [id, database, collection.name]);
   const docArgs = useMemo(() => view === "documents" ? { ...args, query } : null, [args, query, view]);
   const countArgs = useMemo(() => view === "documents" && countRequest?.filter === query.filter
@@ -223,9 +228,9 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
   const editLabel = isView ? "뷰 정의" : "유효성 규칙";
   const editSettings = useNativeRead<MongoValidationSettings | MongoViewSettings>(
     isView ? "mongo_namespace_view_settings" : "mongo_namespace_validation_settings", definitionRequest);
-  const update = (change: Partial<Query>) => setDraft(value => ({ ...value, ...change }));
+  const update = (change: Partial<MongoDocumentQuery>) => setDraft(value => ({ ...value, ...change }));
   const narrowDocument = () => { update({ projection: '{"_id": 1}' }); setQuery({ ...query, projection: '{"_id": 1}', page: 0 }); };
-  function applyQuery(next: Query) {
+  function applyQuery(next: MongoDocumentQuery) {
     if (next.filter !== query.filter) setCountRequest(null);
     setQuery({ ...next, page: 0 });
   }
@@ -285,6 +290,9 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       <div className="mongo-actions" role="group" aria-label="문서 작업">
         {allowEdits && <button type="button" className="secondary small" onClick={() => setDocumentEdit({ kind: "insert" })}>문서 삽입</button>}
         <button type="button" className="secondary small" onClick={() => setFindOpen(true)}>찾기 빌더</button>
+        <button type="button" className="secondary small" onClick={() => setExportOpen(true)}>
+          <Download size={14} aria-hidden /> 문서 내보내기
+        </button>
         <button type="button" className="secondary small" disabled={documents.loading || count.loading}
           onClick={() => setCountRequest({ filter: query.filter })}>일치 건수 조회</button>
         {count.loading && <span className="mongo-count" role="status">건수 조회 중…</span>}
@@ -292,6 +300,7 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
       </div>
       {count.error && <p className="error-banner" role="alert">{count.error}</p>}
       {documentNotice && <p className="form-note mongo-note" role="status">{documentNotice}</p>}
+      {exportReport && <ResultFileReport report={exportReport} onDismiss={() => setExportReport(null)} />}
       <details className="mongo-query">
         <summary>필터 및 정렬</summary>
         <form onSubmit={event => { event.preventDefault(); applyQuery(draft); }}>
@@ -350,6 +359,11 @@ function CollectionContent({ id, database, collection, projectId, revision, refr
         setDocumentEdit(null);
         setDocumentNotice(`문서 ${report.affected_count}개 변경 완료${report.audit_warning ? " · 완료 감사 기록 저장 실패" : ""}`);
         refresh();
+      }} />}
+    {exportOpen && <MongoDocumentExportDialog profile={{ name: profileName, environment }} target={args} query={query}
+      onBusy={onBusy} onClose={() => setExportOpen(false)} onExported={report => {
+        setExportOpen(false);
+        setExportReport(report);
       }} />}
   </section>;
 }

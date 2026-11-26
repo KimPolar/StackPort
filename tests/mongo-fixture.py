@@ -105,6 +105,12 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
     } for rank in range(23))
     records.create_index([('rank', -1)], name='rank_desc')
     records.create_index('expires', name='expiry', expireAfterSeconds=600)
+    client.visible.export_special.insert_one({
+        '_id': 'csv', 'formula': '=1+1', 'array': [{'n': Int64(-9007199254740993)}],
+        'meta': {'label': '쉼표, "인용"\n다음 줄'},
+    })
+    client.visible.export_ambiguous.insert_one({'_id': 'ambiguous', 'value': {'$numberLong': '3'}})
+    client.visible.export_batches.insert_many({'_id': index} for index in range(130))
     client.visible.command('create', 'recent_records', viewOn='records',
                            pipeline=[{'$match': {'rank': {'$gte': 20}}}])
     client.visible.schema_samples.insert_many([
