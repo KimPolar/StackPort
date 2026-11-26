@@ -1,4 +1,5 @@
 mod catalog;
+mod data_pump;
 mod export;
 mod profiles;
 mod query;
@@ -7,6 +8,7 @@ pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
 pub use catalog::{CatalogPage, Column, DataPage, Object};
+pub use data_pump::{DumpHeader, PumpCapabilities, PumpExportOptions, PumpOutcome, PumpPreview, PumpProgress};
 pub use profiles::{Profile, ProfileSettings, Target, Transport};
 pub use query::{QueryInput, QueryOutcome, QuerySource};
 
@@ -63,6 +65,7 @@ struct Session {
     profile: Profile,
     password: Mutex<Option<Password>>,
     export: Mutex<export::State>,
+    data_pump: Mutex<data_pump::State>,
     query: Mutex<Option<query::ActiveQuery>>,
     _wallet: Option<TempDir>,
     _permit: OwnedSemaphorePermit,
@@ -117,6 +120,7 @@ impl Manager {
                 profile,
                 password: Mutex::new(Some(password)),
                 export: Mutex::new(export::State::default()),
+                data_pump: Mutex::new(data_pump::State::default()),
                 query: Mutex::new(None),
                 _wallet: wallet,
                 _permit: permit,
@@ -148,6 +152,7 @@ impl Manager {
         if let Some(session) = session {
             session.closed.store(true, Ordering::Release);
             session.stop_query();
+            session.stop_data_pump()?;
             session
                 .password
                 .lock()

@@ -4,6 +4,7 @@ import { Archive, Database, Download, Plug, RefreshCw, RotateCcw, Search, Shield
 import { DatabasePreviewGrid, type DatabasePreviewValue } from "./DatabasePreviewGrid";
 import { Dialog } from "./Dialog";
 import { ObjectDefinitionPanel } from "./ObjectDefinitionPanel";
+import { OracleDataPumpDialog } from "./OracleDataPumpDialog";
 import { RelationalScriptWorkspace } from "./RelationalScriptWorkspace";
 import { PostgresPager } from "./PostgresPager";
 import { ResultFileDialog, ResultFileReport, type ExportDriver, type ExportOutcome, type ExportReport } from "./ResultExportDialog";
@@ -98,17 +99,22 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
             <button type="button" className="secondary" onClick={() => setBackupTool("backup")}><Archive size={15} aria-hidden /> DB 백업</button>
             <button type="button" className="secondary" onClick={() => setBackupTool("restore")}><RotateCcw size={15} aria-hidden /> DB 복원</button>
           </>}
+          {prefix === "oracle" && <button type="button" className="secondary" onClick={() => setBackupTool("backup")}>
+            <Archive size={15} aria-hidden /> Data Pump</button>}
           <button type="button" className="secondary" onClick={disconnect}>{engine} 연결 끊기</button></>
           : <button type="button" className="primary" onClick={() => { setError(""); setLogin(true); }}><Plug size={15} aria-hidden /> {engine} 연결</button>}
       </div>
     </header>
     {error && !login && <p className="error-banner" role="alert">{error}</p>}
     {session && <RelationalViews key={session.id} session={session} profile={profile} editor={editor} engine={engine} prefix={prefix} />}
-    {session && backupTool === "backup" && <SqlServerBackupDialog id={session.id}
+    {session && prefix === "sql_server" && backupTool === "backup" && <SqlServerBackupDialog id={session.id}
       server={`${settings.name} · ${endpoint}`} database={session.database} environment={settings.environment}
       onClose={() => setBackupTool(null)} />}
     {session && backupTool === "restore" && <SqlServerRestoreDialog id={session.id}
       server={`${settings.name} · ${endpoint}`} environment={settings.environment} onClose={() => setBackupTool(null)} />}
+    {session && prefix === "oracle" && backupTool === "backup" && <OracleDataPumpDialog id={session.id}
+      server={`${settings.name} · ${endpoint}`} database={session.database} environment={settings.environment}
+      onClose={() => setBackupTool(null)} />}
     {login && <Dialog title={engine + " 연결"} busy={busy} onClose={closeLogin}>
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>

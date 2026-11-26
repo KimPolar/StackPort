@@ -2391,6 +2391,8 @@ const auditOperationNames: Record<string, string> = {
   "postgres.sql.script.export.json": "PostgreSQL 스크립트 결과 JSON 저장",
   "sql_server.export.csv": "SQL Server CSV 내보내기", "sql_server.export.json": "SQL Server JSON 내보내기",
   "oracle.export.csv": "Oracle CSV 내보내기", "oracle.export.json": "Oracle JSON 내보내기",
+  "oracle.pump.export": "Oracle Data Pump 스키마 백업",
+  "oracle.pump.export.unconfirmed": "Oracle Data Pump 백업 결과 미확인",
   "snowflake.export.csv": "Snowflake CSV 내보내기", "snowflake.export.json": "Snowflake JSON 내보내기",
   "postgres.edit.cell": "PostgreSQL 셀 변경",
   "postgres.edit.row": "PostgreSQL 행 변경",

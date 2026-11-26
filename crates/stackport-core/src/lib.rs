@@ -968,6 +968,9 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "sql_server.restore" | "sql_server.restore.unconfirmed" if record.environment == Some("PROD") =>
             "sql-server-new-database-restore-reviewed-prod",
         "sql_server.restore" | "sql_server.restore.unconfirmed" => "sql-server-new-database-restore-reviewed",
+        "oracle.pump.export" | "oracle.pump.export.unconfirmed" if record.environment == Some("PROD") =>
+            "oracle-datapump-schema-export-reviewed-prod",
+        "oracle.pump.export" | "oracle.pump.export.unconfirmed" => "oracle-datapump-schema-export-reviewed",
         "sqlite.backup" => "sqlite-snapshot-no-overwrite",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",

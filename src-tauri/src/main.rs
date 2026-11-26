@@ -1449,6 +1449,40 @@ fn cancel_oracle_export(manager: State<'_, oracle::Manager>, id: String, request
 }
 
 #[tauri::command]
+async fn oracle_pump_capabilities(manager: State<'_, oracle::Manager>, id: String) -> Result<oracle::PumpCapabilities, String> {
+    manager.pump_capabilities(&id).await
+}
+
+#[tauri::command]
+async fn preview_oracle_pump_export(manager: State<'_, oracle::Manager>, id: String, options: oracle::PumpExportOptions)
+    -> Result<oracle::PumpPreview, String> { manager.preview_pump_export(&id, options).await }
+
+#[tauri::command]
+fn discard_oracle_pump_export(manager: State<'_, oracle::Manager>, id: String, token: String) -> Result<(), String> {
+    manager.discard_pump_export(&id, &token)
+}
+
+#[tauri::command]
+async fn run_oracle_pump_export(manager: State<'_, oracle::Manager>, id: String, request_id: String, token: String,
+    approved: bool, confirmation: String) -> Result<oracle::PumpOutcome, String> {
+    manager.export_pump(&id, &request_id, &token, approved, &confirmation).await
+}
+
+#[tauri::command]
+fn oracle_pump_progress(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<Option<oracle::PumpProgress>, String> {
+    manager.pump_progress(&id, &request_id)
+}
+
+#[tauri::command]
+fn cancel_oracle_pump(manager: State<'_, oracle::Manager>, id: String, request_id: String) -> Result<bool, String> {
+    manager.cancel_pump(&id, &request_id)
+}
+
+#[tauri::command]
+async fn inspect_oracle_pump_dump(manager: State<'_, oracle::Manager>, id: String, directory: String, filename: String, expected_job: Option<String>)
+    -> Result<oracle::DumpHeader, String> { manager.inspect_pump_dump(&id, directory, filename, expected_job).await }
+
+#[tauri::command]
 async fn list_snowflake_profiles(store: State<'_, Store>, project_id: String) -> Result<Vec<snowflake::Profile>, String> {
     let store = store.inner().clone();
     worker(move || store.list_snowflake_profiles(&project_id)).await
@@ -3080,6 +3114,13 @@ fn main() {
             export_oracle,
             oracle_export_progress,
             cancel_oracle_export,
+            oracle_pump_capabilities,
+            preview_oracle_pump_export,
+            discard_oracle_pump_export,
+            run_oracle_pump_export,
+            oracle_pump_progress,
+            cancel_oracle_pump,
+            inspect_oracle_pump_dump,
             list_snowflake_profiles,
             create_snowflake_profile,
             update_snowflake_profile,

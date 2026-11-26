@@ -606,6 +606,139 @@ async function verifyExports(command, id, profile, folder, catalog, hiddenObject
   assert.equal((await save(wide, 'after-cancel.json')).report.rows, 121);
 }
 
+async function verifyPump(page, python) {
+  page.setDefaultTimeout(20_000);
+  const call = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const fixture = (...args) => execFileSync(python, [
+    path.join(__dirname, 'oracle-pump-fixture.py'), String(port), run, service, ...args,
+  ], { encoding: 'utf8', windowsHide: true, timeout: 120_000 });
+  fixture('setup');
+  const source = 'SP_PUMP_' + run;
+  const directory = 'SP_DUMP_' + run;
+  const readonly = 'SP_DUMP_READ_' + run;
+  const secret = 'StackPortPump89Qa';
+  const project = await call('create_project', { name: 'Oracle Data Pump 실서버 검증' });
+  await page.reload();
+  await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+  await chooseDatabase(page, engine);
+  const form = page.getByRole('dialog', { name: engine + ' 연결 추가', exact: true });
+  await form.getByLabel('연결 이름').fill('Data Pump 검증');
+  await form.getByLabel('호스트 이름 또는 IP').fill('localhost');
+  await form.getByLabel('서비스 이름', { exact: true }).fill(service);
+  await form.getByLabel('사용자 이름').fill(source);
+  await form.getByLabel('환경').selectOption('PROD');
+  await form.getByLabel('전송 방식').selectOption(tcpOnly ? 'tcp' : 'tcps');
+  await form.getByLabel('포트').fill(String(tcpOnly ? port : tcpsPort));
+  if (!tcpOnly) await form.getByLabel('CA 인증서 경로 (선택)').fill(ca);
+  await form.getByRole('button', { name: '저장', exact: true }).click();
+  await form.waitFor({ state: 'detached' });
+  const [profile] = await call('list_oracle_profiles', { projectId: project.id });
+  const limited = await call('create_oracle_profile', {
+    projectId: project.id, input: { ...profile.settings, name: 'Data Pump 제한 계정', username: 'SP_READ_' + run },
+  });
+  const open = profile => call('open_oracle', { profileId: profile.id, revision: profile.revision, password: secret, confirmation: 'PROD' });
+  const inspect = (id, filename, name = directory, expectedJob = null) => call('inspect_oracle_pump_dump', { id, directory: name, filename, expectedJob });
+  const preview = (id, content, name = directory) => call('preview_oracle_pump_export', { id, options: { directory: name, content } });
+  const apply = (id, token, changes = {}) => call('run_oracle_pump_export', {
+    id, requestId: randomUUID(), token, approved: true, confirmation: 'PROD', ...changes,
+  });
+  const { id: readerId } = await open(limited);
+  try {
+    const caps = await call('oracle_pump_capabilities', { id: readerId });
+    assert.equal(caps.create_table, false);
+    assert.ok(caps.directories.some(item => item.name === readonly && item.readable && !item.writable));
+    await assert.rejects(preview(readerId, 'all'), /CREATE TABLE/);
+  } finally { await call('close_oracle', { id: readerId }); }
+
+  const { id } = await open(profile);
+  try {
+    const caps = await call('oracle_pump_capabilities', { id });
+    assert.equal(caps.schema, source);
+    assert.equal(caps.create_table, true);
+    assert.ok(caps.directories.some(item => item.name === directory && item.readable && item.writable));
+    await assert.rejects(preview(id, 'all', readonly), /WRITE/);
+    await assert.rejects(inspect(id, '../archive.dmp'), /파일 이름/);
+    const conflict = await preview(id, 'all');
+    assert.equal(conflict.schema, source);
+    assert.match(conflict.filename, /^stackport-[a-f0-9]{32}\.dmp$/);
+    fixture('protect', conflict.filename);
+    await assert.rejects(apply(id, conflict.token, { approved: false }), /서버 파일 경로/);
+    await assert.rejects(apply(id, conflict.token, { confirmation: '' }), /PROD/);
+    const preserved = await apply(id, conflict.token);
+    assert.equal(preserved.status, 'failed', JSON.stringify(preserved));
+    fixture('check-protected', conflict.filename);
+    await assert.rejects(apply(id, conflict.token), /미리보기/);
+    const cancelledPlan = await preview(id, 'all');
+    const requestId = randomUUID();
+    const running = apply(id, cancelledPlan.token, { requestId });
+    void running.catch(() => {});
+    let started = false;
+    for (let attempt = 0; attempt < 160; attempt++) {
+      const progress = await call('oracle_pump_progress', { id, requestId });
+      if (progress?.started) { started = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    assert.ok(started, 'Oracle did not report that the cancellable job had started.');
+    assert.equal(await call('cancel_oracle_pump', { id, requestId }), true);
+    const cancelled = await running;
+    assert.equal(cancelled.status, 'cancelled', JSON.stringify(cancelled));
+    for (const content of ['metadata', 'data']) {
+      const plan = await preview(id, content);
+      const run = await apply(id, plan.token);
+      assert.equal(run.status, 'succeeded', JSON.stringify(run));
+      fixture('import', content, run.filename);
+    }
+  } finally { await call('close_oracle', { id }); }
+
+  const explorer = page.getByRole('complementary', { name: '작업 공간 탐색기', exact: true });
+  await explorer.getByRole('button', { name: engine + ' Data Pump 검증 열기', exact: true }).click();
+  const workspace = page.getByRole('region', { name: engine + ' 작업 공간', exact: true });
+  await workspace.getByRole('button', { name: engine + ' 연결', exact: true }).click();
+  const login = page.getByRole('dialog', { name: engine + ' 연결', exact: true });
+  await login.getByLabel(engine + ' 암호').fill(secret);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'Data Pump', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Oracle Data Pump', exact: true });
+  await dialog.getByLabel('Oracle 디렉터리').selectOption(directory);
+  await dialog.getByRole('button', { name: '백업 미리보기', exact: true }).click();
+  const start = dialog.getByRole('button', { name: '백업 실행', exact: true });
+  await start.waitFor();
+  assert.ok(await start.isDisabled());
+  const file = await dialog.getByText(/^stackport-[a-f0-9]{32}\.dmp$/, { exact: true }).textContent();
+  await dialog.getByRole('checkbox', { name: '스키마와 서버 파일 경로를 확인했습니다.' }).check();
+  assert.ok(await start.isDisabled());
+  await dialog.getByLabel('운영 확인 문구 PROD').fill('PROD');
+  await start.click();
+  const success = dialog.getByRole('status').filter({ hasText: 'Oracle 서버에 덤프를 저장했습니다.' });
+  await success.or(dialog.getByRole('alert')).first().waitFor({ timeout: 90_000 });
+  assert.ok(await success.isVisible(), await dialog.innerText());
+  await dialog.getByRole('button', { name: '이 덤프의 헤더 확인' }).click();
+  assert.equal(await dialog.getByLabel('덤프 파일 이름').inputValue(), file);
+  await dialog.getByRole('button', { name: '헤더 읽기', exact: true }).click();
+  const inspected = dialog.getByRole('status').filter({ hasText: '덤프 헤더를 확인했습니다.' });
+  await inspected.or(dialog.getByRole('alert')).first().waitFor({ timeout: 25_000 });
+  assert.ok(await inspected.isVisible(), await dialog.innerText());
+  await dialog.getByText('덤프 세트 ID', { exact: true }).waitFor();
+  fixture('import', 'all', file);
+
+  const { id: verifier } = await open(profile);
+  try {
+    const header = await inspect(verifier, file, readonly);
+    assert.match(header.guid, /^[a-f0-9-]{32,36}$/i);
+    assert.equal(header.job, `"${source}"."SP_EXP_${file.slice(10, 32).toUpperCase()}"`);
+    assert.match(header.source_version, /^\d+(?:\.\d+)*/);
+    assert.ok(BigInt(header.size_bytes) > 0);
+    await assert.rejects(inspect(verifier, file, readonly, 'SP_DIFFERENT_JOB'), /일치하지/);
+  } finally { await call('close_oracle', { id: verifier }); }
+  const { events } = await call('list_audit_events', { before: null });
+  const audit = events.filter(event => event.operation.startsWith('oracle.pump.export'));
+  assert.ok(audit.some(event => event.outcome === 'succeeded'));
+  assert.ok(audit.some(event => event.outcome === 'failed'));
+  assert.doesNotMatch(JSON.stringify(audit), /\.dmp|SP_PUMP_|SP_DUMP_|StackPortPump89Qa/);
+}
+
 async function main() {
   const cdp = process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369';
   if (process.env.STACKPORT_ORACLE_TEST_MOCK_BIND_EDITOR === '1') {
@@ -622,6 +755,13 @@ async function main() {
   }
   assert.ok(process.env.STACKPORT_ORACLE_SYS_PASSWORD);
   const python = process.env.STACKPORT_TEST_PYTHON || 'python';
+  if (process.env.STACKPORT_ORACLE_PUMP_DIRECTORY_PATH) {
+    const browser = await chromium.connectOverCDP(cdp);
+    try { await verifyPump(browser.contexts()[0].pages()[0], python); }
+    finally { await browser.close(); }
+    console.log('Oracle Windows Data Pump E2E passed (directories and permissions, collision protection, three export modes, dump header, and real isolated imports).');
+    return;
+  }
   const object = Number(execFileSync(python, [path.join(__dirname, 'oracle-fixture.py'), String(port), run, service], {
     encoding: 'utf8', windowsHide: true, timeout: 90_000,
   }).trim());
