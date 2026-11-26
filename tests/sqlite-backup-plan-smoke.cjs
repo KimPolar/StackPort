@@ -10,7 +10,7 @@ const { chooseDatabase } = require('./database-picker.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume'].includes(phase)) throw new Error('Set the isolated root and prepare/resume phase.');
+if (!root || !['prepare', 'resume', 'calendar'].includes(phase)) throw new Error('Set the isolated root and prepare/resume/calendar phase.');
 
 const source = path.join(root, '예약 원본.sqlite');
 const output = path.join(root, '예약 백업');
@@ -57,7 +57,7 @@ async function main() {
   };
 
   try {
-    if (phase === 'prepare') {
+    if (phase !== 'resume') {
       fs.mkdirSync(output);
       const db = new DatabaseSync(source);
       try {
@@ -83,6 +83,11 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
+        if (phase === 'calendar') {
+          await verifyCalendarPlan(dialog, history, () => state(profile.id), storeRun);
+          assert.deepEqual(errors, []);
+          return;
+        }
         await dialog.getByLabel('실행 주기').selectOption('once');
         const due = Math.floor(Date.now() / 1000) + 20;
         await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(dateInput(due));
@@ -185,6 +190,49 @@ async function main() {
     }
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
+}
+
+async function verifyCalendarPlan(dialog, history, state, storeRun) {
+  await dialog.getByLabel('실행 주기').selectOption('calendar');
+  await dialog.getByLabel('Cron 식', { exact: true }).fill('0 9 * * MON');
+  const zone = dialog.getByLabel('예약 시간대', { exact: true });
+  const preview = dialog.getByRole('button', { name: '일정 미리보기', exact: true });
+  const dates = dialog.getByRole('list', { name: '다음 실행 시각', exact: true });
+  const excluded = dialog.getByLabel('제외 날짜 (선택)');
+  await zone.fill('Invalid/Place');
+  await preview.click();
+  await dialog.getByRole('alert').getByText(/IANA 시간대/).waitFor();
+  await zone.fill('Asia/Seoul');
+  await preview.click();
+  await dates.getByRole('listitem').first().waitFor();
+  const entries = await dates.getByRole('listitem').allTextContents();
+  assert.equal(entries.length, 5);
+  assert.match(entries[0], /^\d{4}-\d{2}-\d{2} 09:00 \+09:00$/);
+  await excluded.fill(entries[0].slice(0, 10));
+  await preview.click();
+  await dates.getByText(entries[1], { exact: true }).waitFor();
+  assert.equal((await dates.getByRole('listitem').first().innerText()), entries[1]);
+  await dialog.getByLabel('Cron 식', { exact: true }).fill('* * * * *');
+  await excluded.fill('2099-12-25');
+  await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+  await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  const { plan } = await state();
+  assert.deepEqual(plan.calendar, { expression: '* * * * *', time_zone: 'Asia/Seoul', excluded_dates: ['2099-12-25'] });
+  assert.equal(plan.interval_minutes, null);
+  console.log('Validated the calendar preview and waiting for the next real minute tick.');
+  await history.getByText(/무결성 검사 통과 · 예약 실행/).first().waitFor({ timeout: 75000 });
+  const onward = await state();
+  const run = onward.runs.find(item => item.trigger_kind === 'scheduled');
+  storeRun(run);
+  assert.ok(run.started_at >= plan.next_at && onward.plan.next_at > run.started_at);
+  assert.equal(onward.plan.next_at % 60, 0);
+  await dialog.getByRole('button', { name: '예약 중지', exact: true }).click();
+  await dialog.getByText('예약 실행을 중지했습니다.', { exact: true }).waitFor();
+  const paused = (await state()).plan;
+  assert.equal(paused.next_at, null);
+  assert.deepEqual(paused.calendar, plan.calendar);
+  assert.equal(await zone.inputValue(), 'Asia/Seoul');
+  console.log('Ran a real calendar backup and kept the calendar rule when paused.');
 }
 
 main().catch(error => { console.error(error); process.exit(1); });

@@ -545,11 +545,13 @@ Windows의 **백업 → 백업 계획**에서 SQLite 연결별 폴더, 파일 �
 
 Windows 앱이 켜져 있을 때 계획을 실행합니다. 종료 중 지난 예약이 여러 건이면 재시작 후 한 번 실행하고 다음 주기를 이어 갑니다. 선택한 경우 예약 실패 1분 뒤 한 번 재시도하며, 상태 표시줄에 예약 결과가 표시됩니다. **예약 중지**는 예정분과 대기 중인 재시도를 취소합니다. 이미 시작한 백업은 계속 진행합니다. 동일 작업 공간을 여러 앱에서 열 때 저장 계획을 한 번에 하나씩 실행합니다. 작업 공간을 다른 위치에서 열면 계획의 저장 폴더와 일정을 다시 검토합니다. 보관된 프로젝트의 계획은 보관 해제 후 다시 실행 대상이 됩니다.
 
+SQLite와 PostgreSQL의 **달력 일정**은 분·시·일·월·요일을 지정하는 5필드 cron 식과 IANA 시간대를 사용합니다. **일정 미리보기**에서 다음 실행 시각을 최대 다섯 개까지 확인합니다. 서머타임으로 사라진 시각은 건너뛰고, 두 번 나타난 시각은 첫 번째에 실행합니다. 사용자가 입력한 휴일과 제외 날짜에는 지난 예약 실행과 자동 재시도도 건너뜁니다. 예약을 중지해도 cron 식, 시간대와 제외 날짜는 보존합니다. [cronexpr 예약 문법](https://docs.rs/cronexpr/latest/cronexpr/)
+
 PostgreSQL 작업 공간의 **백업 계획**은 Windows에 저장한 자격 증명으로 전체 데이터베이스를 `.backup` 파일로 저장합니다. 작업 공간에 열린 PostgreSQL 세션 없이 실행할 수 있습니다. 운영 계획을 저장하거나 즉시 실행하려면 `PROD`를 입력합니다. 계획은 저장할 때 검토한 PostgreSQL 연결 버전에 묶입니다. **용량 확인**에 표시되는 원본 크기는 서버의 디스크 사용량이며 압축된 파일의 실제 크기는 실행 이력에서 확인할 수 있습니다. [PostgreSQL 크기 함수](https://www.postgresql.org/docs/15/functions-admin.html) · [PostgreSQL pg_dump](https://www.postgresql.org/docs/16/app-pgdump.html)
 
 **백업 연결 경로**에서 직접 TLS 연결이나 같은 프로젝트에서 실행 중인 로컬 SSH 터널을 선택합니다. 계획에 터널과 경유 SSH 연결의 버전 및 순서를 저장합니다. 지정한 경로로 터널을 다시 열면 현재 로컬 포트를 사용하고 PostgreSQL 인증서는 원래 호스트 이름으로 검증합니다. 백업을 실행하는 앱 인스턴스에서 해당 터널을 시작해 둡니다. 터널이 중단되거나 경유 순서가 달라지면 해당 실행을 실패로 기록합니다. 터널이나 연결 정의를 편집하면 계획을 다시 검토합니다. [libpq 연결 설정](https://www.postgresql.org/docs/16/libpq-connect.html)
 
-백업 계획은 최근 실행 40건에 파일 크기, 무결성 검사 결과와 보존 만료일을 표시합니다. SQLite는 온라인 스냅샷을 검사하고 PostgreSQL은 `pg_restore`로 아카이브를 읽어 검사합니다. 새 파일을 게시하기 전에 SHA-256과 Windows 파일 ID를 확인합니다. **파일 지문 확인**은 현재 파일을 생성 당시 값과 대조하고 확인 시각을 기록합니다. 작업 공간 v25 이관은 기존 계획과 실행 이력, 기록된 파일 지문을 보존합니다. 기존 PostgreSQL 계획에는 직접 TLS 연결을 적용합니다. [PostgreSQL pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
+백업 계획은 최근 실행 40건에 파일 크기, 무결성 검사 결과와 보존 만료일을 표시합니다. SQLite는 온라인 스냅샷을 검사하고 PostgreSQL은 `pg_restore`로 아카이브를 읽어 검사합니다. 새 파일을 게시하기 전에 SHA-256과 Windows 파일 ID를 확인합니다. **파일 지문 확인**은 현재 파일을 생성 당시 값과 대조하고 확인 시각을 기록합니다. 작업 공간 v26 이관은 기존 단발·간격 계획과 PostgreSQL 연결 경로, 실행 이력 및 파일 지문을 보존합니다. [PostgreSQL pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
 
 **만료 파일** 목록에서 최근 40건보다 오래된 항목도 **더 보기**로 찾을 수 있습니다. Windows의 **만료 파일 삭제**는 보존 기간이 지난 백업 한 개의 경로·용량·지문을 미리 보여 줍니다. 확인은 5분 동안 한 번만 사용합니다. 삭제할 때 저장된 위치·파일 ID·크기·SHA-256을 다시 확인하고, 쓰기나 이름 변경이 겹치지 않도록 연 파일 핸들로 대상을 영구 삭제합니다. 변경되거나 교체된 파일, 링크, 복사한 작업 공간의 백업은 보존합니다. 삭제 결과와 시각을 실행 이력에 기록합니다. 앱이 파일 작업 도중 종료되면 완료 확인 필요로 표시합니다. 공용 감사 기록에는 백업 경로나 지문을 저장하지 않습니다. [Windows 파일 삭제 핸들](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_disposition_info) · [Windows 파일 ID](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_info)
 

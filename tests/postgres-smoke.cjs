@@ -2797,9 +2797,10 @@ async function main() {
   let browser;
   try {
     const tunnelPlan = process.env.STACKPORT_POSTGRES_TUNNEL_PLAN_ONLY === '1';
-    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1' || tunnelPlan) {
+    const calendarPlan = process.env.STACKPORT_POSTGRES_CALENDAR_ONLY === '1';
+    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1' || tunnelPlan || calendarPlan) {
       browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL);
-      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1', tunnelPlan);
+      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1', tunnelPlan, calendarPlan);
       return;
     }
     gateway = await startGateway(fixture.port);
@@ -2819,7 +2820,7 @@ async function main() {
   }
 }
 
-async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan) {
+async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan, calendarPlan) {
   assert.ok(backupTools);
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
@@ -2872,6 +2873,10 @@ async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan) {
     await page.getByRole('button', { name: 'PostgreSQL 연결 끊기', exact: true }).click();
     if (tunnelPlan) {
       await verifyTunneledPostgresBackupPlan(page, command, project, profile, fixture);
+      return;
+    }
+    if (calendarPlan) {
+      await verifyPostgresCalendarBackupPlan(page, command, profile);
       return;
     }
     const scheduled = testPlan ? await verifyPostgresBackupPlan(page, command, profile) : null;
@@ -2960,6 +2965,34 @@ async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan) {
   } finally {
     await command('forget_postgres_password', { profile }).catch(() => {});
   }
+}
+
+async function verifyPostgresCalendarBackupPlan(page, command, profile) {
+  const directory = path.join(root, 'postgres calendar backups');
+  fs.mkdirSync(directory);
+  await page.getByRole('button', { name: 'PostgreSQL 연결', exact: true }).waitFor();
+  await page.getByRole('button', { name: '백업 계획', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+  await dialog.getByLabel('저장 폴더').fill(directory);
+  await dialog.getByLabel('실행 주기').selectOption('calendar');
+  await dialog.getByLabel('Cron 식', { exact: true }).fill('* * * * *');
+  await dialog.getByLabel('예약 시간대', { exact: true }).fill('America/New_York');
+  await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+  await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
+  await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+  await dialog.getByText(/무결성 검사 통과 · 예약 실행/).first().waitFor({ timeout: 85000 });
+  const state = await command('postgres_backup_plan', { profileId: profile.id });
+  assert.equal(state.plan.calendar.time_zone, 'America/New_York');
+  assert.equal(state.plan.next_at % 60, 0);
+  const [run] = state.runs;
+  assert.equal(run.engine, 'PostgreSQL');
+  assert.equal(createHash('sha256').update(fs.readFileSync(run.path)).digest('hex'), run.artifact.sha256);
+  const data = execFileSync(path.join(backupTools, 'pg_restore.exe'), ['--data-only', '--schema=report', '--file=-', run.path],
+    { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+  assert.match(data, /행 4/);
+  await dialog.getByRole('button', { name: '예약 중지', exact: true }).click();
+  await dialog.getByText('예약 실행을 중지했습니다.', { exact: true }).waitFor();
+  console.log('PostgreSQL saved-credential calendar backup fired and its archive was read with pg_restore.');
 }
 
 async function verifyTunneledPostgresBackupPlan(page, command, project, profile, fixture) {

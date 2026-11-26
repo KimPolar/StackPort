@@ -1,7 +1,7 @@
 use stackport_core::{
     backup_artifact::{RemovalPreview, RemovalResult},
     backup_schedule::{
-        BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, ExpiredBackupPage,
+        BackupCalendar, BackupCapacity, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence, ExpiredBackupPage,
     },
     BackupTunnelRoute, PostgresProfile, SshTunnelManager, Store,
 };
@@ -33,6 +33,11 @@ impl Scheduler {
     pub(crate) fn stop(&self) {
         let _ = self.0.send(());
     }
+}
+
+#[tauri::command]
+pub(crate) async fn preview_backup_calendar(input: BackupCalendar) -> Result<Vec<CalendarOccurrence>, String> {
+    super::worker(move || stackport_core::backup_schedule::preview_backup_calendar(input)).await
 }
 
 #[tauri::command]

@@ -6,10 +6,13 @@ import type { PostgresProfile } from "./PostgresWorkspace";
 type Profile = { id: string; name: string; path: string; environment: string };
 type TunnelChoice = { id: string; name: string };
 type BackupTunnel = TunnelChoice & { revision: number; profiles: (TunnelChoice & { revision: number })[] };
+type Calendar = { expression: string; time_zone: string; excluded_dates: string[] };
+type Occurrence = { at: number; local_time: string };
 type Plan = {
   revision: number; directory: string; prefix: string; interval_minutes: number | null;
   retention_days: number; retry_once: boolean; next_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
+  calendar: Calendar | null;
 };
 type Run = {
   id: string; status: "running" | "succeeded" | "failed" | "interrupted"; trigger_kind: "scheduled" | "retry" | "manual";
@@ -26,7 +29,8 @@ type RemovalPreview = { token: string; path: string; size_bytes: number; sha256:
 type CredentialStatus = { supported: boolean; usable: boolean };
 type Draft = {
   revision: number | null; directory: string; prefix: string; scheduled: boolean; next: string;
-  periodic: boolean; minutes: string; retention: string; retry: boolean;
+  mode: "once" | "periodic" | "calendar"; minutes: string; retention: string; retry: boolean;
+  expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
 const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요" };
@@ -48,12 +52,27 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     prefix: plan?.prefix ?? `${engine}-backup`,
     scheduled: plan ? plan.next_at !== null : true,
     next: dateInput(plan?.next_at ?? Math.floor(Date.now() / 1000) + 600),
-    periodic: plan ? plan.interval_minutes !== null : true,
+    mode: plan?.calendar ? "calendar" : plan && plan.interval_minutes === null ? "once" : "periodic",
     minutes: String(plan?.interval_minutes ?? 1440),
+    expression: plan?.calendar?.expression ?? "0 2 * * *",
+    timeZone: plan?.calendar?.time_zone ?? (date.resolvedOptions().timeZone || "UTC"),
+    excluded: plan?.calendar?.excluded_dates.join("\n") ?? "",
     retention: String(plan?.retention_days ?? 30),
     retry: plan?.retry_once ?? true,
     tunnel: plan ? plan.tunnel : initialTunnel,
   };
+}
+
+function calendarInput(draft: Draft): Calendar {
+  return { expression: draft.expression.trim(), time_zone: draft.timeZone.trim(), excluded_dates: draft.excluded.split(/[\s,]+/).filter(Boolean) };
+}
+
+function calendarDate(seconds: number, timeZone: string) {
+  try {
+    return new Intl.DateTimeFormat("ko-KR", { timeZone: timeZone.trim(), dateStyle: "medium", timeStyle: "medium" }).format(seconds * 1000) + ` (${timeZone.trim()})`;
+  } catch {
+    return new Date(seconds * 1000).toISOString();
+  }
 }
 
 function matchesTunnel(selected: TunnelChoice | BackupTunnel, running: BackupTunnel) {
@@ -69,8 +88,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [capacity, setCapacity] = useState<Capacity | null>(null);
+  const [preview, setPreview] = useState<Occurrence[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "refresh" | "pause" | "file" | "history" | "">("");
+  const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "preview" | "refresh" | "pause" | "file" | "history" | "">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [removal, setRemoval] = useState<{ run: Run; preview: RemovalPreview } | null>(null);
@@ -122,6 +142,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setError("");
     setNotice("");
     if (key === "directory" || key === "tunnel") setCapacity(null);
+    if (key === "mode" || key === "expression" || key === "timeZone" || key === "excluded") setPreview([]);
   }
 
   async function perform(task: typeof busy, action: () => Promise<void>) {
@@ -137,13 +158,14 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   function apply(state: Snapshot) {
     setSnapshot(state);
     setDraft(form(state.plan, displayPath, engine, tunnels.find(tunnel => tunnel.id === preferredTunnel?.id) ?? preferredTunnel));
+    setPreview([]);
     setDirty(false);
   }
 
   function save(event: FormEvent) {
     event.preventDefault();
     if (!draft || needsCredential || approvalMissing || routeUnavailable) return;
-    const nextAt = draft.scheduled ? Date.parse(draft.next) / 1000 : null;
+    const nextAt = draft.scheduled && draft.mode !== "calendar" ? Date.parse(draft.next) / 1000 : null;
     if (nextAt !== null && (!Number.isSafeInteger(nextAt) || nextAt <= Date.now() / 1000)) {
       setError("첫 실행 시각을 현재보다 늦게 지정하세요.");
       return;
@@ -152,7 +174,9 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
       const target = postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
       apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...target, input: {
         revision: draft.revision, directory: draft.directory, prefix: draft.prefix,
-        interval_minutes: draft.periodic ? Number(draft.minutes) : null,
+        interval_minutes: draft.mode === "periodic" ? Number(draft.minutes) : null,
+        calendar: draft.mode === "calendar" ? calendarInput(draft) : null,
+        calendar_enabled: draft.mode === "calendar" && draft.scheduled,
         retention_days: Number(draft.retention), retry_once: draft.retry, next_at: nextAt,
       } }));
       setConfirmation("");
@@ -198,7 +222,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
 
   const plan = snapshot?.plan;
   const stale = draft && draft.revision !== (plan?.revision ?? null);
-  const nextAt = plan?.next_at ? dateText(plan.next_at) : "예약 없음";
+  const nextAt = plan?.next_at ? (plan.calendar ? calendarDate(plan.next_at, plan.calendar.time_zone) : dateText(plan.next_at)) : "예약 없음";
   const running = snapshot?.runs.some(run => run.status === "running");
   const runs = expiredPage?.runs ?? snapshot?.runs ?? [];
 
@@ -251,15 +275,35 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         <label className="files-check"><input type="checkbox" checked={draft.scheduled} disabled={Boolean(busy)}
           onChange={event => change("scheduled", event.target.checked)} /> 예약 실행</label>
         {draft.scheduled && <div className="backup-plan-fields">
-          <label className="field">첫 실행 (이 장치 시각)<input required type="datetime-local" step={1} value={draft.next}
-            disabled={Boolean(busy)} onChange={event => change("next", event.target.value)} /></label>
-          <label className="field">실행 주기<select value={draft.periodic ? "periodic" : "once"} disabled={Boolean(busy)}
-            onChange={event => change("periodic", event.target.value === "periodic")}>
-            <option value="once">한 번</option><option value="periodic">일정 간격으로 반복</option>
+          {draft.mode !== "calendar" && <label className="field">첫 실행 (이 장치 시각)<input required type="datetime-local" step={1} value={draft.next}
+            disabled={Boolean(busy)} onChange={event => change("next", event.target.value)} /></label>}
+          <label className="field">실행 주기<select value={draft.mode} disabled={Boolean(busy)}
+            onChange={event => change("mode", event.target.value as Draft["mode"])}>
+            <option value="once">한 번</option><option value="periodic">일정 간격으로 반복</option><option value="calendar">달력 일정 (cron)</option>
           </select></label>
-          {draft.periodic && <label className="field">간격 (분)<input required type="number" min={1} max={43200} step={1}
+          {draft.mode === "periodic" && <label className="field">간격 (분)<input required type="number" min={1} max={43200} step={1}
             value={draft.minutes} disabled={Boolean(busy)} onChange={event => change("minutes", event.target.value)} /></label>}
         </div>}
+        {draft.mode === "calendar" && <>
+          <div className="backup-plan-fields">
+            <label className="field">Cron 식<input required maxLength={160} value={draft.expression} placeholder="0 9 * * MON"
+              disabled={Boolean(busy)} onChange={event => change("expression", event.target.value)} /></label>
+            <label className="field">예약 시간대<input required maxLength={80} value={draft.timeZone} placeholder="Asia/Seoul"
+              disabled={Boolean(busy)} onChange={event => change("timeZone", event.target.value)} /></label>
+          </div>
+          <p className="form-note">분, 시, 일, 월, 요일 순서로 입력합니다. <code>0 9 * * MON</code>은 매주 월요일 오전 9시입니다.</p>
+          <label className="field">제외 날짜 (선택)<textarea rows={2} maxLength={4400} value={draft.excluded} placeholder="YYYY-MM-DD"
+            disabled={Boolean(busy)} onChange={event => change("excluded", event.target.value)} /></label>
+          <p className="form-note">휴일이나 건너뛸 날짜를 줄바꿈 또는 쉼표로 구분해 넣으세요. 서머타임으로 사라지는 시각은 건너뛰고, 두 번 나타나는 시각은 처음 한 번만 실행합니다.</p>
+          <button type="button" className="secondary small" disabled={Boolean(busy) || !draft.expression.trim() || !draft.timeZone.trim()}
+            onClick={() => void perform("preview", async () => {
+              setPreview([]);
+              setPreview(await invoke<Occurrence[]>("preview_backup_calendar", { input: calendarInput(draft) }));
+            })}>일정 미리보기</button>
+          {preview.length > 0 && <ul aria-label="다음 실행 시각" className="form-note">
+            {preview.map(item => <li key={item.at}><time dateTime={new Date(item.at * 1000).toISOString()}>{item.local_time}</time></li>)}
+          </ul>}
+        </>}
         <label className="files-check"><input type="checkbox" checked={draft.retry} disabled={Boolean(busy)}
           onChange={event => change("retry", event.target.checked)} /> 예약 실패 시 1분 뒤 한 번 재시도</label>
         <p className="form-note">앱을 실행 중일 때 백업합니다. 앱이 닫혀 있는 동안 지난 예약은 다음 실행에서 한 번 처리합니다. {postgres ? "백업 파일은 암호화되지 않습니다." : "백업은 전체 SQLite 파일이며 암호화되지 않습니다."}</p>

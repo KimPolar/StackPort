@@ -1,4 +1,8 @@
 //! Workspace scheduler for verified database backups.
+mod calendar;
+
+pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
+use calendar::CalendarSchedule;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
     db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
@@ -16,6 +20,7 @@ use uuid::Uuid;
 
 const RETRY_DELAY: i64 = 60;
 const LATEST_START: i64 = 4_102_444_800; // 2100-01-01 UTC
+const NO_CALENDAR_OCCURRENCE: &str = "2100년까지 실행할 수 있는 달력 일정이 없습니다.";
 
 pub(crate) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS backup_plans (
@@ -29,6 +34,7 @@ pub(crate) const SCHEMA: &str = "
         directory TEXT NOT NULL,
         prefix TEXT NOT NULL,
         interval_minutes INTEGER,
+        calendar TEXT CHECK (calendar IS NULL OR interval_minutes IS NULL),
         retention_days INTEGER NOT NULL,
         retry_once INTEGER NOT NULL,
         next_at INTEGER,
@@ -77,6 +83,14 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
         db.execute_batch("ALTER TABLE backup_plans ADD COLUMN postgres_tunnel TEXT
             CHECK (postgres_tunnel IS NULL OR postgres_profile_id IS NOT NULL);").map_err(db_error)?;
     }
+    let has_calendar: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('backup_plans') WHERE name='calendar')",
+        [], |row| row.get(0),
+    ).map_err(db_error)?;
+    if !has_calendar {
+        db.execute_batch("ALTER TABLE backup_plans ADD COLUMN calendar TEXT
+            CHECK (calendar IS NULL OR interval_minutes IS NULL);").map_err(db_error)?;
+    }
     if legacy {
         db.execute_batch("INSERT INTO backup_plans
             (profile_id, sqlite_profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at)
@@ -97,6 +111,10 @@ pub struct BackupPlanWrite {
     directory: String,
     prefix: String,
     interval_minutes: Option<i64>,
+    #[serde(default)]
+    calendar: Option<BackupCalendar>,
+    #[serde(default)]
+    calendar_enabled: bool,
     retention_days: i64,
     retry_once: bool,
     next_at: Option<i64>,
@@ -113,6 +131,7 @@ pub struct BackupPlan {
     directory: String,
     prefix: String,
     interval_minutes: Option<i64>,
+    calendar: Option<BackupCalendar>,
     retention_days: i64,
     retry_once: bool,
     next_at: Option<i64>,
@@ -289,12 +308,25 @@ impl Store {
         if !(1..=3_650).contains(&input.retention_days) {
             return Err("보존 기간은 1~3,650일로 입력하세요.".into());
         }
+        if input.calendar.is_some() && (input.next_at.is_some() || input.interval_minutes.is_some()) {
+            return Err("달력 일정과 단발·간격 예약은 함께 저장할 수 없습니다.".into());
+        }
+        if input.calendar.is_none() && input.calendar_enabled {
+            return Err("달력 예약을 사용하려면 cron 식과 시간대를 입력하세요.".into());
+        }
         if input
             .next_at
             .is_some_and(|at| at <= now || at > LATEST_START)
         {
             return Err("첫 예약은 현재보다 늦고 2100년 이전인 시각을 선택하세요.".into());
         }
+        let next_at = match &input.calendar {
+            Some(calendar) => {
+                let next = CalendarSchedule::parse(calendar)?.next_after(now)?.ok_or(NO_CALENDAR_OCCURRENCE)?;
+                input.calendar_enabled.then_some(next.at)
+            }
+            None => input.next_at,
+        };
         let directory = if postgres.is_some() {
             backup_directory(&input.directory)?.to_string_lossy().into_owned()
         } else {
@@ -323,18 +355,20 @@ impl Store {
         }
         let tunnel = route.map(serde_json::to_string).transpose()
             .map_err(|_| "백업 계획의 SSH 터널을 저장할 수 없습니다.")?;
+        let calendar = input.calendar.as_ref().map(serde_json::to_string).transpose()
+            .map_err(|_| "백업 달력 일정을 저장할 수 없습니다.")?;
         tx.execute(
             "INSERT INTO backup_plans
              (profile_id, revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at,
-              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+              sqlite_profile_id, postgres_profile_id, postgres_revision, postgres_tunnel, calendar)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(profile_id) DO UPDATE SET revision=excluded.revision, workspace_path=excluded.workspace_path,
              directory=excluded.directory, prefix=excluded.prefix, interval_minutes=excluded.interval_minutes,
              retention_days=excluded.retention_days, retry_once=excluded.retry_once, next_at=excluded.next_at, retry_at=NULL,
-             postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel",
+             postgres_revision=excluded.postgres_revision, postgres_tunnel=excluded.postgres_tunnel, calendar=excluded.calendar",
             params![profile_id, revision.unwrap_or(0) + 1, self.backup_workspace_path()?, directory,
-                prefix, input.interval_minutes, input.retention_days, input.retry_once, input.next_at,
-                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel],
+                prefix, input.interval_minutes, input.retention_days, input.retry_once, next_at,
+                postgres.is_none().then_some(profile_id), postgres.is_some().then_some(profile_id), postgres.map(|profile| profile.revision), tunnel, calendar],
         ).map_err(db_error)?;
         tx.commit().map_err(db_error)?;
         self.backup_plan(profile_id, postgres)
@@ -443,6 +477,19 @@ impl Store {
             );
         }
 
+        let calendar = plan.calendar.as_ref().map(CalendarSchedule::parse).transpose()?;
+        if manual.is_none() {
+            if let Some(schedule) = &calendar {
+                if schedule.is_excluded(now)? {
+                    let next_at = if plan.next_at.is_some() { schedule.next_after(now)?.map(|next| next.at) } else { None };
+                    tx.execute("UPDATE backup_plans SET next_at=?2, retry_at=NULL WHERE profile_id=?1",
+                        params![profile_id, next_at]).map_err(db_error)?;
+                    tx.commit().map_err(db_error)?;
+                    return Ok(None);
+                }
+            }
+        }
+
         let trigger_kind = if manual.is_some() {
             "manual"
         } else if plan
@@ -457,10 +504,14 @@ impl Store {
             "retry"
         } else {
             let due = plan.next_at.ok_or("실행할 예약을 찾을 수 없습니다.")?;
-            let next_at = plan.interval_minutes.map(|minutes| {
-                let period = minutes * 60;
-                due + ((now - due) / period + 1) * period
-            });
+            let next_at = if let Some(schedule) = &calendar {
+                schedule.next_after(now)?.map(|next| next.at)
+            } else {
+                plan.interval_minutes.map(|minutes| {
+                    let period = minutes * 60;
+                    due + ((now - due) / period + 1) * period
+                })
+            };
             tx.execute(
                 "UPDATE backup_plans SET next_at=?2 WHERE profile_id=?1",
                 params![profile_id, next_at],
@@ -538,6 +589,7 @@ impl Store {
                 if trigger_kind == "scheduled"
                     && plan.retry_once
                     && matches!(destination.try_exists(), Ok(false))
+                    && !calendar.as_ref().map(|rule| rule.is_excluded(finished_at + RETRY_DELAY)).transpose()?.unwrap_or(false)
                 {
                     tx.execute(
                         "UPDATE backup_plans SET retry_at=?3 WHERE profile_id=?1 AND revision=?2 AND retry_at IS NULL",
@@ -608,7 +660,7 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
 
 fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
     db.query_row(
-        "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at, postgres_revision, postgres_tunnel
+        "SELECT revision, workspace_path, directory, prefix, interval_minutes, retention_days, retry_once, next_at, retry_at, postgres_revision, postgres_tunnel, calendar
          FROM backup_plans WHERE profile_id=?1",
         [profile_id], |row| Ok(BackupPlan {
             revision: row.get(0)?, workspace_path: row.get(1)?, directory: row.get(2)?, prefix: row.get(3)?,
@@ -616,6 +668,8 @@ fn read_plan(db: &Connection, profile_id: &str) -> Result<Option<BackupPlan>> {
             next_at: row.get(7)?, retry_at: row.get(8)?, postgres_revision: row.get(9)?, requires_review: false,
             tunnel: row.get::<_, Option<String>>(10)?.map(|json| serde_json::from_str(&json)
                 .map_err(|error| rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
+            calendar: row.get::<_, Option<String>>(11)?.map(|json| serde_json::from_str(&json)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error)))).transpose()?,
         }),
     ).optional().map_err(db_error)
 }
@@ -786,6 +840,8 @@ mod tests {
                         directory: self.output.to_str().unwrap().into(),
                         prefix: "fixture".into(),
                         interval_minutes: interval,
+                        calendar: None,
+                        calendar_enabled: false,
                         retention_days: 7,
                         retry_once: true,
                         next_at: Some(first),
@@ -923,6 +979,67 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(f.store.run_sqlite_backup_plan(&f.profile_id, 1).is_err());
+    }
+
+    #[test]
+    fn calendar_plan_reopens_and_advances_past_missed_minutes() {
+        let f = Fixture::new();
+        let input = serde_json::from_value(serde_json::json!({
+            "revision": null, "directory": f.output, "prefix": "calendar", "retention_days": 7,
+            "retry_once": true, "calendar_enabled": true,
+            "calendar": { "expression": "* * * * *", "time_zone": "UTC" }
+        })).unwrap();
+        let saved = f.store.save_sqlite_backup_plan(&f.profile_id, input).unwrap().plan.unwrap();
+        let first = saved.next_at.unwrap();
+        let reopened = Store::open(&f.workspace).unwrap();
+        let run = reopened.process_backup(None, first + 212, None).unwrap().unwrap();
+        assert_eq!(run.status, "succeeded");
+        assert_eq!(run.trigger_kind, "scheduled");
+        assert!(reopened.process_backup(None, first + 212, None).unwrap().is_none());
+        let current = f.current();
+        assert_eq!(current.runs.len(), 1);
+        assert_eq!(current.plan.unwrap().next_at, Some(first + 240));
+        let paused = f.store.pause_sqlite_backup_plan(&f.profile_id, saved.revision).unwrap().plan.unwrap();
+        assert!(paused.calendar.is_some());
+        assert_eq!(paused.next_at, None);
+    }
+
+    #[test]
+    fn calendar_exclusions_skip_overdue_jobs_and_retries_but_allow_an_explicit_run() {
+        let f = Fixture::new();
+        let holiday = (unix_now().unwrap().div_euclid(86_400) + 2) * 86_400;
+        let date = DateTime::<Utc>::from_timestamp(holiday, 0).unwrap().format("%Y-%m-%d").to_string();
+        let input = serde_json::from_value(serde_json::json!({
+            "revision": null, "directory": f.output, "prefix": "calendar", "retention_days": 7,
+            "retry_once": true, "calendar_enabled": true,
+            "calendar": { "expression": "* * * * *", "time_zone": "UTC", "excluded_dates": [date] }
+        })).unwrap();
+        let saved = f.store.save_sqlite_backup_plan(&f.profile_id, input).unwrap().plan.unwrap();
+        f.store.connect().unwrap().execute("UPDATE backup_plans SET retry_at=?2 WHERE profile_id=?1",
+            params![f.profile_id, holiday - 30]).unwrap();
+        assert!(f.store.process_backup(None, holiday + 120, None).unwrap().is_none());
+        let state = f.current();
+        assert!(state.runs.is_empty());
+        let plan = state.plan.unwrap();
+        assert_eq!(plan.retry_at, None);
+        assert_eq!(plan.next_at, Some(holiday + 86_400));
+        let run = f.store.process_backup(Some((&f.profile_id, saved.revision, None)), holiday + 120, None)
+            .unwrap().unwrap();
+        assert_eq!(run.trigger_kind, "manual");
+        assert_eq!(run.status, "succeeded");
+        assert_eq!(f.current().plan.unwrap().next_at, Some(holiday + 86_400));
+    }
+
+    #[test]
+    fn v25_interval_plans_preserve_their_cadence() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, Some(60));
+        f.store.connect().unwrap().execute_batch("ALTER TABLE backup_plans DROP COLUMN calendar; PRAGMA user_version=25;").unwrap();
+        let upgraded = Store::open(&f.workspace).unwrap();
+        let plan = upgraded.sqlite_backup_plan(&f.profile_id).unwrap().plan.unwrap();
+        assert!(plan.calendar.is_none());
+        assert_eq!((plan.interval_minutes, plan.next_at), (Some(60), Some(first)));
     }
 
     #[test]

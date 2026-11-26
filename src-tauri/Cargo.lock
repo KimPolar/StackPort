@@ -1014,6 +1014,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
+name = "cronexpr"
+version = "1.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aea8642ad034578aac0f901f12cae6ddb9cbae03a3e0bb2796be33dbf8c68019"
+dependencies = [
+ "jiff 0.2.46",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5904,6 +5913,7 @@ dependencies = [
  "bson",
  "bytes",
  "chrono",
+ "cronexpr",
  "encoding_rs",
  "flate2",
  "futures-util",
