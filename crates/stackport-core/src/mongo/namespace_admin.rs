@@ -17,8 +17,8 @@ use std::{
 use tokio::{sync::Mutex, time::timeout};
 use uuid::Uuid;
 
-mod drop_collection;
-pub use drop_collection::MongoCollectionDropReview;
+mod collection_changes;
+pub use collection_changes::{MongoCollectionDropReview, MongoCollectionRenameReview};
 
 const REVIEW_TTL: Duration = Duration::from_secs(300);
 const STALE: &str = "MongoDB 변경 검토가 만료되었거나 바뀌었습니다. 다시 검토하세요.";
@@ -151,7 +151,8 @@ enum Change {
     Create,
     Validation(ValidationSnapshot),
     View(Document),
-    DropCollection(drop_collection::DropSnapshot),
+    DropCollection(collection_changes::CollectionSnapshot),
+    RenameCollection(collection_changes::RenameSnapshot),
 }
 
 #[derive(Clone, Copy)]
@@ -160,6 +161,7 @@ enum Action {
     Validation,
     View,
     DropCollection,
+    RenameCollection,
 }
 
 struct ValidationSnapshot {
@@ -426,6 +428,7 @@ impl MongoManager {
                             | (Change::Validation(_), Action::Validation)
                             | (Change::View(_), Action::View)
                             | (Change::DropCollection(_), Action::DropCollection)
+                            | (Change::RenameCollection(_), Action::RenameCollection)
                     )
             })
             .ok_or(STALE)?;
@@ -443,12 +446,19 @@ impl MongoManager {
             ..
         } = pending.take().ok_or(STALE)?;
         let db = client.database(&database);
-        let object_name =
-            matches!(action, Action::DropCollection).then(|| format!("{database}.{name}"));
+        let object_name = match &change {
+            Change::DropCollection(_) => Some(format!("{database}.{name}")),
+            Change::RenameCollection(before) => Some(format!(
+                "{database}.{name} → {database}.{}",
+                before.new_name
+            )),
+            _ => None,
+        };
         let (kind, operation) = match &change {
             Change::Validation(_) => ("collection", "mongo.namespace.validation"),
             Change::View(_) => ("view", "mongo.namespace.update_view"),
             Change::DropCollection(_) => ("collection", "mongo.namespace.drop_collection"),
+            Change::RenameCollection(_) => ("collection", "mongo.namespace.rename_collection"),
             Change::Create => {
                 check_names(&db, &name, &command).await?;
                 if command.contains_key("viewOn") {
@@ -470,7 +480,7 @@ impl MongoManager {
         )
         .await?;
         let result = async {
-            match change {
+            match &change {
                 Change::Validation(before) => {
                     let current = validation_snapshot(&db, &name)
                         .await?
@@ -490,7 +500,12 @@ impl MongoManager {
                     }
                 }
                 Change::DropCollection(before) => {
-                    drop_collection::check_snapshot(&db, &name, &before).await?;
+                    collection_changes::check_drop(&db, &name, before).await?;
+                }
+                Change::RenameCollection(before) => {
+                    collection_changes::check_rename(&db, &name, before).await?;
+                    return execute_namespace_change(&client.database("admin"), command, action)
+                        .await;
                 }
                 Change::Create => {}
             }
@@ -501,6 +516,11 @@ impl MongoManager {
             Ok(()) => (operation, "succeeded", Some(1)),
             Err(error) if error == UNKNOWN && matches!(action, Action::DropCollection) => (
                 "mongo.namespace.drop_collection.unconfirmed",
+                "started",
+                None,
+            ),
+            Err(error) if error == UNKNOWN && matches!(action, Action::RenameCollection) => (
+                "mongo.namespace.rename_collection.unconfirmed",
                 "started",
                 None,
             ),
@@ -521,7 +541,10 @@ impl MongoManager {
         match result {
             Ok(()) => Ok(MongoNamespaceReport {
                 database,
-                name,
+                name: match change {
+                    Change::RenameCollection(before) => before.new_name,
+                    _ => name,
+                },
                 kind,
                 audit_warning,
             }),
@@ -720,9 +743,15 @@ async fn execute_namespace_change(db: &Database, command: Document, action: Acti
                     "MongoDB 서버가 뷰 정의 변경을 거부했습니다. 원본, 파이프라인과 서버 지원을 확인하세요."
                 }
                 (Action::DropCollection, 13) => "현재 MongoDB 계정에 컬렉션을 삭제할 권한이 없습니다.",
-                (Action::DropCollection, 26 | 361) => drop_collection::CHANGED,
+                (Action::DropCollection, 26 | 361) => collection_changes::CHANGED,
                 (Action::DropCollection, 2 | 9 | 20 | 72 | 73 | 115 | 197 | 303 | 323 | 40415) => {
                     "MongoDB 서버가 UUID 조건이 있는 컬렉션 삭제를 거부했습니다. 서버 지원을 확인하세요."
+                }
+                (Action::RenameCollection, 13) => "현재 MongoDB 계정에 컬렉션 이름을 변경할 권한이 없습니다.",
+                (Action::RenameCollection, 26 | 361) => collection_changes::CHANGED,
+                (Action::RenameCollection, 48) => collection_changes::NAME_TAKEN,
+                (Action::RenameCollection, 2 | 9 | 20 | 72 | 73 | 115 | 166 | 197 | 303 | 323 | 40415) => {
+                    "MongoDB 서버가 컬렉션 이름 변경을 거부했습니다. 이름과 서버 지원을 확인하세요."
                 }
                 (Action::Create, 13) => "현재 MongoDB 계정에 컬렉션 또는 뷰를 생성할 권한이 없습니다.",
                 (Action::Create, 48) => EXISTS,

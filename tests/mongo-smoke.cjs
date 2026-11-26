@@ -248,6 +248,7 @@ async function verify(page, port, ca) {
   await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
     fixtureAction);
   await verifyCollectionDropCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, false, true), fixtureAction);
+  await verifyCollectionRenameCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, false, true), fixtureAction);
   const limitedNamespace = await open(profile, secret, 'PROD', false, false, true);
   try {
     const denied = await command('review_mongo_namespace_create', { id: limitedNamespace.id, database: 'visible',
@@ -261,6 +262,12 @@ async function verify(page, port, ca) {
     await assert.rejects(command('apply_mongo_namespace_view', { id: limitedNamespace.id, token: view.token, confirmation: 'PROD' }), /뷰를 변경할 권한/);
     const drop = await command('review_mongo_collection_drop', { id: limitedNamespace.id, database: 'visible', name: 'records' });
     await assert.rejects(command('apply_mongo_collection_drop', { id: limitedNamespace.id, token: drop.token, confirmation: 'PROD', approval: 'DROP' }), /삭제할 권한/);
+    const rename = await command('review_mongo_collection_rename', {
+      id: limitedNamespace.id, database: 'visible', name: 'records', newName: 'denied_rename',
+    });
+    await assert.rejects(command('apply_mongo_collection_rename', {
+      id: limitedNamespace.id, token: rename.token, confirmation: 'PROD',
+    }), /이름을 변경할 권한/);
   } finally {
     await command('close_mongo', { id: limitedNamespace.id });
   }
@@ -280,7 +287,8 @@ async function verify(page, port, ca) {
   await indexLogin.waitFor({ state: 'detached' });
   await verifyIndexEditor(page, workspace, detail);
   await verifyNamespaceEditor(page, workspace, detail);
-  await verifyCollectionDropEditor(page, workspace, detail);
+  await verifyCollectionRenameEditor(page, workspace, detail);
+  await verifyCollectionDropEditor(page, workspace, detail, 'ui_renamed');
   const audit = [];
   let cursor = null;
   do {
@@ -303,6 +311,9 @@ async function verify(page, port, ca) {
   }
   assert.ok(audit.some(event => event.operation === 'mongo.namespace.drop_collection' && event.outcome === 'succeeded'
     && event.object_name === 'namespace_new.drop_target' && event.policy === 'mongo-collection-drop-uuid-prod-reviewed'));
+  assert.ok(audit.some(event => event.operation === 'mongo.namespace.rename_collection' && event.outcome === 'succeeded'
+    && event.object_name === 'namespace_new.rename_source → namespace_new.rename_destination'
+    && event.policy === 'mongo-collection-rename-uuid-prod-reviewed'));
   assert.deepEqual(errors, []);
 }
 
@@ -347,9 +358,10 @@ async function verifyCollectionDropCommands(command, openAdmin, changeFixture) {
   }
 }
 
-async function verifyCollectionDropEditor(page, workspace, detail) {
+async function verifyCollectionDropEditor(page, workspace, detail, name) {
   const button = (container, name) => container.getByRole('button', { name, exact: true });
-  await button(workspace, 'ui_collection 컬렉션').click();
+  const entry = button(workspace, name + ' 컬렉션');
+  await entry.click();
   await button(detail, '정의').click();
   await button(detail, '컬렉션 삭제').click();
   const dialog = page.getByRole('dialog', { name: 'MongoDB 컬렉션 삭제', exact: true });
@@ -364,10 +376,84 @@ async function verifyCollectionDropEditor(page, workspace, detail) {
   await dialog.getByLabel('운영 환경 확인').fill('PROD');
   await apply.click();
   await dialog.waitFor({ state: 'detached' });
-  await button(workspace, 'ui_collection 컬렉션').waitFor({ state: 'detached' });
+  await entry.waitFor({ state: 'detached' });
   await detail.waitFor({ state: 'detached' });
-  await workspace.getByText('visible.ui_collection 컬렉션 삭제 완료.', { exact: true }).waitFor();
+  await workspace.getByText('visible.' + name + ' 컬렉션 삭제 완료.', { exact: true }).waitFor();
   await button(workspace, 'records 컬렉션').waitFor();
+  assert.equal(await entry.count(), 0);
+}
+
+async function verifyCollectionRenameCommands(command, openAdmin, changeFixture) {
+  const first = await openAdmin();
+  const second = await openAdmin();
+  const database = 'namespace_new';
+  const name = 'rename_source';
+  const destination = 'rename_destination';
+  const review = (id, newName, source = name) =>
+    command('review_mongo_collection_rename', { id, database, name: source, newName });
+  const apply = (id, token, confirmation = 'PROD') =>
+    command('apply_mongo_collection_rename', { id, token, confirmation });
+  const rows = async collection => (await command('mongo_documents', { id: first.id, database, collection, query: {} }))
+    .items.map(item => JSON.parse(item.json)._id);
+  try {
+    changeFixture('create_rename_source');
+    await assert.rejects(review(first.id, name), /기존 이름과 다른/);
+    await assert.rejects(review(first.id, 'system.views'), /유효한 MongoDB 컬렉션 이름/);
+    await assert.rejects(review(first.id, 'rename_taken'), /이미 있습니다/);
+    await assert.rejects(review(first.id, 'uses_rename_source'), /이미 있습니다/);
+    await assert.rejects(review(first.id, destination, 'uses_rename_source'), /일반 MongoDB 컬렉션/);
+    const initial = await review(first.id, destination);
+    assert.deepEqual(initial.dependent_views, ['uses_rename_source']);
+    assert.deepEqual(initial.destination_views, ['uses_rename_destination']);
+    assert.deepEqual(await rows(name), ['original']);
+    await assert.rejects(apply(second.id, initial.token), /만료되었거나/);
+    await assert.rejects(apply(first.id, initial.token, ''), /PROD/);
+    changeFixture('occupy_rename_destination');
+    await assert.rejects(apply(first.id, initial.token), /이미 있습니다/);
+    assert.deepEqual(await rows(destination), ['late-target']);
+    assert.deepEqual(await rows(name), ['original']);
+    changeFixture('clear_rename_destination');
+    const reviewedViews = await review(first.id, destination);
+    changeFixture('add_rename_dependency');
+    await assert.rejects(apply(first.id, reviewedViews.token), /의존 뷰가 바뀌었습니다/);
+    const outdated = await review(first.id, destination);
+    assert.deepEqual(outdated.destination_views, ['uses_rename_destination', 'uses_rename_destination_late']);
+    changeFixture('recreate_rename_source');
+    await assert.rejects(apply(first.id, outdated.token), /컬렉션 또는 의존 뷰가 바뀌었습니다/);
+    const latest = await review(first.id, destination);
+    assert.deepEqual(await apply(first.id, latest.token), { database, name: destination, kind: 'collection', audit_warning: false });
+    await assert.rejects(apply(first.id, latest.token), /만료되었거나/);
+    assert.deepEqual(await rows(destination), ['replacement']);
+    assert.deepEqual(await rows('uses_rename_destination'), ['replacement']);
+    assert.deepEqual(await rows('rename_taken'), ['keep-target']);
+    const indexes = await command('mongo_indexes', { id: first.id, database, collection: destination });
+    assert.ok(indexes.items.some(index => index.name === 'qty_idx'));
+    const catalog = await command('mongo_collections', { id: first.id, database, search: '', page: 0 });
+    assert.ok(!catalog.items.some(item => item.name === name));
+    assert.ok(catalog.items.some(item => item.name === 'uses_rename_source' && item.kind === 'view'));
+  } finally {
+    await Promise.all([first, second].map(session => command('close_mongo', { id: session.id })));
+  }
+}
+
+async function verifyCollectionRenameEditor(page, workspace, detail) {
+  const button = (container, name) => container.getByRole('button', { name, exact: true });
+  const original = button(workspace, 'ui_collection 컬렉션');
+  await original.click();
+  await button(detail, '정의').click();
+  await button(detail, '컬렉션 이름 변경').click();
+  const dialog = page.getByRole('dialog', { name: 'MongoDB 컬렉션 이름 변경', exact: true });
+  await dialog.getByLabel('새 컬렉션 이름').fill('ui_renamed');
+  await button(dialog, '이름 변경 검토').click();
+  await dialog.getByText(/visible\.ui_collection → visible\.ui_renamed/u).waitFor();
+  const apply = button(dialog, '검토한 이름 적용');
+  assert.equal(await apply.isDisabled(), true);
+  await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  await apply.click();
+  await dialog.waitFor({ state: 'detached' });
+  await detail.getByRole('heading', { name: 'ui_renamed', exact: true }).waitFor();
+  await button(workspace, 'ui_renamed 컬렉션').waitFor();
+  assert.equal(await original.count(), 0);
 }
 
 async function verifyNamespaceCommands(command, openAdmin, changeFixture) {
@@ -999,7 +1085,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation, validation changes, view updates, and collection drops and renames).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;

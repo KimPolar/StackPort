@@ -59,6 +59,37 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         client.namespace_new.drop_collection('drop_target')
         client.namespace_new.drop_target.insert_one({'_id': 'replacement'})
         sys.exit(0)
+    if action == ['create_rename_source']:
+        db = client.namespace_new
+        db.rename_source.insert_one({'_id': 'original', 'qty': 2})
+        db.rename_source.create_index('qty', name='qty_idx')
+        db.rename_taken.insert_one({'_id': 'keep-target'})
+        db.create_collection('uses_rename_source', viewOn='rename_source', pipeline=[])
+        db.create_collection('uses_rename_destination', viewOn='rename_destination', pipeline=[])
+        try:
+            client.admin.command('renameCollection', 'namespace_new.rename_source',
+                                 to='namespace_new.rename_destination',
+                                 dropTarget=False, collectionUUID=Binary.from_uuid(uuid4()))
+            raise AssertionError('MongoDB accepted a rename with the wrong collection UUID')
+        except OperationFailure as error:
+            assert error.code == 361, error
+        sys.exit(0)
+    if action == ['occupy_rename_destination']:
+        client.namespace_new.rename_destination.insert_one({'_id': 'late-target'})
+        sys.exit(0)
+    if action == ['clear_rename_destination']:
+        client.namespace_new.drop_collection('rename_destination')
+        sys.exit(0)
+    if action == ['add_rename_dependency']:
+        client.namespace_new.create_collection('uses_rename_destination_late',
+                                              viewOn='rename_destination', pipeline=[])
+        sys.exit(0)
+    if action == ['recreate_rename_source']:
+        db = client.namespace_new
+        db.drop_collection('rename_source')
+        db.rename_source.insert_one({'_id': 'replacement', 'qty': 3})
+        db.rename_source.create_index('qty', name='qty_idx')
+        sys.exit(0)
     if action:
         raise ValueError('Unexpected fixture action')
     client.private.data.insert_one({'private': True})

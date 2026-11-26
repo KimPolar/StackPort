@@ -14,7 +14,7 @@ pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, Mo
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
-pub use namespace_admin::{MongoCollectionDropReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
+pub use namespace_admin::{MongoCollectionDropReview, MongoCollectionRenameReview, MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings, MongoViewSettings};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};

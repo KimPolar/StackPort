@@ -28,6 +28,10 @@ Windows 앱과 TLS를 적용한 MongoDB 8.0.38에서 규칙 변경으로 인한 
 
 Windows 앱과 MongoDB 8.0.38 TLS 환경에서 승인 후 삭제와 읽기 전용 계정의 요청 거절을 확인했습니다. 의존 뷰가 추가되거나 같은 이름의 컬렉션이 재생성되면 이전 검토가 거절됐습니다. MongoDB는 잘못된 UUID를 포함한 삭제 명령도 거절했습니다. 뷰는 UUID가 없으므로 뷰 삭제에는 서버에서 대상의 이름과 타입을 함께 확인할 수단이 필요합니다. [MongoDB 8 서버의 뷰 삭제 처리](https://github.com/mongodb/mongo/blob/r8.0.0/src/mongo/db/catalog/drop_collection.cpp#L148-L159)
 
+일반 컬렉션은 **정의 → 컬렉션 이름 변경**에서 같은 데이터베이스 안의 새 이름을 검토할 수 있습니다. 기존 이름에 의존하는 뷰와 새 이름에 연결될 뷰를 각각 표시하고 운영 환경에서는 `PROD`를 확인합니다. 기존 뷰 정의는 그대로 유지됩니다. 적용 전에 두 이름의 의존 뷰와 원본 UUID를 다시 확인하며, 서버에 원본 UUID와 `dropTarget: false`를 전달합니다. 성공하면 새 이름을 선택하고 감사 기록에 두 이름을 남깁니다. [MongoDB renameCollection](https://www.mongodb.com/docs/manual/reference/command/renamecollection/) · [MongoDB 8 서버의 원본 UUID 확인](https://github.com/mongodb/mongo/blob/r8.0.0/src/mongo/db/commands/rename_collection_cmd.cpp#L86-L104)
+
+Windows 앱과 MongoDB 8.0.38 TLS 환경에서 이름 변경 후 문서와 인덱스가 보존되고, 새 이름을 참조하던 뷰가 데이터를 반환하는 것을 확인했습니다. 기존 이름을 참조하던 뷰의 정의와 별도 컬렉션의 데이터도 보존됐습니다. 검토 뒤 새 이름이 사용되거나 의존 뷰가 추가되거나 원본이 재생성되면 이전 검토가 거절됐으며, 서버도 잘못된 UUID를 포함한 이름 변경을 거절했습니다.
+
 **이 연결에서 인덱스 관리 허용**을 선택하면 일반 컬렉션의 **인덱스** 화면에서 이름과 키 순서를 지정해 인덱스를 만들 수 있습니다. 오름차순·내림차순 단일 및 복합 키, 텍스트, 2d·2dsphere, 해시를 지원합니다. TTL은 `_id`를 제외한 일반 키 하나에 지정하고, 이미 만료된 문서에 미칠 영향을 생성 검토에 표시합니다. 인덱스 종류와 옵션 조합은 서버가 검사합니다. [MongoDB createIndexes](https://www.mongodb.com/docs/manual/reference/command/createindexes/) · [MongoDB TTL 인덱스](https://www.mongodb.com/docs/manual/core/index-ttl/)
 
 **옵션 변경**에서 쿼리 플래너의 인덱스 숨김을 켜거나 끄고, 지원하는 단일 키에 TTL을 추가하거나 변경할 수 있습니다. 검토 화면에 변경 전후 정의를 표시합니다. TTL을 새로 설정하거나 줄이면 이미 만료된 문서를 서버가 삭제할 수 있습니다. 숨김 인덱스도 고유 제약을 검사하고 TTL 만료를 처리합니다. 적용은 서버의 `collMod` 권한을 따르며, 컬렉션 UUID와 인덱스 정의를 다시 확인한 뒤 실행합니다. [MongoDB collMod](https://www.mongodb.com/docs/manual/reference/command/collmod/) · [MongoDB 숨김 인덱스](https://www.mongodb.com/docs/manual/core/index-hidden/)

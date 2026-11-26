@@ -1015,6 +1015,14 @@ async fn apply_mongo_collection_drop(mongo: State<'_, stackport_core::MongoManag
     -> Result<stackport_core::MongoNamespaceReport, String> { mongo.apply_mongo_collection_drop(&id, &token, &confirmation, &approval).await }
 
 #[tauri::command]
+async fn review_mongo_collection_rename(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, name: String, new_name: String)
+    -> Result<stackport_core::MongoCollectionRenameReview, String> { mongo.review_mongo_collection_rename(&id, database, name, new_name).await }
+
+#[tauri::command]
+async fn apply_mongo_collection_rename(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, confirmation: String)
+    -> Result<stackport_core::MongoNamespaceReport, String> { mongo.apply_mongo_collection_rename(&id, &token, &confirmation).await }
+
+#[tauri::command]
 async fn discard_mongo_namespace_review(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
     -> Result<(), String> { mongo.discard_namespace_review(&id, &token).await }
 
@@ -2775,6 +2783,8 @@ fn main() {
             apply_mongo_namespace_view,
             review_mongo_collection_drop,
             apply_mongo_collection_drop,
+            review_mongo_collection_rename,
+            apply_mongo_collection_rename,
             discard_mongo_namespace_review,
             apply_mongo_namespace_create,
             mongo_documents,
