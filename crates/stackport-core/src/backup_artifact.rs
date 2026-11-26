@@ -35,10 +35,10 @@ pub(crate) struct Evidence {
     pub(crate) file_id: Option<String>,
 }
 
-pub(crate) fn measure(file: &File) -> Result<Evidence> {
+pub(crate) fn measure(file: &File, check: impl Fn() -> Result<()>) -> Result<Evidence> {
     Ok(Evidence {
         file_id: file_identity(file),
-        sha256: fingerprint(file)?,
+        sha256: fingerprint(file, check)?,
     })
 }
 
@@ -301,7 +301,7 @@ fn open_verified(artifact: &Artifact, remove: bool) -> Result<File> {
     if !current.is_file() || current.len() != artifact.size_bytes {
         return Err(CHANGED.into());
     }
-    let evidence = measure(&file)?;
+    let evidence = measure(&file, || Ok(()))?;
     if evidence.sha256 != artifact.evidence.sha256
         || artifact.evidence.file_id.is_some() && artifact.evidence.file_id != evidence.file_id
     {
@@ -310,12 +310,13 @@ fn open_verified(artifact: &Artifact, remove: bool) -> Result<File> {
     Ok(file)
 }
 
-fn fingerprint(mut file: &File) -> Result<String> {
+fn fingerprint(mut file: &File, check: impl Fn() -> Result<()>) -> Result<String> {
     file.seek(SeekFrom::Start(0))
         .map_err(|_| "백업 파일을 처음부터 읽을 수 없습니다.")?;
     let mut sha = Sha256::new();
     let mut buffer = [0; 128 * 1024];
     loop {
+        check()?;
         let count = file
             .read(&mut buffer)
             .map_err(|_| "백업 파일의 SHA-256을 계산할 수 없습니다.")?;

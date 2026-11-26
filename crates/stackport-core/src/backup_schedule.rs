@@ -1,8 +1,11 @@
 //! Workspace scheduler for verified database backups.
 mod calendar;
+mod execution;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
+pub(crate) use execution::{Execution, RunControl};
 use calendar::CalendarSchedule;
+use execution::CANCELLED_MESSAGE;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
     db_error, open_user_db, postgres, BackupTunnelRoute, PostgresProfile, Result, SshTunnelManager, Store,
@@ -53,7 +56,7 @@ pub(crate) const SCHEMA: &str = "
         workspace_path TEXT NOT NULL,
         trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('scheduled', 'retry', 'manual')),
         retry_attempt INTEGER NOT NULL DEFAULT 1 CHECK (retry_attempt BETWEEN 1 AND 5),
-        status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted')),
+        status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed', 'interrupted', 'cancelled')),
         started_at INTEGER NOT NULL,
         finished_at INTEGER,
         expires_at INTEGER,
@@ -117,6 +120,25 @@ pub(crate) fn migrate(db: &Connection) -> Result<()> {
             DROP TABLE legacy_backup_runs;
             DROP TABLE legacy_backup_plans;").map_err(db_error)?;
     }
+    let old_run_status: bool = db.query_row(
+        "SELECT instr(sql, 'cancelled')=0 FROM sqlite_schema WHERE type='table' AND name='backup_runs'",
+        [], |row| row.get(0),
+    ).map_err(db_error)?;
+    if old_run_status {
+        db.execute_batch("ALTER TABLE backup_artifacts RENAME TO previous_backup_artifacts;
+            ALTER TABLE backup_runs RENAME TO previous_backup_runs;
+            DROP INDEX IF EXISTS backup_runs_recent;").map_err(db_error)?;
+        db.execute_batch(SCHEMA).map_err(db_error)?;
+        db.execute_batch(backup_artifact::SCHEMA).map_err(db_error)?;
+        db.execute_batch("INSERT INTO backup_runs
+            (rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt, status, started_at, finished_at, expires_at, path, size_bytes, message)
+            SELECT rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt, status, started_at, finished_at,
+                expires_at, path, size_bytes, message FROM previous_backup_runs;
+            INSERT INTO backup_artifacts
+            SELECT run_id, sha256, file_id, engine_version, verified_at, removal_started_at, removed_at FROM previous_backup_artifacts;
+            DROP TABLE previous_backup_artifacts;
+            DROP TABLE previous_backup_runs;").map_err(db_error)?;
+    }
     Ok(())
 }
 
@@ -166,6 +188,7 @@ pub struct BackupRun {
     pub profile_id: String,
     pub status: String,
     pub engine: &'static str,
+    can_cancel: bool,
     trigger_kind: String,
     retry_attempt: Option<u8>,
     started_at: i64,
@@ -250,12 +273,19 @@ impl Store {
                 "{RUN_SELECT} WHERE r.profile_id = ?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 40"
             ))
             .map_err(db_error)?;
-        let runs = statement
+        let mut runs = statement
             .query_map(params![profile_id, workspace_path], run_from_row)
             .map_err(db_error)?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(db_error)?;
+        for run in runs.iter_mut().filter(|run| run.status == "running") {
+            run.can_cancel = self.backup_execution.for_run(profile_id, &run.id).is_some_and(|control| control.can_cancel());
+        }
         Ok(BackupPlanState { plan, runs })
+    }
+
+    pub fn cancel_backup_plan_run(&self, profile_id: &str, run_id: &str) -> bool {
+        self.backup_execution.for_run(profile_id, run_id).is_some_and(|control| control.request_cancel())
     }
 
     pub fn expired_sqlite_backups(
@@ -562,12 +592,14 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7)",
             params![id, profile_id, workspace, trigger_kind, now, path, retry_attempt.unwrap_or(1)],
         ).map_err(db_error)?;
+        let registration = self.backup_execution.start(&profile_id, &id);
+        let control = &registration.control;
         tx.commit().map_err(db_error)?;
 
         let result = if let Some(revision) = plan.postgres_revision {
-            self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id, plan.tunnel.as_ref(), tunnels)
-        } else { self
-            .sqlite_backup_capacity(&profile_id, &plan.directory)
+            self.execute_postgres_backup(&profile_id, revision, &plan.directory, &path, &id, plan.tunnel.as_ref(), tunnels, control)
+        } else { control.check()
+            .and_then(|()| self.sqlite_backup_capacity(&profile_id, &plan.directory))
             .and_then(|capacity| {
                 if capacity.directory != plan.directory {
                     return Err(
@@ -583,9 +615,11 @@ impl Store {
                         "백업 폴더의 여유 공간이 원본의 예상 백업 크기보다 작습니다.".into(),
                     );
                 }
-                let (report, evidence) = self.backup_sqlite_with(&profile_id, &path, backup_artifact::measure)?;
+                let (report, evidence) = self.backup_sqlite_with(&profile_id, &path, Some(control),
+                    |file| backup_artifact::measure(file, || control.check()))?;
                 Ok((report.size_bytes, evidence, rusqlite::version().to_owned(), report.audit_warning))
             }) };
+        let result = control.finish().and(result);
         let finished_at = unix_now()?.max(now);
         let tx = db
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -613,6 +647,7 @@ impl Store {
                     Some(artifact),
                 )
             }
+            Err(_) if control.is_cancelled() => ("cancelled", None, None, Some(CANCELLED_MESSAGE.into()), None),
             Err(error) => {
                 let next_retry = match trigger_kind {
                     "scheduled" => Some(1),
@@ -648,6 +683,7 @@ impl Store {
             profile_id,
             status: status.into(),
             engine: engine_label(is_postgres),
+            can_cancel: false,
             trigger_kind: trigger_kind.into(),
             retry_attempt,
             started_at: now,
@@ -682,6 +718,7 @@ fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
         profile_id: row.get(1)?,
         status: row.get(2)?,
         engine: engine_label(row.get(18)?),
+        can_cancel: false,
         trigger_kind: row.get(3)?,
         retry_attempt: row.get(19)?,
         started_at: row.get(4)?,
@@ -997,6 +1034,41 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_cancellation_is_scoped_and_does_not_queue_a_retry() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, Some(60));
+        f._source.execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;").unwrap();
+        let worker = f.store.clone();
+        let task = std::thread::spawn(move || worker.process_backup(None, first, None).unwrap().unwrap());
+        let started = std::time::Instant::now();
+        let active = loop {
+            if let Some(run) = f.current().runs.into_iter().find(|run| run.can_cancel) {
+                break run;
+            }
+            assert!(started.elapsed() < std::time::Duration::from_secs(3));
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let another_instance = Store::open(&f.workspace).unwrap();
+        assert!(!another_instance.sqlite_backup_plan(&f.profile_id).unwrap().runs[0].can_cancel);
+        assert!(!another_instance.cancel_backup_plan_run(&f.profile_id, &active.id));
+        assert!(!f.store.cancel_backup_plan_run("other-profile", &active.id));
+        assert!(f.store.cancel_backup_plan_run(&f.profile_id, &active.id));
+        assert!(!f.store.cancel_backup_plan_run(&f.profile_id, &active.id));
+        f._source.execute_batch("ROLLBACK").unwrap();
+        let run = task.join().unwrap();
+        assert_eq!(run.id, active.id);
+        assert_eq!(run.status, "cancelled");
+        assert!(run.artifact.is_none());
+        assert_eq!(fs::read_dir(&f.output).unwrap().count(), 0);
+        let reopened = Store::open(&f.workspace).unwrap().sqlite_backup_plan(&f.profile_id).unwrap();
+        assert_eq!(reopened.runs[0].status, "cancelled");
+        let plan = reopened.plan.unwrap();
+        assert_eq!(plan.retry_at, None);
+        assert_eq!(plan.next_at, Some(first + 3600));
+    }
+
+    #[test]
     fn a_workspace_copy_requires_review_and_archival_skips_new_runs() {
         let f = Fixture::new();
         let first = unix_now().unwrap() + 120;
@@ -1219,6 +1291,39 @@ mod tests {
             .preview_sqlite_backup_removal(&f.profile_id, &run.id)
             .is_err());
         assert!(Path::new(&run.path).is_file());
+    }
+
+    #[test]
+    fn v27_migration_preserves_retry_history_and_file_evidence() {
+        let f = Fixture::new();
+        let first = unix_now().unwrap() + 120;
+        f.plan(first, Some(60));
+        let run = f.store.run_sqlite_backup_plan(&f.profile_id, 1).unwrap();
+        {
+            let db = f.store.connect().unwrap();
+            db.execute_batch("UPDATE backup_runs SET rowid=17, trigger_kind='retry', retry_attempt=3;
+                UPDATE backup_plans SET retry_at=next_at+60, retry_attempt=4;
+                CREATE TEMP TABLE saved_runs AS SELECT rowid AS original_rowid, * FROM backup_runs;
+                CREATE TEMP TABLE saved_artifacts AS SELECT * FROM backup_artifacts;
+                DROP TABLE backup_artifacts; DROP TABLE backup_runs;").unwrap();
+            db.execute_batch(&SCHEMA.replace(", 'cancelled'", "")).unwrap();
+            db.execute_batch(backup_artifact::SCHEMA).unwrap();
+            db.execute_batch("INSERT INTO backup_runs (rowid, id, profile_id, workspace_path, trigger_kind, retry_attempt,
+                status, started_at, finished_at, expires_at, path, size_bytes, message) SELECT * FROM saved_runs;
+                INSERT INTO backup_artifacts SELECT * FROM saved_artifacts;
+                PRAGMA user_version=27;").unwrap();
+        }
+        let migrated = Store::open(&f.workspace).unwrap();
+        let state = migrated.sqlite_backup_plan(&f.profile_id).unwrap();
+        let plan = state.plan.unwrap();
+        assert_eq!((plan.next_at, plan.retry_at, plan.retry_attempt), (Some(first), Some(first + 60), Some(4)));
+        let old_run = &state.runs[0];
+        assert_eq!((old_run.id.as_str(), old_run.retry_attempt), (run.id.as_str(), Some(3)));
+        assert_eq!(old_run.artifact.as_ref().unwrap().sha256, run.artifact.unwrap().sha256);
+        let db = migrated.connect().unwrap();
+        assert_eq!(db.query_row("SELECT rowid FROM backup_runs", [], |row| row.get::<_, i64>(0)).unwrap(), 17);
+        assert_eq!(db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert!(migrated.verify_sqlite_backup_file(&f.profile_id, &run.id).is_ok());
     }
 
     #[cfg(windows)]

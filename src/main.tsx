@@ -359,7 +359,8 @@ function App() {
     const subscribed = listen<[string, string]>("backup-finished", ({ payload: [engine, status] }) => {
       if (!live) return;
       window.clearTimeout(timer);
-      setBackupNotice(`${engine} 예약 백업 ${status === "succeeded" ? "완료" : "실패"}`);
+      const outcome = status === "succeeded" ? "완료" : status === "cancelled" ? "취소" : "실패";
+      setBackupNotice(`${engine} 예약 백업 ${outcome}`);
       timer = window.setTimeout(() => setBackupNotice(""), 15000);
     });
     void subscribed.catch(() => {});
@@ -2432,6 +2433,7 @@ const auditOperationNames: Record<string, string> = {
   "postgres.export.csv": "PostgreSQL CSV 내보내기", "postgres.export.json": "PostgreSQL JSON 내보내기",
   "postgres.backup": "PostgreSQL 백업",
   "postgres.backup.schedule": "PostgreSQL 계획 백업",
+  "postgres.backup.schedule.cancel": "PostgreSQL 계획 백업", "sqlite.backup.cancel": "SQLite 백업",
   "postgres.backup.delete": "만료된 PostgreSQL 백업 삭제",
   "postgres.restore": "PostgreSQL 백업 복원",
   "ssh_profile.import": "SSH 연결 가져오기", "ssh_profile.export": "SSH 연결 내보내기",
@@ -2480,7 +2482,8 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
       {loading ? <p className="audit-empty">기록을 불러오는 중…</p> : page?.events.length ? <ul className="audit-list">{page.events.map(event => {
         const cancelled = event.operation === "sql_server.sql.execute.cancel" || event.operation === "oracle.sql.execute.cancel" ||
           event.operation === "snowflake.sql.execute.cancel" || event.operation === "mysql.sql.script.cancel" ||
-          event.operation === "postgres.sql.script.cancel" ||
+          event.operation === "postgres.sql.script.cancel" || event.operation === "postgres.backup.schedule.cancel" ||
+          event.operation === "sqlite.backup.cancel" ||
           (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
         const outcome = cancelled ? "cancelled" : event.outcome;
         return <li key={event.id}>

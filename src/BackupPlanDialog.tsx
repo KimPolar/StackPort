@@ -16,7 +16,8 @@ type Plan = {
   calendar: Calendar | null;
 };
 type Run = {
-  id: string; status: "running" | "succeeded" | "failed" | "interrupted"; trigger_kind: "scheduled" | "retry" | "manual";
+  id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled"; trigger_kind: "scheduled" | "retry" | "manual";
+  can_cancel: boolean;
   retry_attempt: number | null;
   started_at: number; finished_at: number | null; expires_at: number | null; path: string; size_bytes: number | null; message: string | null;
   artifact: {
@@ -36,7 +37,7 @@ type Draft = {
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
-const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요" };
+const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨" };
 const trigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
@@ -96,6 +97,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [preview, setPreview] = useState<Occurrence[]>([]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<"save" | "run" | "folder" | "capacity" | "preview" | "refresh" | "pause" | "file" | "history" | "">("");
+  const [cancelRequested, setCancelRequested] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [removal, setRemoval] = useState<{ run: Run; preview: RemovalPreview } | null>(null);
@@ -200,9 +202,23 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
       try {
         const result = await invoke<Run>(`run_${engine}_backup_plan`, { ...target, revision: plan.revision });
         apply(await invoke<Snapshot>(`${engine}_backup_plan`, { profileId }));
-        setNotice(result.status === "succeeded" ? "백업을 만들고 무결성을 확인했습니다." : "백업 결과를 아래 실행 이력에서 확인하세요.");
+        if (result.status === "succeeded") setNotice("백업을 만들고 무결성을 확인했습니다.");
+        else if (result.status === "cancelled") setNotice("백업을 취소했습니다.");
+        else setNotice("백업 결과를 아래 실행 이력에서 확인하세요.");
       } finally { onFileBusy?.(false); }
     });
+  }
+
+  async function cancelRun(runId: string) {
+    setCancelRequested(runId);
+    setError("");
+    try {
+      if (await invoke<boolean>("cancel_backup_plan_run", { profileId, runId })) return;
+      setNotice("백업이 끝났거나 파일 저장을 시작했습니다.");
+    } catch (cause) {
+      setError(String(cause));
+    }
+    setCancelRequested(null);
   }
 
   async function performFile(run: Run, action: () => Promise<string>) {
@@ -230,6 +246,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const stale = draft && draft.revision !== (plan?.revision ?? null);
   const nextAt = plan?.next_at ? (plan.calendar ? calendarDate(plan.next_at, plan.calendar.time_zone) : dateText(plan.next_at)) : "예약 없음";
   const running = snapshot?.runs.some(run => run.status === "running");
+  const cancellable = snapshot?.runs.find(run => run.status === "running" && (run.can_cancel || run.id === cancelRequested));
   const runs = expiredPage?.runs ?? snapshot?.runs ?? [];
 
   return <Dialog title={`${engineLabel} 백업 계획`} className="sqlite-backup-plan" onClose={onClose} busy={Boolean(busy)}>
@@ -339,6 +356,8 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
             })}>예약 중지</button>}
           <button type="button" className="secondary" disabled={Boolean(busy || !plan || plan.requires_review || dirty || stale || running || needsCredential || approvalMissing || routeUnavailable)}
             onClick={runNow}>{busy === "run" ? "백업 중…" : "지금 백업"}</button>
+          {cancellable && <button type="button" className="secondary" disabled={cancellable.id === cancelRequested}
+            onClick={() => void cancelRun(cancellable.id)}>{cancellable.id === cancelRequested ? "취소 처리 중…" : "백업 취소"}</button>}
           <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || approvalMissing || routeUnavailable)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
         </div>
       </form>

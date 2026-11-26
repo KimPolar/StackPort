@@ -167,7 +167,7 @@ mod tls;
 pub mod backup_schedule;
 pub mod backup_artifact;
 
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 pub const PAGE_SIZE: usize = 100;
 const CELL_MAX_CHARS: usize = 4096;
 const AUDIT_SCHEMA: &str = "CREATE TABLE audit_events (
@@ -354,6 +354,7 @@ pub struct Store {
     queries: Arc<query::QueryManager>,
     restore: Arc<restore::RestoreManager>,
     backup_removal: Arc<backup_artifact::RemovalReview>,
+    backup_execution: Arc<backup_schedule::Execution>,
     schema_sync: Arc<schema_sync::SchemaSyncManager>,
 }
 
@@ -370,6 +371,7 @@ impl Store {
             queries: Arc::new(query::QueryManager::default()),
             restore: Arc::new(restore::RestoreManager::default()),
             backup_removal: Arc::new(backup_artifact::RemovalReview::default()),
+            backup_execution: Arc::new(backup_schedule::Execution::default()),
             schema_sync: Arc::new(schema_sync::SchemaSyncManager::default()),
         };
         let mut db = store.connect()?;
@@ -928,7 +930,7 @@ impl Store {
     /// Create a verified SQLite snapshot without modifying or replacing either
     /// the source database or an existing destination.
     pub fn backup_sqlite(&self, profile_id: &str, destination: &str) -> Result<BackupReport> {
-        let (report, ()) = self.backup_sqlite_with(profile_id, destination, |_| Ok(()))?;
+        let (report, ()) = self.backup_sqlite_with(profile_id, destination, None, |_| Ok(()))?;
         Ok(report)
     }
 
@@ -936,13 +938,14 @@ impl Store {
         &self,
         profile_id: &str,
         destination: &str,
+        control: Option<&backup_schedule::RunControl>,
         inspect: impl FnOnce(&std::fs::File) -> Result<T>,
     ) -> Result<(BackupReport, T)> {
         let profile = self.profile(profile_id)?;
         let correlation_id = Uuid::new_v4().to_string();
-        let audit = |outcome, affected_count| AuditRecord {
+        let audit = |operation, outcome, affected_count| AuditRecord {
             correlation_id: &correlation_id,
-            operation: "sqlite.backup",
+            operation,
             project_id: Some(&profile.project_id),
             profile_id: Some(&profile.id),
             environment: Some(&profile.environment),
@@ -950,9 +953,22 @@ impl Store {
             outcome,
             affected_count,
         };
-        insert_audit(&self.connect()?, audit("started", None))?;
-        let result = open_user_db(Path::new(&profile.path))
-            .and_then(|source| snapshot_sqlite_with(&source, Path::new(destination.trim()), None, inspect));
+        insert_audit(&self.connect()?, audit("sqlite.backup", "started", None))?;
+        let result = open_user_db(Path::new(&profile.path)).and_then(|source| {
+            if control.is_some() {
+                source.busy_timeout(Duration::from_millis(100)).map_err(db_error)?;
+            }
+            snapshot_sqlite_with(&source, Path::new(destination.trim()), None, control, inspect)
+        });
+        let result = match control {
+            Some(control) => control.finish().and(result),
+            None => result,
+        };
+        let operation = if control.is_some_and(backup_schedule::RunControl::is_cancelled) {
+            "sqlite.backup.cancel"
+        } else {
+            "sqlite.backup"
+        };
         let outcome = if result.is_ok() {
             "succeeded"
         } else {
@@ -960,7 +976,7 @@ impl Store {
         };
         let audit_result = self
             .connect()
-            .and_then(|db| insert_audit(&db, audit(outcome, result.as_ref().ok().map(|_| 1))));
+            .and_then(|db| insert_audit(&db, audit(operation, outcome, result.as_ref().ok().map(|_| 1))));
         match (result, audit_result) {
             (Ok((mut report, evidence)), Err(_)) => {
                 report.audit_warning =
@@ -991,11 +1007,11 @@ fn insert_audit(db: &Connection, record: AuditRecord<'_>) -> Result<()> {
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" if record.environment == Some("PROD") =>
             "oracle-datapump-schema-import-reviewed-prod",
         "oracle.pump.import" | "oracle.pump.import.unconfirmed" => "oracle-datapump-schema-import-reviewed",
-        "sqlite.backup" => "sqlite-snapshot-no-overwrite",
+        "sqlite.backup" | "sqlite.backup.cancel" => "sqlite-snapshot-no-overwrite",
         "postgres.credential.save" | "postgres.credential.delete" => "windows-per-user-postgres-credential",
         "sqlite.backup.delete" => "sqlite-backup-expired-reviewed-fingerprint",
         "postgres.backup.delete" => "postgres-backup-expired-reviewed-fingerprint",
-        "postgres.backup.schedule" => "postgres-backup-stored-credential-verified-tls",
+        "postgres.backup.schedule" | "postgres.backup.schedule.cancel" => "postgres-backup-stored-credential-verified-tls",
         "sqlite.restore" => "sqlite-verified-restore-no-overwrite",
         "sqlite.export.csv" => "sqlite-readonly-csv-no-overwrite",
         "sqlite.export.json" => "sqlite-readonly-json-no-overwrite",
@@ -1088,7 +1104,7 @@ fn snapshot_sqlite(
     destination: &Path,
     expected_version: Option<i64>,
 ) -> Result<BackupReport> {
-    let (report, ()) = snapshot_sqlite_with(source, destination, expected_version, |_| Ok(()))?;
+    let (report, ()) = snapshot_sqlite_with(source, destination, expected_version, None, |_| Ok(()))?;
     Ok(report)
 }
 
@@ -1096,8 +1112,11 @@ fn snapshot_sqlite_with<T>(
     source: &Connection,
     destination: &Path,
     expected_version: Option<i64>,
+    control: Option<&backup_schedule::RunControl>,
     inspect: impl FnOnce(&std::fs::File) -> Result<T>,
 ) -> Result<(BackupReport, T)> {
+    let check = || control.map_or(Ok(()), backup_schedule::RunControl::check);
+    check()?;
     if !destination.is_absolute() || destination.file_name().is_none() {
         return Err("새 백업 파일의 절대 경로를 지정하세요.".into());
     }
@@ -1124,6 +1143,7 @@ fn snapshot_sqlite_with<T>(
             let mut last_remaining = None;
             let mut last_progress = Instant::now();
             loop {
+                check()?;
                 let state = backup.step(128).map_err(db_error)?;
                 if state == StepResult::Done {
                     break;
@@ -1138,6 +1158,7 @@ fn snapshot_sqlite_with<T>(
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+        check()?;
         target
             .pragma_update(None, "journal_mode", "DELETE")
             .map_err(db_error)?;
@@ -1150,6 +1171,9 @@ fn snapshot_sqlite_with<T>(
                     "백업 중 작업 공간 버전이 변경되었습니다 (버전 {actual})."
                 ));
             }
+        }
+        if let Some(control) = control.cloned() {
+            target.progress_handler(10_000, Some(move || control.is_cancelled()));
         }
         let mut check = target.prepare("PRAGMA integrity_check").map_err(db_error)?;
         let results = check
@@ -1171,6 +1195,9 @@ fn snapshot_sqlite_with<T>(
         .map_err(|e| format!("백업 크기를 확인할 수 없습니다: {e}"))?
         .len();
     let evidence = inspect(temporary.as_file())?;
+    if let Some(control) = control {
+        control.finish()?;
+    }
     temporary.persist_noclobber(destination).map_err(|e| {
         format!(
             "백업을 저장할 수 없습니다. 기존 파일은 덮어쓰지 않습니다: {}",

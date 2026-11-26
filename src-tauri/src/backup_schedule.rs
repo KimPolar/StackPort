@@ -121,6 +121,11 @@ pub(crate) async fn run_sqlite_backup_plan(
 }
 
 #[tauri::command]
+pub(crate) fn cancel_backup_plan_run(store: State<'_, Store>, profile_id: String, run_id: String) -> bool {
+    store.cancel_backup_plan_run(&profile_id, &run_id)
+}
+
+#[tauri::command]
 pub(crate) async fn pause_sqlite_backup_plan(
     store: State<'_, Store>,
     profile_id: String,

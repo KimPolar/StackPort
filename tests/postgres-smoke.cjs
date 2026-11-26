@@ -3050,7 +3050,8 @@ async function verifyTunneledPostgresBackupPlan(page, command, project, profile,
       tunnel: { ...approved, profiles: [...approved.profiles].reverse() } }), /경로가 백업 계획과 다릅니다/);
     await dialog.getByLabel('실행 주기').selectOption('once');
     const next = new Date(Date.now() + 12000);
-    await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(new Date(next.getTime() - next.getTimezoneOffset() * 60000).toISOString().slice(0, 19));
+    await dialog.getByLabel('첫 실행 (이 장치 시각)').fill(
+      new Date(next.getTime() - next.getTimezoneOffset() * 60_000).toISOString().slice(0, 19).replace(/:00$/, ''));
     await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
     await dialog.getByRole('button', { name: '계획 저장', exact: true }).click();
     await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
@@ -3086,13 +3087,36 @@ async function verifyTunneledPostgresBackupPlan(page, command, project, profile,
       { encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
     assert.match(archiveContent, /행 4/);
 
+    const waitForStalledForward = async () => {
+      const deadline = Date.now() + 8000;
+      while (gateway.forwarded() < stallReplyAt && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 40));
+      }
+      assert.equal(gateway.forwarded(), stallReplyAt);
+    };
+    const cancel = dialog.getByRole('button', { name: '백업 취소', exact: true });
+    for (const offset of [1, 2]) {
+      stallReplyAt = gateway.forwarded() + offset; // Block the TLS preflight or the pg_dump connection.
+      await dialog.getByLabel('운영 백업 확인 (PROD 입력)').fill('PROD');
+      await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+      await waitForStalledForward();
+      await cancel.waitFor();
+      const active = (await planState()).runs[0];
+      assert.equal(active.status, 'running');
+      await cancel.click();
+      await dialog.getByText(/취소됨 · 수동 실행/).nth(offset - 1).waitFor();
+      const cancelled = (await planState()).runs[0];
+      assert.equal(cancelled.id, active.id);
+      assert.equal(cancelled.status, 'cancelled');
+      assert.equal(cancelled.artifact, null);
+      assert.equal(fs.readdirSync(directory).length, 1, 'Cancellation keeps the earlier archive and removes the staging file');
+      assert.equal(await command('cancel_backup_plan_run', { profileId: profile.id, runId: cancelled.id }), false);
+    }
+    console.log('Cancelled both stalled PostgreSQL preflight and pg_dump from the desktop and kept the previous verified archive.');
+
     stallReplyAt = gateway.forwarded() + 2; // Allow the TLS preflight, then stall pg_dump's connection.
     const inProgress = manual();
-    const deadline = Date.now() + 8000;
-    while (gateway.forwarded() < stallReplyAt && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 40));
-    }
-    assert.equal(gateway.forwarded(), stallReplyAt);
+    await waitForStalledForward();
     await stop();
     const interrupted = await inProgress;
     assert.equal(interrupted.status, 'failed');
@@ -3136,7 +3160,7 @@ async function verifyPostgresBackupPlan(page, command, profile) {
   await dialog.getByLabel('실행 주기').selectOption('once');
   const next = new Date(Date.now() + 10_000);
   await dialog.getByLabel('첫 실행 (이 장치 시각)', { exact: true }).fill(
-    new Date(next.getTime() - next.getTimezoneOffset() * 60_000).toISOString().slice(0, 19));
+    new Date(next.getTime() - next.getTimezoneOffset() * 60_000).toISOString().slice(0, 19).replace(/:00$/, ''));
   assert.equal(await save.isDisabled(), true);
   await approval.fill('PROD');
   await save.click();

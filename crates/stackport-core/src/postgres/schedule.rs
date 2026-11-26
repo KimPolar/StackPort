@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     backup_artifact::Evidence,
-    backup_schedule::{active_profile, confirm_backup_directory},
+    backup_schedule::{active_profile, confirm_backup_directory, RunControl},
     insert_audit, ssh_tunnel::DatabaseTunnel, AuditRecord, BackupTunnelRoute, Result, SshTunnelManager, Store,
 };
 use postgres_native_tls::MakeTlsConnector;
@@ -19,7 +19,7 @@ pub(crate) fn scheduled_backup_size(store: &Store, profile: &PostgresProfile, ro
         reviewed.verify_saved(&store.connect()?, &profile.project_id, &profile.settings.host, profile.settings.port)?;
         manager.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)
     }).transpose()?;
-    source_details(profile, &password, true, tunnel.as_ref()).map(|(_, size)| size)
+    source_details(profile, &password, true, tunnel.as_ref(), None).map(|(_, size)| size)
 }
 
 impl Store {
@@ -32,6 +32,7 @@ impl Store {
         run_id: &str,
         route: Option<&BackupTunnelRoute>,
         tunnels: Option<&SshTunnelManager>,
+        control: &RunControl,
     ) -> Result<(u64, Evidence, String, Option<String>)> {
         let db = self.connect()?;
         let profile = super::find_profile(&db, profile_id)?;
@@ -47,9 +48,9 @@ impl Store {
             }
             Ok(())
         };
-        let audit = |outcome| insert_audit(&db, AuditRecord {
+        let audit = |operation, outcome| insert_audit(&db, AuditRecord {
             correlation_id: run_id,
-            operation: "postgres.backup.schedule",
+            operation,
             project_id: Some(&profile.project_id),
             profile_id: Some(profile_id),
             environment: Some(&profile.settings.environment),
@@ -57,15 +58,16 @@ impl Store {
             outcome,
             affected_count: None,
         });
-        audit("started")?;
+        audit("postgres.backup.schedule", "started")?;
         let result = (|| {
+            control.check()?;
             verify_profile()?;
             confirm_backup_directory(directory)?;
             let tunnel = route.map(|reviewed| {
                 tunnels.ok_or(TUNNEL_STOPPED)?.backup_tunnel(reviewed, &profile.project_id, &profile.settings.host, profile.settings.port)
             }).transpose()?;
             let password = self.saved_postgres_password(&profile)?;
-            let (major, _) = source_details(&profile, &password, false, tunnel.as_ref())?;
+            let (major, _) = source_details(&profile, &password, false, tunnel.as_ref(), Some(control))?;
             verify_profile()?;
             let deadline = Instant::now() + backup::TIME_LIMIT;
             backup::create_with(
@@ -75,17 +77,21 @@ impl Store {
                 PostgresBackupContents::All,
                 path.to_owned(),
                 || {
+                    control.check()?;
                     ensure_tunnel_running(tunnel.as_ref())?;
                     (Instant::now() < deadline).then_some(()).ok_or_else(|| "PostgreSQL 백업 실행 시간이 초과되었습니다.".into())
                 },
                 || {
                     verify_profile()?;
                     confirm_backup_directory(directory)?;
-                    ensure_tunnel_running(tunnel.as_ref())
+                    ensure_tunnel_running(tunnel.as_ref())?;
+                    control.finish()
                 },
             )
         })();
-        let warning = audit(if result.is_ok() { "succeeded" } else { "failed" }).err()
+        let result = control.finish().and(result);
+        let operation = if control.is_cancelled() { "postgres.backup.schedule.cancel" } else { "postgres.backup.schedule" };
+        let warning = audit(operation, if result.is_ok() { "succeeded" } else { "failed" }).err()
             .map(|_| "PostgreSQL 백업 작업 기록을 저장할 수 없습니다.".into());
         result.map(|(report, evidence)| (report.size_bytes, evidence, report.tool_version, warning))
     }
@@ -96,7 +102,7 @@ fn ensure_tunnel_running(tunnel: Option<&DatabaseTunnel>) -> Result<()> {
     Ok(())
 }
 
-fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measure_size: bool, tunnel: Option<&DatabaseTunnel>) -> Result<(u32, u64)> {
+fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measure_size: bool, tunnel: Option<&DatabaseTunnel>, control: Option<&RunControl>) -> Result<(u32, u64)> {
     ensure_tunnel_running(tunnel)?;
     let settings = &profile.settings;
     let tls = MakeTlsConnector::new(tls_connector(settings.ca_path.as_deref())?);
@@ -122,13 +128,24 @@ fn source_details(profile: &PostgresProfile, password: &PostgresPassword, measur
                 .map_err(|_| "PostgreSQL 데이터베이스 크기를 확인할 수 없습니다.")?;
             Ok((major, size))
         });
-        let result = if let Some(route) = tunnel {
-            tokio::select! {
-                biased;
-                _ = route.ended() => return Err(TUNNEL_STOPPED.into()),
-                response = read => response,
+        let cancelled = async {
+            match control {
+                Some(control) => control.wait_cancelled().await,
+                None => std::future::pending().await,
             }
-        } else { read.await };
+        };
+        let tunnel_ended = async {
+            match tunnel {
+                Some(route) => route.ended().await,
+                None => std::future::pending().await,
+            }
+        };
+        let result = tokio::select! {
+            biased;
+            message = cancelled => return Err(message.into()),
+            _ = tunnel_ended => return Err(TUNNEL_STOPPED.into()),
+            response = read => response,
+        };
         ensure_tunnel_running(tunnel)?;
         result.map_err(|_| "PostgreSQL 백업 연결 확인 시간이 초과되었습니다.")?
     })
