@@ -979,6 +979,20 @@ async fn review_mongo_namespace_create(mongo: State<'_, stackport_core::MongoMan
 }
 
 #[tauri::command]
+async fn mongo_namespace_validation_settings(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, name: String)
+    -> Result<stackport_core::MongoValidationSettings, String> { mongo.namespace_validation_settings(&id, &database, &name).await }
+
+#[tauri::command]
+async fn review_mongo_namespace_validation(mongo: State<'_, stackport_core::MongoManager>, id: String, database: String, name: String,
+    input: stackport_core::MongoValidationChange) -> Result<stackport_core::MongoNamespaceReview, String> {
+    mongo.review_namespace_validation(&id, database, name, input).await
+}
+
+#[tauri::command]
+async fn apply_mongo_namespace_validation(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String, confirmation: String)
+    -> Result<stackport_core::MongoNamespaceReport, String> { mongo.apply_namespace_validation(&id, &token, &confirmation).await }
+
+#[tauri::command]
 async fn discard_mongo_namespace_review(mongo: State<'_, stackport_core::MongoManager>, id: String, token: String)
     -> Result<(), String> { mongo.discard_namespace_review(&id, &token).await }
 
@@ -2731,6 +2745,9 @@ fn main() {
             discard_mongo_index_review,
             apply_mongo_index_change,
             review_mongo_namespace_create,
+            mongo_namespace_validation_settings,
+            review_mongo_namespace_validation,
+            apply_mongo_namespace_validation,
             discard_mongo_namespace_review,
             apply_mongo_namespace_create,
             mongo_documents,

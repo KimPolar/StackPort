@@ -14,7 +14,7 @@ pub use document_edit::{MongoDocumentChange, MongoEditDraft, MongoEditReport, Mo
 pub use document_structure::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};
 pub use find_builder::{build_mongo_find_filter, MongoFindNode};
 pub use index_admin::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
-pub use namespace_admin::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview};
+pub use namespace_admin::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings};
 pub use pipeline::{MongoPipelinePreview, MongoPipelineStage};
 pub use pipeline_store::{MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub(crate) use pipeline_store::{copy_project_pipelines, SCHEMA as PIPELINE_SCHEMA};
@@ -102,6 +102,7 @@ pub struct MongoManager {
     store: Store,
     capacity: Arc<Semaphore>,
     sessions: Mutex<HashMap<String, Session>>,
+    namespace_writes: tokio::sync::Mutex<()>,
 }
 
 impl MongoManager {
@@ -110,6 +111,7 @@ impl MongoManager {
             store,
             capacity: Arc::new(Semaphore::new(6)),
             sessions: Mutex::default(),
+            namespace_writes: tokio::sync::Mutex::new(()),
         }
     }
 

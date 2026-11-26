@@ -34,7 +34,7 @@ pub use mysql::{MysqlActivityInput, MysqlActivitySnapshot};
 pub use mongo::{MongoCatalogPage, MongoCollection, MongoDocumentPage, MongoIndex, MongoManager, MongoPassword, MongoProfile, MongoQuery, MongoSchemaSample, MongoSessionInfo, MongoSettings};
 pub use mongo::{build_mongo_find_filter, MongoFindNode};
 pub use mongo::{MongoIndexChange, MongoIndexReport, MongoIndexReview};
-pub use mongo::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview};
+pub use mongo::{MongoNamespaceCreate, MongoNamespaceReport, MongoNamespaceReview, MongoValidationChange, MongoValidationSettings};
 pub use mongo::{MongoPipelinePreview, MongoPipelineStage, MongoPipelineSummary, MongoPipelineWrite, SavedMongoPipeline};
 pub use mongo::{MongoDocumentChange, MongoEditDraft, MongoEditReport, MongoEditReview};
 pub use mongo::{edit_mongo_document_draft, MongoDraftChange, MongoDraftStructure};

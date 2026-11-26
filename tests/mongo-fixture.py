@@ -24,6 +24,10 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
         client.visible.drop_collection('edit_generation')
         client.visible.edit_generation.insert_one({'_id': 'seed', 'keep': True})
         sys.exit(0)
+    if action == ['recreate_validation_collection']:
+        client.namespace_new.drop_collection('validated_items')
+        client.namespace_new.create_collection('validated_items')
+        sys.exit(0)
     if action:
         raise ValueError('Unexpected fixture action')
     client.private.data.insert_one({'private': True})
@@ -60,4 +64,4 @@ with MongoClient('localhost', **options, username='stackport_fixture_admin',
                          roles=[{'role': 'readWrite', 'db': 'visible'}])
     client.admin.command('createUser', 'index_editor', pwd='stackport-mongo-index-test',
                          roles=[{'role': 'readWrite', 'db': 'visible'}, {'role': 'dbAdmin', 'db': 'visible'},
-                                {'role': 'readWrite', 'db': 'namespace_new'}])
+                                {'role': 'readWrite', 'db': 'namespace_new'}, {'role': 'dbAdmin', 'db': 'namespace_new'}])

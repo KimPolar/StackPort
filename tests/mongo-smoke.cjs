@@ -244,12 +244,16 @@ async function verify(page, port, ca) {
   const indexProfile = await alternate({ name: '인덱스 검증', username: 'index_editor' });
   await verifyDocumentCommands(command, open, profile, editProfile, port, ca);
   await verifyIndexCommands(command, () => open(indexProfile, indexSecret, 'PROD', false, true));
-  await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true));
+  await verifyNamespaceCommands(command, () => open(indexProfile, indexSecret, 'PROD', true, false, true),
+    () => run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca, 'recreate_validation_collection']));
   const limitedNamespace = await open(profile, secret, 'PROD', false, false, true);
   try {
     const denied = await command('review_mongo_namespace_create', { id: limitedNamespace.id, database: 'visible',
       name: 'denied_collection', input: { kind: 'collection', validator: '', level: 'strict', action: 'error' } });
     await assert.rejects(command('apply_mongo_namespace_create', { id: limitedNamespace.id, token: denied.token, confirmation: 'PROD' }), /생성할 권한/);
+    const validation = await command('review_mongo_namespace_validation', { id: limitedNamespace.id, database: 'visible', name: 'records',
+      input: { validator: '{"rank":{"$gte":0}}', level: 'strict', action: 'error' } });
+    await assert.rejects(command('apply_mongo_namespace_validation', { id: limitedNamespace.id, token: validation.token, confirmation: 'PROD' }), /변경할 권한/);
   } finally {
     await command('close_mongo', { id: limitedNamespace.id });
   }
@@ -280,13 +284,13 @@ async function verify(page, port, ca) {
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.drop' && event.outcome === 'succeeded'));
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'succeeded'));
   assert.ok(audit.events.some(event => event.operation === 'mongo.index.modify' && event.outcome === 'failed'));
-  for (const operation of ['mongo.namespace.create_collection', 'mongo.namespace.create_view']) {
+  for (const operation of ['mongo.namespace.create_collection', 'mongo.namespace.create_view', 'mongo.namespace.validation']) {
     assert.ok(audit.events.some(event => event.operation === operation && event.outcome === 'succeeded'));
   }
   assert.deepEqual(errors, []);
 }
 
-async function verifyNamespaceCommands(command, openAdmin) {
+async function verifyNamespaceCommands(command, openAdmin, recreateValidationCollection) {
   const first = await openAdmin();
   const second = await openAdmin();
   const database = 'namespace_new';
@@ -296,6 +300,11 @@ async function verifyNamespaceCommands(command, openAdmin) {
   const apply = (id, token, confirmation = 'PROD') => command('apply_mongo_namespace_create', { id, token, confirmation });
   const definition = { kind: 'collection', validator: '{"$jsonSchema":{"required":["qty"],"properties":{"qty":{"bsonType":"int"}}}}',
     level: 'strict', action: 'error' };
+  const settings = id => command('mongo_namespace_validation_settings', { id, database, name: collection });
+  const reviewValidation = (id, validator, name = collection) => command('review_mongo_namespace_validation', {
+    id, database, name, input: { validator, level: 'strict', action: 'error' },
+  });
+  const applyValidation = (id, token, confirmation = 'PROD') => command('apply_mongo_namespace_validation', { id, token, confirmation });
   const insert = async (id, input) => {
     const draft = await command('begin_mongo_document_edit', { id, database, collection, change: { kind: 'insert' } });
     const prepared = await command('review_mongo_document_edit', { id, token: draft.token, input });
@@ -325,6 +334,36 @@ async function verifyNamespaceCommands(command, openAdmin) {
     assert.equal((await apply(first.id, preview.token)).kind, 'view');
     const { items } = await command('mongo_documents', { id: first.id, database, collection: 'filtered_items', query: {} });
     assert.deepEqual(items.map(item => JSON.parse(item.json)._id), ['keep']);
+    assert.deepEqual(JSON.parse((await settings(first.id)).validator), JSON.parse(definition.validator));
+    await assert.rejects(reviewValidation(first.id, definition.validator), /변경할 유효성/);
+    await assert.rejects(reviewValidation(first.id, definition.validator, 'filtered_items'), /일반 MongoDB 컬렉션/);
+    const rule = await reviewValidation(first.id, '{"qty":{"$gte":{"$numberInt":"3"}}}');
+    const competingRule = await reviewValidation(second.id, '{"qty":{"$gte":{"$numberInt":"3"}}}');
+    assert.match(rule.previous_definition, /\$jsonSchema/);
+    assert.match(rule.definition, /\$gte/);
+    await assert.rejects(apply(first.id, rule.token), /만료되었거나/);
+    await assert.rejects(applyValidation(first.id, rule.token, ''), /PROD/);
+    const writes = await Promise.allSettled([applyValidation(first.id, rule.token), applyValidation(second.id, competingRule.token)]);
+    assert.equal(writes.filter(write => write.status === 'fulfilled').length, 1);
+    assert.match(String(writes.find(write => write.status === 'rejected').reason), /규칙이 바뀌었습니다/);
+    await assert.rejects(insert(first.id, '{"_id":"too-low","qty":{"$numberInt":"1"}}'), /유효성 검사/);
+    await insert(first.id, '{"_id":"new-rule","qty":{"$numberInt":"5"}}');
+    const currentRule = await settings(first.id);
+    const warning = await command('review_mongo_namespace_validation', { id: first.id, database, name: collection,
+      input: { ...currentRule, action: 'warn' } });
+    await applyValidation(first.id, warning.token);
+    assert.deepEqual(await settings(first.id), { ...currentRule, action: 'warn' });
+    await insert(first.id, '{"_id":"warn-only","qty":{"$numberInt":"1"}}');
+    const removal = await reviewValidation(first.id, '');
+    assert.deepEqual(JSON.parse(removal.definition).validator, {});
+    await applyValidation(first.id, removal.token);
+    assert.equal((await settings(first.id)).validator, '');
+    await insert(first.id, '{"_id":"no-rule"}');
+
+    const originalCollection = await reviewValidation(first.id, definition.validator);
+    recreateValidationCollection();
+    await assert.rejects(applyValidation(first.id, originalCollection.token), /컬렉션.*바뀌었습니다/);
+    assert.equal((await settings(second.id)).validator, '');
   } finally {
     await Promise.all([first, second].map(session => command('close_mongo', { id: session.id })));
   }
@@ -347,6 +386,28 @@ async function verifyNamespaceEditor(page, workspace, detail) {
   await button(workspace, 'ui_collection 컬렉션').waitFor();
   await button(detail, '정의').click();
   await detail.getByLabel('컬렉션 정의', { exact: true }).filter({ hasText: '$jsonSchema' }).waitFor();
+  await button(detail, '유효성 규칙 편집').click();
+  const validating = page.getByRole('dialog', { name: 'MongoDB 유효성 규칙 편집', exact: true });
+  const rule = validating.getByLabel('유효성 규칙 (선택, Extended JSON)');
+  assert.match(await rule.inputValue(), /"title"/);
+  await rule.fill('{"$jsonSchema":{"required":["code"]}}');
+  await button(validating, '변경 검토').click();
+  await validating.getByLabel('변경 전 유효성 설정', { exact: true }).filter({ hasText: 'title' }).waitFor();
+  await validating.getByLabel('변경 후 유효성 설정', { exact: true }).filter({ hasText: 'code' }).waitFor();
+  assert.equal(await button(validating, '변경 적용').isDisabled(), true);
+  await validating.getByLabel('운영 환경 확인').fill('PROD');
+  await button(validating, '변경 적용').click();
+  await validating.waitFor({ state: 'detached' });
+  await detail.getByLabel('컬렉션 정의', { exact: true }).filter({ hasText: 'code' }).waitFor();
+  await button(detail, '유효성 규칙 편집').click();
+  await rule.fill('');
+  await button(validating, '변경 검토').click();
+  await validating.getByText('유효성 규칙이 제거됩니다.', { exact: true }).waitFor();
+  await validating.getByLabel('운영 환경 확인').fill('PROD');
+  await button(validating, '변경 적용').click();
+  await validating.waitFor({ state: 'detached' });
+  const settingsWithoutRule = await detail.getByLabel('컬렉션 정의', { exact: true }).textContent();
+  assert.deepEqual(JSON.parse(settingsWithoutRule).validator ?? {}, {});
 
   await button(workspace, '컬렉션·뷰 만들기').click();
   await dialog.getByLabel('생성 유형', { exact: true }).selectOption('view');
@@ -805,7 +866,7 @@ async function main() {
     run(python, [path.join(__dirname, 'mongo-fixture.py'), String(port), ca]);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
     await verify(browser.contexts()[0].pages()[0], port, ca);
-    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, and reviewed collection and view creation).');
+    console.log('MongoDB Windows E2E passed (TLS, catalog, BSON, pipelines, document and index editing, reviewed creation and validation changes).');
   } catch (cause) {
     if (fs.existsSync(log)) console.error(fs.readFileSync(log, 'utf8').slice(-3500));
     throw cause;
