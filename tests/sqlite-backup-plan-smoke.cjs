@@ -11,7 +11,7 @@ const { withSecondDesktopInstance } = require('./desktop-instance.cjs');
 const root = process.env.STACKPORT_TEST_ROOT;
 const phase = process.env.STACKPORT_BACKUP_TEST_PHASE;
 const fixtureFile = root && path.join(root, 'schedule.json');
-if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip'].includes(phase)) {
+if (!root || !['prepare', 'resume', 'calendar', 'retry', 'cancel', 'timeout', 'concurrency', 'skip', 'history'].includes(phase)) {
   throw new Error('Set the isolated root and backup test phase.');
 }
 
@@ -86,6 +86,11 @@ async function main() {
         assert.match(await capacity.innerText(), /사용 가능/);
         await dialog.getByLabel('파일 이름 접두어').fill('fixture');
         await dialog.getByLabel('보존 기간 (일)').fill('7');
+        if (phase === 'history') {
+          await verifyWorkspaceHistory(page, dialog, command, profile);
+          assert.deepEqual(errors, []);
+          return;
+        }
         if (phase === 'concurrency') {
           await verifyConcurrency(dialog, history, command, project.id, profile.id);
           assert.deepEqual(errors, []);
@@ -217,6 +222,70 @@ function seedLargeSnapshot(db, blocks = 256) {
   db.exec(`CREATE TABLE large_snapshot (data BLOB);
     WITH RECURSIVE blocks(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM blocks WHERE n<${blocks})
     INSERT INTO large_snapshot SELECT zeroblob(1048576) FROM blocks;`);
+}
+
+async function verifyWorkspaceHistory(page, dialog, command, profile) {
+  const secondProject = await command('create_project', { name: '두 번째 백업 프로젝트' });
+  const second = await command('create_sqlite_profile', {
+    projectId: secondProject.id, name: '재실행할 원본', path: source, environment: 'DEV',
+  });
+  const secondOutput = path.join(root, '두 번째 백업');
+  const temporarilyMoved = secondOutput + '-moved';
+  fs.mkdirSync(secondOutput);
+  const save = (profileId, directory) => command('save_sqlite_backup_plan', { profileId, input: {
+    revision: null, directory, prefix: 'history', interval_minutes: null, retention_days: 7, retry_limit: 0, next_at: null,
+  } });
+  const run = profileId => command('run_sqlite_backup_plan', { profileId, revision: 1 });
+  await save(profile.id, output);
+  await save(second.id, secondOutput);
+  const success = await run(profile.id);
+  assert.equal(success.status, 'succeeded');
+  fs.renameSync(secondOutput, temporarilyMoved);
+  try { assert.equal((await run(second.id)).status, 'failed'); }
+  finally { fs.renameSync(temporarilyMoved, secondOutput); }
+  const db = new DatabaseSync(path.join(root, 'workspace', 'workspace.sqlite'));
+  try {
+    const insert = db.prepare("INSERT INTO backup_runs (id, profile_id, workspace_path, trigger_kind, status, started_at, path, message) " +
+      "SELECT ?, profile_id, workspace_path, 'scheduled', 'skipped', ?, '', ? FROM backup_runs WHERE id=?");
+    for (let index = 0; index < 42; index++) {
+      insert.run('history-fixture-' + index, success.started_at - 1, '페이지 경계 검증 ' + index, success.id);
+    }
+  } finally { db.close(); }
+
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.getByRole('button', { name: '작업 기록', exact: true }).click();
+  await page.getByRole('button', { name: '백업 실행', exact: true }).click();
+  const view = page.getByRole('region', { name: '백업 실행 기록', exact: true });
+  const entries = view.getByRole('listitem');
+  await view.getByText('재실행할 원본', { exact: true }).waitFor();
+  assert.equal(await entries.count(), 40);
+  await view.getByRole('button', { name: '이전 기록 더 보기', exact: true }).click();
+  await view.getByText('페이지 경계 검증 0', { exact: true }).waitFor();
+  assert.equal(await entries.count(), 4);
+  await view.getByRole('button', { name: '이전 페이지', exact: true }).click();
+  await view.getByText(profile.name, { exact: true }).first().waitFor();
+
+  await view.getByLabel('프로젝트').selectOption(secondProject.id);
+  await view.getByLabel('실행 상태').selectOption('failed');
+  await view.getByLabel('실행 방식').selectOption('manual');
+  const failed = entries.filter({ hasText: '재실행할 원본' });
+  await failed.getByText('실패', { exact: true }).waitFor();
+  assert.equal(await entries.count(), 1);
+  await failed.getByRole('button', { name: '백업 계획 열기', exact: true }).click();
+  await dialog.getByText('재실행할 원본', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '지금 백업', exact: true }).click();
+  await dialog.getByText('백업을 만들고 무결성을 확인했습니다.', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  assert.equal(await view.getByLabel('프로젝트').inputValue(), secondProject.id);
+  assert.equal(await view.getByLabel('실행 상태').inputValue(), 'failed');
+  assert.equal(await view.getByLabel('실행 방식').inputValue(), 'manual');
+  await view.getByLabel('실행 상태').selectOption('succeeded');
+  await entries.getByText('무결성 검사 통과', { exact: true }).waitFor();
+  assert.equal(await entries.count(), 1);
+  await entries.getByText('상세', { exact: true }).click();
+  await entries.getByText('파일 경로', { exact: true }).waitFor();
+  assert.equal(fs.readdirSync(secondOutput).length, 1);
+  console.log('Windows backup history combined two projects, paged tied records, filtered failures, and reran the saved plan.');
 }
 
 async function verifyConcurrency(dialog, history, command, projectId, waitingProfile) {

@@ -15,7 +15,7 @@ type Plan = {
   tunnel: BackupTunnel | null;
   calendar: Calendar | null;
 };
-type Run = {
+export type BackupRun = {
   id: string; status: "running" | "succeeded" | "failed" | "interrupted" | "cancelled" | "timed_out" | "skipped"; trigger_kind: "scheduled" | "retry" | "manual";
   can_cancel: boolean;
   retry_attempt: number | null;
@@ -27,8 +27,8 @@ type Run = {
   } | null;
 };
 type ExecutionPolicy = { revision: number; max_concurrent: number; max_supported: number };
-type Snapshot = { plan: Plan | null; runs: Run[]; execution_policy: ExecutionPolicy };
-type ExpiredPage = { runs: Run[]; next_before: number | null };
+type Snapshot = { plan: Plan | null; runs: BackupRun[]; execution_policy: ExecutionPolicy };
+type ExpiredPage = { runs: BackupRun[]; next_before: number | null };
 type Capacity = { directory: string; estimated_bytes: number; available_bytes: number | null };
 type RemovalPreview = { token: string; path: string; size_bytes: number; sha256: string; expires_at: number };
 type CredentialStatus = { supported: boolean; usable: boolean };
@@ -39,12 +39,12 @@ type Draft = {
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
 };
-const runStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과", skipped: "건너뜀" };
-const trigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
+export const backupRunStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과", skipped: "건너뜀" };
+export const backupRunTrigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
-const dateText = (seconds: number) => date.format(seconds * 1000);
-const size = (amount: number) => bytes.format(amount / 1_048_576) + " MiB";
+export const formatBackupTime = (seconds: number) => date.format(seconds * 1000);
+export const formatBackupSize = (amount: number) => bytes.format(amount / 1_048_576) + " MiB";
 
 function dateInput(seconds: number) {
   const value = new Date(seconds * 1000);
@@ -103,7 +103,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const [cancelRequested, setCancelRequested] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [removal, setRemoval] = useState<{ run: Run; preview: RemovalPreview } | null>(null);
+  const [removal, setRemoval] = useState<{ run: BackupRun; preview: RemovalPreview } | null>(null);
   const [fileFeedback, setFileFeedback] = useState<{ runId: string; text: string; error: boolean } | null>(null);
   const [expiredPage, setExpiredPage] = useState<ExpiredPage | null>(null);
   const [credential, setCredential] = useState<CredentialStatus | null>(null);
@@ -221,7 +221,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
       setConfirmation("");
       onFileBusy?.(true);
       try {
-        const result = await invoke<Run>(`run_${engine}_backup_plan`, { ...target, revision: plan.revision });
+        const result = await invoke<BackupRun>(`run_${engine}_backup_plan`, { ...target, revision: plan.revision });
         apply(await invoke<Snapshot>(`${engine}_backup_plan`, { profileId }));
         if (result.status === "succeeded") setNotice("백업을 만들고 무결성을 확인했습니다.");
         else if (result.status === "cancelled") setNotice("백업을 취소했습니다.");
@@ -243,7 +243,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
     setCancelRequested(null);
   }
 
-  async function performFile(run: Run, action: () => Promise<string>) {
+  async function performFile(run: BackupRun, action: () => Promise<string>) {
     if (busy) return;
     setBusy("file");
     setFileFeedback(null);
@@ -267,7 +267,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
   const plan = snapshot?.plan;
   const policy = snapshot?.execution_policy;
   const stale = draft && draft.revision !== (plan?.revision ?? null);
-  const nextAt = plan?.next_at ? (plan.calendar ? calendarDate(plan.next_at, plan.calendar.time_zone) : dateText(plan.next_at)) : "예약 없음";
+  const nextAt = plan?.next_at ? (plan.calendar ? calendarDate(plan.next_at, plan.calendar.time_zone) : formatBackupTime(plan.next_at)) : "예약 없음";
   const running = snapshot?.runs.some(run => run.status === "running");
   const awaitingExecution = plan && !plan.requires_review && !running &&
     [plan.next_at, plan.retry_at].some(at => at !== null && at <= Date.now() / 1000);
@@ -310,8 +310,8 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
             { ...(postgres ? { profile: postgres, tunnel: reviewedTunnel } : { profileId }), directory: draft.directory })))}>
           용량 확인
         </button>
-        {capacity && <p className="form-note" role="status">{postgres ? "원본 크기" : "예상 크기"} {size(capacity.estimated_bytes)}
-          {capacity.available_bytes !== null && " · 사용 가능 " + size(capacity.available_bytes)}
+        {capacity && <p className="form-note" role="status">{postgres ? "원본 크기" : "예상 크기"} {formatBackupSize(capacity.estimated_bytes)}
+          {capacity.available_bytes !== null && " · 사용 가능 " + formatBackupSize(capacity.available_bytes)}
           {capacity.available_bytes !== null && capacity.available_bytes < capacity.estimated_bytes && (postgres ? " · 원본보다 여유 공간이 적습니다" : " · 공간 부족")}</p>}
         <div className="backup-plan-fields">
           <label className="field">파일 이름 접두어<input required maxLength={40} pattern="[A-Za-z0-9_\-]+" value={draft.prefix}
@@ -376,7 +376,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
           disabled={Boolean(busy)} onChange={event => setConfirmation(event.target.value)} /></label>}
         {plan && <p className="form-note">다음 예약 {plan.requires_review ? "설정 검토 필요" : nextAt}
           {!plan.requires_review && plan.retry_at !== null && ` · ${plan.retry_attempt}차 재시도 ${plan.calendar
-            ? calendarDate(plan.retry_at, plan.calendar.time_zone) : dateText(plan.retry_at)}`}</p>}
+            ? calendarDate(plan.retry_at, plan.calendar.time_zone) : formatBackupTime(plan.retry_at)}`}</p>}
         {plan?.requires_review && <p className="form-note" role="status">{postgres ? "현재 연결 설정, 백업 위치와 일정을 검토한 뒤 계획을 다시 저장하세요." : "이 작업 공간의 백업 위치와 일정을 검토한 뒤 계획을 저장하세요."}</p>}
         {awaitingExecution && <p className="form-note" role="status">예약 백업 실행 대기 중</p>}
         {stale && <p className="form-error" role="alert">다른 창에서 계획이 변경되었습니다. 설정을 새로고침하세요.</p>}
@@ -409,18 +409,18 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         {fileFeedback && !fileFeedback.error && !runs.some(run => run.id === fileFeedback.runId) &&
           <p className="form-note" role="status">{fileFeedback.text}</p>}
         {runs.length ? runs.map(run => <details key={run.id}>
-          <summary>{runStatus[run.status]} · {trigger[run.trigger_kind]}{run.retry_attempt !== null && ` (${run.retry_attempt}차)`} · {dateText(run.started_at)}</summary>
-          {run.scheduled_at !== null && <p>예정 시각 {dateText(run.scheduled_at)}</p>}
+          <summary>{backupRunStatus[run.status]} · {backupRunTrigger[run.trigger_kind]}{run.retry_attempt !== null && ` (${run.retry_attempt}차)`} · {formatBackupTime(run.started_at)}</summary>
+          {run.scheduled_at !== null && <p>예정 시각 {formatBackupTime(run.scheduled_at)}</p>}
           {run.path && <p>{displayPath(run.path)}</p>}
           {run.status !== "skipped" && run.finished_at !== null && <p>실행 시간 {(run.finished_at - run.started_at).toLocaleString("ko-KR")}초</p>}
-          {run.size_bytes !== null && <p>백업 크기 {size(run.size_bytes)}
-            {run.expires_at !== null && " · 보존 만료 " + dateText(run.expires_at)}</p>}
+          {run.size_bytes !== null && <p>백업 크기 {formatBackupSize(run.size_bytes)}
+            {run.expires_at !== null && " · 보존 만료 " + formatBackupTime(run.expires_at)}</p>}
           {run.message && <p>{run.message}</p>}
           {run.artifact && <>
             <p>백업 엔진 {engineLabel} {run.artifact.engine_version}</p>
             <p>SHA-256 <code>{run.artifact.sha256}</code></p>
-            {run.artifact.verified_at !== null && <p>마지막 지문 확인 {dateText(run.artifact.verified_at)}</p>}
-            {run.artifact.removed_at !== null ? <p>파일 삭제 완료 {dateText(run.artifact.removed_at)}</p> : <>
+            {run.artifact.verified_at !== null && <p>마지막 지문 확인 {formatBackupTime(run.artifact.verified_at)}</p>}
+            {run.artifact.removed_at !== null ? <p>파일 삭제 완료 {formatBackupTime(run.artifact.removed_at)}</p> : <>
               {run.artifact.removal_started_at !== null && <p>삭제 결과 확인 필요</p>}
               {run.artifact.owned_here && <div className="backup-file-actions">
                 <button type="button" className="secondary small" disabled={Boolean(busy)} onClick={() => void performFile(run, async () => {
@@ -463,7 +463,7 @@ export function BackupPlanDialog({ profile, postgres, displayPath, onClose, onFi
         <div className="edit-current">
           <p><strong>{profile.name}</strong> <span className={"environment " + profile.environment.toLowerCase()}>{profile.environment}</span></p>
           <p>{displayPath(removal.preview.path)}</p>
-          <p>{size(removal.preview.size_bytes)} · 보존 만료 {dateText(removal.preview.expires_at)}</p>
+          <p>{formatBackupSize(removal.preview.size_bytes)} · 보존 만료 {formatBackupTime(removal.preview.expires_at)}</p>
           <p>SHA-256 <code>{removal.preview.sha256}</code></p>
         </div>
         <div className="dialog-actions">

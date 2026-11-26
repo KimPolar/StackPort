@@ -19,6 +19,7 @@ import { gridDisplay, gridTypeLabels, rawCellFormat, sqliteGridValueType } from 
 import { TableQueryControls, defaultTableQuery, type TableQuery } from "./TableQueryControls";
 import { SqliteRestoreDialog, restoreCounts, type RestoreReport } from "./SqliteRestoreDialog";
 import { BackupPlanDialog } from "./BackupPlanDialog";
+import { BackupHistoryView, type BackupHistoryViewProps } from "./BackupHistoryView";
 import { SqliteEditDialog, sqliteEditValue, type EditKey, type SqliteEditRequest, type SqliteEditResult } from "./SqliteEditDialog";
 import { GridPasteDialog, type GridPasteRequest, type GridPasteResult } from "./GridPasteDialog";
 import { GridCopyControls, GridSelectionButton, GridSelectPage, GridSelectRow, sqliteCopyCell, useGridRowSelection } from "./GridRowSelection";
@@ -1744,7 +1745,10 @@ function App() {
         onObjectHandled={finishPostgresObject} favorites={favorites} favoriteScope={favoriteScope}
         onFileBusy={busy => { localFileBusy.current = busy; }} editor={networkSqlEditor} />
     </div>}
-    {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
+    {historyOpen ? <AuditPanel onBack={() => setHistoryOpen(false)} backup={{
+      displayPath, onFileBusy: busy => { localFileBusy.current = busy; },
+      onOpenTunnels: targetProject => { setProjectId(targetProject); openTunnels(); },
+    }} /> : !desktop ? <EmptyState title="데스크톱 앱에서 시작하세요" text="브라우저에서 로컬 파일에 직접 연결할 수 없습니다. 브라우저용 게이트웨이는 아직 제공되지 않습니다." /> :
     !project ? <EmptyState title="첫 프로젝트를 만드세요" text="데이터베이스와 SSH 연결을 프로젝트별로 관리할 수 있습니다." action="프로젝트 만들기" onAction={() => openModal("project")} /> :
     !sqliteWorkspace ? null :
     !profile ? <EmptyState title="데이터베이스를 연결하세요" text="저장된 연결을 탐색기에서 열 수 있습니다." action="데이터베이스 연결 추가" onAction={() => setDatabasePicker(true)} /> : <>
@@ -2458,7 +2462,8 @@ const auditOperationNames: Record<string, string> = {
 };
 const auditOutcomeNames: Record<string, string> = { started: "시작", succeeded: "완료", failed: "실패", cancelled: "중단", timed_out: "시간 초과" };
 
-function AuditPanel({ onBack }: { onBack: () => void }) {
+function AuditPanel({ onBack, backup }: { onBack: () => void; backup: BackupHistoryViewProps }) {
+  const [view, setView] = useState<"audit" | "backup">("audit");
   const [cursors, setCursors] = useState<(number | null)[]>([null]);
   const [page, setPage] = useState<AuditPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2477,7 +2482,15 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
   }, [cursor, refresh]);
 
   return <section className="audit-panel" aria-labelledby="audit-title">
-    <div className="audit-header"><div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1><p>이 장치의 프로젝트·연결 변경, SQLite·SFTP 작업과 SSH 호스트 키 신뢰 기록을 확인합니다.</p></div><button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button></div>
+    <div className="audit-header">
+      <div><button className="back-button" onClick={onBack}><ArrowLeft size={15} /> 작업 공간으로</button><h1 id="audit-title">작업 기록</h1></div>
+      {view === "audit" && <button className="secondary" disabled={loading} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} /> 새로고침</button>}
+    </div>
+    <div className="audit-view-picker" role="group" aria-label="작업 기록 유형">
+      <button type="button" className="secondary small" aria-pressed={view === "audit"} onClick={() => setView("audit")}>감사 기록</button>
+      <button type="button" className="secondary small" aria-pressed={view === "backup"} onClick={() => setView("backup")}>백업 실행</button>
+    </div>
+    {view === "backup" ? <BackupHistoryView {...backup} /> : <>
     <p className="audit-note">SQL, 행 데이터, 암호와 파일 경로는 기록하지 않습니다. 실행자는 로컬 사용자로만 표시되며 개인 계정 식별과 변조 방지는 아직 제공되지 않습니다.</p>
     {error && <div className="error-banner" role="alert">기록을 불러오지 못했습니다: {error}</div>}
     <div className="audit-card" aria-busy={loading}>
@@ -2496,6 +2509,7 @@ function AuditPanel({ onBack }: { onBack: () => void }) {
       <div className="pagination"><span>최대 100개씩 표시</span><div><button className="secondary" disabled={loading || cursors.length === 1} onClick={() => setCursors(items => items.slice(0, -1))}>이전</button><button className="secondary" disabled={loading || !page?.next_cursor} onClick={() => { if (page?.next_cursor) setCursors(items => [...items, page.next_cursor]); }}>이전 기록 더 보기</button></div></div>
     </div>
     <details className="ssh-history" onToggle={event => setSshOpen(event.currentTarget.open)}><summary>SSH 호스트 키 신뢰 기록</summary>{sshOpen && <SshTrustHistory />}</details>
+    </>}
   </section>;
 }
 

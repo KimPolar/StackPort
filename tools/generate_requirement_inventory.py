@@ -27,7 +27,7 @@ PARTIAL = {
     "SP-UI-007": "Ctrl+Shift+P 명령 팔레트, 작업 도구·프로젝트·저장 연결·SQLite 객체 열기와 메모리 내 최근 명령 우선 표시",
     "SP-UI-008": "Windows 상단·단축키에서 SSH·RDP·PostgreSQL 주소와 SQLite 파일 경로 판별, 현재 프로젝트 저장 연결 재사용, 새 대상 양식 채우기와 SSH 등록",
     "SP-UI-009": "SQLite·PostgreSQL·SSH 연결과 SQLite·PostgreSQL 테이블·뷰를 개인 또는 프로젝트 범위로 고정, 검색·재시작 복원, 연결 확인 후 열기, 프로젝트 복제 시 연결 ID 재매핑",
-    "SP-UI-011": "프로젝트·SQLite 작업, SFTP 전송·복사·폴더 생성·이름 변경·이동·삭제, SSH·PostgreSQL 연결 정의와 SSH 호스트 키 신뢰·교체의 로컬 기록",
+    "SP-UI-011": "프로젝트·SQLite 작업, SFTP 파일 작업, SSH·PostgreSQL 연결 및 호스트 키 기록, 작업 공간 SQLite·PostgreSQL 백업 이력의 프로젝트·상태·실행 방식 필터와 계획 재실행",
     "SP-UI-012": "재시작 후 마지막 프로젝트·SQLite 연결·도구 배치·분할 크기·탐색기 상태 복원, 저장된 SSH 정의 다시 표시",
     "SP-UI-014": "쿼리 실행·중단·시간 초과·오류와 읽기 전용 표시, 하단 상태 표시줄에 터미널·RDP·SSH 터널 수와 PostgreSQL 연결 및 DB 실행 상태 표시",
     "SP-UI-019": "SQLite·PostgreSQL 탭·앱 닫기 시 탭별 초안 확인 및 개별 파일 저장, SFTP 편집기·앱 닫기 시 확인과 로컬 초안 보관",
@@ -418,6 +418,10 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 evidence = "crates/stackport-core/tests/workspace.rs; src/; src-tauri/"
             if requirement_id in {"SP-BK-012", "SP-AU-001", "SP-AU-003", "SP-AU-006", "SP-AU-007", "SP-AU-008", "SP-AU-009", "SP-AU-012", "SP-AT-017"}:
                 evidence = "crates/stackport-core/src/backup_schedule.rs; crates/stackport-core/src/backup_schedule/calendar.rs; crates/stackport-core/src/postgres/schedule.rs; src/BackupPlanDialog.tsx; src-tauri/src/backup_schedule.rs; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
+            if requirement_id in {"SP-UI-011", "SP-BK-012", "SP-AU-008"}:
+                evidence += "; crates/stackport-core/src/backup_schedule/history.rs; src/BackupHistoryView.tsx"
+                if requirement_id == "SP-UI-011":
+                    evidence += "; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
             if requirement_id in {"SP-BK-011", "SP-BK-012", "SP-BK-016", "SP-AU-016", "SP-SEC-013"}:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence

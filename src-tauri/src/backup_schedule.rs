@@ -1,8 +1,9 @@
 use stackport_core::{
     backup_artifact::{RemovalPreview, RemovalResult},
     backup_schedule::{
-        BackupCalendar, BackupCapacity, BackupExecutionPolicy, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence,
-        ExpiredBackupPage, MAX_CONCURRENT_BACKUPS,
+        BackupCalendar, BackupCapacity, BackupExecutionPolicy, BackupHistoryCursor, BackupHistoryFilter,
+        BackupHistoryPage, BackupPlanState, BackupPlanWrite, BackupRun, CalendarOccurrence, ExpiredBackupPage,
+        MAX_CONCURRENT_BACKUPS,
     },
     BackupTunnelRoute, PostgresProfile, SshTunnelManager, Store,
 };
@@ -42,6 +43,12 @@ impl Scheduler {
             let _ = worker.send(());
         }
     }
+}
+
+#[tauri::command]
+pub(crate) async fn list_backup_history(store: State<'_, Store>, filter: BackupHistoryFilter, before: Option<BackupHistoryCursor>) -> Result<BackupHistoryPage, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.list_backup_history(filter, before)).await
 }
 
 #[tauri::command]

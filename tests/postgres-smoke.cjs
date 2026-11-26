@@ -2799,9 +2799,10 @@ async function main() {
   try {
     const tunnelPlan = process.env.STACKPORT_POSTGRES_TUNNEL_PLAN_ONLY === '1';
     const calendarPlan = process.env.STACKPORT_POSTGRES_CALENDAR_ONLY === '1';
-    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1' || tunnelPlan || calendarPlan) {
+    const historyPlan = process.env.STACKPORT_POSTGRES_HISTORY_ONLY === '1';
+    if (process.env.STACKPORT_POSTGRES_CREDENTIAL_ONLY === '1' || process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1' || tunnelPlan || calendarPlan || historyPlan) {
       browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL);
-      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1', tunnelPlan, calendarPlan);
+      await verifyStoredCredentials(browser, fixture, process.env.STACKPORT_POSTGRES_PLAN_ONLY === '1', tunnelPlan, calendarPlan, historyPlan);
       return;
     }
     gateway = await startGateway(fixture.port);
@@ -2821,7 +2822,7 @@ async function main() {
   }
 }
 
-async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan, calendarPlan) {
+async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan, calendarPlan, historyPlan) {
   assert.ok(backupTools);
   const page = browser.contexts()[0].pages()[0];
   page.setDefaultTimeout(15000);
@@ -2844,6 +2845,12 @@ async function verifyStoredCredentials(browser, fixture, testPlan, tunnelPlan, c
   const submit = connect.getByRole('button', { name: '연결', exact: true });
   const remember = connect.getByRole('checkbox', { name: '연결 성공 후 Windows에 암호 저장', exact: true });
   try {
+    if (historyPlan) {
+      const session = await directlyOpen(profile, { password: secret, useSavedPassword: false, rememberPassword: true });
+      await command('close_postgres', { id: session.id });
+      await verifyPostgresBackupHistory(page, command, profile);
+      return;
+    }
     assert.deepEqual(await status(), { supported: true, stored: false, usable: false });
     const temporary = await directlyOpen(profile, { password: secret, useSavedPassword: false });
     await command('close_postgres', { id: temporary.id });
@@ -2994,6 +3001,39 @@ async function verifyPostgresCalendarBackupPlan(page, command, profile) {
   await dialog.getByRole('button', { name: '예약 중지', exact: true }).click();
   await dialog.getByText('예약 실행을 중지했습니다.', { exact: true }).waitFor();
   console.log('PostgreSQL saved-credential calendar backup fired and its archive was read with pg_restore.');
+}
+
+async function verifyPostgresBackupHistory(page, command, profile) {
+  const directory = path.join(root, 'postgres history backups');
+  fs.mkdirSync(directory);
+  const { plan } = await command('save_postgres_backup_plan', { profile, confirmation: 'PROD', tunnel: null, input: {
+    revision: null, directory, prefix: 'history', interval_minutes: null, retention_days: 7, retry_limit: 0, next_at: null,
+  } });
+  const first = await command('run_postgres_backup_plan', { profile, confirmation: 'PROD', revision: plan.revision });
+  assert.equal(first.status, 'succeeded');
+  await page.reload();
+  await page.getByRole('button', { name: '작업 기록', exact: true }).click();
+  await page.getByRole('button', { name: '백업 실행', exact: true }).click();
+  const history = page.getByRole('region', { name: '백업 실행 기록', exact: true });
+  const entry = history.getByRole('listitem').filter({ hasText: profile.settings.name }).first();
+  await entry.getByText(/PostgreSQL · 수동 실행/).waitFor();
+  await entry.getByRole('button', { name: '백업 계획 열기', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'PostgreSQL 백업 계획', exact: true });
+  const approval = dialog.getByLabel('운영 백업 확인 (PROD 입력)');
+  await approval.waitFor();
+  const runNow = dialog.getByRole('button', { name: '지금 백업', exact: true });
+  assert.equal(await runNow.isDisabled(), true);
+  await approval.fill('PROD');
+  await runNow.click();
+  await dialog.getByText('백업을 만들고 무결성을 확인했습니다.', { exact: true }).waitFor();
+  await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+  const state = await command('postgres_backup_plan', { profileId: profile.id });
+  assert.equal(state.runs.length, 2);
+  const latest = state.runs[0];
+  assert.notEqual(latest.id, first.id);
+  assert.equal(latest.status, 'succeeded');
+  assert.equal(createHash('sha256').update(fs.readFileSync(latest.path)).digest('hex'), latest.artifact.sha256);
+  console.log('PostgreSQL reran from history after PROD confirmation and wrote a separate verified archive.');
 }
 
 async function verifyTunneledPostgresBackupPlan(page, command, project, profile, fixture) {

@@ -1,9 +1,11 @@
 //! Workspace scheduler for verified database backups.
 mod calendar;
 mod execution;
+mod history;
 
 pub use calendar::{preview_backup_calendar, BackupCalendar, CalendarOccurrence};
 pub(crate) use execution::{Execution, RunControl, Stop};
+pub use history::{BackupHistoryCursor, BackupHistoryFilter, BackupHistoryPage};
 use calendar::CalendarSchedule;
 use crate::{
     backup_artifact::{self, ArtifactSummary},
@@ -345,7 +347,7 @@ impl Store {
         }
         let mut statement = db
             .prepare(&format!(
-                "{RUN_SELECT} WHERE r.profile_id = ?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 40"
+                "SELECT {RUN_COLUMNS} {RUN_TABLES} WHERE r.profile_id = ?1 ORDER BY r.started_at DESC, r.rowid DESC LIMIT 40"
             ))
             .map_err(db_error)?;
         let mut runs = statement
@@ -385,7 +387,7 @@ impl Store {
         let db = self.connect()?;
         let mut statement = db
             .prepare(&format!(
-            "{RUN_SELECT} WHERE r.profile_id=?1 AND r.workspace_path=?2 AND r.status='succeeded'
+            "SELECT {RUN_COLUMNS} {RUN_TABLES} WHERE r.profile_id=?1 AND r.workspace_path=?2 AND r.status='succeeded'
              AND a.file_id IS NOT NULL AND a.removed_at IS NULL AND r.expires_at<=?3
              AND (?4 IS NULL OR r.rowid<?4) ORDER BY r.rowid DESC LIMIT 41"
         ))
@@ -907,16 +909,18 @@ fn record_skipped(
          VALUES (?1, ?2, ?3, ?4, ?5, 'skipped', ?6, ?7, ?7, '', ?8)",
         params![id, profile_id, plan.workspace_path, trigger.kind, trigger.retry_attempt.unwrap_or(1), trigger.at, now, message],
     ).map_err(db_error)?;
-    db.query_row(&format!("{RUN_SELECT} WHERE r.id=?1"), params![id, plan.workspace_path], run_from_row)
+    db.query_row(&format!("SELECT {RUN_COLUMNS} {RUN_TABLES} WHERE r.id=?1"), params![id, plan.workspace_path], run_from_row)
         .map_err(db_error)
 }
 
-const RUN_SELECT: &str =
-    "SELECT r.id, r.profile_id, r.status, r.trigger_kind, r.started_at, r.finished_at,
+const RUN_COLUMNS: &str =
+    "r.id, r.profile_id, r.status, r.trigger_kind, r.started_at, r.finished_at,
     r.expires_at, r.path, r.size_bytes, r.message, a.sha256, a.engine_version, a.verified_at,
     a.removal_started_at, a.removed_at, r.workspace_path = ?2, a.file_id IS NOT NULL, r.rowid, p.postgres_revision IS NOT NULL,
-    CASE WHEN r.trigger_kind='retry' THEN r.retry_attempt END, r.scheduled_at
-    FROM backup_runs r JOIN backup_plans p ON p.profile_id=r.profile_id LEFT JOIN backup_artifacts a ON a.run_id = r.id";
+    CASE WHEN r.trigger_kind='retry' THEN r.retry_attempt END, r.scheduled_at";
+
+const RUN_TABLES: &str =
+    "FROM backup_runs r JOIN backup_plans p ON p.profile_id=r.profile_id LEFT JOIN backup_artifacts a ON a.run_id = r.id";
 
 fn run_from_row(row: &Row<'_>) -> rusqlite::Result<BackupRun> {
     Ok(BackupRun {
