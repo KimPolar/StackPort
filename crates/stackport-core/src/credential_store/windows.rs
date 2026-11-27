@@ -61,7 +61,7 @@ pub(crate) fn read<T>(name: &str, inspect: impl FnOnce(&[u8]) -> T) -> Result<Op
 
 pub(crate) fn write(name: &str, blob: &mut [u8]) -> Result<()> {
     if blob.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
-        return Err("암호가 Windows 자격 증명 관리자의 저장 한도를 초과합니다.".into());
+        return Err("Windows 자격 증명 관리자의 저장 크기 한도를 초과했습니다.".into());
     }
     let mut name: Vec<u16> = name.encode_utf16().chain([0]).collect();
     let mut entry: CREDENTIALW = unsafe { std::mem::zeroed() };
@@ -71,7 +71,7 @@ pub(crate) fn write(name: &str, blob: &mut [u8]) -> Result<()> {
     entry.CredentialBlobSize = blob.len() as u32;
     entry.Persist = CRED_PERSIST_LOCAL_MACHINE;
     if unsafe { CredWriteW(&entry, 0) } == 0 {
-        return Err("Windows 자격 증명 관리자에 암호를 저장할 수 없습니다.".into());
+        return Err("Windows 자격 증명 관리자에 인증 정보를 저장할 수 없습니다.".into());
     }
     Ok(())
 }
@@ -86,6 +86,6 @@ pub(crate) fn delete(name: &str) -> Result<()> {
         .map(|status| status as u32)
     {
         Some(ERROR_NOT_FOUND | ERROR_NO_SUCH_LOGON_SESSION) => Ok(()),
-        _ => Err("Windows 자격 증명 관리자에서 저장한 암호를 삭제할 수 없습니다.".into()),
+        _ => Err("Windows 자격 증명 관리자에서 인증 정보를 삭제할 수 없습니다.".into()),
     }
 }

@@ -1741,9 +1741,26 @@ async fn delete_snowflake_profile(store: State<'_, Store>, id: String, revision:
 }
 
 #[tauri::command]
+async fn snowflake_credential_status(store: State<'_, Store>, profile_id: String, revision: i64)
+    -> Result<snowflake::CredentialStatus, String> {
+    let store = store.inner().clone();
+    worker(move || store.snowflake_credential_status(&profile_id, revision)).await
+}
+
+#[tauri::command]
+async fn forget_snowflake_token(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
+    let store = store.inner().clone();
+    worker(move || store.forget_snowflake_token(&profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn open_snowflake(manager: State<'_, snowflake::Manager>, profile_id: String, revision: i64,
-    token: snowflake::AccessToken, confirmation: String) -> Result<snowflake::SessionInfo, String> {
-    manager.open(profile_id, revision, token, confirmation).await
+    token: Option<snowflake::AccessToken>, use_saved_token: Option<bool>, remember_token: Option<bool>,
+    confirmation: String) -> Result<snowflake::SessionInfo, String> {
+    let authentication = snowflake::TokenAuthentication::requested(
+        token, use_saved_token.unwrap_or(false), remember_token.unwrap_or(false), "Snowflake",
+    )?;
+    manager.open(profile_id, revision, authentication, confirmation).await
 }
 
 #[tauri::command]
@@ -3459,6 +3476,8 @@ fn main() {
             create_snowflake_profile,
             update_snowflake_profile,
             delete_snowflake_profile,
+            snowflake_credential_status,
+            forget_snowflake_token,
             open_snowflake,
             close_snowflake,
             snowflake_schemas,

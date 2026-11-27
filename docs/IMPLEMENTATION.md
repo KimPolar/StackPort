@@ -134,7 +134,9 @@ Oracle의 **결과 내보내기**는 테이블·뷰·구체화 뷰에서 적용�
 
 내보내기는 같은 인증과 전송 설정으로 별도 연결을 엽니다. 암호는 열린 세션 동안 메모리에 유지하고 종료 시 지웁니다. 진행 행 수를 표시하며, 중단은 진행 중인 서버 호출이 반환된 뒤 처리합니다. 제한은 4,096열, 행당 값 합계 32 MiB, 전체 5분입니다. `BFILE`·`LONG` 등 지원 범위 밖의 열은 이름과 타입을 오류에 표시합니다. 성공한 파일만 지정 경로에 저장하고 대상 객체와 행 수를 작업 기록에 남깁니다.
 
-**Snowflake**는 공식 SQL API에 Windows의 인증서 검증을 사용하는 HTTPS로 연결합니다. 계정 식별자 또는 계정 호스트, 데이터베이스, 선택한 웨어하우스와 역할, 인증 방식과 환경을 프로젝트에 저장합니다. PAT 또는 OAuth 액세스 토큰은 연결할 때 입력하며 운영 프로필에는 PROD 확인이 필요합니다. 업무 화면에 연결된 실제 역할과 웨어하우스를 표시합니다. [Snowflake SQL API](https://docs.snowflake.com/en/developer-guide/sql-api/intro) · [Snowflake 인증 방식](https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/authentication)
+**Snowflake**는 공식 SQL API에 Windows의 인증서 검증을 사용하는 HTTPS로 연결합니다. 계정 식별자 또는 계정 호스트, 데이터베이스, 선택한 웨어하우스와 역할, 인증 방식과 환경을 프로젝트에 저장합니다. PAT 또는 OAuth 액세스 토큰을 입력하거나 Windows에 저장한 토큰을 선택할 수 있으며 운영 프로필에는 PROD 확인이 필요합니다. 업무 화면에 연결된 실제 역할과 웨어하우스를 표시합니다. [Snowflake SQL API](https://docs.snowflake.com/en/developer-guide/sql-api/intro) · [Snowflake 인증 방식](https://docs.snowflake.com/en/developer-guide/snowflake-rest-api/authentication)
+
+**연결 성공 후 Windows에 토큰 저장**을 선택하면 서버의 인증과 데이터베이스·역할·웨어하우스 확인을 마친 뒤 토큰을 보관합니다. 연결 설정이나 인증 방식을 바꾸거나 토큰이 만료되면 새 토큰을 입력할 수 있습니다. 연결 창의 **저장한 토큰 삭제**나 프로필·프로젝트 삭제로 해당 Windows 항목을 지웁니다.
 
 Snowflake 작업 공간은 현재 역할로 볼 수 있는 데이터베이스의 스키마, 테이블, 뷰, 구체화 뷰를 검색합니다. 열 구조는 이름, 데이터 타입, NULL 허용 여부와 IDENTITY를 표시합니다. 미리보기는 최대 50행과 64열을 읽습니다. NUMBER의 정밀도를 문자열로 보존하고, 긴 문자와 바이너리 값은 앞 256문자 또는 256바이트를 표시합니다. [Snowflake TABLES](https://docs.snowflake.com/en/sql-reference/info-schema/tables) · [Snowflake COLUMNS](https://docs.snowflake.com/en/sql-reference/info-schema/columns)
 

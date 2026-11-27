@@ -132,6 +132,10 @@ impl Api {
         self.cancel.cancel();
     }
 
+    pub(super) fn token(&self) -> &str {
+        self.token.0.as_str()
+    }
+
     pub(super) fn operation_token(&self) -> CancellationToken {
         self.cancel.child_token()
     }

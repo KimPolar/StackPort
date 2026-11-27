@@ -7,6 +7,7 @@ mod query;
 pub use crate::result_export::{
     ResultFileOptions as ExportOptions, ResultFileOutcome as ExportOutcome,
 };
+pub use crate::credential_store::CredentialStatus;
 pub use catalog::{CatalogPage, Column, DataPage, Object};
 pub use profiles::{Auth, Profile, ProfileSettings};
 pub use query::{QueryInput, QueryOutcome, QuerySource};
@@ -28,6 +29,8 @@ const CLOSED: &str = "Snowflake 연결이 닫혔습니다. 다시 연결하세�
 #[serde(transparent)]
 pub struct AccessToken(#[serde(deserialize_with = "deserialize_token")] Zeroizing<String>);
 
+pub type TokenAuthentication = crate::db_profiles::CredentialAuthentication<AccessToken>;
+
 fn deserialize_token<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> std::result::Result<Zeroizing<String>, D::Error> {
@@ -40,6 +43,7 @@ pub struct SessionInfo {
     database: String,
     version: String,
     context: String,
+    credential_warning: Option<String>,
 }
 
 struct Session {
@@ -58,6 +62,16 @@ pub struct Manager {
     capacity: Arc<Semaphore>,
 }
 
+impl Store {
+    pub fn snowflake_credential_status(&self, id: &str, revision: i64) -> Result<CredentialStatus> {
+        self.native_db_credential_status::<ProfileSettings>(id, revision, "Snowflake")
+    }
+
+    pub fn forget_snowflake_token(&self, id: &str, revision: i64) -> Result<()> {
+        self.forget_native_db_password::<ProfileSettings>(id, revision, "snowflake.credential.delete")
+    }
+}
+
 impl Manager {
     pub fn new(store: Store) -> Self {
         Self {
@@ -71,28 +85,42 @@ impl Manager {
         &self,
         profile_id: String,
         revision: i64,
-        token: AccessToken,
+        credentials: impl Into<TokenAuthentication>,
         confirmation: String,
+    ) -> Result<SessionInfo> {
+        self.open_with(profile_id, revision, credentials.into(), confirmation, Api::new).await
+    }
+
+    async fn open_with(
+        &self,
+        profile_id: String,
+        revision: i64,
+        credentials: TokenAuthentication,
+        confirmation: String,
+        make_api: impl FnOnce(ProfileSettings, AccessToken) -> Result<Api>,
     ) -> Result<SessionInfo> {
         let permit = Arc::clone(&self.capacity)
             .try_acquire_owned()
             .map_err(|_| "열린 Snowflake 연결이 너무 많습니다.")?;
         let store = self.store.clone();
-        let profile =
-            tokio::task::spawn_blocking(move || store.snowflake_profile(&profile_id, revision))
-                .await
-                .map_err(|_| "Snowflake 연결 설정을 읽을 수 없습니다.")??;
+        let (profile, token, remember) = tokio::task::spawn_blocking(move || {
+            let profile = store.snowflake_profile(&profile_id, revision)?;
+            if profile.settings.environment == "PROD" && confirmation != "PROD" {
+                return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
+            }
+            let (token, remember) = credentials.resolve(&store, &profile, "Snowflake", AccessToken)?;
+            Ok::<_, String>((profile, token, remember))
+        })
+        .await
+        .map_err(|_| "Snowflake 연결 설정을 읽을 수 없습니다.")??;
         let expected = &profile.settings;
-        if expected.environment == "PROD" && confirmation != "PROD" {
-            return Err("운영 환경을 확인하려면 PROD를 입력하세요.".into());
-        }
         if token.0.is_empty()
             || token.0.len() > 16_384
             || !token.0.bytes().all(|byte| byte.is_ascii_graphic())
         {
             return Err("Snowflake 액세스 토큰을 확인하세요.".into());
         }
-        let mut api = Api::new(expected.clone(), token)?;
+        let mut api = make_api(expected.clone(), token)?;
         let rows = api
             .query(
                 "SELECT CURRENT_DATABASE(), CURRENT_VERSION(), CURRENT_ROLE(), CURRENT_WAREHOUSE()",
@@ -123,6 +151,13 @@ impl Manager {
         }
         api.set_context(role, warehouse);
 
+        let credential_warning = if remember {
+            self.store
+                .remember_connected_credential(&profile, "Snowflake", api.token(), "snowflake.credential.save")
+                .await
+        } else {
+            None
+        };
         let id = Uuid::new_v4().to_string();
         self.sessions
             .lock()
@@ -144,6 +179,7 @@ impl Manager {
             database: database.clone(),
             version: version.clone(),
             context: format!("{role} / {warehouse}"),
+            credential_warning,
         })
     }
 

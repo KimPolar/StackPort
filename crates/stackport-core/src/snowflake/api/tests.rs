@@ -29,6 +29,106 @@ struct Fixture {
     acceptor: TlsAcceptor,
 }
 
+#[cfg(windows)]
+#[tokio::test]
+#[ignore = "requires the Windows user credential vault"]
+async fn saves_and_reuses_snowflake_tokens_after_verified_login() {
+    use crate::{credential_store as vault, snowflake::TokenAuthentication, Store};
+
+    struct VaultEntry(String);
+
+    impl Drop for VaultEntry {
+        fn drop(&mut self) {
+            let _ = vault::delete(&self.0);
+        }
+    }
+
+    for (auth, other_auth) in [(Auth::Pat, Auth::Oauth), (Auth::Oauth, Auth::Pat)] {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("workspace.sqlite");
+        let store = Store::open(&database).unwrap();
+        let project = store.create_project("Snowflake credential fixture").unwrap();
+        let (fixture, fixture_api) = fixture(auth, true).await;
+        let profile = store.create_snowflake_profile(&project.id, ProfileSettings {
+            host: "fixture.snowflakecomputing.com".into(),
+            environment: "PROD".into(),
+            ..fixture_api.settings.clone()
+        }).unwrap();
+        let _entry = VaultEntry(vault::target(&store, "snowflake", &profile.id).unwrap());
+        let status = |profile: &Profile| {
+            serde_json::to_value(store.snowflake_credential_status(&profile.id, profile.revision).unwrap()).unwrap()
+        };
+        let entered = || TokenAuthentication::Entered {
+            credential: AccessToken(Zeroizing::new(TEST_TOKEN.into())),
+            remember: true,
+        };
+        let make_api = |settings, token| {
+            Ok(Api {
+                client: fixture_api.client.clone(),
+                endpoint: fixture_api.endpoint.clone(),
+                settings,
+                token,
+                cancel: CancellationToken::new(),
+            })
+        };
+        let login = |database: &str| part(1, &[1], vec![vec![json!(database), json!("fixture"), json!("READER"), json!("DEMO_WH")]]);
+        let server = tokio::spawn(async move {
+            for (code, data) in [
+                ("401 Unauthorized", encoded(json!({ "code": "390303" }))),
+                ("200 OK", login("OTHER_DB")),
+                ("200 OK", login("DEMO")),
+                ("200 OK", login("DEMO")),
+            ] {
+                let (_, body, stream) = fixture.request(auth.header()).await;
+                let body: Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["statement"], "SELECT CURRENT_DATABASE(), CURRENT_VERSION(), CURRENT_ROLE(), CURRENT_WAREHOUSE()");
+                reply(stream, code, "", &data).await;
+            }
+        });
+
+        let manager = Manager::new(store.clone());
+        let result = manager.open_with(profile.id.clone(), profile.revision, entered(), String::new(), |_, _| {
+            panic!("PROD confirmation must precede the HTTPS request");
+        }).await;
+        assert!(result.err().is_some_and(|error| error.contains("PROD")));
+        let absent = json!({ "supported": true, "stored": false, "usable": false });
+        for reason in ["토큰이 만료", "접속 권한"] {
+            let result = manager.open_with(profile.id.clone(), profile.revision, entered(), "PROD".into(), make_api).await;
+            let error = result.err().expect("The fixture login must fail");
+            assert!(error.contains(reason), "Expected {reason} in {error}");
+            assert_eq!(status(&profile), absent);
+        }
+        let first = manager.open_with(profile.id.clone(), profile.revision, entered(), "PROD".into(), make_api).await.unwrap();
+        assert!(first.credential_warning.is_none());
+        assert_eq!(status(&profile), json!({ "supported": true, "stored": true, "usable": true }));
+        assert!(!serde_json::to_string(&first).unwrap().contains(TEST_TOKEN));
+        manager.close(&first.id).unwrap();
+
+        let reopened = Manager::new(Store::open(&database).unwrap());
+        let session = reopened.open_with(
+            profile.id.clone(), profile.revision, TokenAuthentication::Saved, "PROD".into(), make_api,
+        ).await.unwrap();
+        assert_eq!(session.database, "DEMO");
+        assert_eq!(session.context, "READER / DEMO_WH");
+        reopened.close(&session.id).unwrap();
+        server.await.unwrap();
+
+        let changed = store.update_snowflake_profile(&profile.id, profile.revision, ProfileSettings {
+            auth: other_auth,
+            ..profile.settings
+        }).unwrap();
+        assert_eq!(status(&changed), json!({ "supported": true, "stored": true, "usable": false }));
+        let result = reopened.open_with(
+            changed.id.clone(), changed.revision, TokenAuthentication::Saved, "PROD".into(), |_, _| {
+                panic!("A token saved for another authentication mode must not be sent");
+            },
+        ).await;
+        assert!(result.err().is_some_and(|error| error.contains("저장된")));
+        store.forget_snowflake_token(&changed.id, changed.revision).unwrap();
+        assert_eq!(status(&changed), absent);
+    }
+}
+
 #[tokio::test]
 async fn reads_async_status_and_gzipped_partitions_over_verified_https() {
     let (fixture, api) = fixture(Auth::Pat, true).await;

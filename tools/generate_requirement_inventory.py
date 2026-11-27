@@ -42,8 +42,8 @@ PARTIAL = {
     "SP-CN-009": "Windows SSH 서버 대화형 인증과 다중 질문·서버 안내·응답 표시 정책",
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-011": "PostgreSQL·MySQL 계열 TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 서버 인증서 체인·호스트 이름·유효기간 검증, MySQL 계열 PEM 클라이언트 인증",
-    "SP-CN-012": "Windows 저장 암호를 사용하는 PostgreSQL 연결·모니터·백업·복원, MySQL·MariaDB 연결·예약 백업, Redis 연결·Pub/Sub 구독, MongoDB 연결·백업·복원, SQL Server 로그인·Oracle 연결",
-    "SP-CN-013": "Windows 자격 증명 관리자에 SSH·SFTP 및 지원 DB 로그인 암호의 선택적 저장·삭제, 작업 공간과 연결 설정으로 재사용 범위 제한",
+    "SP-CN-012": "Windows 저장 암호를 사용하는 PostgreSQL 연결·모니터·백업·복원, MySQL·MariaDB 연결·예약 백업, Redis 연결·Pub/Sub 구독, MongoDB 연결·백업·복원, SQL Server 로그인·Oracle 연결, Snowflake Windows 저장 PAT·OAuth 토큰",
+    "SP-CN-013": "Windows 자격 증명 관리자에 SSH·SFTP와 지원 DB 암호 및 Snowflake 토큰의 선택적 저장·삭제, 작업 공간과 연결 설정으로 재사용 범위 제한",
     "SP-CN-014": "SSH 연결 JSON에서 암호·개인 키·호스트 키 신뢰 정보 제외, DB 연결 JSON에서 암호·토큰·인증서·개인 키 경로 제외 및 가져오는 장치에서 필요한 파일 재선택",
     "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시와 Windows 저장 암호 선택",
     "SP-CN-017": "프로젝트별 로컬(-L)·동적 SOCKS5(-D)·원격(-R) TCP 전달 등록·수정·삭제·시작·중단, 선택적 SSH 경유와 서버별 Windows 저장 암호 사용",
@@ -92,7 +92,7 @@ PARTIAL = {
     "SP-DB-001": "SQLite·PostgreSQL 조회·그리드 편집, MySQL·MariaDB·SQL Server·Oracle·Snowflake 객체 탐색·데이터 미리보기와 SQL 편집기 세션 권한 적용, MongoDB 컬렉션·문서 탐색과 세션별 문서 편집, Redis 단독 서버 키 탐색·타입별 편집. Snowflake 실제 계정 검증 대기",
     "SP-DB-004": "PostgreSQL·MySQL 계열·SQL Server 호스트·포트·DB·사용자와 환경, Oracle 호스트·포트·서비스 이름·SID·사용자와 환경, Snowflake 계정 호스트·데이터베이스·웨어하우스·역할·환경",
     "SP-DB-005": "PostgreSQL·MySQL 계열 TLS 서버 인증서 검증과 SSH 터널·점프 호스트, MySQL 계열 PEM 클라이언트 인증, MongoDB·SQL Server·Oracle 서버 인증서 검증과 선택적 PEM CA, Snowflake HTTPS 인증서 검증",
-    "SP-DB-006": "PostgreSQL·MySQL 계열·SQL Server·Oracle 세션별 사용자 이름·암호 인증, SQL Server Windows 통합 인증 설정, Snowflake 세션별 PAT·OAuth 액세스 토큰",
+    "SP-DB-006": "PostgreSQL·MySQL 계열·SQL Server·Oracle 사용자 이름·암호 인증, SQL Server Windows 통합 인증 설정, Snowflake PAT·OAuth 액세스 토큰 입력 또는 Windows 저장값 사용",
     "SP-DB-007": "한 프로젝트에 여러 SQLite·PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 연결 정의",
     "SP-DB-009": "SQLite 테이블·뷰 목록, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake 스키마 및 테이블·뷰의 지연 조회와 접근 불가 표시, Oracle·Snowflake 구체화 뷰 표시",
     "SP-DB-010": "SQLite 테이블·뷰의 열·기본 키·외래 키·인덱스, PostgreSQL 테이블·파티션 테이블·뷰·구체화 뷰의 열·제약조건·인덱스·트리거·파티션, MySQL·MariaDB·SQL Server 열·인덱스·제약조건·양방향 외래 키, Oracle·Snowflake 열 타입·NULL·IDENTITY",
@@ -197,7 +197,7 @@ PARTIAL = {
     "SP-SEC-008": "메타데이터·셀 변경 값 바인딩, 일반 SQL 읽기 전용 검사와 SSH 인자 분리·대상 검증",
     "SP-SEC-003": "SFTP 원격 삭제와 SQLite 셀 변경의 영향·운영 확인, 쓰기 SQL의 범위·연결·환경·위험 유형 표시, MySQL 계열 복원의 원본·새 DB·환경 확인과 기존 이름 충돌 방지",
     "SP-SEC-004": "SSH 호스트 키 지문 확인·변경 차단과 이력, 웹 TLS 인증서 검증, RDP 서버 인증 실패 시 연결 거부 설정",
-    "SP-SEC-006": "SSH·SFTP와 PostgreSQL, MySQL·MariaDB, Redis, MongoDB, SQL Server 로그인, Oracle 연결 암호의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정과 SSH 호스트 키 검증, 임시 버퍼 정리",
+    "SP-SEC-006": "SSH·SFTP와 PostgreSQL, MySQL·MariaDB, Redis, MongoDB, SQL Server 로그인, Oracle 연결 암호 및 Snowflake 토큰의 Windows 사용자별 자격 증명 저장, 작업 공간·프로필 설정과 SSH 호스트 키 검증, 임시 버퍼 정리",
     "SP-SEC-009": "작업 기록에서 SQL·행 데이터·경로·자격 증명 제외",
     "SP-SEC-011": "로컬 변경·백업·복원·DB 내보내기·편집, PostgreSQL·MySQL 계열·SQL Server·Oracle·Snowflake SQL 실행 결과와 PostgreSQL 스크립트 JSON 저장 결과, Redis 키와 MongoDB 문서 변경·삭제 및 결과 미확인, SFTP 파일 작업과 SSH 연결·키 이력 기록",
     "SP-SEC-015": "운영 SQL 실행에서 PostgreSQL·MySQL 계열 스크립트 및 SQL Server·Oracle·Snowflake의 식별된 변경에 PROD 확인. SQLite·PostgreSQL·MySQL 계열 그리드 변경, Redis 키·MongoDB 문서 변경, SFTP 삭제·원격 편집 저장에도 확인",
@@ -431,7 +431,7 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence
             if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-CN-013", "SP-SEC-006"}:
-                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/ssh/credentials.rs; src/SshPasswordOptions.tsx; src/SshRouteDialog.tsx; tests/sftp-smoke.cjs; tests/ssh-tunnel-smoke.cjs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; crates/stackport-core/src/db_profiles.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs"
+                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/ssh/credentials.rs; src/SshPasswordOptions.tsx; src/SshRouteDialog.tsx; tests/sftp-smoke.cjs; tests/ssh-tunnel-smoke.cjs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; crates/stackport-core/src/db_profiles.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs; crates/stackport-core/src/snowflake/api/tests.rs; tests/snowflake-editor-smoke.cjs"
                 evidence = credential_evidence if requirement_id in {"SP-CN-013", "SP-SEC-006"} else evidence + "; " + credential_evidence
             if requirement_id in {
                 "SP-UI-002", "SP-UI-006", "SP-UI-011", "SP-CN-001", "SP-CN-003", "SP-CN-011", "SP-CN-012",

@@ -45,7 +45,7 @@ type SqlClient = Client<Compat<TcpStream>>;
 #[serde(transparent)]
 pub struct Password(#[serde(deserialize_with = "deserialize_password")] Zeroizing<String>);
 
-pub type PasswordAuthentication = crate::db_profiles::PasswordAuthentication<Password>;
+pub type PasswordAuthentication = crate::db_profiles::CredentialAuthentication<Password>;
 
 fn deserialize_password<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -151,7 +151,7 @@ impl Manager {
         .map_err(|_| "SQL Server 연결 시간이 초과되었습니다.")??;
         let credential_warning = if remember && !password.0.is_empty() {
             self.store
-                .remember_connected_password(&profile, "SQL Server", &password.0, "sql_server.credential.save")
+                .remember_connected_credential(&profile, "SQL Server", &password.0, "sql_server.credential.save")
                 .await
         } else {
             None

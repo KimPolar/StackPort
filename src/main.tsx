@@ -2410,6 +2410,7 @@ const auditOperationNames: Record<string, string> = {
   "postgres.credential.save": "PostgreSQL 암호 저장", "postgres.credential.delete": "저장한 PostgreSQL 암호 삭제",
   "sql_server.credential.save": "SQL Server 암호 저장", "sql_server.credential.delete": "저장한 SQL Server 암호 삭제",
   "oracle.credential.save": "Oracle 암호 저장", "oracle.credential.delete": "저장한 Oracle 암호 삭제",
+  "snowflake.credential.save": "Snowflake 토큰 저장", "snowflake.credential.delete": "저장한 Snowflake 토큰 삭제",
   "redis_profile.create": "Redis 연결 추가", "redis_profile.update": "Redis 연결 수정", "redis_profile.delete": "Redis 연결 삭제",
   "mysql_profile.create": "MySQL 계열 연결 추가", "mysql_profile.update": "MySQL 계열 연결 수정", "mysql_profile.delete": "MySQL 계열 연결 삭제",
   "mongo_profile.create": "MongoDB 연결 추가", "mongo_profile.update": "MongoDB 연결 수정", "mongo_profile.delete": "MongoDB 연결 삭제",

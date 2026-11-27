@@ -43,7 +43,6 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   const [login, setLogin] = useState(false);
   const [backupTool, setBackupTool] = useState<"backup" | "restore" | null>(null);
   const [busy, setBusy] = useState(false);
-  const [token, setToken] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
   const active = useRef<string | null>(null);
@@ -51,8 +50,8 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   const pending = useRef(false);
   const confirmationHint = useId();
   const { settings } = profile;
-  const credentialEngine = prefix === "snowflake" ? null : prefix;
-  const credentials = useDatabaseCredentials(credentialEngine, login && credentialEngine ? profile : null);
+  const credentials = useDatabaseCredentials(prefix, login ? profile : null);
+  const usesToken = prefix === "snowflake";
   const production = settings.environment === "PROD";
   const endpoint = settings.port === undefined ? settings.host : networkAddressText({ host: settings.host, port: settings.port });
 
@@ -65,17 +64,21 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
   }, [prefix]);
 
   function closeLogin() {
-    setLogin(false); setToken(""); credentials.setPassword(""); setConfirmation(""); setError("");
+    setLogin(false); credentials.setPassword(""); setConfirmation(""); setError("");
   }
 
   async function connect(event: FormEvent) {
     event.preventDefault();
     if (pending.current || credentials.clearing) return;
-    pending.current = true; setBusy(true); setError(""); setToken("");
+    pending.current = true; setBusy(true); setError("");
     try {
+      const input = credentials.take();
+      const authentication = usesToken
+        ? { token: input.password, useSavedToken: input.useSavedPassword, rememberToken: input.rememberPassword }
+        : passwordless ? { password: "" } : input;
       const next = await invoke<Session>("open_" + prefix, {
         profileId: profile.id, revision: profile.revision, confirmation,
-        ...(credentialEngine ? (passwordless ? { password: "" } : credentials.take()) : { token }),
+        ...authentication,
       });
       if (!mounted.current) { await invoke("close_" + prefix, { id: next.id }); return; }
       active.current = next.id; setSession(next); closeLogin();
@@ -124,11 +127,8 @@ export function RelationalWorkspace({ profile, editor, engine, prefix, database,
       <form onSubmit={event => void connect(event)} aria-busy={busy}>
         <p className="confirm-copy"><strong>{settings.name} · {settings.environment}</strong><br />{endpoint} / {database}</p>
         {passwordless && <p className="form-note">현재 Windows 계정으로 연결합니다.</p>}
-        {credentialEngine
-          ? <DatabasePasswordField credentials={credentials} allowRemember acceptsPassword={!passwordless}
-            autoFocus disabled={busy} maxLength={passwordLimit} />
-          : <label className="field">{tokenLabel}<input autoFocus type="password" autoComplete="off" value={token}
-            required maxLength={16_384} disabled={busy} onChange={event => setToken(event.target.value)} /></label>}
+        <DatabasePasswordField credentials={credentials} allowRemember acceptsPassword={!passwordless}
+          autoFocus disabled={busy} passwordLabel={tokenLabel} maxLength={usesToken ? 16_384 : passwordLimit} required={usesToken} />
         {transportNote && <p className="form-note">{transportNote}</p>}
         {production && <label className="field">운영 환경 확인<input required placeholder="PROD" autoComplete="off"
           aria-describedby={confirmationHint} value={confirmation} disabled={busy} onChange={event => setConfirmation(event.target.value)} />

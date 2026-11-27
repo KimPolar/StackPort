@@ -3,6 +3,7 @@ const { chromium } = require(process.env.STACKPORT_PLAYWRIGHT_PATH || 'playwrigh
 const { chooseDatabase } = require('./database-picker.cjs');
 const { saveDefaultSet } = require('./parameter-set-fixture.cjs');
 const { verifySqlDocumentTabs } = require('./sql-document-tabs.cjs');
+const auth = process.env.STACKPORT_SNOWFLAKE_FIXTURE_AUTH || 'pat';
 
 async function verify(page) {
   const errors = [];
@@ -20,9 +21,11 @@ async function verify(page) {
     const fetchNative = window.fetch.bind(window);
     const routes = new Map([
       'open_snowflake', 'snowflake_schemas', 'snowflake_objects', 'close_snowflake',
+      'snowflake_credential_status', 'forget_snowflake_token',
       'run_snowflake_query', 'cancel_snowflake_query',
     ].map(name => [bridge.convertFileSrc(name, 'ipc'), name]));
     let pending;
+    let storedToken = false;
     const plan = (value, line) => ({
       line, query_id: '00000000-0000-4000-8000-000000000001', warning: null,
       data: {
@@ -37,10 +40,17 @@ async function verify(page) {
     });
     async function respond(name, args) {
       if (name === 'open_snowflake') {
-        if (args.token !== 'synthetic-token-for-local-ui-test') throw new Error('Wrong test token');
         if (args.confirmation !== 'PROD') throw new Error('Expected production login confirmation');
+        if (args.useSavedToken) {
+          if (!storedToken || args.token !== null || args.rememberToken) throw new Error('Expected a stored token request');
+        } else {
+          if (args.token !== 'synthetic-token-for-local-ui-test' || !args.rememberToken) throw new Error('Expected a token with explicit storage');
+          storedToken = true;
+        }
         return { id: 'snowflake-fixture', database: 'DEMO', version: 'fixture', context: 'READER / DEMO_WH' };
       }
+      if (name === 'snowflake_credential_status') return { supported: true, stored: storedToken, usable: storedToken };
+      if (name === 'forget_snowflake_token') { storedToken = false; return; }
       if (name === 'snowflake_schemas') return { items: ['PUBLIC'], has_next: false };
       if (name === 'snowflake_objects') return { items: [], has_next: false };
       if (name === 'close_snowflake') return;
@@ -110,13 +120,16 @@ async function verify(page) {
   await profile.getByLabel('연결 이름').fill('Snowflake 편집기 픽스처');
   await profile.getByLabel('계정 식별자 또는 호스트').fill('stackport-fixture');
   await profile.getByLabel('데이터베이스 이름').fill('DEMO');
+  await profile.getByLabel('인증 방식').selectOption(auth);
   await profile.getByLabel('환경').selectOption('PROD');
   await profile.getByRole('button', { name: '저장', exact: true }).click();
   await profile.waitFor({ state: 'detached' });
   const workspace = page.getByRole('region', { name: 'Snowflake 작업 공간', exact: true });
   await workspace.getByRole('button', { name: 'Snowflake 연결', exact: true }).click();
   const login = page.getByRole('dialog', { name: 'Snowflake 연결', exact: true });
-  await login.getByLabel('Snowflake 액세스 토큰 (PAT)', { exact: true }).fill('synthetic-token-for-local-ui-test');
+  const tokenLabel = auth === 'pat' ? 'Snowflake 액세스 토큰 (PAT)' : 'Snowflake OAuth 액세스 토큰';
+  await login.getByLabel(tokenLabel, { exact: true }).fill('synthetic-token-for-local-ui-test');
+  await login.getByLabel('연결 성공 후 Windows에 토큰 저장', { exact: true }).check();
   await login.getByLabel('운영 환경 확인').fill('PROD');
   await login.getByRole('button', { name: '연결', exact: true }).click();
   await login.waitFor({ state: 'detached' });
@@ -273,14 +286,28 @@ async function verify(page) {
   assert.equal(await editor.inputValue(), snowflakeSql);
   assert.equal(await results.count(), 0);
   await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
+  const connect = workspace.getByRole('button', { name: 'Snowflake 연결', exact: true });
+  await connect.click();
+  await login.getByLabel('저장한 토큰 사용', { exact: true }).check();
+  assert.equal(await login.getByLabel(tokenLabel, { exact: true }).count(), 0);
+  await login.getByLabel('운영 환경 확인').fill('PROD');
+  await login.getByRole('button', { name: '연결', exact: true }).click();
+  await login.waitFor({ state: 'detached' });
+  await workspace.getByRole('button', { name: 'Snowflake 연결 끊기', exact: true }).click();
+  await connect.click();
+  await login.getByRole('button', { name: '저장한 토큰 삭제', exact: true }).click();
+  await login.getByText('저장한 토큰을 삭제했습니다.', { exact: true }).waitFor();
+  assert.equal(await login.getByLabel('저장한 토큰 사용', { exact: true }).count(), 0);
+  await login.getByRole('button', { name: '취소', exact: true }).click();
   assert.deepEqual(errors, []);
 }
 
 async function main() {
+  assert.ok(auth === 'pat' || auth === 'oauth');
   const browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
   try {
     await verify(browser.contexts()[0].pages()[0]);
-    console.log('Snowflake editor Windows E2E passed with mocked SQL IPC.');
+    console.log(`Snowflake ${auth} token controls and editor passed with mocked IPC.`);
   } finally {
     await browser.close();
   }

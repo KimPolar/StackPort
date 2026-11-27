@@ -34,28 +34,28 @@ pub struct DatabaseProfile<T> {
     pub settings: T,
 }
 
-pub enum PasswordAuthentication<P> {
-    Entered { password: P, remember: bool },
+pub enum CredentialAuthentication<C> {
+    Entered { credential: C, remember: bool },
     Saved,
 }
 
-impl<P> From<P> for PasswordAuthentication<P> {
-    fn from(password: P) -> Self {
-        Self::Entered { password, remember: false }
+impl<C> From<C> for CredentialAuthentication<C> {
+    fn from(credential: C) -> Self {
+        Self::Entered { credential, remember: false }
     }
 }
 
-impl<P> PasswordAuthentication<P> {
+impl<C> CredentialAuthentication<C> {
     pub fn requested(
-        password: Option<P>,
+        credential: Option<C>,
         use_saved: bool,
         remember: bool,
         engine: &str,
     ) -> Result<Self> {
-        match (password, use_saved, remember) {
+        match (credential, use_saved, remember) {
             (None, true, false) => Ok(Self::Saved),
-            (Some(password), false, remember) => Ok(Self::Entered { password, remember }),
-            _ => Err(format!("{engine} 암호를 입력하거나 저장한 암호를 선택하세요.")),
+            (Some(credential), false, remember) => Ok(Self::Entered { credential, remember }),
+            _ => Err(format!("{engine} 인증 정보를 입력하거나 저장한 항목을 선택하세요.")),
         }
     }
 
@@ -64,15 +64,15 @@ impl<P> PasswordAuthentication<P> {
         store: &Store,
         profile: &DatabaseProfile<T>,
         engine: &str,
-        wrap: impl FnOnce(Zeroizing<String>) -> P,
-    ) -> Result<(P, bool)> {
+        wrap: impl FnOnce(Zeroizing<String>) -> C,
+    ) -> Result<(C, bool)> {
         match self {
-            Self::Entered { password, remember } => Ok((password, remember)),
+            Self::Entered { credential, remember } => Ok((credential, remember)),
             Self::Saved => {
-                let password = store
+                let credential = store
                     .saved_native_db_password(profile, engine)?
-                    .ok_or_else(|| format!("현재 연결 설정에 저장된 {engine} 암호가 없습니다."))?;
-                Ok((wrap(password), false))
+                    .ok_or_else(|| format!("현재 연결 설정에 저장된 {engine} 인증 정보가 없습니다."))?;
+                Ok((wrap(credential), false))
             }
         }
     }
@@ -218,23 +218,23 @@ impl Store {
         tx.commit().map_err(db_error)
     }
 
-    pub(crate) async fn remember_connected_password<T: Settings + Clone + Send + 'static>(
+    pub(crate) async fn remember_connected_credential<T: Settings + Clone + Send + 'static>(
         &self,
         profile: &DatabaseProfile<T>,
         engine: &'static str,
-        password: &str,
+        credential: &str,
         operation: &'static str,
     ) -> Option<String> {
         let store = self.clone();
         let profile = profile.clone();
-        let password = Zeroizing::new(password.to_owned());
+        let credential = Zeroizing::new(credential.to_owned());
         match tokio::task::spawn_blocking(move || {
-            store.remember_native_db_password(&profile, engine, &password, operation)
+            store.remember_native_db_password(&profile, engine, &credential, operation)
         })
         .await
         {
             Ok(result) => result.err(),
-            Err(_) => Some(format!("{engine} 암호를 저장할 수 없습니다.")),
+            Err(_) => Some(format!("{engine} 인증 정보를 저장할 수 없습니다.")),
         }
     }
 
@@ -488,8 +488,8 @@ mod password_tests {
         // resolution and invalidation without SQL Server or Oracle running.
         let sql_secret = "x".repeat(129);
         let oracle_secret = "x".repeat(257);
-        assert!(store.remember_connected_password(&sql, "SQL Server", &sql_secret, "sql_server.credential.save").await.is_none());
-        assert!(store.remember_connected_password(&oracle, "Oracle", &oracle_secret, "oracle.credential.save").await.is_none());
+        assert!(store.remember_connected_credential(&sql, "SQL Server", &sql_secret, "sql_server.credential.save").await.is_none());
+        assert!(store.remember_connected_credential(&oracle, "Oracle", &oracle_secret, "oracle.credential.save").await.is_none());
         assert!(store.sql_server_credential_status(&sql.id, sql.revision)?.usable);
         assert!(store.oracle_credential_status(&oracle.id, oracle.revision)?.usable);
         let sql_attempt = sql_manager.open(sql.id.clone(), sql.revision, sql_server::PasswordAuthentication::Saved, "PROD").await;

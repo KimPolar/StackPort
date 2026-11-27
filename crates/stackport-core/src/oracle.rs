@@ -50,7 +50,7 @@ const CLOSED: &str = "Oracle 연결이 닫혔습니다. 다시 연결하세요."
 #[serde(transparent)]
 pub struct Password(#[serde(deserialize_with = "deserialize_password")] Zeroizing<String>);
 
-pub type PasswordAuthentication = crate::db_profiles::PasswordAuthentication<Password>;
+pub type PasswordAuthentication = crate::db_profiles::CredentialAuthentication<Password>;
 
 fn deserialize_password<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -141,7 +141,7 @@ impl Manager {
             .map_err(|_| "Oracle 연결 작업을 마치지 못했습니다.")??;
         let credential_warning = if remember {
             self.store
-                .remember_connected_password(&profile, "Oracle", &password.0, "oracle.credential.save")
+                .remember_connected_credential(&profile, "Oracle", &password.0, "oracle.credential.save")
                 .await
         } else {
             None
