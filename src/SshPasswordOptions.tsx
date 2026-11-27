@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SshProfile } from "./ssh-profile-types";
 
-type Status = { supported: boolean; stored: boolean; usable: boolean };
+export type SshPasswordStatus = { supported: boolean; stored: boolean; usable: boolean };
+export type SshPasswordChoice = { mode: "saved" | "remember"; fingerprint: string };
 
 export function useSshPassword(profile: SshProfile | null, fingerprint: string | undefined) {
   const profileId = profile?.id;
   const revision = profile?.revision;
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState<SshPasswordStatus | null>(null);
   const [saved, setSaved] = useState(false);
   const [remember, setRemember] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -21,7 +22,7 @@ export function useSshPassword(profile: SshProfile | null, fingerprint: string |
     setMessage("");
     if (!profileId || revision === undefined || !fingerprint) return;
     let current = true;
-    void invoke<Status>("ssh_credential_status", { profileId, revision, fingerprint }).then(result => {
+    void invoke<SshPasswordStatus>("ssh_credential_status", { profileId, revision, fingerprint }).then(result => {
       if (current) setStatus(result);
     }, error => {
       if (current) setMessage(String(error));
@@ -58,18 +59,32 @@ export function useSshPassword(profile: SshProfile | null, fingerprint: string |
     }
   }
 
-  return { status, useSaved, setSaved, remember, setRemember, clearing, message, resetChoice, argumentsFor, forget };
+  function selectSaved(checked: boolean) {
+    setSaved(checked);
+    setRemember(false);
+  }
+
+  return { status, useSaved, setSaved: selectSaved, remember, setRemember, clearing, message, resetChoice, argumentsFor, forget };
 }
 
 export function SshPasswordOptions({ credentials, clearPassword }: {
-  credentials: ReturnType<typeof useSshPassword>;
-  clearPassword: () => void;
+  credentials: {
+    status: SshPasswordStatus | null;
+    useSaved: boolean;
+    remember: boolean;
+    setSaved: (checked: boolean) => void;
+    setRemember: (checked: boolean) => void;
+    clearing: boolean;
+    message: string;
+    forget: () => Promise<void>;
+  };
+  clearPassword?: () => void;
 }) {
   const { status, useSaved, setSaved, remember, setRemember, clearing, message, forget } = credentials;
   return <>
     {status?.usable && <label className="files-check">
       <input type="checkbox" checked={useSaved} disabled={clearing} onChange={event => {
-        setSaved(event.target.checked); setRemember(false); clearPassword();
+        setSaved(event.target.checked); clearPassword?.();
       }} /> 저장한 암호 사용
     </label>}
     {status?.supported && !useSaved && <label className="files-check">

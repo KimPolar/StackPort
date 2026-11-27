@@ -451,6 +451,8 @@ async function verifyRoutedSftp(page, command, identity) {
   const target = await startHost(finalHost, identity, 0, true);
   const second = await startJump(secondHost, 'fixture-second', { host: destinationHost, port: target.port });
   const first = await startJump(firstHost, 'fixture-first', { host: secondName, port: second.port });
+  const withVault = process.env.STACKPORT_SFTP_ROUTE_CREDENTIALS === '1';
+  const credentialProfiles = [];
   try {
     const project = await command('create_project', { name: '경유 연결 검증' });
     const create = (name, host, port, environment) => command('create_ssh_profile', {
@@ -459,6 +461,8 @@ async function verifyRoutedSftp(page, command, identity) {
     const profile = await create('경유 대상', destinationHost, target.port, 'DEV');
     const firstProfile = await create('첫 경유 서버', '127.0.0.1', first.port, 'DEV');
     const secondProfile = await create('둘째 경유 서버', secondName, second.port, 'PROD');
+    if (withVault) credentialProfiles.push(firstProfile, secondProfile, profile);
+    const review = item => command('ssh_credential_review', { profileId: item.id, revision: item.revision });
     const authentication = { kind: 'password', password };
     const hops = [firstProfile, secondProfile].map(profile => ({ profile, authentication }));
     await assert.rejects(command('open_routed_sftp', { profile, confirmation: '', authentication, hops }), /경유 2.*PROD/);
@@ -482,6 +486,7 @@ async function verifyRoutedSftp(page, command, identity) {
     await dialog.getByRole('group', { name: '대상 · 경유 대상', exact: true }).getByLabel('SSH 암호', { exact: true }).fill(password);
     await dialog.getByLabel('운영 환경 확인').fill('PROD');
     const open = dialog.getByRole('button', { name: 'SFTP 연결', exact: true });
+    const remember = stage => dialog.getByRole('group', { name: stage, exact: true }).getByLabel('연결 성공 후 Windows에 암호 저장');
     async function trust(stage, host, stats) {
       await open.click();
       await dialog.getByText(stage, { exact: true }).waitFor();
@@ -492,28 +497,55 @@ async function verifyRoutedSftp(page, command, identity) {
       await open.waitFor();
     }
     await trust('경유 1 · 첫 경유 서버의 서버 지문 확인', firstHost, () => first.stats.attempts);
+    if (withVault) await remember('경유 1').check();
     first.stats.denied = true;
     await open.click();
     await dialog.getByRole('alert').getByText(/경유 2.*이전 경유 서버/).waitFor();
+    if (withVault) assert.equal((await review(firstProfile)).stored, false);
     first.stats.denied = false;
     await trust('경유 2 · 둘째 경유 서버의 서버 지문 확인', secondHost, () => second.stats.attempts);
+    if (withVault) await remember('경유 2').check();
     await secondSecret.fill('fixture-wrong');
     await open.click();
     await dialog.getByRole('alert').getByText(/경유 2.*인증을 거부/).waitFor();
+    if (withVault) assert.equal((await review(secondProfile)).stored, false);
     await secondSecret.fill('fixture-second');
     await trust('대상 · 경유 대상의 서버 지문 확인', finalHost, () => target.stats.passwords);
+    if (withVault) await remember('대상 · 경유 대상').check();
     await open.click();
     await dialog.waitFor({ state: 'detached' });
     await page.getByRole('region', { name: '원격 파일', exact: true }).getByText('대시보드.txt', { exact: true }).waitFor();
     await page.getByText('경유 첫 경유 서버 → 둘째 경유 서버', { exact: true }).waitFor();
+    if (withVault) {
+      const fingerprints = [firstHost.fingerprint, secondHost.fingerprint, finalHost.fingerprint];
+      for (const [index, item] of credentialProfiles.entries()) {
+        assert.deepEqual(await review(item), { fingerprint: fingerprints[index], supported: true, stored: true, usable: true });
+      }
+      const passwordsBefore = [first.stats.attempts, second.stats.attempts, target.stats.passwords];
+      const savedHops = [firstProfile, secondProfile].map((profile, index) => ({
+        profile, passwordChoice: { mode: 'saved', fingerprint: fingerprints[index] },
+      }));
+      const targetChoice = { mode: 'saved', fingerprint: finalHost.fingerprint };
+      await assert.rejects(command('open_routed_sftp', {
+        profile, confirmation: '', passwordChoice: targetChoice, hops: savedHops,
+      }), /경유 2.*PROD/);
+      await assert.rejects(command('open_routed_sftp', {
+        profile, confirmation: 'PROD', passwordChoice: targetChoice,
+        hops: [savedHops[0], { profile: secondProfile, passwordChoice: { mode: 'saved', fingerprint: firstHost.fingerprint } }],
+      }), /경유 2.*호스트 키/);
+      assert.deepEqual([first.stats.attempts, second.stats.attempts, target.stats.passwords], passwordsBefore);
+    }
     assert.equal(target.stats.subsystem, 1);
     assert.ok(first.stats.forwards >= 3 && second.stats.forwards >= 2);
     await page.getByRole('button', { name: 'SFTP 연결 끊기' }).click();
     await page.getByRole('button', { name: '경유 서버 사용', exact: true }).waitFor();
     await verifyHopsClosed(first, second);
-    await verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target);
+    await verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target, withVault);
   } finally {
-    await Promise.all([first.close(), second.close(), target.close()]);
+    await Promise.all([
+      first.close(), second.close(), target.close(),
+      ...credentialProfiles.map(item => command('forget_ssh_password', { profileId: item.id, revision: item.revision })),
+    ]);
   }
 }
 
@@ -524,7 +556,7 @@ async function verifyHopsClosed(first, second) {
   assert.equal(first.clients.size + second.clients.size, 0, 'All SSH hop connections closed');
 }
 
-async function verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target) {
+async function verifyRoutedTerminal(page, command, profile, firstProfile, secondProfile, first, second, target, withVault) {
   const authentication = { kind: 'password', password };
   const hops = [firstProfile, secondProfile].map(profile => ({ profile, authentication }));
   await assert.rejects(command('open_routed_ssh_terminal', { profile, authentication, hops, confirmation: '', rows: 24, cols: 80 }), /경유 2.*PROD/);
@@ -596,7 +628,13 @@ async function verifyRoutedTerminal(page, command, profile, firstProfile, second
   assert.equal(await secret('경유 1').inputValue(), '');
   assert.equal(await secret('대상 · 경유 대상').inputValue(), '');
   assert.equal(await dialog.getByLabel('운영 환경 확인').inputValue(), '');
-  await fillCredentials();
+  if (withVault) {
+    for (const stage of ['경유 1', '경유 2', '대상 · 경유 대상']) {
+      await dialog.getByRole('group', { name: stage, exact: true }).getByLabel('저장한 암호 사용').check();
+      assert.equal(await secret(stage).count(), 0);
+    }
+    await dialog.getByLabel('운영 환경 확인').fill('PROD');
+  } else await fillCredentials();
   await open.click();
   await rows.getByText('ROUTED_SHELL_READY', { exact: true }).waitFor();
   await closeTab();
@@ -640,6 +678,7 @@ async function main() {
       await verifyRoutedSftp(page, command, identity);
       assert.deepEqual(errors, []);
       console.log('Two SSH jumps, per-host verification, SFTP and terminal, routed PTY input/output, resizing, exit and disconnect passed.');
+      if (process.env.STACKPORT_SFTP_ROUTE_CREDENTIALS === '1') console.log('All three routed credentials saved after success, rejected stale pins before authentication, and reused after opening a new terminal.');
       return;
     }
     await page.getByRole('button', { name: '새 프로젝트' }).click();

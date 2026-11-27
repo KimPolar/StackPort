@@ -87,7 +87,7 @@ pub use schema_sync::{SchemaSyncPreview, SchemaSyncReport};
 mod schema_document;
 pub use schema_document::{SchemaDocumentFormat, SchemaDocumentReport};
 mod ssh;
-pub use ssh::{SshAuthentication, SshCredentialStatus, SshHostInfo, SshKeyInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshTrustEvent, SshTrustPage};
+pub use ssh::{SshAuthentication, SshCredentialReview, SshCredentialStatus, SshHostInfo, SshKeyInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshTrustEvent, SshTrustPage};
 mod ssh_profiles;
 pub use ssh_profiles::{SshProfile, SshProfileInput};
 mod ssh_exchange;

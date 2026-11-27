@@ -406,6 +406,8 @@ Windows에서 저장된 SSH 프로필로 직접 연결할 때 **연결 성공 �
 
 SSH 터미널과 SFTP의 **경유 서버 사용**은 같은 프로젝트의 SSH 연결을 최대 3개 순서대로 열고, 이전 서버의 `direct-tcpip` 채널 안에서 다음 SSH 서버와 키 교환을 수행합니다. 직접 접속할 수 없는 주소도 경유 서버를 통해 확인할 수 있습니다. 호스트와 포트별 저장 지문이 있으면 일치해야 인증을 시도합니다. 첫 지문은 별도 확인을 위해 표시하고 해당 서버에는 자격 증명을 보내기 전에 연결을 끊습니다. 사용자가 신뢰한 뒤 계속하면 앞서 확인한 경유 서버부터 다시 연결합니다. 각 단계의 인증·키 검증·전달 오류와 `PROD` 확인은 해당 경유지 또는 대상 이름과 함께 표시됩니다. [RFC 4254 TCP/IP 전달 채널](https://www.rfc-editor.org/rfc/rfc4254.html#section-7.2)
 
+Windows의 경유 연결과 SSH 터널은 각 경유 서버와 최종 대상에 저장한 암호를 따로 선택할 수 있습니다. 지문을 처음 신뢰한 서버부터 암호 저장 옵션을 표시하고, 요청한 연결이나 터널이 열린 뒤에만 선택한 암호를 저장합니다. 프로필이나 지문이 바뀐 서버는 암호를 다시 입력해야 합니다.
+
 경유 터미널은 대상 SSH 채널에서 `xterm-256color` PTY를 요청하고 일반 터미널 탭과 같은 입출력, 크기 조절, 출력 검색 및 종료 상태 표시를 사용합니다. 프로그램 내에서 SSH 채널을 열고, 닫기나 셸 종료 후 대상과 경유 연결을 역순으로 정리합니다. SFTP 연결을 끊을 때도 같은 순서로 닫습니다. 탭 복제와 다시 열기는 경유 서버 순서만 보관합니다. [RFC 4254 SSH 상호작용 세션](https://www.rfc-editor.org/rfc/rfc4254.html#section-6)
 
 **네트워크 → SSH 터널**에서 로컬·동적 SOCKS5·원격 전달을 프로젝트에 저장합니다. 기존 로컬 전달 설정은 이관 후에도 수신 포트·대상·버전을 유지합니다. 시작할 때 저장된 SSH 연결과 추가 경유 서버들의 지문·인증을 확인합니다. 포트 `0`은 자동 할당입니다. 로컬과 동적 전달은 `127.0.0.1`에서만 받고 Windows에서는 독점 바인드를 사용합니다. 포트 충돌·예약 오류는 SSH 인증 전에 표시합니다. 동적 전달은 확인을 거쳐 무인증 SOCKS5 TCP `CONNECT`를 받고, 요청의 도메인·IPv4·IPv6를 SSH 서버로 전달합니다. [RFC 1928 SOCKS5](https://www.rfc-editor.org/rfc/rfc1928.html) · [RFC 4254 포트 전달](https://www.rfc-editor.org/rfc/rfc4254.html#section-7) · [Windows 독점 포트 바인딩](https://learn.microsoft.com/en-us/windows/win32/winsock/using-so-reuseaddr-and-so-exclusiveaddruse)
@@ -615,6 +617,7 @@ SQLite 복원은 독립된 백업의 경로·크기·SHA-256·사용자 버전·
 - `tests/sftp-smoke.cjs`는 경유 서버 두 곳을 거치는 SFTP와 SSH 터미널을 검사합니다. 각 지문 승인 전 인증 차단, 운영 경유지 확인, TCP·인증·PTY 요청 거부, 터미널 입출력·크기 변경·종료 코드·다시 열기, 닫기 후 연결 해제를 확인합니다. `STACKPORT_SFTP_ROUTE_ONLY=1`로 경유 흐름을 따로 실행할 수 있습니다.
 - `STACKPORT_SFTP_LINK_ONLY=1`은 Windows 앱에서 SSH 암호·암호화 개인 키로 파일 탐색을 함께 여는 흐름을 검사합니다. SFTP 승인보다 먼저 도착한 SSH 흐름 제어 메시지, SFTP 거부와 승인 후 채널 종료, 같은 연결의 재시도, 원격 파일 편집과 재조회, 독립 연결로 돌아갔을 때 폴더 복원을 확인합니다.
 - `STACKPORT_SFTP_CREDENTIAL_ONLY=1`과 `STACKPORT_TEST_APP_EXE`를 지정하면 Windows에 저장한 SSH 암호를 공유 연결, SSH 단독, SFTP 단독과 두 번째 앱 프로세스에서 검사합니다. 로그인 실패 시 비저장, 호스트 키 교체 전후 인증 차단, 암호 삭제와 감사 기록도 확인합니다.
+- `STACKPORT_SFTP_ROUTE_ONLY=1`과 `STACKPORT_SFTP_ROUTE_CREDENTIALS=1`을 함께 지정하면 경유 서버 두 곳과 대상에 저장한 암호를 검증합니다. `tests/ssh-tunnel-smoke.cjs`에 `STACKPORT_SSH_TUNNEL_CREDENTIALS=1`을 지정하면 저장 암호로 터널을 다시 시작해 바이트를 전달하는 흐름을 검사합니다.
 - `crates/stackport-core/tests/ssh_tunnel.rs`와 `tests/ssh-tunnel-smoke.cjs`는 터널 정의의 저장·복제·이관, 로컬 포트 충돌, SOCKS5의 도메인·IPv4·IPv6 CONNECT와 거부 응답, 원격 수신·미등록 채널 차단·포트 해제, 바이너리 전달과 카운터를 검사합니다.
 - `crates/stackport-core/src/sftp/preview.rs` 단위 테스트와 `tests/sftp-smoke.cjs`에서 로컬 UTF-8과 키보드 조작, 원격 HTML의 원문 표시, 정적 PNG, HEX 표시 범위, 빈 파일과 읽기 중 변경을 검사합니다.
 - `crates/stackport-core/src/sftp/audit.rs` 단위 테스트는 시작 기록과 결과 기록 실패를 검사합니다. `tests/sftp-smoke.cjs`에서 전송 시작과 완료·실패·중단의 작업 ID 연결, 민감 정보 제외와 작업 기록 화면을 확인합니다.

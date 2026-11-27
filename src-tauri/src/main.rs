@@ -18,10 +18,10 @@ use stackport_core::{
     RdpAvailability, RdpManager, RdpRequest, RdpSession,
     RestorePreview, RestoreReport, RouteDiagnostic, RouteFamily, RouteTool, SqlCompletionCatalog, SqlDiagnostics, SqlParameterValue, SshAuthentication,
     RowChange, RowChangePreview, RowChangeResult, RowChangeSession, RowInsertField, RowPastePreview, RowPasteResult,
-    SshCredentialStatus, SshHostInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshProfile, SshProfileExportReport, SshProfileImportPreview,
+    SshCredentialReview, SshCredentialStatus, SshHostInfo, SshManager, SshPasswordChoice, SshPasswordSave, SshProfile, SshProfileExportReport, SshProfileImportPreview,
     save_terminal_output, save_text_draft, SftpAuthentication, SftpDeletePreview, SftpEditDocument, SftpEditSave, SftpEntrySource, SftpMutationReport, SftpTransferReport, SftpTransferProgress, SftpManager,
     open_sql_file_with_encoding, save_sql_definition, save_sql_file, sqlite_statement_at, SftpPermissionChange, SqlDocument, SqlFileEncoding, SqlTemplate, SqlTemplateSummary, SqlTemplateWrite,
-    RoutedSftpOpened, SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
+    SftpOpened, SshCredentials, SshProfileInput, SshRouteHop, SshRouteResult, SshTrustPage, Store, TableQuery, TableQueryClauses, TableQueryPreset, TableQueryPresetWrite, TableQueryTarget, TerminalInfo, MAX_SSH_HOPS,
     SavedSshTunnel, SshTunnelInput, SshTunnelManager, SshTunnelStatus,
     LocalTunnelEndpoint, PostgresExportOptions, PostgresManager, PostgresObjectPage, PostgresPage, PostgresPassword, PostgresProfile, PostgresProfileInput, PostgresSchemaPage, PostgresSessionInfo, PostgresSqlBindings, PostgresSqlInput, PostgresSqlMode, PostgresSqlOutcome, PostgresSqlScope, PostgresStructure, PostgresStructureSection,
     PostgresCellChange, PostgresDisconnect, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp,
@@ -825,6 +825,18 @@ async fn ssh_credential_status(
 }
 
 #[tauri::command]
+async fn ssh_credential_review(
+    store: State<'_, Store>,
+    ssh: State<'_, Arc<SshManager>>,
+    profile_id: String,
+    revision: i64,
+) -> Result<Option<SshCredentialReview>, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    worker(move || store.ssh_credential_review(&ssh, &profile_id, revision)).await
+}
+
+#[tauri::command]
 async fn forget_ssh_password(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<(), String> {
     let store = store.inner().clone();
     worker(move || store.forget_ssh_password(&profile_id, revision)).await
@@ -948,11 +960,16 @@ async fn open_routed_sftp(
     sftp: State<'_, SftpManager>,
     profile: SshProfile,
     confirmation: String,
-    authentication: SshCredentials,
-    hops: Vec<SshRouteHop>,
-) -> Result<RoutedSftpOpened, String> {
-    let (destination, hops) = confirmed_ssh_route(store.inner().clone(), profile, confirmation, authentication, hops).await?;
-    sftp.open_routed(Arc::clone(ssh.inner()), destination, hops).await
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
+    hops: Vec<SshRouteInput>,
+) -> Result<SshRouteResult<SshConnectionResult<SftpOpened>>, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    let target = SshRouteInput { profile, authentication, password_choice };
+    let route = prepare_ssh_route(&store, &ssh, target, hops, confirmation, false).await?;
+    let opened = sftp.open_routed(Arc::clone(&ssh), route.destination, route.hops).await?;
+    Ok(finish_ssh_route(store, ssh, opened, route.saves).await)
 }
 
 #[tauri::command]
@@ -962,34 +979,108 @@ async fn open_routed_ssh_terminal(
     terminals: State<'_, Arc<TerminalManager>>,
     profile: SshProfile,
     confirmation: String,
-    authentication: SshCredentials,
-    hops: Vec<SshRouteHop>,
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
+    hops: Vec<SshRouteInput>,
     rows: u16,
     cols: u16,
-) -> Result<SshRouteResult<TerminalInfo>, String> {
-    let (destination, hops) = confirmed_ssh_route(store.inner().clone(), profile, confirmation, authentication, hops).await?;
-    terminals.open_routed_ssh(Arc::clone(ssh.inner()), destination, hops, rows, cols).await
+) -> Result<SshRouteResult<SshConnectionResult<TerminalInfo>>, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    let target = SshRouteInput { profile, authentication, password_choice };
+    let route = prepare_ssh_route(&store, &ssh, target, hops, confirmation, false).await?;
+    let opened = terminals.open_routed_ssh(Arc::clone(&ssh), route.destination, route.hops, rows, cols).await?;
+    Ok(finish_ssh_route(store, ssh, opened, route.saves).await)
 }
 
-async fn confirmed_ssh_route(
-    store: Store,
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SshRouteInput {
     profile: SshProfile,
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
+}
+
+struct PreparedSshRoute {
+    destination: SshRouteHop,
+    hops: Vec<SshRouteHop>,
+    saves: Vec<(String, SshPasswordSave)>,
+}
+
+async fn prepare_ssh_route(
+    store: &Store,
+    ssh: &Arc<SshManager>,
+    mut target: SshRouteInput,
+    mut hops: Vec<SshRouteInput>,
     confirmation: String,
-    authentication: SshCredentials,
-    mut hops: Vec<SshRouteHop>,
-) -> Result<(SshRouteHop, Vec<SshRouteHop>), String> {
+    allow_direct: bool,
+) -> Result<PreparedSshRoute, String> {
+    let store = store.clone();
+    let ssh = Arc::clone(ssh);
     worker(move || {
-        if !(1..=MAX_SSH_HOPS).contains(&hops.len()) {
+        if hops.len() > MAX_SSH_HOPS || (!allow_direct && hops.is_empty()) {
+            if allow_direct {
+                return Err(format!("경유 서버는 최대 {MAX_SSH_HOPS}개입니다."));
+            }
             return Err(format!("경유 서버를 1~{MAX_SSH_HOPS}개 선택하세요."));
         }
-        let profile = confirmed_ssh_profile(&store, &profile, &confirmation)
-            .map_err(|error| format!("대상 · {} — {error}", profile.name))?;
-        for (index, hop) in hops.iter_mut().enumerate() {
-            hop.profile = confirmed_ssh_profile(&store, &hop.profile, &confirmation)
-                .map_err(|error| format!("경유 {} · {} — {error}", index + 1, hop.profile.name))?;
+        let target_stage = format!("대상 · {}", target.profile.name);
+        target.profile = confirmed_ssh_profile(&store, &target.profile, &confirmation)
+            .map_err(|error| format!("{target_stage} — {error}"))?;
+        let mut stages = Vec::with_capacity(hops.len());
+        let mut addresses = std::collections::HashSet::from([(target.profile.host.clone(), target.profile.port)]);
+        for (index, input) in hops.iter_mut().enumerate() {
+            let stage = format!("경유 {} · {}", index + 1, input.profile.name);
+            input.profile = confirmed_ssh_profile(&store, &input.profile, &confirmation)
+                .map_err(|error| format!("{stage} — {error}"))?;
+            if input.profile.project_id != target.profile.project_id
+                || !addresses.insert((input.profile.host.clone(), input.profile.port))
+            {
+                return Err("대상과 다른 같은 프로젝트의 SSH 서버를 순서대로 한 번씩 선택하세요.".into());
+            }
+            stages.push(stage);
         }
-        Ok((SshRouteHop { profile, authentication }, hops))
+
+        let mut saves = Vec::new();
+        let mut prepare = |input: SshRouteInput, stage: String| {
+            let SshRouteInput { profile, authentication, password_choice } = input;
+            let (authentication, save) = store.prepare_ssh_credentials(&ssh, &profile, authentication, password_choice)
+                .map_err(|error| format!("{stage} — {error}"))?;
+            if let Some(save) = save {
+                saves.push((stage, save));
+            }
+            Ok::<_, String>(SshRouteHop { profile, authentication })
+        };
+        let hops = hops.into_iter().zip(stages).map(|(input, stage)| prepare(input, stage)).collect::<Result<_, _>>()?;
+        let destination = prepare(target, target_stage)?;
+        Ok(PreparedSshRoute { destination, hops, saves })
     }).await
+}
+
+async fn finish_ssh_route<T>(
+    store: Store,
+    ssh: Arc<SshManager>,
+    result: SshRouteResult<T>,
+    saves: Vec<(String, SshPasswordSave)>,
+) -> SshRouteResult<SshConnectionResult<T>> {
+    match result {
+        SshRouteResult::Open { session } => {
+            let credential_warning = if saves.is_empty() {
+                None
+            } else {
+                match worker(move || {
+                    Ok(saves.into_iter().filter_map(|(stage, save)| {
+                        save.store(&store, &ssh).err().map(|error| format!("{stage} — {error}"))
+                    }).collect::<Vec<_>>().join(" · "))
+                }).await {
+                    Ok(message) if message.is_empty() => None,
+                    Ok(message) | Err(message) => Some(message),
+                }
+            };
+            SshRouteResult::Open { session: SshConnectionResult { session, credential_warning } }
+        }
+        SshRouteResult::TrustRequired { stage, host } => SshRouteResult::TrustRequired { stage, host },
+    }
 }
 
 #[tauri::command]
@@ -2472,17 +2563,27 @@ fn ssh_tunnel_status(tunnels: State<'_, SshTunnelManager>) -> Result<Vec<SshTunn
 
 #[tauri::command]
 async fn start_ssh_tunnel(
+    store: State<'_, Store>,
     tunnels: State<'_, SshTunnelManager>,
     ssh: State<'_, Arc<SshManager>>,
     tunnel: SavedSshTunnel,
     profile: SshProfile,
-    authentication: SshCredentials,
-    hops: Vec<SshRouteHop>,
+    authentication: Option<SshCredentials>,
+    password_choice: Option<SshPasswordChoice>,
+    hops: Vec<SshRouteInput>,
     confirmation: String,
     scope_confirmed: Option<bool>,
-) -> Result<SshRouteResult<SshTunnelStatus>, String> {
-    let gateway = SshRouteHop { profile, authentication };
-    tunnels.start(Arc::clone(ssh.inner()), tunnel, gateway, hops, &confirmation, scope_confirmed.unwrap_or_default()).await
+) -> Result<SshRouteResult<SshConnectionResult<SshTunnelStatus>>, String> {
+    let store = store.inner().clone();
+    let ssh = Arc::clone(ssh.inner());
+    let scope_confirmed = scope_confirmed.unwrap_or_default();
+    if tunnel.settings.kind != stackport_core::SshTunnelKind::Local && !scope_confirmed {
+        return Err("터널 수신 범위를 확인하세요.".into());
+    }
+    let target = SshRouteInput { profile, authentication, password_choice };
+    let route = prepare_ssh_route(&store, &ssh, target, hops, confirmation.clone(), true).await?;
+    let opened = tunnels.start(Arc::clone(&ssh), tunnel, route.destination, route.hops, &confirmation, scope_confirmed).await?;
+    Ok(finish_ssh_route(store, ssh, opened, route.saves).await)
 }
 
 #[tauri::command]
@@ -3172,6 +3273,7 @@ fn main() {
             update_ssh_profile,
             delete_ssh_profile,
             ssh_credential_status,
+            ssh_credential_review,
             forget_ssh_password,
             preview_ssh_profile_import,
             import_ssh_profiles,

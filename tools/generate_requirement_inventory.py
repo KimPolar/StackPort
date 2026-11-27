@@ -43,9 +43,10 @@ PARTIAL = {
     "SP-CN-010": "SSH 호스트 키 지문 확인·고정·변경 차단과 명시적 교체",
     "SP-CN-011": "PostgreSQL·MySQL 계열 TLS에서 시스템 신뢰 저장소·선택적 PEM CA를 사용해 서버 인증서 체인·호스트 이름·유효기간 검증, MySQL 계열 PEM 클라이언트 인증",
     "SP-CN-012": "Windows 저장 암호를 사용하는 PostgreSQL 연결·모니터·백업·복원, MySQL·MariaDB 연결·예약 백업, Redis 연결·Pub/Sub 구독, MongoDB 연결·백업·복원, SQL Server 로그인·Oracle 연결",
+    "SP-CN-013": "Windows 자격 증명 관리자에 SSH·SFTP 및 지원 DB 로그인 암호의 선택적 저장·삭제, 작업 공간과 연결 설정으로 재사용 범위 제한",
     "SP-CN-014": "SSH 연결 JSON에서 암호·개인 키·호스트 키 신뢰 정보 제외, DB 연결 JSON에서 암호·토큰·인증서·개인 키 경로 제외 및 가져오는 장치에서 필요한 파일 재선택",
-    "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시",
-    "SP-CN-017": "프로젝트별 로컬(-L)·동적 SOCKS5(-D)·원격(-R) TCP 전달 등록·수정·삭제·시작·중단과 선택적 SSH 경유",
+    "SP-CN-015": "같은 프로젝트의 SSH 서버 최대 3개를 순서대로 경유해 SSH 터미널·SFTP 접속, 단계별 지문·인증·실패 표시와 Windows 저장 암호 선택",
+    "SP-CN-017": "프로젝트별 로컬(-L)·동적 SOCKS5(-D)·원격(-R) TCP 전달 등록·수정·삭제·시작·중단, 선택적 SSH 경유와 서버별 Windows 저장 암호 사용",
     "SP-CN-018": "로컬 포트 충돌·예약, 원격 수신 거부·대상 연결 오류·SSH 단절, 실행 상태·접속 수·송수신량 표시",
     "SP-CN-023": "저장된 SSH·PostgreSQL 연결의 DEV/STAGING/PROD 구분·표시와 PROD 연결 전 확인",
     "SP-CN-024": "SSH 암호·대화형 인증 시도 제한과 지정 방식의 대체 인증 차단",
@@ -429,9 +430,9 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
             if requirement_id in {"SP-BK-011", "SP-BK-012", "SP-BK-016", "SP-AU-016", "SP-SEC-013"}:
                 backup_evidence = "crates/stackport-core/src/backup_artifact.rs; crates/stackport-core/src/backup_artifact/windows.rs; src/BackupPlanDialog.tsx; tests/sqlite-backup-plan-smoke.cjs; tests/postgres-smoke.cjs"
                 evidence = evidence + "; " + backup_evidence if requirement_id.startswith("SP-BK-") else backup_evidence
-            if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-SEC-006"}:
-                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/ssh/credentials.rs; src/SshPasswordOptions.tsx; tests/sftp-smoke.cjs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; crates/stackport-core/src/db_profiles.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs"
-                evidence = credential_evidence if requirement_id == "SP-SEC-006" else evidence + "; " + credential_evidence
+            if requirement_id in {"SP-CN-007", "SP-CN-012", "SP-CN-013", "SP-SEC-006"}:
+                credential_evidence = "crates/stackport-core/src/credential_store/windows.rs; crates/stackport-core/src/ssh/credentials.rs; src/SshPasswordOptions.tsx; src/SshRouteDialog.tsx; tests/sftp-smoke.cjs; tests/ssh-tunnel-smoke.cjs; crates/stackport-core/src/postgres/credentials.rs; crates/stackport-core/src/mysql/credentials.rs; crates/stackport-core/src/redis/credentials.rs; crates/stackport-core/src/mongo/credentials.rs; crates/stackport-core/src/db_profiles.rs; src/DatabasePasswordField.tsx; tests/postgres-smoke.cjs; tests/mysql-smoke.cjs; tests/redis-smoke.cjs; tests/mongo-smoke.cjs; tests/sql-server-smoke.cjs; tests/oracle-smoke.cjs"
+                evidence = credential_evidence if requirement_id in {"SP-CN-013", "SP-SEC-006"} else evidence + "; " + credential_evidence
             if requirement_id in {
                 "SP-UI-002", "SP-UI-006", "SP-UI-011", "SP-CN-001", "SP-CN-003", "SP-CN-011", "SP-CN-012",
                 "SP-CN-023", "SP-DB-001", "SP-DB-004", "SP-DB-005", "SP-DB-006", "SP-DB-007", "SP-DB-009",

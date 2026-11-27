@@ -2,9 +2,11 @@ import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, X } from "lucide-react";
 import type { SshProfile } from "./ssh-profile-types";
+import { SshPasswordOptions, type SshPasswordChoice, type SshPasswordStatus } from "./SshPasswordOptions";
 import { tunnelPath, type SavedSshTunnel } from "./sshTunnel";
 
-type Credentials = { method: "password" | "private_key"; path: string; secret: string };
+type Credentials = { method: "password" | "private_key"; path: string; secret: string; passwordChoice?: SshPasswordChoice };
+type CredentialReview = SshPasswordStatus & { fingerprint: string };
 type Hop = { profile: SshProfile; credentials: Credentials };
 type TrustRequest = { status: "trust_required"; stage: string; host: {
   host: string; port: number; token: string; keys: { algorithm: string; fingerprint: string }[];
@@ -14,9 +16,11 @@ type RouteResponse<Session> = { status: "open"; session: Session } | TrustReques
 const maxHops = 3;
 const emptyCredentials: Credentials = { method: "password", path: "", secret: "" };
 const address = ({ host, port }: Pick<SshProfile, "host" | "port">) => `${host.includes(":") ? `[${host}]` : host}:${port}`;
-const authentication = (credentials: Credentials) => credentials.method === "password"
-  ? { kind: "password", password: credentials.secret }
-  : { kind: "private_key", path: credentials.path, passphrase: credentials.secret };
+function authenticationArguments({ method, path, secret, passwordChoice }: Credentials) {
+  if (method === "private_key") return { authentication: { kind: "private_key", path, passphrase: secret } };
+  if (passwordChoice?.mode === "saved") return { passwordChoice };
+  return { authentication: { kind: "password", password: secret }, passwordChoice };
+}
 
 export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initialHops = [], initialFiles = true, onBusy, onClose, onOpened }: ({
   tool: "sftp" | "terminal";
@@ -95,8 +99,8 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
     if ((!tunnel && !hops.length) || (confirmScope && !scopeConfirmed)) return;
     void perform(async () => {
       const result = await invoke<RouteResponse<Session>>(command, {
-        profile: target, confirmation, authentication: authentication(credentials),
-        hops: hops.map(hop => ({ profile: hop.profile, authentication: authentication(hop.credentials) })),
+        profile: target, confirmation, ...authenticationArguments(credentials),
+        hops: hops.map(hop => ({ profile: hop.profile, ...authenticationArguments(hop.credentials) })),
         ...(tool === "terminal" ? { rows: 24, cols: 80 } : {}),
         ...(tunnel ? { tunnel, scopeConfirmed } : {}),
       });
@@ -127,7 +131,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
         </div>
       </fieldset> : <fieldset className="sftp-route-settings" disabled={busy}>
         {tunnel && <p className="confirm-copy"><strong>{tunnel.settings.name}</strong> · {tunnelPath(tunnel.settings)}</p>}
-        <p className="form-note">경유 서버는 위에서 아래로 연결합니다. 각 서버에 사용할 인증 정보를 입력하세요.</p>
+        <p className="form-note">경유 서버는 위에서 아래로 연결합니다. 서버별로 인증 정보를 선택하세요.</p>
         <ol className="sftp-route-list">
           {hops.map((hop, index) => <li key={hop.profile.id}>
             <fieldset className="sftp-route-stage">
@@ -142,8 +146,8 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
                 <button type="button" className="icon-button" aria-label={`경유 ${index + 1} 삭제`} onClick={() => editHops(hops.filter((_, position) => index !== position))}><X size={15} aria-hidden /></button>
               </div>
               <p className={`files-target ${hop.profile.environment.toLowerCase()}`}>{hop.profile.username}@{address(hop.profile)} · {hop.profile.environment}</p>
-              <CredentialFields value={hop.credentials} onChange={value => setHops(current => current.map(row =>
-                row.profile.id === hop.profile.id ? { ...row, credentials: value } : row))} onChoose={chooseKey} />
+              <CredentialFields profile={hop.profile} value={hop.credentials} onChange={value => setHops(current => current.map(row =>
+                row.profile.id === hop.profile.id ? { ...row, credentials: value } : row))} onChoose={chooseKey} onOperation={perform} />
             </fieldset>
           </li>)}
         </ol>
@@ -151,7 +155,7 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
         <fieldset className="sftp-route-stage">
           <legend>{tunnel ? "SSH 서버" : "대상"} · {target.name}</legend>
           <p className={`files-target ${target.environment.toLowerCase()}`}>{target.username}@{address(target)} · {target.environment}</p>
-          <CredentialFields value={credentials} onChange={setCredentials} onChoose={chooseKey} />
+          <CredentialFields profile={target} value={credentials} onChange={setCredentials} onChoose={chooseKey} onOperation={perform} />
         </fieldset>
         {production && <label className="field">운영 환경 확인<input required pattern="PROD" placeholder="PROD" value={confirmation} onChange={event => setConfirmation(event.target.value)} /></label>}
         {tool === "terminal" && <label className="files-check"><input type="checkbox" checked={withFiles}
@@ -170,12 +174,47 @@ export function SshRouteDialog<Session>({ tool, tunnel, target, profiles, initia
   </dialog>;
 }
 
-function CredentialFields({ value, onChange, onChoose }: {
+function CredentialFields({ profile, value, onChange, onChoose, onOperation }: {
+  profile: SshProfile;
   value: Credentials;
   onChange: (value: Credentials) => void;
   onChoose: (update: (path: string) => void) => Promise<void>;
+  onOperation: (action: () => Promise<void>) => Promise<void>;
 }) {
   const pass = value.method === "password";
+  const { id: profileId, revision } = profile;
+  const [review, setReview] = useState<CredentialReview | null>();
+  const [message, setMessage] = useState("");
+  const currentChoice = review?.fingerprint === value.passwordChoice?.fingerprint ? value.passwordChoice : undefined;
+  const useSaved = pass && value.passwordChoice?.mode === "saved" &&
+    (review === undefined || Boolean(review?.usable && currentChoice));
+
+  useEffect(() => {
+    setReview(undefined);
+    setMessage("");
+    if (!pass) return;
+    let live = true;
+    void invoke<CredentialReview | null>("ssh_credential_review", { profileId, revision }).then(
+      result => { if (live) setReview(result); },
+      reason => { if (live) { setReview(null); setMessage(String(reason)); } },
+    );
+    return () => { live = false; };
+  }, [pass, profileId, revision]);
+
+  function select(mode: SshPasswordChoice["mode"], checked: boolean) {
+    onChange({ ...value, secret: mode === "saved" ? "" : value.secret,
+      passwordChoice: checked && review ? { mode, fingerprint: review.fingerprint } : undefined });
+  }
+
+  async function forget() {
+    await onOperation(async () => {
+      await invoke("forget_ssh_password", { profileId, revision });
+      setReview(current => current && { ...current, stored: false, usable: false });
+      onChange({ ...value, passwordChoice: undefined });
+      setMessage("저장한 암호를 삭제했습니다.");
+    });
+  }
+
   return <div className="sftp-route-credentials">
     <label className="field">인증 방식<select value={value.method} onChange={event => onChange({ ...emptyCredentials, method: event.target.value as Credentials["method"] })}>
       <option value="password">SSH 암호</option><option value="private_key">개인 키 파일</option>
@@ -184,8 +223,12 @@ function CredentialFields({ value, onChange, onChoose }: {
       <input required value={value.path} onChange={event => onChange({ ...value, path: event.target.value })} />
       <button type="button" className="secondary" onClick={() => void onChoose(path => onChange({ ...value, path }))}>키 선택</button>
     </span></label>}
-    <label className="field">{pass ? "SSH 암호" : "개인 키 암호 (선택)"}
-      <input required={pass} type="password" autoComplete="off" maxLength={4096} value={value.secret} onChange={event => onChange({ ...value, secret: event.target.value })} />
-    </label>
+    {!useSaved && <label className="field">{pass ? "SSH 암호" : "개인 키 암호 (선택)"}
+      <input required={pass} type="password" autoComplete="off" maxLength={4096} value={value.secret}
+        onChange={event => onChange({ ...value, secret: event.target.value, passwordChoice: currentChoice })} />
+    </label>}
+    {pass && <SshPasswordOptions credentials={{ status: review ?? null, useSaved, remember: currentChoice?.mode === "remember",
+      setSaved: checked => select("saved", checked), setRemember: checked => select("remember", checked),
+      clearing: false, message, forget }} />}
   </div>;
 }

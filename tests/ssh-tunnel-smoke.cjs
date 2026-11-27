@@ -130,6 +130,8 @@ async function main() {
   const page = browser.contexts()[0].pages()[0];
   const errors = [];
   const sockets = [];
+  const credentialProfiles = [];
+  const withVault = process.env.STACKPORT_SSH_TUNNEL_CREDENTIALS === '1';
   page.on('pageerror', error => errors.push(String(error)));
   const command = (command, args) => page.evaluate(({ command, args }) => window.__TAURI_INTERNALS__.invoke(command, args), { command, args });
   try {
@@ -138,6 +140,8 @@ async function main() {
       input: { name, host: '127.0.0.1', port, username: 'stackport', environment } });
     const profile = await createProfile('터널 서버', gateway.port, 'PROD');
     const jumpProfile = await createProfile('별도 경유 서버', jump.port, 'DEV');
+    if (withVault) credentialProfiles.push(profile, jumpProfile);
+    const review = item => command('ssh_credential_review', { profileId: item.id, revision: item.revision });
     await page.reload();
     await page.getByLabel('프로젝트', { exact: true }).selectOption({ label: 'SSH 터널 검증' });
     await page.getByRole('button', { name: '네트워크', exact: true }).click();
@@ -157,8 +161,10 @@ async function main() {
     const start = page.getByRole('button', { name: '보고서 전달 시작', exact: true });
     const dialog = page.getByRole('dialog', { name: 'SSH 터널 시작', exact: true });
     const launch = dialog.getByRole('button', { name: '터널 시작', exact: true });
+    const gatewayGroup = dialog.getByRole('group', { name: 'SSH 서버 · 터널 서버', exact: true });
+    const jumpGroup = dialog.getByRole('group', { name: '경유 1', exact: true });
     async function enterCredentials() {
-      await dialog.getByRole('group', { name: 'SSH 서버 · 터널 서버', exact: true }).getByLabel('SSH 암호', { exact: true }).fill(password);
+      await gatewayGroup.getByLabel('SSH 암호', { exact: true }).fill(password);
       await dialog.getByLabel('운영 환경 확인').fill('PROD');
     }
     async function trust(fingerprint) {
@@ -187,9 +193,14 @@ async function main() {
     await dialog.getByText(gateway.fingerprint, { exact: true }).waitFor();
     assert.equal(gateway.stats.authentications, 0);
     await trust(gateway.fingerprint);
+    if (withVault) await gatewayGroup.getByLabel('연결 성공 후 Windows에 암호 저장').check();
     await launch.click();
     const running = page.getByRole('table', { name: '실행 중인 SSH 터널', exact: true });
     await running.waitFor();
+    if (withVault) {
+      await dialog.waitFor({ state: 'detached' });
+      assert.equal((await review(profile)).usable, true);
+    }
     const status = page.getByRole('contentinfo', { name: '작업 공간 상태' });
     await page.getByRole('button', { name: '데이터베이스', exact: true }).click();
     await status.getByRole('button', { name: '활성 SSH 터널 1개', exact: true }).click();
@@ -219,12 +230,15 @@ async function main() {
     await start.click();
     await dialog.getByRole('button', { name: '경유 서버 추가', exact: true }).click();
     await dialog.getByLabel('경유 1 서버').selectOption(jumpProfile.id);
-    await dialog.getByRole('group', { name: '경유 1', exact: true }).getByLabel('SSH 암호', { exact: true }).fill('fixture-jump-secret');
+    await jumpGroup.getByLabel('SSH 암호', { exact: true }).fill('fixture-jump-secret');
     await enterCredentials();
+    if (withVault) await gatewayGroup.getByLabel('저장한 암호 사용').check();
     await launch.click();
     await trust(jump.fingerprint);
+    if (withVault) await jumpGroup.getByLabel('연결 성공 후 Windows에 암호 저장').check();
     await launch.click();
     await running.getByText(/별도 경유 서버 → 터널 서버/).waitFor();
+    if (withVault) await dialog.waitFor({ state: 'detached' });
     const [second] = await command('ssh_tunnel_status');
     const routed = await connect(second.listen_port);
     sockets.push(routed);
@@ -234,6 +248,18 @@ async function main() {
     await running.waitFor({ state: 'detached' });
     await page.getByRole('table', { name: '저장된 SSH 터널' }).getByText('연결 끊김', { exact: true }).waitFor();
     await assert.rejects(connect(second.listen_port), /ECONNREFUSED/);
+    if (withVault) {
+      assert.equal((await review(jumpProfile)).usable, true);
+      const saved = await command('start_ssh_tunnel', { tunnel: current, profile, confirmation: 'PROD',
+        passwordChoice: { mode: 'saved', fingerprint: gateway.fingerprint },
+        hops: [{ profile: jumpProfile, passwordChoice: { mode: 'saved', fingerprint: jump.fingerprint } }],
+      });
+      assert.equal(saved.status, 'open');
+      const socket = await connect(saved.session.listen_port);
+      sockets.push(socket);
+      await verifyTraffic(socket, payload);
+      await command('stop_ssh_tunnel', { id: current.id });
+    }
 
     const startSaved = name => page.getByRole('button', { name: `${name} 시작`, exact: true }).click();
     const stopSaved = name => page.getByRole('button', { name: `${name} 중단`, exact: true }).click();
@@ -329,10 +355,15 @@ async function main() {
     assert.deepEqual(await command('list_ssh_tunnels', { projectId: project.id }), []);
     assert.deepEqual(errors, []);
     console.log('Local, dynamic SOCKS5 and remote SSH forwarding, binary data, verification, rejection and shutdown passed.');
+    if (withVault) console.log('Saved gateway and jump passwords reopened a tunnel and forwarded binary data.');
   } finally {
     for (const socket of sockets) socket.destroy();
     jump.close(); gateway.close(); reserved.close(); echo.close();
-    await browser.close();
+    try {
+      await Promise.all(credentialProfiles.map(item => command('forget_ssh_password', { profileId: item.id, revision: item.revision })));
+    } finally {
+      await browser.close();
+    }
   }
 }
 

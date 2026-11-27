@@ -1,7 +1,7 @@
 //! Explicit SSH host-key verification before invoking the system OpenSSH client.
 
 mod credentials;
-pub use credentials::{SshCredentialStatus, SshPasswordChoice, SshPasswordSave};
+pub use credentials::{SshCredentialReview, SshCredentialStatus, SshPasswordChoice, SshPasswordSave};
 
 use crate::{db_error, Result, TerminalInfo, TerminalManager};
 use base64::{

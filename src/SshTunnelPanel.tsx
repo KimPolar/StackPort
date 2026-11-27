@@ -7,7 +7,7 @@ import { tunnelKindLabels, tunnelListenAddress, tunnelPath, tunnelTarget, type S
 
 type TunnelStatus = { tunnel: SavedSshTunnel; listen_port: number; gateway: SshProfile; hops: string[];
   phase: "running" | "stopping" | "stopped" | "disconnected"; clients: number;
-  sent_bytes: string; received_bytes: string; last_error: string | null };
+  sent_bytes: string; received_bytes: string; last_error: string | null; credential_warning?: string };
 type DefinitionAction = { kind: "create" } | { kind: "edit" | "delete"; tunnel: SavedSshTunnel };
 const phases: Record<TunnelStatus["phase"], string> = { running: "수신 중", stopping: "중단 중", stopped: "중단됨", disconnected: "연결 끊김" };
 const running = (status: TunnelStatus) => status.phase === "running" || status.phase === "stopping";
@@ -138,7 +138,9 @@ export function SshTunnelPanel({ projectId, profiles, visible, onCountChange }: 
     {action && <TunnelDefinitionDialog projectId={projectId} action={action} profiles={profiles}
       onClose={() => setAction(null)} onSaved={() => { setAction(null); void refreshDefinitions(); }} />}
     {opening && <SshRouteDialog<TunnelStatus> tool="tunnel" target={opening.profile} tunnel={opening.tunnel} profiles={profiles}
-      onBusy={setConnecting} onClose={() => setOpening(null)} onOpened={status => { updateStatus(status); setOpening(null); }} />}
+      onBusy={setConnecting} onClose={() => setOpening(null)} onOpened={status => {
+        updateStatus(status); setNotice(status.credential_warning ?? ""); setOpening(null);
+      }} />}
   </section>;
 }
 

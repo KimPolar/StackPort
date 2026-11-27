@@ -1,12 +1,19 @@
 use super::{HostKey, SshManager};
 use crate::{credential_store as vault, db_error, ssh_profiles::profile_audit, Result, SshCredentials, SshProfile, Store};
 use rusqlite::{Connection, TransactionBehavior};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 pub use vault::CredentialStatus as SshCredentialStatus;
 
 const ENGINE: &str = "ssh";
+
+#[derive(Serialize)]
+pub struct SshCredentialReview {
+    fingerprint: String,
+    #[serde(flatten)]
+    status: SshCredentialStatus,
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -43,7 +50,18 @@ impl Store {
     ) -> Result<SshCredentialStatus> {
         let profile = credential_profile(&self.connect()?, id, revision)?;
         let key = reviewed_key(ssh, &profile, fingerprint)?;
-        vault::status(&vault::target(self, ENGINE, id)?, &password_binding(&profile, &key)?)
+        password_status(self, &profile, &key)
+    }
+
+    pub fn ssh_credential_review(
+        &self, ssh: &SshManager, id: &str, revision: i64,
+    ) -> Result<Option<SshCredentialReview>> {
+        let profile = credential_profile(&self.connect()?, id, revision)?;
+        let Some(key) = ssh.lookup(&profile.host, profile.port)? else {
+            return Ok(None);
+        };
+        let status = password_status(self, &profile, &key)?;
+        Ok(Some(SshCredentialReview { fingerprint: key.fingerprint, status }))
     }
 
     pub fn forget_ssh_password(&self, id: &str, revision: i64) -> Result<()> {
@@ -124,4 +142,8 @@ fn reviewed_key(ssh: &SshManager, profile: &SshProfile, fingerprint: &str) -> Re
 
 fn password_binding(profile: &SshProfile, key: &HostKey) -> Result<[u8; vault::BINDING_BYTES]> {
     vault::binding(&(profile, &key.fingerprint), "SSH")
+}
+
+fn password_status(store: &Store, profile: &SshProfile, key: &HostKey) -> Result<SshCredentialStatus> {
+    vault::status(&vault::target(store, ENGINE, &profile.id)?, &password_binding(profile, key)?)
 }
