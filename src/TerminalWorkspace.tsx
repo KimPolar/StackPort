@@ -4,7 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { ChevronDown, ChevronUp, Ellipsis, FileDown, Pin, Plug, Plus, Search, TerminalSquare, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Ellipsis, FileDown, FolderOpen, Pin, Plug, Plus, Search, TerminalSquare, X } from "lucide-react";
 import type { SshOpenRequest, SshProfile } from "./ssh-profile-types";
 import { NetworkDiagnosticResult, type NetworkDiagnostics } from "./NetworkDiagnosticsPanel";
 import { TerminalOutputDialog, terminalText, type TerminalOutputFormat } from "./TerminalOutputDialog";
@@ -65,7 +65,7 @@ function terminalTheme(host: HTMLElement) {
   };
 }
 
-export function TerminalWorkspace({ visible, colorScheme, onCountChange, request, sshProfiles, onRequestHandled, onDirectoryChange, onFilesChange, onShowFiles }: {
+export function TerminalWorkspace({ visible, colorScheme, onCountChange, request, sshProfiles, onRequestHandled, onDirectoryChange, onFilesChange, filesVisible, onShowFiles }: {
   visible: boolean;
   colorScheme: ColorScheme;
   onCountChange: (count: number) => void;
@@ -74,7 +74,8 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
   onRequestHandled: () => void;
   onDirectoryChange: (directory: TerminalDirectory | null) => void;
   onFilesChange: (files: TerminalFiles | null) => void;
-  onShowFiles: () => void;
+  filesVisible: boolean;
+  onShowFiles: (reveal: boolean) => void;
 }) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [selectedId, setActiveId] = useState("");
@@ -132,7 +133,7 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
     setTabs(current => [...current, { ...terminal, launch, number, exit: null, directory: null, unreadOutput: false, pinned: false, files }]);
     if (reopened !== undefined) setRecentTabs(current => current.filter(tab => tab.number !== reopened));
     setActiveId(terminal.id);
-    if (files) onShowFiles();
+    if (files) onShowFiles(false);
   }
 
   async function openTerminal(launch: TerminalLaunch, reopened?: number) {
@@ -274,7 +275,9 @@ export function TerminalWorkspace({ visible, colorScheme, onCountChange, request
   return <section className="terminal-workspace" aria-label="터미널">
     <header className="terminal-heading session-heading">
       <h1><TerminalSquare size={20} aria-hidden /> 터미널</h1>
-      <div className="terminal-actions" role="group" aria-label="새 터미널">
+      <div className="terminal-actions" role="group" aria-label="터미널 작업">
+        {activeFiles && !filesVisible && <button type="button" className="secondary small"
+          onClick={() => onShowFiles(true)}><FolderOpen size={14} aria-hidden /> SSH 원격 파일 보기</button>}
         <button type="button" className="primary small" disabled={opening} onClick={() => void openTerminal({ kind: "local", shell: "powershell" })}><Plus size={14} aria-hidden /> PowerShell 열기</button>
         <button type="button" className="secondary small" disabled={opening} onClick={() => void openTerminal({ kind: "local", shell: "cmd" })}><Plus size={14} aria-hidden /> CMD 열기</button>
         <button type="button" className="secondary small" disabled={opening}

@@ -1196,11 +1196,12 @@ function App() {
     else if (next === "workspace") setHistoryOpen(false);
   }
 
-  function showTerminalFiles() {
+  function showTerminalFiles(reveal: boolean) {
     const tools = paneTools(layout);
     if (tools.includes("files") || !tools.includes("terminal")) return;
     if (tools.length >= 4) {
-      setLoadedPages(current => current.has("files") ? current : new Set([...current, "files"]));
+      if (reveal) applyLayout(replacePaneTool(layout, "terminal", "files"));
+      else setLoadedPages(current => current.has("files") ? current : new Set([...current, "files"]));
       return;
     }
     const pane = splitPane(++nextSplit.current, "side", toolPane("files"), toolPane("terminal"));
@@ -2026,7 +2027,8 @@ function App() {
     terminal: loadedPages.has("terminal") && <div id="workspace-pane-terminal" className="tool-body terminal-body">
       <React.Suspense fallback={<p className="terminal-loading" role="status">터미널을 불러오는 중…</p>}>
         <TerminalWorkspace visible={toolVisible("terminal")} colorScheme={colorScheme} onCountChange={updateTerminalCount} request={sshOpenRequest} sshProfiles={sshProfiles}
-          onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} onFilesChange={setTerminalFiles} onShowFiles={showTerminalFiles} />
+          onRequestHandled={consumeSshRequest} onDirectoryChange={setTerminalDirectory} onFilesChange={setTerminalFiles}
+          filesVisible={toolVisible("files")} onShowFiles={showTerminalFiles} />
       </React.Suspense>
     </div>,
     network: loadedPages.has("network") && <div id="workspace-pane-network" className="tool-body network-body">

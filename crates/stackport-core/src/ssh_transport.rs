@@ -1,11 +1,11 @@
 use crate::{ssh, Result, SshHostInfo, SshManager, SshProfile};
 use russh::{
-    client::{self, Handle},
+    client::{self, AuthResult, Handle, KeyboardInteractiveAuthResponse},
     keys::{
         decode_secret_key, key::PrivateKeyWithHashAlg, Algorithm, HashAlg, PublicKey,
         PublicKeyOrCertificate,
     },
-    Disconnect, Preferred,
+    Disconnect, MethodKind, Preferred,
 };
 use serde::{Deserialize, Deserializer};
 use std::{
@@ -377,9 +377,18 @@ async fn authenticate(
             if password.is_empty() || password.len() > 4096 {
                 return Err("SSH 암호를 확인하세요.".into());
             }
-            connection
+            let result = connection
                 .authenticate_password(username, password.as_str())
                 .await
+                .map_err(|_| "SSH 사용자 인증을 완료할 수 없습니다.")?;
+            // Fall back only when the server offers interactive authentication in place of password authentication.
+            if matches!(&result, AuthResult::Failure { remaining_methods, partial_success: false }
+                if !remaining_methods.contains(&MethodKind::Password)
+                    && remaining_methods.contains(&MethodKind::KeyboardInteractive))
+            {
+                return authenticate_password_prompt(connection, username, &password).await;
+            }
+            Ok(result)
         }
         SshCredentials::PrivateKey { path, passphrase } => {
             let key = tokio::task::spawn_blocking(move || load_key(&path, &passphrase))
@@ -412,6 +421,45 @@ async fn authenticate(
         return Err("서버가 SSH 사용자 인증을 거부했습니다.".into());
     }
     Ok(())
+}
+
+async fn authenticate_password_prompt(
+    connection: &mut SshConnection,
+    username: &str,
+    password: &str,
+) -> Result<()> {
+    let auth_error = "SSH 대화형 인증을 완료할 수 없습니다.";
+    let mut response = connection
+        .authenticate_keyboard_interactive_start(username, None)
+        .await
+        .map_err(|_| auth_error)?;
+    let mut answered = false;
+    for round in 0..=8 {
+        let answers = match response {
+            KeyboardInteractiveAuthResponse::Success => return Ok(()),
+            KeyboardInteractiveAuthResponse::Failure { partial_success: false, .. } => {
+                return Err("서버가 SSH 사용자 인증을 거부했습니다.".into());
+            }
+            KeyboardInteractiveAuthResponse::InfoRequest { .. } if round == 8 => break,
+            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. } if prompts.is_empty() => {
+                Vec::new()
+            }
+            // A stored or entered password must never be sent as an OTP or another answer.
+            KeyboardInteractiveAuthResponse::InfoRequest { prompts, .. }
+                if !answered && prompts.len() == 1 && !prompts[0].echo
+                    && prompts[0].prompt.trim().trim_end_matches(':').eq_ignore_ascii_case("password") =>
+            {
+                answered = true;
+                vec![password.to_owned()]
+            }
+            _ => return Err("서버가 추가 SSH 인증을 요구합니다. 터미널만 연결하고 서버 대화형 인증을 선택하세요.".into()),
+        };
+        response = connection
+            .authenticate_keyboard_interactive_respond(answers)
+            .await
+            .map_err(|_| auth_error)?;
+    }
+    Err(auth_error.into())
 }
 
 pub(crate) async fn disconnect(connection: &SshConnection) {

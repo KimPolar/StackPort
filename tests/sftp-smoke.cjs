@@ -314,7 +314,8 @@ function makeHost() {
 
 async function startHost(host, identity, port = 0, terminal = false) {
   const clients = new Set();
-  const stats = { passwords: 0, signatures: 0, subsystem: 0, ptys: [], windowChanges: [], rejectPty: false, rejectSftp: false, dropSftp: false };
+  const stats = { passwords: 0, signatures: 0, subsystem: 0, ptys: [], windowChanges: [], rejectPty: false, rejectSftp: false, dropSftp: false,
+    interactiveMode: '', interactiveRequests: 0, interactiveAnswers: 0 };
   const uploads = { files: new Map(), behavior: '', aliases: new Map(), unavailableDirectories: new Set(), comparisonDirectories: new Map(), moves: 0, moveCollision: false,
     deletions: 0, edits: 0, editRace: null, advertiseEdit: true, advertisePermissions: true,
     permissionDirectories: new Map(), permissionRequests: [] };
@@ -324,6 +325,21 @@ async function startHost(host, identity, port = 0, terminal = false) {
     client.on('close', () => clients.delete(client));
     client.on('authentication', context => {
       if (context.username !== 'stackport') return context.reject(['password', 'publickey']);
+      if (stats.interactiveMode) {
+        if (context.method !== 'keyboard-interactive') return context.reject(['keyboard-interactive']);
+        stats.interactiveRequests++;
+        return context.prompt([], acknowledgement => {
+          if (acknowledgement instanceof Error) return;
+          const prompts = [{ prompt: 'Password: ', echo: false }];
+          if (stats.interactiveMode === 'mfa') prompts.push({ prompt: 'Verification code: ', echo: false });
+          context.prompt(prompts, responses => {
+            if (responses instanceof Error) return;
+            stats.interactiveAnswers++;
+            if (responses.length === 1 && responses[0] === password) context.accept();
+            else context.reject(['keyboard-interactive']);
+          });
+        });
+      }
       if (context.method === 'password') {
         stats.passwords++;
         if (context.password === password) return context.accept();
@@ -710,8 +726,9 @@ async function main() {
       await verifyLinkedSftp(page, command, profile, server, keyFile);
       await verifyDirectLinkedSftp(page, server);
       await verifyStandaloneAndLinkedSftp(page, server);
+      await verifyInteractivePasswordAndFullLayout(page, command, profile, server);
       assert.deepEqual(errors, []);
-      console.log('Saved and direct SSH share authentication with SFTP, recover from subsystem and protocol errors, and restore an open standalone SFTP connection.');
+      console.log('Saved and direct SSH share authentication with SFTP, recover from subsystem and protocol errors, and restore an open standalone SFTP connection. Keyboard-interactive password and the four-pane layout passed.');
       return;
     }
     const authentication = { kind: 'password', password };
@@ -1168,6 +1185,58 @@ async function verifyStandaloneAndLinkedSftp(page, server) {
   assert.equal(server.stats.passwords - passwordsBefore, 2);
   await disconnect.click();
   await disconnect.waitFor({ state: 'detached' });
+}
+
+async function verifyInteractivePasswordAndFullLayout(page, command, profile, server) {
+  const connection = { profile, confirmation: 'PROD', authentication: { kind: 'password', password } };
+  const subsystems = server.stats.subsystem;
+  server.stats.interactiveMode = 'mfa';
+  await assert.rejects(command('open_sftp', connection), /추가 SSH 인증/);
+  assert.equal(server.stats.interactiveRequests, 1);
+  assert.equal(server.stats.interactiveAnswers, 0);
+  assert.equal(server.stats.subsystem, subsystems);
+
+  server.stats.interactiveMode = 'password';
+  const standalone = await command('open_sftp', connection);
+  assert.equal(standalone.directory.path, '/home/stackport');
+  await command('close_sftp', { id: standalone.id });
+
+  const split = page.getByRole('group', { name: '화면 배치', exact: true });
+  await split.getByText('배치 설정', { exact: true }).click();
+  await split.getByRole('button', { name: '2×2 배치', exact: true }).click();
+  const area = split.getByLabel('편집할 영역', { exact: true });
+  const tool = split.getByLabel('영역에 표시할 도구', { exact: true });
+  const current = await area.locator('option').evaluateAll(options => options.map(option => option.value));
+  assert.equal(current.length, 4);
+  await area.selectOption('files');
+  await tool.selectOption(['workspace', 'network', 'rdp'].find(name => !current.includes(name)));
+  await split.getByText('배치 설정', { exact: true }).click();
+
+  const ssh = page.getByRole('dialog', { name: 'SSH 연결', exact: true });
+  await page.getByRole('button', { name: 'SSH 운영 파일 서버 연결', exact: true }).click();
+  await ssh.getByRole('button', { name: '지문 확인' }).click();
+  await ssh.getByLabel('운영 환경 확인: PROD 입력').fill('PROD');
+  await ssh.getByLabel('SSH 암호', { exact: true }).fill(password);
+  await ssh.getByRole('button', { name: '연결', exact: true }).click();
+  const shell = page.locator('[role=tabpanel]:visible .xterm-rows');
+  await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'SSH 원격 파일 보기', exact: true }).click();
+  const workspace = page.getByRole('region', { name: '파일 탐색', exact: true });
+  const remote = workspace.getByRole('region', { name: '원격 파일', exact: true });
+  await remote.getByText('대시보드.txt', { exact: true }).waitFor();
+  await workspace.getByText('SSH 터미널과 공유', { exact: true }).waitFor();
+  assert.equal(server.stats.interactiveRequests, 3);
+  assert.equal(server.stats.interactiveAnswers, 2);
+  assert.equal(server.stats.subsystem, subsystems + 2);
+
+  await split.getByText('배치 설정', { exact: true }).click();
+  await area.selectOption('files');
+  await tool.selectOption('terminal');
+  await split.getByText('배치 설정', { exact: true }).click();
+  await shell.getByText('SFTP_FOLLOW_SHELL_READY', { exact: true }).waitFor();
+  page.once('dialog', confirmation => confirmation.accept());
+  await page.getByRole('button', { name: /SSH \d+ .*터미널 닫기/ }).click();
+  await shell.waitFor({ state: 'detached' });
 }
 
 async function verifyRemoteDirectoryFollow(page, remote) {
