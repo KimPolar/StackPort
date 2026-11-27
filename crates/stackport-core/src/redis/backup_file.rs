@@ -18,7 +18,7 @@ use tokio::{
 };
 
 mod recovery;
-mod download;
+pub(super) mod download;
 pub use download::{RedisRdbDownloadInput, RedisRdbDownloadReport};
 
 const TIME_LIMIT: Duration = Duration::from_secs(15 * 60);
@@ -196,7 +196,7 @@ impl Store {
     }
 }
 
-async fn checker_at(directory: &Path, format: RedisBackupFileFormat) -> Result<(PathBuf, String)> {
+pub(super) async fn checker_at(directory: &Path, format: RedisBackupFileFormat) -> Result<(PathBuf, String)> {
     if !directory.is_absolute() {
         return Err("Redis 검사 도구 폴더의 절대 경로를 지정하세요.".into());
     }
@@ -225,7 +225,7 @@ impl RedisBackupFileFormat {
         }
     }
 
-    fn tool_executable(self) -> String {
+    pub(super) fn tool_executable(self) -> String {
         format!("{}{}", self.tool_name(), std::env::consts::EXE_SUFFIX)
     }
 }

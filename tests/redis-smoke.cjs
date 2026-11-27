@@ -1213,6 +1213,132 @@ async function verifyRdbDownloads(browser, port, secure) {
   }
 }
 
+async function verifyBackupPlans(browser, port, secure) {
+  const page = browser.contexts()[0].pages()[0];
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'Redis 예약 검증' });
+  const settings = { name: 'TLS 예약', host: 'localhost', port: secure.port, database: 3, username: 'fixture_rdb_export',
+    environment: 'PROD', tls: true, ca_path: secure.ca };
+  const create = input => command('create_redis_profile', { projectId: project.id, input });
+  const profile = await create(settings);
+  const credential = { profileId: profile.id, revision: profile.revision };
+  const state = () => command('redis_backup_plan', { profileId: profile.id });
+  const tools = path.dirname(binary);
+  const directory = path.join(root, '예약 결과');
+  fs.mkdirSync(directory);
+  const target = { profileId: profile.id, profileRevision: profile.revision, confirmation: 'PROD' };
+  const input = { directory, prefix: 'fixture', retention_days: 7, interval_minutes: null, next_at: null };
+  const save = { ...target, tools, useSavedPassword: true, includeAllDatabases: true, input };
+  const artifact = run => {
+    assert.equal(run.status, 'succeeded', run.message);
+    assert.equal(run.engine, 'Redis');
+    const file = fileReport(run.path, 'rdb');
+    assert.equal(run.size_bytes, file.bytes);
+    assert.equal(run.artifact.sha256, file.sha256);
+    assert.ok(run.expires_at > run.finished_at);
+    return file;
+  };
+  try {
+    cli(port, [
+      ['ACL', 'SETUSER', 'fixture_rdb_export', 'on', '>' + secret, '+info', '+select', '+replconf', '+psync'],
+      ['SELECT', '31'], ['SET', 'schedule:db31', 'backup'],
+      ['CONFIG', 'SET', 'repl-diskless-sync', 'yes'],
+    ]);
+    const session = await command('open_redis', { ...credential, password: secret, rememberPassword: true, confirmation: 'PROD' });
+    assert.equal(session.credential_warning, null);
+    await command('close_redis', { id: session.id });
+    await assert.rejects(command('save_redis_backup_plan', { ...save, confirmation: '' }), /PROD/);
+    await assert.rejects(command('save_redis_backup_plan', { ...save, includeAllDatabases: false }), /모든 논리 DB/);
+    await assert.rejects(command('save_redis_backup_plan', { ...save, useSavedPassword: false }), /ACL 사용자 이름/);
+    assert.equal((await state()).plan, null);
+
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', { name: 'Redis TLS 예약 열기', exact: true }).click();
+    await page.getByRole('region', { name: 'Redis 작업 공간', exact: true }).getByRole('button', { name: '백업 계획', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Redis 백업 계획', exact: true });
+    await dialog.getByLabel('Redis 검사 도구 폴더').fill(tools);
+    await dialog.getByLabel('저장 폴더').fill(directory);
+    await dialog.getByLabel('파일 이름 규칙').fill('{prefix}-{engine}-{trigger}');
+    await dialog.getByRole('button', { name: '이름 미리보기' }).click();
+    await dialog.getByText(/redis-backup-redis-scheduled.*\.rdb/).waitFor();
+    await dialog.getByLabel('운영 백업 확인').fill('PROD');
+    const saveButton = dialog.getByRole('button', { name: '계획 저장', exact: true });
+    assert.equal(await saveButton.isDisabled(), true);
+    await dialog.getByLabel('서버의 모든 논리 DB를 백업합니다.').check();
+    await dialog.getByRole('button', { name: '용량 확인' }).click();
+    await dialog.getByText(/Redis 사용 메모리.*사용 가능/).waitFor();
+    await dialog.getByRole('button', { name: '계획 검증' }).click();
+    const report = dialog.getByRole('region', { name: '백업 계획 검증 결과' });
+    await report.getByText(/복제 설정을 확인했습니다/).waitFor();
+    await report.getByText(/redis-check-rdb.*확인했습니다/).waitFor();
+    assert.equal(secure.replicationCount(), 0);
+    const first = await page.evaluate(() => {
+      const time = new Date(Date.now() + 8000);
+      return new Date(time.getTime() - time.getTimezoneOffset() * 60_000).toISOString().slice(0, 19);
+    });
+    await dialog.getByLabel('첫 실행 (이 장치 시각)', { exact: true }).fill(first);
+    await saveButton.click();
+    await dialog.getByText('백업 계획을 저장했습니다.', { exact: true }).waitFor();
+    await dialog.getByRole('region', { name: '백업 실행 이력' }).getByText(/^무결성 검사 통과 · 예약 실행/).waitFor({ timeout: 30000 });
+    const [scheduled] = (await state()).runs;
+    assert.equal(scheduled.trigger_kind, 'scheduled');
+    assert.equal(scheduled.scheduled_at, Date.parse(first) / 1000);
+    assert.equal((await state()).plan.redis_use_saved_password, true);
+    const file = artifact(scheduled);
+    await page.locator('#workspace-status').getByText('Redis 예약 백업 완료', { exact: true }).waitFor();
+    const restore = await command('verify_redis_rdb_restore', {
+      request: await command('prepare_query'), source: scheduled.path, directory: tools, sha256: file.sha256,
+    });
+    assert.deepEqual(restore.recovery.databases.map(db => db.database), [0, 3, 31]);
+    await command('verify_sqlite_backup_file', { profileId: profile.id, runId: scheduled.id });
+
+    await dialog.getByRole('button', { name: '예약 중지', exact: true }).click();
+    await dialog.getByText('예약 실행을 중지했습니다.', { exact: true }).waitFor();
+    const paused = (await state()).plan;
+    assert.equal(paused.next_at, null);
+    assert.equal(paused.retry_at, null);
+    const run = () => command('run_redis_backup_plan', { ...target, revision: paused.revision });
+    secure.holdNextReplication();
+    const requests = secure.replicationCount();
+    const pending = run();
+    for (let i = 0; i < 200 && secure.replicationCount() === requests; i++) await delay(25);
+    assert.equal(secure.replicationCount(), requests + 1);
+    const [active] = (await state()).runs;
+    assert.equal(active.can_cancel, true);
+    assert.equal(await command('cancel_backup_plan_run', { profileId: profile.id, runId: active.id }), true);
+    assert.equal((await pending).status, 'cancelled');
+    assert.deepEqual(fs.readdirSync(directory), [file.name]);
+    artifact(await run());
+
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    await page.getByRole('button', { name: '작업 기록', exact: true }).click();
+    const cancelled = page.locator('.audit-list li').filter({ hasText: 'Redis 계획 백업 취소' });
+    await cancelled.getByText('중단', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '백업 실행', exact: true }).click();
+    const history = page.getByRole('region', { name: '백업 실행 기록', exact: true });
+    const row = history.getByRole('listitem').filter({ hasText: 'Redis 예약 검증 · Redis · 예약 실행' });
+    await row.getByRole('button', { name: '백업 계획 열기' }).click();
+    await dialog.getByLabel('백업 연결 인증').waitFor();
+    assert.equal(await dialog.getByLabel('백업 연결 인증').inputValue(), 'saved');
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    await command('forget_redis_password', credential);
+    const missing = await run();
+    assert.equal(missing.status, 'failed');
+    assert.match(missing.message, /저장.*암호|자격 증명/u);
+    await command('update_redis_profile', { id: profile.id, revision: profile.revision, input: { ...settings, database: 0 } });
+    assert.equal((await state()).plan.requires_review, true);
+  } finally {
+    await command('forget_redis_password', credential).catch(() => {});
+  }
+
+  const local = await create({ ...settings, name: '인증 없는 예약', host: '127.0.0.1', port, username: '', environment: 'DEV', tls: false, ca_path: null });
+  const localTarget = { profileId: local.id, profileRevision: local.revision, confirmation: '' };
+  const localPlan = await command('save_redis_backup_plan', { ...save, ...localTarget, useSavedPassword: false, input });
+  assert.equal(localPlan.plan.redis_use_saved_password, false);
+  artifact(await command('run_redis_backup_plan', { ...localTarget, revision: localPlan.plan.revision }));
+}
+
 async function main() {
   const port = await availablePort();
   const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no', '--databases', '40',
@@ -1266,6 +1392,11 @@ async function main() {
     ]);
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+    if (process.env.STACKPORT_REDIS_PLAN_ONLY === '1') {
+      await verifyBackupPlans(browser, port, secure);
+      console.log('Redis backup planning and scheduling passed (TLS and ACL, no-auth, validation, cancellation, verification, restore, history, and profile revision).');
+      return;
+    }
     if (process.env.STACKPORT_REDIS_RDB_DOWNLOAD_ONLY === '1') {
       await verifyRdbDownloads(browser, port, secure);
       console.log('Redis RDB download passed (length and diskless frames, TLS and saved ACL password, all DBs restored, cancellation and no overwrite).');

@@ -78,8 +78,10 @@ pub(crate) async fn preview_backup_calendar(input: BackupCalendar) -> Result<Vec
 }
 
 #[tauri::command]
-pub(crate) fn preview_backup_file_name(prefix: String, template: String, postgres: bool, mysql: Option<bool>, scheduled: bool) -> Result<String, String> {
-    if mysql.unwrap_or(false) {
+pub(crate) fn preview_backup_file_name(prefix: String, template: String, postgres: bool, mysql: Option<bool>, redis: Option<bool>, scheduled: bool) -> Result<String, String> {
+    if redis.unwrap_or(false) {
+        stackport_core::backup_schedule::preview_redis_backup_file_name(&prefix, &template, scheduled)
+    } else if mysql.unwrap_or(false) {
         stackport_core::backup_schedule::preview_mysql_backup_file_name(&prefix, &template, scheduled)
     } else {
         stackport_core::backup_schedule::preview_backup_file_name(&prefix, &template, postgres, scheduled)
@@ -161,6 +163,42 @@ pub(crate) async fn run_mysql_backup_plan(store: State<'_, Store>, profile_id: S
 pub(crate) async fn pause_mysql_backup_plan(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<BackupPlanState, String> {
     let store = store.inner().clone();
     super::worker(move || store.pause_mysql_backup_plan(&profile_id, revision)).await
+}
+
+#[tauri::command]
+pub(crate) async fn redis_backup_plan(store: State<'_, Store>, profile_id: String) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.redis_backup_plan(&profile_id)).await
+}
+
+#[tauri::command]
+pub(crate) async fn redis_backup_capacity(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, use_saved_password: bool, directory: String) -> Result<BackupCapacity, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.redis_backup_capacity(&profile_id, profile_revision, &confirmation, use_saved_password, &directory)).await
+}
+
+#[tauri::command]
+pub(crate) async fn validate_redis_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, tools: String, use_saved_password: bool, include_all_databases: bool, input: BackupPlanWrite) -> Result<BackupPlanValidation, String> {
+    let store = store.inner().clone();
+    super::worker(move || Ok(store.validate_redis_backup_plan(&profile_id, profile_revision, &confirmation, &tools, use_saved_password, include_all_databases, &input))).await
+}
+
+#[tauri::command]
+pub(crate) async fn save_redis_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, confirmation: String, tools: String, use_saved_password: bool, include_all_databases: bool, input: BackupPlanWrite) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.save_redis_backup_plan(&profile_id, profile_revision, &confirmation, &tools, use_saved_password, include_all_databases, input)).await
+}
+
+#[tauri::command]
+pub(crate) async fn run_redis_backup_plan(store: State<'_, Store>, profile_id: String, profile_revision: i64, revision: i64, confirmation: String) -> Result<BackupRun, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.run_redis_backup_plan(&profile_id, profile_revision, revision, &confirmation)).await
+}
+
+#[tauri::command]
+pub(crate) async fn pause_redis_backup_plan(store: State<'_, Store>, profile_id: String, revision: i64) -> Result<BackupPlanState, String> {
+    let store = store.inner().clone();
+    super::worker(move || store.pause_redis_backup_plan(&profile_id, revision)).await
 }
 
 #[tauri::command]

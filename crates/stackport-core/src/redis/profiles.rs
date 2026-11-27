@@ -143,6 +143,14 @@ pub(crate) fn list(db: &Connection, project_id: &str) -> Result<Vec<RedisProfile
 }
 
 pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<RedisProfile> {
+    let profile = find(db, id)?;
+    if profile.revision != revision {
+        return Err("Redis 연결이 변경되었습니다. 다시 선택하세요.".into());
+    }
+    Ok(profile)
+}
+
+pub(crate) fn find(db: &Connection, id: &str) -> Result<RedisProfile> {
     let profile = db
         .query_row(
             &format!("SELECT {COLUMNS} FROM redis_profiles WHERE id=?1"),
@@ -152,9 +160,6 @@ pub(crate) fn current(db: &Connection, id: &str, revision: i64) -> Result<RedisP
         .optional()
         .map_err(db_error)?
         .ok_or("저장된 Redis 연결을 찾을 수 없습니다.")?;
-    if profile.revision != revision {
-        return Err("Redis 연결이 변경되었습니다. 다시 선택하세요.".into());
-    }
     validate(profile)
 }
 

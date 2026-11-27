@@ -34,10 +34,10 @@ pub struct RedisRdbDownloadInput {
 #[derive(Serialize)]
 pub struct RedisRdbDownloadReport {
     destination: String,
-    engine: &'static str,
-    engine_version: String,
+    pub(crate) engine: &'static str,
+    pub(crate) engine_version: String,
     checker_version: String,
-    bytes: u64,
+    pub(crate) bytes: u64,
     sha256: String,
     rdb: RdbDetails,
     audit_warning: bool,
@@ -71,7 +71,7 @@ impl Store {
                 if check() { Err(CANCELLED.into()) }
                 else if Instant::now() >= deadline { Err(TIMED_OUT.into()) }
                 else { Ok(()) }
-            }).await
+            }).await.map(|(report, _)| report)
         };
         let transferred = tokio::select! {
             biased;
@@ -116,21 +116,16 @@ impl Store {
     }
 }
 
-async fn download_snapshot(
+pub(crate) async fn download_snapshot(
     profile: &RedisProfile,
     password: &RedisPassword,
     staged: &NewFile,
     destination: String,
     tools: &Path,
     check: impl Fn() -> Result<()> + Send + 'static,
-) -> Result<RedisRdbDownloadReport> {
+) -> Result<(RedisRdbDownloadReport, backup_artifact::Evidence)> {
     let (executable, checker_version) = checker_at(tools, RedisBackupFileFormat::Rdb).await?;
-    let mut settings = profile.settings.clone();
-    settings.database = 0;
-    let (engine, engine_version, mut wire) = timeout(CONNECT_TIMEOUT, async {
-        establish(&settings, connector(&settings)?, password).await
-    }).await.map_err(|_| "Redis 백업 연결 시간이 초과되었습니다.")??;
-    verify_status(&mut wire, &[b"REPLCONF", b"capa", b"eof"], b"OK").await?;
+    let (engine, engine_version, mut wire) = replication_connection(profile, password).await?;
     wire.send(&[b"PSYNC", b"?", b"-1"]).await.map_err(|error| error.message())?;
     let mut reader = wire.into_reader();
     let mut output = tokio::fs::File::from_std(staged.writer()?);
@@ -151,10 +146,23 @@ async fn download_snapshot(
         Ok::<_, String>((version, evidence))
     }).await.map_err(|_| "Redis RDB의 SHA-256을 확인할 수 없습니다.")??;
     let rdb = rdb_result(version, bytes, &output.text)?;
-    Ok(RedisRdbDownloadReport {
+    Ok((RedisRdbDownloadReport {
         destination, engine, engine_version, checker_version, bytes,
-        sha256: evidence.sha256, rdb, audit_warning: false,
-    })
+        sha256: evidence.sha256.clone(), rdb, audit_warning: false,
+    }, evidence))
+}
+
+pub(in crate::redis) async fn replication_connection(
+    profile: &RedisProfile,
+    password: &RedisPassword,
+) -> Result<(&'static str, String, resp::Wire)> {
+    let mut settings = profile.settings.clone();
+    settings.database = 0;
+    timeout(CONNECT_TIMEOUT, async {
+        let (engine, version, mut wire) = establish(&settings, connector(&settings)?, password).await?;
+        verify_status(&mut wire, &[b"REPLCONF", b"capa", b"eof"], b"OK").await?;
+        Ok((engine, version, wire))
+    }).await.map_err(|_| "Redis 백업 연결 시간이 초과되었습니다.")?
 }
 
 async fn receive_snapshot(

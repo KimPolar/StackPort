@@ -175,17 +175,19 @@ impl Store {
         let file = open_verified(&artifact, true)?;
         let db = self.connect()?;
         let (project, environment, operation) = db.query_row(
-            "SELECT coalesce(s.project_id,p.project_id,m.project_id), coalesce(s.environment,p.environment,json_extract(m.settings_json,'$.environment')),
-                CASE WHEN m.id IS NOT NULL THEN 'mysql.backup.delete' WHEN p.id IS NOT NULL THEN 'postgres.backup.delete' ELSE 'sqlite.backup.delete' END
+            "SELECT coalesce(s.project_id,p.project_id,m.project_id,r.project_id), coalesce(s.environment,p.environment,json_extract(m.settings_json,'$.environment'),r.environment),
+                CASE WHEN r.id IS NOT NULL THEN 'redis.backup.delete' WHEN m.id IS NOT NULL THEN 'mysql.backup.delete' WHEN p.id IS NOT NULL THEN 'postgres.backup.delete' ELSE 'sqlite.backup.delete' END
              FROM backup_plans b LEFT JOIN profiles s ON s.id=b.sqlite_profile_id
              LEFT JOIN postgres_profiles p ON p.id=b.postgres_profile_id
-             LEFT JOIN mysql_profiles m ON m.id=b.mysql_profile_id WHERE b.profile_id=?1",
+             LEFT JOIN mysql_profiles m ON m.id=b.mysql_profile_id
+             LEFT JOIN redis_profiles r ON r.id=b.redis_profile_id WHERE b.profile_id=?1",
             [&ticket.profile_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
         ).map_err(db_error)?;
         let correlation = Uuid::new_v4().to_string();
         let audit = |outcome, affected_count| AuditRecord {
             correlation_id: &correlation,
             operation: match operation.as_str() {
+                "redis.backup.delete" => "redis.backup.delete",
                 "mysql.backup.delete" => "mysql.backup.delete",
                 "postgres.backup.delete" => "postgres.backup.delete",
                 _ => "sqlite.backup.delete",

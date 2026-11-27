@@ -47,6 +47,10 @@ pub fn preview_mysql_backup_file_name(prefix: &str, template: &str, scheduled: b
     preview_file_name(prefix, template, PlanEngine::Mysql, scheduled)
 }
 
+pub fn preview_redis_backup_file_name(prefix: &str, template: &str, scheduled: bool) -> Result<String> {
+    preview_file_name(prefix, template, PlanEngine::Redis, scheduled)
+}
+
 fn preview_file_name(prefix: &str, template: &str, engine: PlanEngine, scheduled: bool) -> Result<String> {
     validate_template(template.trim(), prefix.trim())?;
     let trigger = if scheduled { "scheduled" } else { "manual" };
@@ -73,6 +77,7 @@ pub(super) fn backup_file_name(
         PlanEngine::Postgres => ("postgres", "backup"),
         PlanEngine::Sqlite => ("sqlite", "sqlite"),
         PlanEngine::Mysql => ("mysql", "sql"),
+        PlanEngine::Redis => ("redis", "rdb"),
     };
     let stem = render_stem(template, prefix, time, engine, trigger)?;
     Ok(format!("{stem}-{id}.{extension}"))

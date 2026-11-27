@@ -1721,7 +1721,7 @@ function App() {
       {restoreReport.audit_warning && <strong className="audit-warning">{restoreReport.audit_warning}</strong>}
     </div>}
     {redisProfile && <div hidden={historyOpen}>
-      <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile}
+      <RedisWorkspace key={`${redisProfile.id}:${redisProfile.revision}`} profile={redisProfile} displayPath={displayPath}
         onBusy={busy => { localFileBusy.current = busy; }} />
     </div>}
     {mysqlProfile && networkSqlEditor && <div hidden={historyOpen}>
@@ -2423,6 +2423,8 @@ const auditOperationNames: Record<string, string> = {
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "redis.persistence.rdb": "Redis RDB 스냅샷",
   "redis.backup.download": "Redis RDB 다운로드",
+  "redis.backup.schedule": "Redis 계획 백업", "redis.backup.schedule.cancel": "Redis 계획 백업 취소",
+  "redis.backup.schedule.timeout": "Redis 계획 백업 시간 초과", "redis.backup.delete": "Redis 만료 백업 삭제",
   "redis.persistence.rdb.unconfirmed": "Redis RDB 스냅샷 결과 미확인",
   "redis.persistence.aof": "Redis AOF 재작성",
   "redis.persistence.aof.unconfirmed": "Redis AOF 재작성 결과 미확인",
@@ -2512,9 +2514,10 @@ function AuditPanel({ onBack, backup }: { onBack: () => void; backup: BackupHist
         const cancelled = event.operation === "sql_server.sql.execute.cancel" || event.operation === "oracle.sql.execute.cancel" ||
           event.operation === "snowflake.sql.execute.cancel" || event.operation === "mysql.sql.script.cancel" ||
           event.operation === "postgres.sql.script.cancel" || event.operation === "postgres.backup.schedule.cancel" ||
-          event.operation === "sqlite.backup.cancel" ||
+          event.operation === "sqlite.backup.cancel" || event.operation === "redis.backup.schedule.cancel" ||
           (event.operation.startsWith("sftp.") && event.operation.endsWith(".cancel"));
-        const timedOut = event.operation === "postgres.backup.schedule.timeout" || event.operation === "sqlite.backup.timeout";
+        const timedOut = event.operation === "postgres.backup.schedule.timeout" || event.operation === "sqlite.backup.timeout" ||
+          event.operation === "redis.backup.schedule.timeout";
         const outcome = cancelled ? "cancelled" : timedOut ? "timed_out" : event.outcome;
         return <li key={event.id}>
           <div className="audit-row"><div><strong>{auditOperationNames[event.operation] ?? event.operation}</strong> <span className={`audit-outcome ${timedOut ? "failed" : outcome}`}>{auditOutcomeNames[outcome] ?? outcome}</span><p>{new Date(event.occurred_at).toLocaleString("ko-KR")} · 로컬 사용자{event.environment ? ` · ${event.environment}` : ""}{event.affected_count !== null ? ` · ${event.affected_count}개 항목` : ""}</p></div><details><summary>상세</summary><dl><dt>이벤트 ID</dt><dd>{event.id}</dd><dt>작업 ID</dt><dd>{event.correlation_id}</dd>{event.project_id && <><dt>프로젝트 ID</dt><dd>{event.project_id}</dd></>}{event.profile_id && <><dt>연결 ID</dt><dd>{event.profile_id}</dd></>}{event.object_name && <><dt>객체</dt><dd>{event.object_name}</dd></>}<dt>정책</dt><dd>{event.policy}</dd></dl></details></div>

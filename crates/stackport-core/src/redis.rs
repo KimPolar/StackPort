@@ -9,6 +9,7 @@ mod persistence;
 pub(crate) mod profiles;
 mod pubsub;
 mod resp;
+mod schedule;
 
 pub use backup_file::{RedisBackupFileFormat, RedisBackupFileReport, RedisRdbDownloadInput, RedisRdbDownloadReport};
 pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
@@ -19,6 +20,7 @@ pub use persistence::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersisten
 pub(crate) use profiles::{copy_profiles, SCHEMA};
 pub use profiles::{RedisProfile, RedisSettings};
 pub use pubsub::{RedisPublishReport, RedisSubscriptionSnapshot};
+pub(crate) use schedule::{scheduled_backup_source, scheduled_backup_tools, tools_directory, validate_scheduled_authentication};
 
 use crate::{insert_audit, tls, AuditRecord, Result, Store};
 use resp::{Failure, Socket, Wire, Work};

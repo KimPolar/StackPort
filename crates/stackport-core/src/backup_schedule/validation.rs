@@ -192,6 +192,33 @@ impl Store {
         })
     }
 
+    pub fn validate_redis_backup_plan(
+        &self,
+        profile_id: &str,
+        revision: i64,
+        confirmation: &str,
+        tools: &str,
+        use_saved_password: bool,
+        include_all_databases: bool,
+        input: &BackupPlanWrite,
+    ) -> BackupPlanValidation {
+        self.validate_backup_plan(profile_id, PlanEngine::Redis, input, |report| {
+            let source = self.redis_profile(profile_id, revision).and_then(|profile| {
+                super::confirm_redis(&profile, confirmation)?;
+                super::confirm_redis_scope(include_all_databases)?;
+                super::redis::scheduled_backup_source(self, &profile, use_saved_password)
+            });
+            let (_, size) = report.check("source", source, |(version, _)| {
+                format!("{version} 연결과 복제 설정을 확인했습니다. 원본 크기는 Redis 메모리 사용량입니다.")
+            })?;
+            report.push("permissions", "warning", "PSYNC 권한은 실제 RDB 백업이 시작될 때 확인합니다.");
+            report.check("tools", super::redis::scheduled_backup_tools(tools), |version| {
+                format!("redis-check-rdb {version}을 확인했습니다.")
+            });
+            Some(size)
+        })
+    }
+
     fn validate_backup_plan(
         &self,
         profile_id: &str,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import { invoke } from "@tauri-apps/api/core";
 import { Activity, Database, Pencil, Plug, Radio, RefreshCw, ShieldCheck, SquareTerminal, Timer, Trash2 } from "lucide-react";
 import { Dialog } from "./Dialog";
+import { BackupPlanDialog } from "./BackupPlanDialog";
 import type { RedisProfile } from "./RedisProfileDialog";
 import { networkAddressText } from "./quickConnect";
 import { RedisEditDialog, type RedisBytes, type RedisEditTarget, type RedisEditReport } from "./RedisEditDialog";
@@ -35,13 +36,15 @@ function hasJsonFilter(support: JsonSupport | undefined) {
   return support === "read_write" || support === "read_only";
 }
 
-export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onBusy: (busy: boolean) => void }) {
+export function RedisWorkspace({ profile, onBusy, displayPath }: {
+  profile: RedisProfile; onBusy: (busy: boolean) => void; displayPath: (value: string) => string;
+}) {
   const settings = profile.settings;
   const [session, setSession] = useState<Session | null>(null);
   const [connectOpen, setConnectOpen] = useState(false);
   const [monitorOpen, setMonitorOpen] = useState(false);
   const [persistenceOpen, setPersistenceOpen] = useState(false);
-  const [backupDialog, setBackupDialog] = useState<"inspect" | "download" | null>(null);
+  const [backupDialog, setBackupDialog] = useState<"inspect" | "download" | "plan" | null>(null);
   const [pubsubOpen, setPubsubOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [consoleHistory, setConsoleHistory] = useState<RedisConsoleEntry[]>([]);
@@ -166,6 +169,7 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
         {session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setConsoleOpen(true)}>
           <SquareTerminal size={15} aria-hidden /> 명령 콘솔</button>}
         <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setBackupDialog("download")}>RDB 다운로드</button>
+        <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setBackupDialog("plan")}>백업 계획</button>
         {!session && <button type="button" className="secondary" aria-haspopup="dialog" onClick={() => setBackupDialog("inspect")}>
           백업 파일 검사</button>}
         {session ? <button type="button" className="secondary" onClick={() => void disconnect()}>Redis 연결 끊기</button> :
@@ -284,6 +288,9 @@ export function RedisWorkspace({ profile, onBusy }: { profile: RedisProfile; onB
       onInspect={() => { setPersistenceOpen(false); setBackupDialog("inspect"); }} />}
     {backupDialog === "inspect" && <RedisBackupFileDialog onBusy={onBusy} onClose={() => setBackupDialog(null)} />}
     {backupDialog === "download" && <RedisRdbDownloadDialog profile={profile} onBusy={onBusy} onClose={() => setBackupDialog(null)} />}
+    {backupDialog === "plan" && <BackupPlanDialog redis={profile}
+      profile={{ id: profile.id, name: settings.name, environment: settings.environment, path: networkAddressText(settings) }}
+      displayPath={displayPath} onFileBusy={onBusy} onClose={() => setBackupDialog(null)} />}
     {pubsubOpen && session && <RedisPubSubDialog id={session.id} profile={profile} allowPublish={session.allow_publish} environment={settings.environment}
       target={`${settings.name} · ${networkAddressText(settings)}`} onBusy={onBusy} onFailure={handleFailure} onClose={() => setPubsubOpen(false)} />}
     {consoleOpen && session && <RedisConsoleDialog id={session.id} history={consoleHistory}

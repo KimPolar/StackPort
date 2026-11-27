@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Dialog } from "./Dialog";
 import type { MysqlProfile } from "./MysqlProfileDialog";
 import type { PostgresProfile } from "./PostgresWorkspace";
+import type { RedisProfile } from "./RedisProfileDialog";
 
 type Profile = { id: string; name: string; path: string; environment: string };
 type TunnelChoice = { id: string; name: string };
@@ -15,6 +16,8 @@ type Plan = {
   next_at: number | null; next_excluded_at: number | null; retry_at: number | null; requires_review: boolean;
   tunnel: BackupTunnel | null;
   mysql_tools_directory: string | null;
+  redis_tools_directory: string | null;
+  redis_use_saved_password: boolean | null;
   calendar: Calendar | null;
 };
 export type BackupRun = {
@@ -44,12 +47,13 @@ type Draft = {
   retryCount: string; retryMinutes: string; timeoutSeconds: string;
   expression: string; timeZone: string; excluded: string;
   tunnel: TunnelChoice | BackupTunnel | null;
+  redisUseSaved: boolean; redisApproved: boolean;
 };
 export const backupRunStatus = { running: "실행 중", succeeded: "무결성 검사 통과", failed: "실패", interrupted: "완료 확인 필요", cancelled: "취소됨", timed_out: "시간 초과", skipped: "건너뜀" };
 export const backupRunTrigger = { scheduled: "예약 실행", retry: "자동 재시도", manual: "수동 실행" };
 const date = new Intl.DateTimeFormat("ko-KR", { dateStyle: "medium", timeStyle: "medium" });
 const bytes = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 2 });
-const validationSteps = { settings: "계획 설정", folder: "저장 폴더", source: "원본 연결", tools: "백업 도구", space: "저장 공간" };
+const validationSteps = { settings: "계획 설정", folder: "저장 폴더", source: "원본 연결", permissions: "복제 권한", tools: "백업 도구", space: "저장 공간" };
 const validationStatus = { passed: "통과", warning: "확인 필요", failed: "실패" };
 export const formatBackupTime = (seconds: number) => date.format(seconds * 1000);
 export const formatBackupSize = (amount: number) => bytes.format(amount / 1_048_576) + " MiB";
@@ -60,10 +64,11 @@ function dateInput(seconds: number) {
 }
 
 function form(plan: Plan | null, displayPath: (value: string) => string, engine: string, initialTunnel: TunnelChoice | null): Draft {
+  const tools = plan?.mysql_tools_directory ?? plan?.redis_tools_directory;
   return {
     revision: plan?.revision ?? null,
     directory: plan ? displayPath(plan.directory) : "",
-    tools: plan?.mysql_tools_directory ? displayPath(plan.mysql_tools_directory) : "",
+    tools: tools ? displayPath(tools) : "",
     prefix: plan?.prefix ?? `${engine}-backup`,
     fileNameTemplate: plan?.file_name_template ?? "{prefix}-{utc}",
     scheduled: plan ? plan.next_at !== null || plan.next_excluded_at !== null : true,
@@ -79,6 +84,8 @@ function form(plan: Plan | null, displayPath: (value: string) => string, engine:
     retryMinutes: String(plan?.retry_delay_minutes ?? 1),
     timeoutSeconds: String(plan?.timeout_seconds ?? (engine === "sqlite" ? 0 : 1800)),
     tunnel: plan ? plan.tunnel : initialTunnel,
+    redisUseSaved: plan?.redis_use_saved_password ?? true,
+    redisApproved: Boolean(plan && !plan.requires_review && engine === "redis"),
   };
 }
 
@@ -113,8 +120,8 @@ function matchesTunnel(selected: TunnelChoice | BackupTunnel, running: BackupTun
     selected.profiles.every((item, index) => item.id === running.profiles[index].id && item.revision === running.profiles[index].revision);
 }
 
-export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClose, onFileBusy, preferredTunnel = null, onOpenTunnels }: {
-  profile: Profile; postgres?: PostgresProfile; mysql?: MysqlProfile; displayPath: (value: string) => string; onClose: () => void;
+export function BackupPlanDialog({ profile, postgres, mysql, redis, displayPath, onClose, onFileBusy, preferredTunnel = null, onOpenTunnels }: {
+  profile: Profile; postgres?: PostgresProfile; mysql?: MysqlProfile; redis?: RedisProfile; displayPath: (value: string) => string; onClose: () => void;
   onFileBusy?: (busy: boolean) => void;
   preferredTunnel?: TunnelChoice | null; onOpenTunnels?: () => void;
 }) {
@@ -136,18 +143,26 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
   const [tunnels, setTunnels] = useState<BackupTunnel[]>([]);
   const [confirmation, setConfirmation] = useState("");
   const profileId = profile.id;
-  const engine = mysql ? "mysql" : postgres ? "postgres" : "sqlite";
-  const engineLabel = mysql ? "MySQL · MariaDB" : postgres ? "PostgreSQL" : "SQLite";
+  const engine = redis ? "redis" : mysql ? "mysql" : postgres ? "postgres" : "sqlite";
+  const engineLabel = redis ? "Redis" : mysql ? "MySQL · MariaDB" : postgres ? "PostgreSQL" : "SQLite";
   const remote = engine !== "sqlite";
   const production = remote && profile.environment === "PROD";
-  const needsCredential = remote && !credential?.usable;
+  const usesCredential = remote && (!redis || draft?.redisUseSaved !== false);
+  const needsCredential = usesCredential && !credential?.usable;
   const needsDatabase = Boolean(mysql && !mysql.settings.database);
   const approvalMissing = production && confirmation !== "PROD";
-  const mysqlTarget = mysql ? { profileId, profileRevision: mysql.revision, confirmation } : null;
+  const scopeMissing = Boolean(redis && !draft?.redisApproved);
+  const directProfile = redis ?? mysql;
+  const directTarget = directProfile ? { profileId, profileRevision: directProfile.revision, confirmation } : null;
   const selectedTunnel = draft?.tunnel;
   const runningTunnel = tunnels.find(tunnel => tunnel.id === selectedTunnel?.id);
   const reviewedTunnel = selectedTunnel && runningTunnel && matchesTunnel(selectedTunnel, runningTunnel) ? runningTunnel : null;
   const routeUnavailable = Boolean(selectedTunnel && !reviewedTunnel);
+  const planTarget = directTarget ? { ...directTarget, tools: draft?.tools,
+    ...(redis && { useSavedPassword: draft?.redisUseSaved, includeAllDatabases: draft?.redisApproved }),
+  } : postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
+  const capacityTarget = directTarget ? { ...directTarget, ...(redis && { useSavedPassword: draft?.redisUseSaved }) } :
+    postgres ? { profile: postgres, tunnel: reviewedTunnel } : { profileId };
 
   useEffect(() => {
     let live = true;
@@ -158,7 +173,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
       try {
         const [state, status, routes] = await Promise.all([
           invoke<Snapshot>(`${engine}_backup_plan`, { profileId }),
-          mysql ? invoke<CredentialStatus>("mysql_credential_status", { profileId, revision: mysql.revision }) :
+          directProfile ? invoke<CredentialStatus>(`${engine}_credential_status`, { profileId, revision: directProfile.revision }) :
             postgres ? invoke<CredentialStatus>("postgres_credential_status", { profile: postgres }) : null,
           postgres ? invoke<BackupTunnel[]>("postgres_backup_tunnel_options", { profile: postgres }) : [],
         ]);
@@ -180,7 +195,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
     void poll();
     const timer = window.setInterval(() => void poll(), 2500);
     return () => { live = false; window.clearInterval(timer); };
-  }, [profileId, displayPath, engine, postgres, mysql, preferredTunnel]);
+  }, [profileId, displayPath, engine, postgres, directProfile, preferredTunnel]);
 
   function change<K extends keyof Draft>(key: K, value: Draft[K]) {
     setDraft(current => current && { ...current, [key]: value });
@@ -189,7 +204,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
     setNotice("");
     setValidation(null);
     if (key === "prefix" || key === "fileNameTemplate" || key === "scheduled") setFileNameExample("");
-    if (key === "directory" || key === "tunnel") setCapacity(null);
+    if (key === "directory" || key === "tunnel" || key === "redisUseSaved") setCapacity(null);
     if (key === "mode" || key === "expression" || key === "timeZone" || key === "excluded") setPreview([]);
   }
 
@@ -225,15 +240,13 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
 
   function save(event: FormEvent) {
     event.preventDefault();
-    if (!draft || needsCredential || needsDatabase || approvalMissing || routeUnavailable) return;
+    if (!draft || needsCredential || needsDatabase || approvalMissing || scopeMissing || routeUnavailable) return;
     void perform("save", async () => {
       const input = planInput(draft);
       if (input.next_at !== null && input.next_at <= Date.now() / 1000) {
         throw new Error("첫 실행 시각을 현재보다 늦게 지정하세요.");
       }
-      const target = mysqlTarget ? { ...mysqlTarget, tools: draft.tools } :
-        postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
-      apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...target, input }));
+      apply(await invoke<Snapshot>(`save_${engine}_backup_plan`, { ...planTarget, input }));
       setConfirmation("");
       setNotice("백업 계획을 저장했습니다.");
     });
@@ -243,9 +256,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
     if (!draft || routeUnavailable) return;
     void perform("validate", async () => {
       setValidation(null);
-      const target = mysqlTarget ? { ...mysqlTarget, tools: draft.tools } :
-        postgres ? { profile: postgres, confirmation, tunnel: reviewedTunnel } : { profileId };
-      setValidation(await invoke<Validation>(`validate_${engine}_backup_plan`, { ...target, input: planInput(draft) }));
+      setValidation(await invoke<Validation>(`validate_${engine}_backup_plan`, { ...planTarget, input: planInput(draft) }));
     });
   }
 
@@ -253,7 +264,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
     const plan = snapshot?.plan;
     if (!plan || dirty || needsCredential || approvalMissing || routeUnavailable) return;
     void perform("run", async () => {
-      const target = mysqlTarget ?? (postgres ? { profile: postgres, confirmation } : { profileId });
+      const target = directTarget ?? (postgres ? { profile: postgres, confirmation } : { profileId });
       setConfirmation("");
       onFileBusy?.(true);
       try {
@@ -342,7 +353,24 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
             })}>도구 폴더 선택</button>
           </span></label>
         </>}
-        {remote && credential && !credential.usable && <p className="form-note" role="status">{credential.supported
+        {redis && <>
+          <p className="form-note">앱이 실행 중일 때 저장한 직접 연결로 Redis의 모든 논리 DB를 하나의 RDB 파일에 저장합니다.</p>
+          <label className="field">백업 연결 인증<select value={draft.redisUseSaved ? "saved" : "none"} disabled={Boolean(busy)}
+            onChange={event => change("redisUseSaved", event.target.value === "saved")}>
+            <option value="saved">Windows에 저장한 암호</option>
+            <option value="none" disabled={Boolean(redis.settings.username)}>인증 없는 서버</option>
+          </select></label>
+          <label className="field">Redis 검사 도구 폴더<span className="file-input">
+            <input required value={draft.tools} disabled={Boolean(busy)} onChange={event => change("tools", event.target.value)} />
+            <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void perform("folder", async () => {
+              const path = await invoke<string | null>("choose_redis_backup_input", { tools: true });
+              if (path) change("tools", path);
+            })}>도구 폴더 선택</button>
+          </span></label>
+          <label className="files-check"><input type="checkbox" checked={draft.redisApproved} disabled={Boolean(busy)}
+            onChange={event => change("redisApproved", event.target.checked)} /> 서버의 모든 논리 DB를 백업합니다.</label>
+        </>}
+        {usesCredential && credential && !credential.usable && <p className="form-note" role="status">{credential.supported
           ? `${engineLabel}에 연결할 때 Windows에 암호를 저장하면 이 계획을 사용할 수 있습니다.`
           : `${engineLabel} 계획 백업에는 Windows 자격 증명 관리자가 필요합니다.`}</p>}
         <label className="field">저장 폴더<span className="file-input">
@@ -352,12 +380,12 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
             if (path) change("directory", path);
           })}>폴더 선택</button>
         </span></label>
-        <button type="button" className="secondary small" disabled={Boolean(busy) || !draft.directory.trim() || needsCredential || needsDatabase || routeUnavailable || Boolean(mysql && approvalMissing)}
+        <button type="button" className="secondary small" disabled={Boolean(busy) || !draft.directory.trim() || needsCredential || needsDatabase || routeUnavailable || Boolean(directTarget && approvalMissing)}
           onClick={() => void perform("capacity", async () => setCapacity(await invoke<Capacity>(`${engine}_backup_capacity`,
-            { ...(mysqlTarget ?? (postgres ? { profile: postgres, tunnel: reviewedTunnel } : { profileId })), directory: draft.directory })))}>
+            { ...capacityTarget, directory: draft.directory })))}>
           용량 확인
         </button>
-        {capacity && <p className="form-note" role="status">{remote ? "원본 크기" : "예상 크기"} {formatBackupSize(capacity.estimated_bytes)}
+        {capacity && <p className="form-note" role="status">{redis ? "Redis 사용 메모리" : remote ? "원본 크기" : "예상 크기"} {formatBackupSize(capacity.estimated_bytes)}
           {capacity.available_bytes !== null && " · 사용 가능 " + formatBackupSize(capacity.available_bytes)}
           {capacity.available_bytes !== null && capacity.available_bytes < capacity.estimated_bytes && (remote ? " · 원본보다 여유 공간이 적습니다" : " · 공간 부족")}</p>}
         <div className="backup-plan-fields">
@@ -371,7 +399,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
             onChange={event => change("fileNameTemplate", event.target.value)} />
           <button type="button" className="secondary" disabled={Boolean(busy)} onClick={() => void perform("name", async () => {
             setFileNameExample(await invoke<string>("preview_backup_file_name", {
-              prefix: draft.prefix, template: draft.fileNameTemplate, postgres: Boolean(postgres), mysql: Boolean(mysql), scheduled: draft.scheduled,
+              prefix: draft.prefix, template: draft.fileNameTemplate, postgres: Boolean(postgres), mysql: Boolean(mysql), redis: Boolean(redis), scheduled: draft.scheduled,
             }));
           })}>이름 미리보기</button>
         </span></label>
@@ -449,7 +477,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
           </li>)}</ul>
           {validation.next_at !== null && <p>다음 실행 {draft.mode === "calendar"
             ? calendarDate(validation.next_at, draft.timeZone) : formatBackupTime(validation.next_at)}</p>}
-          {validation.estimated_bytes !== null && <p>원본 크기 {formatBackupSize(validation.estimated_bytes)}
+          {validation.estimated_bytes !== null && <p>{redis ? "Redis 사용 메모리" : "원본 크기"} {formatBackupSize(validation.estimated_bytes)}
             {validation.available_bytes !== null && ` · 사용 가능 ${formatBackupSize(validation.available_bytes)}`}</p>}
         </section>}
         <div className="dialog-actions">
@@ -468,7 +496,7 @@ export function BackupPlanDialog({ profile, postgres, mysql, displayPath, onClos
           <button type="button" className="secondary" disabled={Boolean(busy || stale || routeUnavailable)}
             onClick={event => { if (event.currentTarget.form?.reportValidity()) validate(); }}>
             {busy === "validate" ? "검증 중…" : "계획 검증"}</button>
-          <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || needsDatabase || approvalMissing || routeUnavailable)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
+          <button type="submit" className="primary" disabled={Boolean(busy || stale || needsCredential || needsDatabase || approvalMissing || scopeMissing || routeUnavailable)}>{busy === "save" ? "저장 중…" : "계획 저장"}</button>
         </div>
       </form>
       <section className="backup-run-history" aria-label="백업 실행 이력">
