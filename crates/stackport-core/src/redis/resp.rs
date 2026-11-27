@@ -49,6 +49,11 @@ impl Wire {
     }
 
     pub(super) async fn command(&mut self, args: &[&[u8]]) -> Result<Reply, Failure> {
+        self.send(args).await?;
+        self.receive().await
+    }
+
+    pub(super) async fn send(&mut self, args: &[&[u8]]) -> Result<(), Failure> {
         let mut request = Zeroizing::new(Vec::new());
         write!(*request, "*{}\r\n", args.len()).map_err(|_| Failure::Protocol)?;
         for arg in args {
@@ -60,9 +65,11 @@ impl Wire {
             .write_all(&request)
             .await
             .map_err(|_| Failure::Transport)?;
-        self.0.flush().await.map_err(|_| Failure::Transport)?;
-        drop(request);
-        self.receive().await
+        self.0.flush().await.map_err(|_| Failure::Transport)
+    }
+
+    pub(super) fn into_reader(self) -> impl tokio::io::AsyncBufRead + Unpin + Send {
+        self.0
     }
 
     pub(super) async fn receive(&mut self) -> Result<Reply, Failure> {
@@ -157,7 +164,7 @@ fn number(bytes: &[u8]) -> Result<i64, Failure> {
         .ok_or(Failure::Protocol)
 }
 
-fn server_error(message: &[u8]) -> Failure {
+pub(super) fn server_error(message: &[u8]) -> Failure {
     Failure::Server(
         match message
             .split(|byte| *byte == b' ')

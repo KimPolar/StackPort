@@ -248,6 +248,10 @@ RDB 복사에는 서버 파일 읽기 권한과 SFTP 등 별도 전송 수단이
 
 Windows 앱과 TLS·ACL을 적용한 Redis 8.4.7 테스트 연결에서 RDB·AOF 완료, 읽기 전용과 서버 ACL의 실행 차단, `PROD` 확인, 요청 응답 유실의 결과 미확인을 검증했습니다. 생성된 RDB와 재작성된 AOF 폴더를 각각 격리된 Redis에 읽혀 논리 DB 0·3의 키와 만료 시간이 복원되는지 확인했습니다.
 
+**RDB 다운로드**는 선택한 Redis 단독 서버의 모든 논리 DB를 로컬 `.rdb`로 받습니다. 프로필의 TLS·ACL 설정과 입력하거나 Windows에 저장한 암호를 사용합니다. Redis에 `INFO`, `REPLCONF`, `PSYNC` 권한이 필요하며 운영 환경에서는 `PROD`를 확인합니다. 다운로드한 임시 파일을 `redis-check-rdb`로 검사한 뒤 새 경로에 저장하고, 크기·버전·내장 체크섬·SHA-256을 표시합니다. 다른 파일과 같은 이름이면 새 경로를 선택해야 합니다. [Redis 원격 RDB 백업](https://redis.io/docs/latest/develop/tools/cli/#remote-backups-of-rdb-files)
+
+`tests/redis-smoke.cjs`의 `STACKPORT_REDIS_RDB_DOWNLOAD_ONLY=1` 모드는 길이 기반·디스크리스 전송, TLS·ACL, 다운로드 중단과 DB 0·3·31 격리 복원을 검사합니다.
+
 **백업 파일 검사**에서는 로컬의 RDB·단일 AOF 파일이나 다중 파일 AOF 매니페스트를 선택합니다. 실행 파일이 설치된 폴더를 지정하면 `redis-check-rdb` 또는 `redis-check-aof`를 임시 사본에 검사 모드로 실행합니다. 다중 파일 AOF에서는 매니페스트와 같은 폴더의 활성 기본·증분 파일을 검사합니다. 구성 파일의 외부 경로와 링크는 거절합니다. 파일마다 크기와 SHA-256을 표시하고, RDB는 형식 버전, 내장 체크섬 검증 여부, 검사 도구가 읽은 키와 이미 만료된 키 수를 표시합니다. [Redis RDB 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-rdb.c) · [Redis AOF 검사 도구](https://github.com/redis/redis/blob/8.4/src/redis-check-aof.c)
 
 Windows 앱과 Redis 8.4.7 도구에서 실제로 만든 RDB와 다중 파일 AOF, 단일 RESP AOF와 RDB 선두부가 있는 단일 AOF를 검사했습니다. RDB 체크섬 손상·생략과 끝 위치 불일치, 잘린 AOF, 매니페스트 구성 파일 누락과 외부 경로, 한글·공백 파일 이름을 확인했습니다. 파일의 SHA-256을 별도로 계산한 값과 비교했고, Redis 연결을 끊은 상태의 RDB·AOF 검사 화면도 통과했습니다.

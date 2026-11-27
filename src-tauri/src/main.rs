@@ -2136,6 +2136,25 @@ async fn verify_redis_rdb_restore(store: State<'_, Store>, request: String, sour
 }
 
 #[tauri::command]
+async fn download_redis_rdb(
+    store: State<'_, Store>, request: String, input: stackport_core::RedisRdbDownloadInput,
+    password: Option<stackport_core::RedisPassword>, use_saved_password: Option<bool>,
+) -> Result<stackport_core::RedisRdbDownloadReport, String> {
+    let authentication = redis_authentication(password, use_saved_password, false)?;
+    store.download_redis_rdb(&request, input, authentication).await
+}
+
+#[tauri::command]
+async fn choose_redis_rdb_destination() -> Result<Option<String>, String> {
+    worker(|| Ok(rfd::FileDialog::new()
+        .set_title("Redis RDB 저장 위치")
+        .add_filter("Redis RDB", &["rdb"])
+        .set_file_name("redis-backup.rdb")
+        .save_file()
+        .map(|path| path.to_string_lossy().into_owned()))).await
+}
+
+#[tauri::command]
 async fn choose_redis_backup_input(tools: bool) -> Result<Option<String>, String> {
     worker(move || {
         let dialog = rfd::FileDialog::new();
@@ -3540,6 +3559,8 @@ fn main() {
             redis_persistence_report,
             inspect_redis_backup_file,
             verify_redis_rdb_restore,
+            download_redis_rdb,
+            choose_redis_rdb_destination,
             choose_redis_backup_input,
             redis_console_commands,
             redis_run_console,

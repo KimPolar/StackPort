@@ -10,7 +10,7 @@ pub(crate) mod profiles;
 mod pubsub;
 mod resp;
 
-pub use backup_file::{RedisBackupFileFormat, RedisBackupFileReport};
+pub use backup_file::{RedisBackupFileFormat, RedisBackupFileReport, RedisRdbDownloadInput, RedisRdbDownloadReport};
 pub use console::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use credentials::RedisCredentialStatus;
 pub use keys::{RedisKeyPage, RedisScanInput, RedisValueInput, RedisValuePage};

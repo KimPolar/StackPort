@@ -2420,6 +2420,7 @@ const auditOperationNames: Record<string, string> = {
   "redis.key.edit": "Redis 키 편집",
   "redis.key.edit.unconfirmed": "Redis 키 편집 결과 미확인",
   "redis.persistence.rdb": "Redis RDB 스냅샷",
+  "redis.backup.download": "Redis RDB 다운로드",
   "redis.persistence.rdb.unconfirmed": "Redis RDB 스냅샷 결과 미확인",
   "redis.persistence.aof": "Redis AOF 재작성",
   "redis.persistence.aof.unconfirmed": "Redis AOF 재작성 결과 미확인",

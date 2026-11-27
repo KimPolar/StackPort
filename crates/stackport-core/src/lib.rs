@@ -54,7 +54,7 @@ pub use redis::{RedisAuthentication, RedisCredentialStatus};
 pub use redis::{RedisEditInput, RedisEditPreview, RedisEditReport, RedisEditStatus, RedisKeyDeletePreview};
 pub use redis::{RedisPublishReport, RedisSubscriptionSnapshot};
 pub use redis::{RedisPersistenceInfo, RedisPersistenceKind, RedisPersistenceReport};
-pub use redis::{RedisBackupFileFormat, RedisBackupFileReport};
+pub use redis::{RedisBackupFileFormat, RedisBackupFileReport, RedisRdbDownloadInput, RedisRdbDownloadReport};
 pub use redis::{redis_console_commands, RedisConsoleCommand, RedisConsoleResult};
 pub use postgres::{PostgresCellChange, PostgresEditField, PostgresEditInput, PostgresEditOutcome, PostgresEditPreview, PostgresEditSession, PostgresRowEditPreview, PostgresRowStamp};
 pub use postgres::{PostgresGridEditChange, PostgresGridEditOutcome, PostgresGridEditPreview, PostgresGridEditSession};

@@ -5,7 +5,7 @@ use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
 };
@@ -18,6 +18,8 @@ use tokio::{
 };
 
 mod recovery;
+mod download;
+pub use download::{RedisRdbDownloadInput, RedisRdbDownloadReport};
 
 const TIME_LIMIT: Duration = Duration::from_secs(15 * 60);
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -115,33 +117,7 @@ impl Store {
         let deadline = Instant::now() + TIME_LIMIT;
         let directory = Path::new(directory.trim());
         let operation = async {
-            if !directory.is_absolute() {
-                return Err("Redis 검사 도구 폴더의 절대 경로를 지정하세요.".into());
-            }
-            let executable = tokio::fs::canonicalize(directory.join(format.tool_executable()))
-                .await
-                .map_err(|_| "선택한 폴더에서 Redis 검사 도구를 찾을 수 없습니다.")?;
-            let version = timeout(
-                Duration::from_secs(8),
-                checker(&executable, None, "--version"),
-            )
-            .await
-            .map_err(|_| "Redis 검사 도구의 버전 확인 시간이 초과되었습니다.")??;
-            let checker_version = version
-                .text
-                .split_whitespace()
-                .nth(1)
-                .map(|word| word.strip_prefix("v=").unwrap_or(word))
-                .filter(|word| {
-                    word.len() <= 48
-                        && word.as_bytes().first().is_some_and(u8::is_ascii_digit)
-                        && word
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte))
-                })
-                .filter(|_| version.text.starts_with(format.tool_name()))
-                .ok_or("Redis 검사 도구의 버전을 확인할 수 없습니다.")?
-                .to_owned();
+            let (executable, checker_version) = checker_at(directory, format).await?;
             if matches!(format, RedisBackupFileFormat::AofManifest)
                 && checker_version
                     .split('.')
@@ -218,6 +194,27 @@ impl Store {
         }
         Ok(report)
     }
+}
+
+async fn checker_at(directory: &Path, format: RedisBackupFileFormat) -> Result<(PathBuf, String)> {
+    if !directory.is_absolute() {
+        return Err("Redis 검사 도구 폴더의 절대 경로를 지정하세요.".into());
+    }
+    let executable = tokio::fs::canonicalize(directory.join(format.tool_executable()))
+        .await
+        .map_err(|_| "선택한 폴더에서 Redis 검사 도구를 찾을 수 없습니다.")?;
+    let version = timeout(Duration::from_secs(8), checker(&executable, None, "--version"))
+        .await
+        .map_err(|_| "Redis 검사 도구의 버전 확인 시간이 초과되었습니다.")??;
+    let version = version.text.split_whitespace().nth(1)
+        .map(|word| word.strip_prefix("v=").unwrap_or(word))
+        .filter(|word| word.len() <= 48
+            && word.as_bytes().first().is_some_and(u8::is_ascii_digit)
+            && word.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-+".contains(&byte)))
+        .filter(|_| version.text.starts_with(format.tool_name()))
+        .ok_or("Redis 검사 도구의 버전을 확인할 수 없습니다.")?
+        .to_owned();
+    Ok((executable, version))
 }
 
 impl RedisBackupFileFormat {

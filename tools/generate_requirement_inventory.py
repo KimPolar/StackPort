@@ -216,7 +216,7 @@ PARTIAL = {
     "SP-NS-006": "MongoDB 인덱스 키 순서·고유·TTL·숨김 조회, 일반 컬렉션의 단일·복합·텍스트·TTL·지리·해시 인덱스 생성, 검토 후 숨김·TTL 변경 및 단일 삭제",
     "SP-NS-007": "MongoDB 필터·표시 필드·정렬 결과를 Canonical Extended JSON 또는 CSV로 내보내기, BSON 왕복 검증과 CSV 타입 손실 표시, 기존 컬렉션에 Extended JSON·JSON Lines·CSV 가져오기와 BSON 매핑, mongodump 아카이브 생성과 일반 컬렉션 또는 데이터베이스 복원",
     "SP-BK-009": "MongoDB JSON·CSV 가져오기와 내보내기, mongodump로 데이터베이스나 일반 컬렉션 백업, 서버·도구 버전을 확인하고 mongorestore로 새 컬렉션 또는 새 데이터베이스에 복원",
-    "SP-BK-010": "Redis 서버 RDB 스냅샷·AOF 재작성의 요청과 완료 구분, 원격 경로·파일 접근 권한과 격리 복원 절차 안내, 복사한 RDB와 단일·다중 AOF의 네이티브 파일 검사, 앱에서 로컬 RDB 격리 복원 검증",
+    "SP-BK-010": "직접 TLS·ACL 연결을 통한 단독 Redis의 전체 논리 DB RDB 다운로드와 검증, 서버 RDB 스냅샷·AOF 재작성 완료 확인, RDB와 단일·다중 AOF 검사 및 로컬 RDB 격리 복원",
     "SP-AT-018": "실제 MongoDB 서버에서 제한 계정·TLS·BSON 문서 조회, 문서 편집 및 동시 변경 차단, 표본 스키마 분석, 단계별 집계 미리보기와 파이프라인 저장·교환, 실제 Redis 서버에서 ACL·TLS·논리 DB·SCAN, 여섯 타입 조회·편집, 바이너리 입력, TTL 설정·해제, 선택 삭제의 동시 변경 차단, Pub/Sub 구독·발행·재연결·결과 미확인 검증. Redis JSON 명령 감지·검토·동시 변경 응답은 RESP 테스트로 확인하며 모듈 활성 서버 검증 대기",
     "SP-AT-010": "SQLite·PostgreSQL의 기본 키 기반 다중 셀·행 미리보기·적용·취소·롤백·동시 수정 검사, PostgreSQL 행 수준 보안과 커밋 제약 오류에서 전체 롤백, MySQL·MariaDB 복합 키·미리보기·적용·취소·롤백·동시 변경 확인",
     "SP-AT-011": "SQLite 바인딩·실행 계획·페이지·취소·시간 초과, PostgreSQL 타입별 바인딩·예상/실제 계획·SSH 경유 서버 취소, MySQL·MariaDB 매개변수 계획·실제 분석·요청 중단 확인",
@@ -614,6 +614,8 @@ with OUTPUT.open("w", encoding="utf-8-sig", newline="") as target:
                     evidence += "; tests/redis-smoke.cjs"
             if requirement_id in {"SP-BK-010", "SP-BK-013", "SP-BK-014", "SP-AT-016"}:
                 evidence += "; crates/stackport-core/src/redis/backup_file/recovery.rs"
+            if requirement_id in {"SP-BK-010", "SP-BK-014", "SP-AT-016"}:
+                evidence += "; crates/stackport-core/src/redis/backup_file/download.rs; src/RedisRdbDownloadDialog.tsx"
             if requirement_id in {"SP-BK-001", "SP-BK-002", "SP-BK-003", "SP-BK-004", "SP-BK-011", "SP-BK-014", "SP-BK-016", "SP-BK-017", "SP-AT-016", "SP-SEC-011"}:
                 evidence += "; crates/stackport-core/src/mysql/backup.rs; src/MysqlBackupDialog.tsx; tests/mysql-smoke.cjs"
             if requirement_id in {"SP-BK-004", "SP-BK-013", "SP-BK-014", "SP-BK-017", "SP-AT-016", "SP-SEC-003", "SP-SEC-011"}:

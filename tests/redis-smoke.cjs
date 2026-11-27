@@ -108,6 +108,8 @@ async function proxy(port) {
   const subscribers = new Set();
   let interruptCommand = null;
   let blockSubscriptions = false;
+  let holdReplication = false;
+  let replicationRequests = 0;
   const listener = tls.createServer({ cert: fs.readFileSync(cert), key: fs.readFileSync(key), minVersion: 'TLSv1.2' }, client => {
     clients.add(client);
     const target = net.connect(port, '127.0.0.1');
@@ -117,6 +119,14 @@ async function proxy(port) {
     target.on('close', () => client.destroy());
     const relay = new Transform({
       transform(chunk, _encoding, callback) {
+        if (chunk.includes(Buffer.from('$5\r\nPSYNC\r\n'))) {
+          replicationRequests++;
+          if (holdReplication) {
+            holdReplication = false;
+            callback();
+            return;
+          }
+        }
         if (chunk.includes(Buffer.from('$9\r\nSUBSCRIBE\r\n')) || chunk.includes(Buffer.from('$10\r\nPSUBSCRIBE\r\n'))) {
           if (blockSubscriptions) {
             client.destroy();
@@ -139,6 +149,8 @@ async function proxy(port) {
   await once(listener, 'listening');
   const dropClients = () => { for (const client of clients) client.destroy(); };
   return { port: listener.address().port, ca, dropClients,
+    holdNextReplication: () => { holdReplication = true; },
+    replicationCount: () => replicationRequests,
     pauseSubscriptions: () => { blockSubscriptions = true; for (const client of subscribers) client.destroy(); },
     resumeSubscriptions: () => { blockSubscriptions = false; },
     subscriptionCount: () => subscribers.size,
@@ -1107,6 +1119,100 @@ async function verifyCredentials(browser, port, secure) {
   }
 }
 
+async function verifyRdbDownloads(browser, port, secure) {
+  const page = browser.contexts()[0].pages()[0];
+  const command = (name, args) => page.evaluate(({ name, args }) => window.__TAURI_INTERNALS__.invoke(name, args), { name, args });
+  const project = await command('create_project', { name: 'Redis RDB 내려받기 검증' });
+  const settings = { name: '원격 RDB', host: 'localhost', port: secure.port, database: 3, username: 'fixture_rdb_export',
+    environment: 'PROD', tls: true, ca_path: secure.ca };
+  const create = input => command('create_redis_profile', { projectId: project.id, input });
+  const profile = await create(settings);
+  const credential = { profileId: profile.id, revision: profile.revision };
+  const tools = path.dirname(binary);
+  const target = path.join(root, '길이 지정 백업.rdb');
+  const diskless = path.join(root, '디스크리스 백업.rdb');
+  const aborted = path.join(root, '중단된 백업.rdb');
+  const args = { profile_id: profile.id, revision: profile.revision, destination: target, tools_directory: tools,
+    include_all_databases: true, confirmation: 'PROD' };
+  const saved = { password: null, useSavedPassword: true };
+  const download = async (input = args, authentication = saved, request) => command('download_redis_rdb', {
+    request: request ?? await command('prepare_query'), input, ...authentication,
+  });
+  const forProfile = (item, input = args) => ({ ...input, profile_id: item.id, revision: item.revision });
+  const checkArtifact = (destination, report) => {
+    const contents = fs.readFileSync(destination);
+    assert.equal(contents.subarray(0, 5).toString(), 'REDIS');
+    assert.equal(report.bytes, contents.length);
+    assert.equal(report.sha256, sha256(contents));
+    assert.equal(report.rdb.checksum_verified, true);
+    assert.ok(report.rdb.keys_read > 300);
+    assert.equal(report.audit_warning, false);
+    assert.ok(!JSON.stringify(report).includes(secret));
+  };
+  try {
+    cli(port, [
+      ['ACL', 'SETUSER', 'fixture_rdb_export', 'on', '>' + secret, '+info', '+select', '+replconf', '+psync'],
+      ['SELECT', '31'], ['SET', 'download:db31', 'backup'],
+      ['CONFIG', 'SET', 'repl-diskless-sync', 'no'],
+    ]);
+    const session = await command('open_redis', { ...credential, password: secret, rememberPassword: true, confirmation: 'PROD' });
+    assert.equal(session.credential_warning, null);
+    await command('close_redis', { id: session.id });
+
+    await assert.rejects(download({ ...args, include_all_databases: false }), /모든 논리 DB/);
+    await assert.rejects(download({ ...args, confirmation: '' }), /PROD/);
+    const reader = await create({ ...settings, name: '복제 권한 없음', username: 'fixture_reader' });
+    await assert.rejects(download(forProfile(reader), { password: secret }), /권한이 없습니다/);
+    const incorrectHost = await create({ ...settings, name: '호스트 불일치', host: '127.0.0.1' });
+    await assert.rejects(download(forProfile(incorrectHost), { password: secret }), /TLS 인증서/);
+    assert.equal(secure.replicationCount(), 0);
+    assert.equal(fs.existsSync(target), false);
+    checkArtifact(target, await download());
+    const before = fs.readFileSync(target);
+    await assert.rejects(download(), /같은 이름/);
+    assert.deepEqual(fs.readFileSync(target), before);
+
+    cli(port, [['CONFIG', 'SET', 'repl-diskless-sync', 'yes']]);
+    await page.reload();
+    await page.getByLabel('프로젝트', { exact: true }).selectOption(project.id);
+    await page.getByRole('button', { name: 'Redis 원격 RDB 열기', exact: true }).click();
+    const workspace = page.getByRole('region', { name: 'Redis 작업 공간', exact: true });
+    await workspace.getByRole('button', { name: 'RDB 다운로드', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Redis RDB 다운로드', exact: true });
+    const start = dialog.getByRole('button', { name: '다운로드', exact: true });
+    await dialog.getByLabel('새 RDB 파일 경로').fill(diskless);
+    await dialog.getByLabel('Redis 검사 도구 폴더').fill(tools);
+    await dialog.getByLabel('저장한 암호 사용', { exact: true }).check();
+    await dialog.getByLabel('서버의 모든 논리 DB를 백업합니다.', { exact: true }).check();
+    assert.equal(await start.isDisabled(), true);
+    await dialog.getByLabel('운영 환경 확인').fill('PROD');
+    await start.click();
+    await dialog.getByText(/RDB 저장 완료/).waitFor();
+    assert.equal(await dialog.getByText(/내장 체크섬 검증 완료/).count(), 1);
+    const downloaded = fileReport(diskless, 'rdb');
+    await dialog.getByText(downloaded.sha256, { exact: true }).waitFor();
+    await dialog.getByRole('button', { name: '닫기', exact: true }).click();
+    const restore = await command('verify_redis_rdb_restore', {
+      request: await command('prepare_query'), source: diskless, directory: tools, sha256: downloaded.sha256,
+    });
+    assert.deepEqual(restore.recovery.databases.map(db => db.database), [0, 3, 31]);
+    assert.equal(restore.recovery.databases.find(db => db.database === 31).keys, 1);
+
+    const started = secure.replicationCount();
+    const request = await command('prepare_query');
+    secure.holdNextReplication();
+    const pending = download({ ...args, destination: aborted }, saved, request).catch(error => error);
+    for (let i = 0; i < 200 && secure.replicationCount() === started; i++) await delay(25);
+    assert.equal(secure.replicationCount(), started + 1);
+    assert.equal(await command('cancel_query', { token: request }), true);
+    assert.match(String(await pending), /다운로드가 중단되었습니다/);
+    assert.equal(fs.existsSync(aborted), false);
+    assert.deepEqual(fs.readdirSync(root).filter(file => file.startsWith('.stackport-redis-')), []);
+  } finally {
+    await command('forget_redis_password', credential);
+  }
+}
+
 async function main() {
   const port = await availablePort();
   const server = spawn(binary, ['--bind', '127.0.0.1', '--port', String(port), '--save', '', '--appendonly', 'no', '--databases', '40',
@@ -1160,6 +1266,11 @@ async function main() {
     ]);
     secure = await proxy(port);
     browser = await chromium.connectOverCDP(process.env.STACKPORT_CDP_URL || 'http://127.0.0.1:9369');
+    if (process.env.STACKPORT_REDIS_RDB_DOWNLOAD_ONLY === '1') {
+      await verifyRdbDownloads(browser, port, secure);
+      console.log('Redis RDB download passed (length and diskless frames, TLS and saved ACL password, all DBs restored, cancellation and no overwrite).');
+      return;
+    }
     if (process.env.STACKPORT_REDIS_CREDENTIAL_ONLY === '1') {
       await verifyCredentials(browser, port, secure);
       console.log('Redis Windows credential flow passed (opt-in, ACL/TLS, new process, Pub/Sub, profile changes and deletion).');
